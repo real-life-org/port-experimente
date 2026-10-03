@@ -66,6 +66,7 @@ export async function runLoad(make: () => Candidate, members = 30, operations = 
  * auch Vanadium); einzelne kurze Läufe sind dann nicht aussagekräftig.
  */
 export async function runLoadMedian(make: () => Candidate, runs = 5, members = 30, operations = 500): Promise<LoadResult> {
+  if (!Number.isInteger(runs) || runs <= 0) throw new RangeError(`runs muss eine positive ganze Zahl sein, war ${runs}`)
   const results: LoadResult[] = []
   for (let i = 0; i < runs; i++) {
     const r = await runLoad(make, members, operations)

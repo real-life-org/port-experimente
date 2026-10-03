@@ -15,3 +15,10 @@ it('meldet bei mehreren Läufen den Median', async () => {
   expect(r.runs).toBe(3)
   expect(r.error).toBeUndefined()
 })
+
+it('lehnt eine Zahl von Läufen ab, die keine positive ganze Zahl ist', async () => {
+  const { runLoadMedian } = await import('../src/lab/load')
+  for (const runs of [0, -1, 1.5]) {
+    await expect(runLoadMedian(klartext, runs, 3, 5)).rejects.toThrow(RangeError)
+  }
+})
