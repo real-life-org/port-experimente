@@ -34,6 +34,8 @@ th{color:var(--muted);font-weight:600}
   <h1>Port-Experimente</h1>
   <p>Gleiche Szenarien für jeden Kandidaten (Plan: rltp/design/port-experimente-2026-10.md). Der Lasttest ist S9: 30 Mitglieder, 500 Autoritätsoperationen.</p>
   <div class="bar">
+    <label class="env" for="device">Gerät</label>
+    <input id="device" type="text" placeholder="z. B. Pixel 8, GrapheneOS, Vanadium" style="font:inherit;padding:7px 10px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg);min-width:0;flex:1 1 220px">
     <button id="run" type="button">Alle Läufe starten</button>
     <button id="copy" type="button" class="ghost" disabled>Ergebnis als JSON kopieren</button>
     <span id="state" class="env"></span>

@@ -9,6 +9,11 @@ const copyBtn = $<HTMLButtonElement>('copy')
 const out = $('out')
 const state = $('state')
 const json = $<HTMLTextAreaElement>('json')
+const deviceInput = $<HTMLInputElement>('device')
+try { deviceInput.value = localStorage.getItem('port-experimente:geraet') ?? '' } catch {}
+deviceInput.addEventListener('change', () => {
+  try { localStorage.setItem('port-experimente:geraet', deviceInput.value) } catch {}
+})
 
 const env = {
   userAgent: navigator.userAgent,
@@ -65,7 +70,7 @@ runBtn.addEventListener('click', async () => {
     render(c.title, results, load)
   }
   state.textContent = 'fertig'
-  json.value = JSON.stringify({ at: new Date().toISOString(), env, report }, null, 1)
+  json.value = JSON.stringify({ at: new Date().toISOString(), device: deviceInput.value.trim() || null, env, report }, null, 1)
   runBtn.disabled = false
   copyBtn.disabled = false
 })
