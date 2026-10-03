@@ -12,9 +12,14 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "wasm": "sh scripts/build-wasm.sh",
-    "test:rust": "cargo +1.96 test --manifest-path rust/p2panda-wasm/Cargo.toml --test peer"
+    "test:rust": "cargo +1.96 test --manifest-path rust/p2panda-wasm/Cargo.toml --test peer",
+    "server:fetch": "sh scripts/fetch-subduction.sh"
   },
   "dependencies": {
+    "@automerge/automerge": "3.3.2",
+    "@automerge/automerge-repo": "2.6.0-subduction.48",
+    "@automerge/automerge-repo-keyhive": "0.6.0-alpha.1",
+    "@automerge/automerge-subduction": "0.16.1",
     "@keyhive/keyhive": "0.3.0-alpha.1",
     "@web_of_trust/adapter-yjs": "0.3.0",
     "@web_of_trust/core": "0.6.0",

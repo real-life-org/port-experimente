@@ -1,6 +1,6 @@
 import * as Y from 'yjs'
 import { World } from './world'
-import type { Candidate, Capability, Outcome, ScenarioResult } from './types'
+import type { CandidateFactory, Capability, Outcome, ScenarioResult } from './types'
 
 export interface Scenario {
   readonly id: string
@@ -370,8 +370,8 @@ export const scenarios: Scenario[] = [
   },
 ]
 
-export async function runScenario(make: () => Candidate, s: Scenario): Promise<ScenarioResult> {
-  const candidate = make()
+export async function runScenario(make: CandidateFactory, s: Scenario): Promise<ScenarioResult> {
+  const candidate = await make()
   const missing = s.needs.filter((c) => !candidate.capabilities.has(c))
   if (missing.length) {
     return { scenario: s.id, title: s.title, outcome: 'nicht abbildbar', authority: `fehlt: ${missing.join(', ')}`, keys: '—', ms: 0 }
@@ -387,7 +387,7 @@ export async function runScenario(make: () => Candidate, s: Scenario): Promise<S
   }
 }
 
-export async function runAll(make: () => Candidate): Promise<ScenarioResult[]> {
+export async function runAll(make: CandidateFactory): Promise<ScenarioResult[]> {
   const out: ScenarioResult[] = []
   for (const s of scenarios) out.push(await runScenario(make, s))
   return out

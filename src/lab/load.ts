@@ -1,5 +1,5 @@
 import { World } from './world'
-import type { Candidate } from './types'
+import type { CandidateFactory } from './types'
 
 export interface LoadResult {
   readonly runs?: number
@@ -28,8 +28,8 @@ function rng(seed: number) {
  * `operations` Autoritätsoperationen (Entfernen, Wiederaufnehmen, Rotation),
  * alle 50 Operationen wird zugestellt.
  */
-export async function runLoad(make: () => Candidate, members = 30, operations = 500): Promise<LoadResult> {
-  const candidate = make()
+export async function runLoad(make: CandidateFactory, members = 30, operations = 500): Promise<LoadResult> {
+  const candidate = await make()
   const w = new World(candidate)
   const next = rng(42)
   const people = Array.from({ length: members }, (_, i) => `p${String(i).padStart(2, '0')}`)
@@ -68,7 +68,7 @@ export async function runLoad(make: () => Candidate, members = 30, operations = 
  * `performance.now()` teils auf ganze Millisekunden (Firefox, vermutlich
  * auch Vanadium); einzelne kurze Läufe sind dann nicht aussagekräftig.
  */
-export async function runLoadMedian(make: () => Candidate, runs = 5, members = 30, operations = 500): Promise<LoadResult> {
+export async function runLoadMedian(make: CandidateFactory, runs = 5, members = 30, operations = 500): Promise<LoadResult> {
   if (!Number.isInteger(runs) || runs <= 0) throw new RangeError(`runs muss eine positive ganze Zahl sein, war ${runs}`)
   const results: LoadResult[] = []
   for (let i = 0; i < runs; i++) {
@@ -89,8 +89,8 @@ export async function runLoadMedian(make: () => Candidate, runs = 5, members = 3
  * Gerät pro eingehender Nachricht zahlt; der Prüfstand rechnet alle Geräte in
  * einem Thread).
  */
-export async function runContentLoad(make: () => Candidate, members = 10, writes = 100): Promise<LoadResult> {
-  const candidate = make()
+export async function runContentLoad(make: CandidateFactory, members = 10, writes = 100): Promise<LoadResult> {
+  const candidate = await make()
   const w = new World(candidate)
   const people = Array.from({ length: members }, (_, i) => `p${String(i).padStart(2, '0')}`)
   try {
