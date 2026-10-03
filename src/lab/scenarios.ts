@@ -77,7 +77,7 @@ export const scenarios: Scenario[] = [
     needs: [],
     async run(w) {
       await base(w)
-      await w.partition(['bob'])
+      await w.partition(['alice', 'carol'], ['bob'])
       await w.write('bob', 'offline-bob')
       await w.write('alice', 'online-alice')
       await w.flush()

@@ -49,11 +49,14 @@ export async function runLoad(make: () => Candidate, members = 30, operations = 
     await w.flush()
     const ms = performance.now() - t0
     const idleMs = candidate.transport?.idleMs()
-    await candidate.dispose?.()
     return { members, operations, ms, msPerOp: ms / operations, ...(idleMs === undefined ? {} : { idleMs }) }
   } catch (e) {
     const ms = performance.now() - t0
     return { members, operations, ms, msPerOp: ms / operations, error: (e as Error).message }
+  } finally {
+    // Auch nach einem Fehler: Adapter, Timer und Verbindungen schließen,
+    // damit keine Hintergrundarbeit in den nächsten Lauf hineinwirkt.
+    await candidate.dispose?.().catch(() => {})
   }
 }
 

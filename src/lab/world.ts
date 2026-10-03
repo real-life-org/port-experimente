@@ -69,7 +69,12 @@ export class World {
     return this.candidate.members(device)
   }
 
-  /** Teilt die Welt; nicht genannte Geräte landen in der letzten Gruppe. */
+  /**
+   * Teilt die Welt; nicht genannte Geräte landen in einer eigenen Gruppe.
+   * Konvention: Die erste Gruppe ist die Seite mit dem Relay. Bei Kandidaten
+   * mit eigenem Transport bleibt nur sie online, alle anderen gehen offline.
+   * Szenarien nennen deshalb die Seite, die online bleiben soll, zuerst.
+   */
   async partition(...groups: Device[][]): Promise<void> {
     if (this.own) {
       // Nur die erste Gruppe erreicht das Relay; alle anderen sind offline.
