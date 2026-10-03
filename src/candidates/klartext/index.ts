@@ -72,7 +72,7 @@ export function klartext(): Candidate {
     steal() { return {} },
     attackerOpen(_stolen, msg) {
       const op = decode(msg.body)
-      return op.t === 'content' ? Uint8Array.from(op.u) : null
+      return op.t === 'content' ? [Uint8Array.from(op.u)] : []
     },
   }
 }

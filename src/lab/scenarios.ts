@@ -1,3 +1,4 @@
+import * as Y from 'yjs'
 import { World } from './world'
 import type { Candidate, Capability, Outcome, ScenarioResult } from './types'
 
@@ -318,23 +319,32 @@ export const scenarios: Scenario[] = [
     needs: ['steal', 'rotate'],
     async run(w) {
       await base(w)
+      await w.write('alice', 'vorher-1')
+      await w.write('carol', 'vorher-2')
+      await w.flush()
+      // Diebstahl: ganzer Gerätezustand von Bob, inklusive seines Yjs-Stands.
       const theft = w.log.length
       const stolen = await w.candidate.steal('bob')
+      const attackerDoc = new Y.Doc()
+      Y.applyUpdate(attackerDoc, Y.encodeStateAsUpdate(w.docs.get('bob')!))
+      // Positivkontrolle: zwischen Diebstahl und Rotation muss er mitlesen können.
+      await w.write('alice', 'vor-rotation')
+      await w.flush()
       await w.candidate.rotate('bob')
       await w.flush()
-      const mark = w.log.length
       await w.write('alice', 'nach-rotation')
       await w.flush()
-      // Der Angreifer sieht allen Verkehr ab dem Diebstahl, in Log-Reihenfolge.
-      const opened: Uint8Array[] = []
       for (const m of w.log.slice(theft)) {
-        const r = await w.candidate.attackerOpen(stolen, m)
-        if (r && w.log.indexOf(m) >= mark) opened.push(r)
+        for (const u of await w.candidate.attackerOpen(stolen, m)) Y.applyUpdate(attackerDoc, u)
       }
+      const seen = attackerDoc.getArray<string>('eintraege').toArray()
+      const control = seen.includes('vor-rotation')
+      const leaked = seen.includes('nach-rotation')
+      const honest = ['alice', 'carol'].every((d) => w.read(d).includes('nach-rotation'))
       return {
-        outcome: verdict(opened.length === 0),
+        outcome: verdict(control && !leaked && honest),
         authority: '—',
-        keys: opened.length ? `Angreifer öffnet ${opened.length} Nachricht(en) nach der Rotation` : 'Angreifer öffnet nichts nach der Rotation',
+        keys: `Angreifer liest vor der Rotation: ${control ? 'ja' : 'NEIN (Angreifer-Modell wirkungslos)'}; nach der Rotation: ${leaked ? 'ja' : 'nein'}; Alice/Carol lesen nach der Rotation: ${honest ? 'ja' : 'nein'}`,
       }
     },
   },

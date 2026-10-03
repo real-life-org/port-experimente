@@ -108,7 +108,7 @@ export function keyhive(): Candidate {
    * Ein neuer Eintrag kann die Schlüssel älterer Einträge mitbringen
    * (kausale Verschlüsselung).
    */
-  async function drain(s: DeviceState): Promise<Uint8Array[]> {
+  async function drain(s: Pick<DeviceState, 'kh' | 'pending' | 'keys' | 'heads'>): Promise<Uint8Array[]> {
     const out: Uint8Array[] = []
     if (!docIdBytes) return out
     let progress = true
@@ -268,22 +268,38 @@ export function keyhive(): Candidate {
     status: (d) => [`ausstehend=${dev(d).pending.length}`, ...notes.slice(0, 4)].join('; '),
 
     async steal(d) {
+      // Ganzer Gerätezustand: Keyhive-Archiv, Signierschlüssel und die
+      // Schlüsseltabelle der App (Vorgänger-Kette).
       const s = dev(d)
-      return { archive: (await s.kh.toArchive()).toBytes(), secret: s.signerSecret.slice() }
+      return {
+        archive: (await s.kh.toArchive()).toBytes(),
+        secret: s.signerSecret.slice(),
+        keys: new Map([...s.keys].map(([k, v]) => [k, v.slice()] as const)),
+      }
     },
     async attackerOpen(stolen, msg: Msg) {
-      const st = stolen as { archive: Uint8Array; secret: Uint8Array; kh?: Keyhive }
-      st.kh ??= await new Archive(st.archive).tryToKeyhive(CiphertextStore.newInMemory(), Signer.memorySignerFromBytes(st.secret), () => {})
+      // Der Angreifer wertet Nachrichten mit derselben Logik aus wie ein
+      // ehrliches Gerät: Ereignisse aufnehmen, Inhalte über bekannte Schlüssel,
+      // Vorgänger-Kette oder CGKA öffnen, mit Wiederholung.
+      const st = stolen as {
+        archive: Uint8Array
+        secret: Uint8Array
+        keys: Map<string, Uint8Array>
+        state?: Pick<DeviceState, 'kh' | 'pending' | 'keys' | 'heads'>
+      }
+      st.state ??= {
+        kh: await new Archive(st.archive).tryToKeyhive(CiphertextStore.newInMemory(), Signer.memorySignerFromBytes(st.secret), () => {}),
+        pending: [],
+        keys: st.keys,
+        heads: [],
+      }
       if (msg.label === 'event') {
-        await st.kh.ingestEventsBytes([msg.body]).catch(() => {})
-        return null
+        await st.state.kh.ingestEventsBytes([msg.body]).catch(() => {})
+        return drain(st.state)
       }
-      if (msg.label !== 'content' || !docIdBytes) return null
-      try {
-        return await st.kh.tryDecrypt(docId(), Encrypted.fromBytes(unwrap(msg.body).inner))
-      } catch {
-        return null
-      }
+      if (msg.label !== 'content') return []
+      st.state.pending.push(msg.body)
+      return drain(st.state)
     },
   }
 }

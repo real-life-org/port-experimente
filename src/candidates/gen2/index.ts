@@ -231,7 +231,7 @@ export function gen2(): Candidate {
     steal() {
       throw new Error('nicht abbildbar')
     },
-    attackerOpen: () => null,
+    attackerOpen: () => [],
 
     async dispose() {
       for (const s of devices.values()) {

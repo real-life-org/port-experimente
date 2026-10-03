@@ -24,13 +24,32 @@ ausgestellt hat (sonst „Proof missing to authorize revocation“).
 | S5 | nicht abbildbar | Person als Gruppe ihrer Geräte gibt es, im Prüfstand noch nicht verdrahtet |
 | S6 | nicht bestanden | direkt nach der Aufnahme keine Historie |
 | S6b | bestanden | nach dem nächsten Eintrag die ganze Historie, über die Vorgänger-Kette |
-| S7 | bestanden | **PCS**: Nach `forcePcsUpdate` öffnet ein Angreifer mit erbeutetem Gerät (Archiv + Signierschlüssel) und vollem Mitlesen nichts mehr. Kein anderer Kandidat kann S7 abbilden |
+| S7 | bestanden | Nach `forcePcsUpdate` liest ein passiver Angreifer nichts Neues mehr, siehe Abschnitt S7. Kein anderer Kandidat kann S7 abbilden |
 | S8 | bestanden | ein Admin entfernt ohne die Gründerin |
 
 Last (Node): S9 (30 Mitglieder, 500 Autoritätsoperationen) 25,6 s, 51 ms je
 Operation; Headless Chrome 145 im Median 13 s, 26 ms. S9b (10 Mitglieder,
 100 Einträge) **0,46 ms je Gerät und Nachricht** (p2panda 8,3 ms, Klartext
 0,06 ms).
+
+## S7 im Detail: was geprüft ist und was nicht
+
+Geprüft (Prüfstand-Modell): Ein **passiver** Angreifer erbeutet Bobs ganzen
+Gerätezustand (Keyhive-Archiv, Signierschlüssel, die Schlüsseltabelle der
+App-Vorgänger-Kette, Bobs Yjs-Stand) und sieht danach allen Verkehr. Er wertet
+ihn mit derselben Logik aus wie ein ehrliches Gerät (Ereignisse aufnehmen,
+bekannte Schlüssel, Vorgänger-Kette, CGKA, Wiederholung).
+
+- Positivkontrolle: Einen Eintrag zwischen Diebstahl und Rotation liest er.
+- Nach `forcePcsUpdate` durch Bob liest er den nächsten Eintrag nicht.
+- Alice und Carol lesen ihn.
+
+Nicht geprüft: ein **aktiver** Angreifer, der mit dem erbeuteten Schlüssel
+selbst Operationen einspeist (etwa eine eigene CGKA-Aktualisierung vor Bob);
+ob Bob die Kompromittierung bemerkt; Rotation durch andere als das
+kompromittierte Gerät. Die Aussage ist also: PCS gegen einen passiven
+Mitleser nach einer Rotation durch das betroffene Gerät, im Kern und in der
+App-Kette dieses Kandidaten.
 
 ## Befunde
 

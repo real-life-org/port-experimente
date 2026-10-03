@@ -101,6 +101,6 @@ export function p2panda(): Candidate {
     steal() {
       throw new Error('nicht abbildbar')
     },
-    attackerOpen: () => null,
+    attackerOpen: () => [],
   }
 }
