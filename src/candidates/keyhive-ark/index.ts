@@ -60,20 +60,34 @@ class MemoryStorage implements StorageAdapterInterface {
 }
 
 /** WebSocket-Endpunkt mit Schalter: offline heißt getrennt, und die Wiederverbindung wartet. */
-class GatedEndpoint implements WebSocketEndpointInterface {
-  private readonly inner: WebSocketEndpoint
+export class GatedEndpoint implements WebSocketEndpointInterface {
+  private readonly inner: WebSocketEndpointInterface
   private online = true
   private waiters: Array<() => void> = []
   private readonly transports = new Set<ManagedTransport>()
-  constructor(readonly url: string) {
-    this.inner = new WebSocketEndpoint(url)
+  constructor(
+    readonly url: string,
+    inner?: WebSocketEndpointInterface,
+  ) {
+    this.inner = inner ?? new WebSocketEndpoint(url)
+  }
+  /** Für Tests: Zahl der offenen Verbindungen. */
+  get openTransports() {
+    return this.transports.size
   }
   async connect(): Promise<ManagedTransport> {
-    while (!this.online) await new Promise<void>((r) => this.waiters.push(r))
-    const t = await this.inner.connect()
-    this.transports.add(t)
-    void t.closed().then(() => this.transports.delete(t))
-    return t
+    for (;;) {
+      while (!this.online) await new Promise<void>((r) => this.waiters.push(r))
+      const t = await this.inner.connect()
+      if (!this.online) {
+        // Rennen: offline geschaltet, während der Aufbau lief. Nicht offen lassen.
+        await t.disconnect().catch(() => {})
+        continue
+      }
+      this.transports.add(t)
+      void t.closed().then(() => this.transports.delete(t))
+      return t
+    }
   }
   async setOnline(online: boolean) {
     if (this.online === online) return
@@ -130,6 +144,8 @@ export function keyhiveArk(): Candidate {
   let groupIdBytes: Uint8Array | undefined
   let lastOnlineChange = 0
   let idle = 0
+  /** Nach jedem Schreiben: Wer soll den Eintrag bekommen? (Mitglieder laut Sicht des Schreibers, online.) */
+  const expectations: Array<{ writer: Device; text: string }> = []
 
   const dev = (d: Device) => {
     const s = devices.get(d)
@@ -220,8 +236,9 @@ export function keyhiveArk(): Candidate {
     const start = Date.now()
     const deadline = start + 25_000
     // Der Server reicht Keyhive-Zustand im 2-s-Takt weiter (keyhive-cache-refresh);
-    // Ruhe gilt erst nach 2,5 s ohne Änderung und frühestens 2,5 s nach Beginn.
-    const quietMs = Number(globalThis.process?.env?.ARK_QUIET_MS ?? 2_500) // für Timing-Experimente
+    // Ruhe gilt erst nach quietMs ohne Änderung und frühestens quietMs nach Beginn.
+    // 4 s: Auf dem CI-Runner kamen Blobs nach einer Pause von über 2,5 s noch an (S4b).
+    const quietMs = Number(globalThis.process?.env?.ARK_QUIET_MS ?? 4_000) // für Timing-Experimente
     const minUntil = Math.max(lastOnlineChange + 1_500, start + quietMs)
     let last = ''
     let stable = 0
@@ -233,15 +250,26 @@ export function keyhiveArk(): Candidate {
       for (const [d, s] of devices) views.push([d, await observe(s)])
       const expected = new Set(views.flatMap(([, v]) => v.members))
       const missing = [...devices].filter(([, s]) => s.online && expected.has(s.person) && !s.handle)
+      // Geschriebene Einträge müssen bei allen Online-Mitgliedern (Sicht des
+      // Schreibers) angekommen sein. Obergrenze 12 s: Ein Entfernter, der noch
+      // schreibt, würde sonst bis zur Frist warten (sein Blob wird abgewiesen).
+      const view = new Map(views)
+      const unmet = expectations.filter(({ writer, text }) => {
+        const members = view.get(writer)?.members ?? []
+        return [...devices].some(([d, s]) => s.online && members.includes(s.person) && !(view.get(d)?.items ?? []).includes(text))
+      })
+      const expectationsDone = unmet.length === 0 || Date.now() > start + 12_000
       const fp = JSON.stringify(views)
       stable = fp === last ? stable + 1 : 0
       last = fp
-      if (stable >= quietMs / 100 && missing.length === 0 && Date.now() >= minUntil) {
+      if (stable >= quietMs / 100 && missing.length === 0 && expectationsDone && Date.now() >= minUntil) {
         for (const [d, v] of views) Object.assign(dev(d), v)
+        expectations.length = 0
         return
       }
     }
     for (const [d, s] of devices) Object.assign(s, await observe(s)), void d
+    expectations.length = 0
   }
 
   return {
@@ -265,6 +293,7 @@ export function keyhiveArk(): Candidate {
         h.change((doc) => {
           doc.eintraege.push(text)
         })
+        expectations.push({ writer: d, text })
       },
       read: (d) => dev(d).items,
       idleMs: () => idle,
