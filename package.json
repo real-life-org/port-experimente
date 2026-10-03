@@ -13,6 +13,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@web_of_trust/adapter-yjs": "0.3.0",
+    "@web_of_trust/core": "0.6.0",
     "yjs": "^13.6.30"
   },
   "devDependencies": {

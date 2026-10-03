@@ -37,7 +37,7 @@ function render(title: string, results: ScenarioResult[], load: LoadResult) {
   sec.append(el('h2', title))
   const l = el('div', load.error
     ? `S9 Last: Fehler ${load.error}`
-    : `S9 Last (Median aus ${load.runs ?? 1} Läufen): ${load.members} Mitglieder, ${load.operations} Operationen in ${load.ms.toFixed(0)} ms (${load.msPerOp.toFixed(3)} ms je Operation)`, 'load')
+    : `S9 Last (Median aus ${load.runs ?? 1} Läufen): ${load.members} Mitglieder, ${load.operations} Operationen in ${load.ms.toFixed(0)} ms (${load.msPerOp.toFixed(3)} ms je Operation)${load.idleMs === undefined ? '' : `, davon ${load.idleMs.toFixed(0)} ms Warten auf Ruhe`}`, 'load')
   sec.append(l)
   const wrap = el('div', undefined, 'scroll')
   const t = el('table')
@@ -65,7 +65,7 @@ runBtn.addEventListener('click', async () => {
     state.textContent = `läuft: ${c.id} …`
     await new Promise((r) => setTimeout(r, 0))
     const results = await runAll(c.make)
-    const load = await runLoadMedian(c.make)
+    const load = await runLoadMedian(c.make, c.loadRuns)
     report.push({ candidate: c.id, results, load })
     render(c.title, results, load)
   }

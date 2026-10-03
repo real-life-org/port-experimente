@@ -8,6 +8,8 @@ export interface LoadResult {
   readonly ms: number
   /** Laufzeit pro Autoritätsoperation inkl. Zustellung an alle Geräte. */
   readonly msPerOp: number
+  /** Nur bei eigenem Transport: davon Wartezeit beim Abfragen (Relay-Debounce, Ruhe-Erkennung). */
+  readonly idleMs?: number
   readonly error?: string
 }
 
@@ -46,10 +48,15 @@ export async function runLoad(make: () => Candidate, members = 30, operations = 
     }
     await w.flush()
     const ms = performance.now() - t0
-    return { members, operations, ms, msPerOp: ms / operations }
+    const idleMs = candidate.transport?.idleMs()
+    return { members, operations, ms, msPerOp: ms / operations, ...(idleMs === undefined ? {} : { idleMs }) }
   } catch (e) {
     const ms = performance.now() - t0
     return { members, operations, ms, msPerOp: ms / operations, error: (e as Error).message }
+  } finally {
+    // Auch nach einem Fehler: Adapter, Timer und Verbindungen schließen,
+    // damit keine Hintergrundarbeit in den nächsten Lauf hineinwirkt.
+    await candidate.dispose?.().catch(() => {})
   }
 }
 
