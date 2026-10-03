@@ -77,11 +77,11 @@ export const scenarios: Scenario[] = [
     needs: [],
     async run(w) {
       await base(w)
-      w.partition(['bob'])
+      await w.partition(['bob'])
       await w.write('bob', 'offline-bob')
       await w.write('alice', 'online-alice')
       await w.flush()
-      w.heal()
+      await w.heal()
       await w.flush()
       const want = ['offline-bob', 'online-alice']
       const ok = ['alice', 'bob', 'carol'].every((d) => same(w.read(d), want))
@@ -98,11 +98,11 @@ export const scenarios: Scenario[] = [
     needs: [],
     async run(w) {
       await base(w)
-      w.partition(['alice', 'carol'], ['bob'])
+      await w.partition(['alice', 'carol'], ['bob'])
       await w.remove('alice', 'bob')
       await w.write('bob', 'bob-gleichzeitig')
       await w.flush()
-      w.heal()
+      await w.heal()
       await w.flush()
       await w.write('alice', 'danach')
       await w.flush()
@@ -125,11 +125,11 @@ export const scenarios: Scenario[] = [
       await base(w, [['dave', 'member']])
       await w.add('alice', 'bob', 'admin')
       await w.flush()
-      w.partition(['alice', 'carol'], ['bob', 'dave'])
+      await w.partition(['alice', 'carol'], ['bob', 'dave'])
       await w.remove('alice', 'carol')
       await w.remove('bob', 'dave')
       await w.flush()
-      w.heal()
+      await w.heal()
       await w.flush()
       await w.write('alice', 'danach')
       await w.flush()
@@ -151,17 +151,20 @@ export const scenarios: Scenario[] = [
       await base(w)
       await w.add('alice', 'bob', 'admin')
       await w.flush()
-      w.partition(['alice'], ['bob'])
+      await w.partition(['alice'], ['bob'])
       await w.remove('alice', 'bob')
       await w.remove('bob', 'alice')
       await w.flush()
-      w.heal()
+      await w.heal()
       await w.flush()
-      const m = membersAgree(w, ['alice', 'bob', 'carol'])
-      // Kein festes Soll für das Ergebnis (Produktfrage); verlangt ist Determinismus.
+      // Kein festes Soll für das Ergebnis (Produktfrage); verlangt ist, dass sich
+      // alle einig sind, die laut Carol (unbeteiligt) noch Mitglied sind.
+      const remaining = ['alice', 'bob', 'carol'].filter((d) => d === 'carol' || w.members('carol').includes(d))
+      const m = membersAgree(w, remaining)
+      const others = ['alice', 'bob'].filter((d) => !remaining.includes(d)).map((d) => `${d} (entfernt) sieht ${fmt(w.members(d))}`)
       return {
         outcome: verdict(m.agree),
-        authority: `${m.text}; Zustand ${w.candidate.status('carol')}`,
+        authority: [`${m.text}`, ...others, `Zustand ${w.candidate.status('carol')}`].join('; '),
         keys: '—',
       }
     },
@@ -174,11 +177,11 @@ export const scenarios: Scenario[] = [
       await base(w)
       await w.add('alice', 'bob', 'admin')
       await w.flush()
-      w.partition(['alice', 'carol'], ['bob'])
+      await w.partition(['alice', 'carol'], ['bob'])
       await w.remove('alice', 'carol')
       await w.candidate.rotate('bob')
       await w.flush()
-      w.heal()
+      await w.heal()
       await w.flush()
       await w.write('bob', 'danach')
       await w.flush()
@@ -200,11 +203,11 @@ export const scenarios: Scenario[] = [
       await base(w)
       await w.add('alice', 'bob', 'admin')
       await w.flush()
-      w.partition(['alice'], ['bob'])
+      await w.partition(['alice'], ['bob'])
       await w.candidate.changePolicy('alice', 'regel-a')
       await w.candidate.changePolicy('bob', 'regel-b')
       await w.flush()
-      w.heal()
+      await w.heal()
       await w.flush()
       const states = ['alice', 'bob', 'carol'].map((d) => w.candidate.status(d))
       const agree = states.every((s) => s === states[0])
@@ -223,19 +226,24 @@ export const scenarios: Scenario[] = [
       await base(w, [['mallory', 'admin']])
       await w.device('x', 'x')
       await w.device('y', 'y')
-      w.partition(['alice', 'bob', 'carol'], ['mallory', 'x', 'y'])
+      await w.partition(['alice', 'bob', 'carol'], ['mallory', 'x', 'y'])
       await w.remove('alice', 'mallory')
       await w.add('mallory', 'x', 'admin')
       await w.flush()
-      await w.add('x', 'y', 'member')
+      let chain = 'x lädt y ein'
+      try {
+        await w.add('x', 'y', 'member')
+      } catch (e) {
+        chain = `x kann y nicht einladen (${(e as Error).message})`
+      }
       await w.flush()
-      w.heal()
+      await w.heal()
       await w.flush()
       const m = membersAgree(w, ['alice', 'bob', 'carol'])
       const puppets = ['mallory', 'x', 'y'].filter((p) => w.members('alice').includes(p))
       return {
         outcome: verdict(m.agree && puppets.length === 0),
-        authority: `${m.text}; übrig aus Mallorys Kette: ${puppets.length ? puppets.join(',') : 'niemand'}`,
+        authority: `${m.text}; übrig aus Mallorys Kette: ${puppets.length ? puppets.join(',') : 'niemand'}; ${chain}`,
         keys: '—',
       }
     },
@@ -308,7 +316,7 @@ export const scenarios: Scenario[] = [
       await base(w, [['dave', 'member']])
       await w.add('alice', 'bob', 'admin')
       await w.flush()
-      w.partition(['bob', 'carol', 'dave'], ['alice'])
+      await w.partition(['bob', 'carol', 'dave'], ['alice'])
       await w.remove('bob', 'dave')
       await w.flush()
       await w.write('carol', 'ohne-alice')
@@ -317,7 +325,7 @@ export const scenarios: Scenario[] = [
       const bobReads = w.read('bob').includes('ohne-alice')
       return {
         outcome: verdict(daveOut && bobReads && !w.read('dave').includes('ohne-alice')),
-        authority: `Carol sieht ${fmt(w.members('carol'))}`,
+        authority: `Carol sieht ${fmt(w.members('carol'))}; Zustand ${w.candidate.status('bob')}`,
         keys: `Bob liest Neues: ${bobReads ? 'ja' : 'nein'}; Dave liest Neues: ${w.read('dave').includes('ohne-alice') ? 'ja' : 'nein'}`,
       }
     },
@@ -336,6 +344,8 @@ export async function runScenario(make: () => Candidate, s: Scenario): Promise<S
     return { scenario: s.id, title: s.title, ms: performance.now() - t0, ...r }
   } catch (e) {
     return { scenario: s.id, title: s.title, outcome: 'nicht bestanden', authority: `Fehler: ${(e as Error).message}`, keys: '—', ms: performance.now() - t0 }
+  } finally {
+    await candidate.dispose?.()
   }
 }
 

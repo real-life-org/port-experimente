@@ -21,6 +21,13 @@ export class World {
 
   constructor(readonly candidate: Candidate) {}
 
+  /** Geräte, die im Modus „eigener Transport“ gerade offline geschaltet sind. */
+  private offline = new Set<Device>()
+
+  private get own() {
+    return this.candidate.transport
+  }
+
   async device(person: Person, device: Device): Promise<void> {
     const doc = new Y.Doc()
     doc.on('update', (update: Uint8Array, origin: unknown) => {
@@ -46,6 +53,7 @@ export class World {
 
   /** Schreibt einen Eintrag ins Y.Doc des Geräts; der Kandidat versiegelt das Update. */
   async write(device: Device, text: string): Promise<void> {
+    if (this.own) return this.own.write(device, text)
     const doc = this.doc(device)
     doc.transact(() => doc.getArray<string>('eintraege').push([text]), LOCAL)
     const sealing = this.pendingSeal.splice(0)
@@ -53,6 +61,7 @@ export class World {
   }
 
   read(device: Device): string[] {
+    if (this.own) return this.own.read(device).slice().sort()
     return this.doc(device).getArray<string>('eintraege').toArray().slice().sort()
   }
 
@@ -61,19 +70,34 @@ export class World {
   }
 
   /** Teilt die Welt; nicht genannte Geräte landen in der letzten Gruppe. */
-  partition(...groups: Device[][]): void {
+  async partition(...groups: Device[][]): Promise<void> {
+    if (this.own) {
+      // Nur die erste Gruppe erreicht das Relay; alle anderen sind offline.
+      for (const d of this.docs.keys()) {
+        if (groups[0]?.includes(d)) continue
+        this.offline.add(d)
+        await this.own.setOnline(d, false)
+      }
+      return
+    }
     const all = [...this.docs.keys()]
     groups.forEach((g, i) => g.forEach((d) => this.partitionOf.set(d, i + 1)))
     const rest = groups.length + 1
     for (const d of all) if (!groups.some((g) => g.includes(d))) this.partitionOf.set(d, rest)
   }
 
-  heal(): void {
+  async heal(): Promise<void> {
+    if (this.own) {
+      for (const d of this.offline) await this.own.setOnline(d, true)
+      this.offline.clear()
+      return
+    }
     for (const d of this.docs.keys()) this.partitionOf.set(d, 0)
   }
 
   /** Stellt so lange zu, bis niemand mehr etwas zu senden oder zu empfangen hat. */
   async flush(maxRounds = 50): Promise<void> {
+    if (this.own) return this.own.settle()
     for (let round = 0; round < maxRounds; round++) {
       let moved = false
       for (const d of this.docs.keys()) {
