@@ -1,3 +1,4 @@
+import * as Y from 'yjs'
 import { World } from './world'
 import type { Candidate, Capability, Outcome, ScenarioResult } from './types'
 
@@ -287,22 +288,63 @@ export const scenarios: Scenario[] = [
     },
   },
   {
+    id: 'S6b',
+    title: 'Neues Mitglied liest die Historie nach dem nächsten Eintrag',
+    needs: [],
+    async run(w) {
+      await base(w)
+      for (const t of ['alt-1', 'alt-2']) await w.write('alice', t)
+      await w.write('bob', 'alt-bob')
+      await w.flush()
+      await w.device('dave', 'dave')
+      await w.flush()
+      await w.add('alice', 'dave')
+      await w.flush()
+      const direkt = w.read('dave').length
+      // Bei kausaler Verschlüsselung (Keyhive) öffnet erst ein neuer Eintrag
+      // den Weg zurück in die Historie.
+      await w.write('alice', 'neu')
+      await w.flush()
+      const r = w.read('dave')
+      return {
+        outcome: verdict(same(r, ['alt-1', 'alt-2', 'alt-bob', 'neu'])),
+        authority: `Dave Mitglied: ${w.members('alice').includes('dave') ? 'ja' : 'nein'}`,
+        keys: `direkt nach Aufnahme ${direkt} Einträge; nach neuem Eintrag ${fmt(r)}`,
+      }
+    },
+  },
+  {
     id: 'S7',
     title: 'Gerät erbeutet, danach Rotation: liest der Angreifer weiter?',
     needs: ['steal', 'rotate'],
     async run(w) {
       await base(w)
-      const stolen = w.candidate.steal('bob')
+      await w.write('alice', 'vorher-1')
+      await w.write('carol', 'vorher-2')
+      await w.flush()
+      // Diebstahl: ganzer Gerätezustand von Bob, inklusive seines Yjs-Stands.
+      const theft = w.log.length
+      const stolen = await w.candidate.steal('bob')
+      const attackerDoc = new Y.Doc()
+      Y.applyUpdate(attackerDoc, Y.encodeStateAsUpdate(w.docs.get('bob')!))
+      // Positivkontrolle: zwischen Diebstahl und Rotation muss er mitlesen können.
+      await w.write('alice', 'vor-rotation')
+      await w.flush()
       await w.candidate.rotate('bob')
       await w.flush()
-      const mark = w.log.length
       await w.write('alice', 'nach-rotation')
       await w.flush()
-      const opened = w.messagesSince(mark).map((m) => w.candidate.attackerOpen(stolen, m)).filter((x) => x !== null)
+      for (const m of w.log.slice(theft)) {
+        for (const u of await w.candidate.attackerOpen(stolen, m)) Y.applyUpdate(attackerDoc, u)
+      }
+      const seen = attackerDoc.getArray<string>('eintraege').toArray()
+      const control = seen.includes('vor-rotation')
+      const leaked = seen.includes('nach-rotation')
+      const honest = ['alice', 'carol'].every((d) => w.read(d).includes('nach-rotation'))
       return {
-        outcome: verdict(opened.length === 0),
+        outcome: verdict(control && !leaked && honest),
         authority: '—',
-        keys: opened.length ? `Angreifer öffnet ${opened.length} Nachricht(en) nach der Rotation` : 'Angreifer öffnet nichts nach der Rotation',
+        keys: `Angreifer liest vor der Rotation: ${control ? 'ja' : 'NEIN (Angreifer-Modell wirkungslos)'}; nach der Rotation: ${leaked ? 'ja' : 'nein'}; Alice/Carol lesen nach der Rotation: ${honest ? 'ja' : 'nein'}`,
       }
     },
   },
