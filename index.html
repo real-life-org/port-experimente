@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Port-Experimente</title>
+<style>
+:root{--bg:#f4f5f3;--fg:#1c2321;--muted:#5d6762;--line:#d6dad5;--card:#fff;--ok:#1d5a32;--okbg:#dcefe2;--no:#8a2d22;--nobg:#f6dfdc;--na:#5d6762;--nabg:#e8eae7;--accent:#2d5b4f;color-scheme:light}
+@media (prefers-color-scheme:dark){:root{--bg:#141917;--fg:#e4e9e6;--muted:#9aa5a0;--line:#2e3733;--card:#1b211f;--ok:#9fdcb0;--okbg:#1f3a28;--no:#f0a499;--nobg:#3e2420;--na:#9aa5a0;--nabg:#262c29;--accent:#8cc7b4;color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;padding:0 16px;padding-block:20px 48px}
+main{max-width:1000px;margin:0 auto;display:flex;flex-direction:column;gap:16px}
+h1{font-size:22px;margin:0}
+p{margin:0;color:var(--muted)}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button{font:inherit;padding:8px 14px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:var(--bg);cursor:pointer}
+button.ghost{background:transparent;color:var(--accent)}
+button:disabled{opacity:.5}
+code,.mono{font-family:ui-monospace,"JetBrains Mono",monospace;font-size:13px}
+.env{font-size:13px;color:var(--muted);word-break:break-word}
+section{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:12px;display:flex;flex-direction:column;gap:10px}
+h2{font-size:16px;margin:0}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:13px;font-variant-numeric:tabular-nums}
+th,td{text-align:left;padding:6px 8px;border-top:1px solid var(--line);vertical-align:top}
+th{color:var(--muted);font-weight:600}
+.o{display:inline-block;padding:2px 6px;border-radius:4px;white-space:nowrap;font-size:12px}
+.o.ok{background:var(--okbg);color:var(--ok)}.o.no{background:var(--nobg);color:var(--no)}.o.na{background:var(--nabg);color:var(--na)}
+.load{font-size:14px}
+</style>
+</head>
+<body>
+<main>
+  <h1>Port-Experimente</h1>
+  <p>Gleiche Szenarien für jeden Kandidaten (Plan: rltp/design/port-experimente-2026-10.md). Der Lasttest ist S9: 30 Mitglieder, 500 Autoritätsoperationen.</p>
+  <div class="bar">
+    <button id="run" type="button">Alle Läufe starten</button>
+    <button id="copy" type="button" class="ghost" disabled>Ergebnis als JSON kopieren</button>
+    <span id="state" class="env"></span>
+  </div>
+  <div id="env" class="env mono"></div>
+  <div id="out" style="display:flex;flex-direction:column;gap:16px"></div>
+  <textarea id="json" class="mono" rows="6" hidden readonly></textarea>
+</main>
+<script type="module" src="./src/main.ts"></script>
+</body>
+</html>
