@@ -107,10 +107,12 @@ export async function runContentLoad(make: () => Candidate, members = 10, writes
     }
     await w.flush()
     const ms = performance.now() - t0
-    const seen = w.read(people[members - 1]!).length
     const idle = candidate.transport ? candidate.transport.idleMs() - idle0 : undefined
-    if (seen !== writes) {
-      return { members, operations: writes, ms, msPerOp: ms / writes, error: `letztes Gerät liest ${seen} von ${writes}` }
+    // Jedes Gerät muss alle Einträge lesen, nicht nur eines.
+    const short = people.map((p) => [p, w.read(p).length] as const).filter(([, n]) => n !== writes)
+    if (short.length) {
+      const list = short.map(([p, n]) => `${p} liest ${n}`).join(', ')
+      return { members, operations: writes, ms, msPerOp: ms / writes, error: `nicht alle lesen ${writes} Einträge: ${list}` }
     }
     // Bei eigenem Transport wird auch während des Wartens gearbeitet; eine
     // Zeit je Zustellung ließe sich nicht ehrlich angeben.
