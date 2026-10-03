@@ -50,17 +50,11 @@ default = [
     "sqlite",
     "macros",
 ]
-encryption = [
-    "dep:p2panda-encryption",
-    "sqlite",
-]
-groups = [
-    "dep:p2panda-auth",
-    "sqlite",
-]
+encryption = ["dep:p2panda-encryption"]
+groups = ["dep:p2panda-auth"]
 macros = []
 spaces = [
-    "sqlite",
+    "dep:serde",
     "groups",
     "encryption",
 ]

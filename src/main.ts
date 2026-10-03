@@ -1,6 +1,6 @@
 import { candidates } from './candidates'
 import { runAll } from './lab/scenarios'
-import { runLoadMedian, type LoadResult } from './lab/load'
+import { runContentLoad, runLoadMedian, type LoadResult } from './lab/load'
 import type { ScenarioResult } from './lab/types'
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
@@ -32,13 +32,18 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, classN
   return e
 }
 
-function render(title: string, results: ScenarioResult[], load: LoadResult) {
+function loadLine(name: string, load: LoadResult) {
+  return load.error
+    ? `${name}: Fehler ${load.error}`
+    : `${name}${load.runs ? ` (Median aus ${load.runs} Läufen)` : ''}: ${load.members} Mitglieder, ${load.operations} Operationen in ${load.ms.toFixed(0)} ms (${load.msPerOp.toFixed(3)} ms je Operation)${load.idleMs === undefined ? '' : `, davon ${load.idleMs.toFixed(0)} ms Warten auf Ruhe`}${load.msPerDelivery === undefined ? '' : `; je Gerät und Nachricht ${load.msPerDelivery.toFixed(2)} ms`}`
+}
+
+function render(title: string, results: ScenarioResult[], load: LoadResult, content: LoadResult) {
   const sec = el('section')
   sec.append(el('h2', title))
-  const l = el('div', load.error
-    ? `S9 Last: Fehler ${load.error}`
-    : `S9 Last (Median aus ${load.runs ?? 1} Läufen): ${load.members} Mitglieder, ${load.operations} Operationen in ${load.ms.toFixed(0)} ms (${load.msPerOp.toFixed(3)} ms je Operation)${load.idleMs === undefined ? '' : `, davon ${load.idleMs.toFixed(0)} ms Warten auf Ruhe`}`, 'load')
+  const l = el('div', loadLine('S9 Autorität', load), 'load')
   sec.append(l)
+  sec.append(el('div', loadLine('S9b Inhalte', content), 'load'))
   const wrap = el('div', undefined, 'scroll')
   const t = el('table')
   const head = el('tr')
@@ -60,14 +65,15 @@ runBtn.addEventListener('click', async () => {
   runBtn.disabled = true
   copyBtn.disabled = true
   out.replaceChildren()
-  const report: Array<{ candidate: string; results: ScenarioResult[]; load: LoadResult }> = []
+  const report: Array<{ candidate: string; results: ScenarioResult[]; load: LoadResult; content: LoadResult }> = []
   for (const c of candidates) {
     state.textContent = `läuft: ${c.id} …`
     await new Promise((r) => setTimeout(r, 0))
     const results = await runAll(c.make)
     const load = await runLoadMedian(c.make, c.loadRuns)
-    report.push({ candidate: c.id, results, load })
-    render(c.title, results, load)
+    const content = await runContentLoad(c.make)
+    report.push({ candidate: c.id, results, load, content })
+    render(c.title, results, load, content)
   }
   state.textContent = 'fertig'
   json.value = JSON.stringify({ at: new Date().toISOString(), device: deviceInput.value.trim() || null, env, report }, null, 1)

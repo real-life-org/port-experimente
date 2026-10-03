@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use web_time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -125,7 +125,7 @@ pub enum LifetimeError {
     InvalidLifetime,
 
     #[error(transparent)]
-    SystemTime(std::time::SystemTimeError),
+    SystemTime(web_time::SystemTimeError),
 }
 
 #[cfg(test)]

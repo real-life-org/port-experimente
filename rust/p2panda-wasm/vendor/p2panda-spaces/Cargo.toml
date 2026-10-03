@@ -66,10 +66,7 @@ default-features = false
 
 [dependencies.p2panda-store]
 version = "0.7.1"
-features = [
-    "sqlite",
-    "spaces",
-]
+features = ["spaces"]
 default-features = false
 
 [dependencies.petgraph]
@@ -85,6 +82,11 @@ version = "2.0.18"
 [dependencies.tokio]
 version = "1.52.3"
 features = ["sync"]
+default-features = false
+
+[dev-dependencies.p2panda-store]
+version = "0.7.1"
+features = ["sqlite", "spaces"]
 default-features = false
 
 [dev-dependencies.tokio]

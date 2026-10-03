@@ -10,6 +10,8 @@ export interface LoadResult {
   readonly msPerOp: number
   /** Nur bei eigenem Transport: davon Wartezeit beim Abfragen (Relay-Debounce, Ruhe-Erkennung). */
   readonly idleMs?: number
+  /** Nur S9b: Zeit je Gerät und empfangener Nachricht. */
+  readonly msPerDelivery?: number
   readonly error?: string
 }
 
@@ -34,6 +36,7 @@ export async function runLoad(make: () => Candidate, members = 30, operations = 
   const t0 = performance.now()
   try {
     for (const p of people) await w.device(p, p)
+    await w.flush() // Geräte machen sich bekannt (Key-Bundles), bevor eingeladen wird
     await w.createGroup('p00')
     for (const p of people.slice(1)) await w.add('p00', p)
     await w.flush()
@@ -76,4 +79,46 @@ export async function runLoadMedian(make: () => Candidate, runs = 5, members = 3
   results.sort((a, b) => a.ms - b.ms)
   const median = results[Math.floor(results.length / 2)]!
   return { ...median, runs }
+}
+
+/**
+ * S9b-Last: Inhalte statt Mitgliedschaft. Eine Gruppe mit `members` Personen,
+ * `writes` verschlüsselte Einträge reihum, alle 50 wird zugestellt. Misst den
+ * Durchsatz von Verschlüsseln, Verteilen und Entschlüsseln an alle Geräte.
+ * `msPerDelivery`: Zeit je Gerät und empfangener Nachricht (was ein echtes
+ * Gerät pro eingehender Nachricht zahlt; der Prüfstand rechnet alle Geräte in
+ * einem Thread).
+ */
+export async function runContentLoad(make: () => Candidate, members = 10, writes = 100): Promise<LoadResult> {
+  const candidate = make()
+  const w = new World(candidate)
+  const people = Array.from({ length: members }, (_, i) => `p${String(i).padStart(2, '0')}`)
+  try {
+    for (const p of people) await w.device(p, p)
+    await w.flush()
+    await w.createGroup('p00')
+    for (const p of people.slice(1)) await w.add('p00', p)
+    await w.flush()
+    const t0 = performance.now()
+    const idle0 = candidate.transport?.idleMs() ?? 0
+    for (let i = 0; i < writes; i++) {
+      await w.write(people[i % members]!, `eintrag-${i}`)
+      if (i % 50 === 49) await w.flush()
+    }
+    await w.flush()
+    const ms = performance.now() - t0
+    const seen = w.read(people[members - 1]!).length
+    const idle = candidate.transport ? candidate.transport.idleMs() - idle0 : undefined
+    if (seen !== writes) {
+      return { members, operations: writes, ms, msPerOp: ms / writes, error: `letztes Gerät liest ${seen} von ${writes}` }
+    }
+    // Bei eigenem Transport wird auch während des Wartens gearbeitet; eine
+    // Zeit je Zustellung ließe sich nicht ehrlich angeben.
+    if (idle !== undefined) return { members, operations: writes, ms, msPerOp: ms / writes, idleMs: idle }
+    return { members, operations: writes, ms, msPerOp: ms / writes, msPerDelivery: ms / (writes * (members - 1)) }
+  } catch (e) {
+    return { members, operations: writes, ms: 0, msPerOp: 0, error: (e as Error).message }
+  } finally {
+    await candidate.dispose?.().catch(() => {})
+  }
 }

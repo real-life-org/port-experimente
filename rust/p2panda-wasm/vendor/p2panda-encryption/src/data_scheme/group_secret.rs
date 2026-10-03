@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::{IntoIter, Iter, Keys, Values};
 use std::fmt;
 use std::hash::Hash as StdHash;
-use std::time::{SystemTime, SystemTimeError, UNIX_EPOCH};
+use web_time::{SystemTime, SystemTimeError, UNIX_EPOCH};
 
 use p2panda_core::cbor::{DecodeError, EncodeError, decode_cbor, encode_cbor};
 use serde::de::{SeqAccess, Visitor};

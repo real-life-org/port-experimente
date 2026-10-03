@@ -18,6 +18,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # p2panda-Kandidat: Rust 1.96 mit wasm32-Ziel und wasm-bindgen-cli
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.96'
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust/p2panda-wasm
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@0.2.129
+      - run: sh scripts/build-wasm.sh
+        env:
+          RUST_TOOLCHAIN: '1.96'
+      - name: Rust-Tests der Hülle (u. a. die beiden p2panda-Befunde)
+        run: cargo +1.96 test --manifest-path rust/p2panda-wasm/Cargo.toml --test peer
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:

@@ -22,3 +22,10 @@ it('lehnt eine Zahl von Läufen ab, die keine positive ganze Zahl ist', async ()
     await expect(runLoadMedian(klartext, runs, 3, 5)).rejects.toThrow(RangeError)
   }
 })
+
+it('S9b-Inhaltslast: das letzte Gerät liest alle Einträge', async () => {
+  const { runContentLoad } = await import('../src/lab/load')
+  const r = await runContentLoad(klartext, 5, 60)
+  expect(r.error).toBeUndefined()
+  expect(r.operations).toBe(60)
+})

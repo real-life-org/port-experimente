@@ -112,3 +112,6 @@ version = "1.0.150"
 [lints.clippy]
 needless_pass_by_ref_mut = "warn"
 unused_async = "warn"
+
+[dependencies.web-time]
+version = "1"

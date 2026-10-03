@@ -7,7 +7,7 @@ use std::num::ParseIntError;
 use std::ops::Add;
 use std::str::FromStr;
 #[cfg(not(any(test, feature = "test_utils")))]
-use std::time::{SystemTime, SystemTimeError, UNIX_EPOCH};
+use web_time::{SystemTime, SystemTimeError, UNIX_EPOCH};
 
 #[cfg(any(test, feature = "test_utils"))]
 use mock_instant::SystemTimeError;
