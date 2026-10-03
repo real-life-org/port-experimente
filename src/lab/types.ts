@@ -34,10 +34,30 @@ export interface Received {
   readonly content: Uint8Array[]
 }
 
+/**
+ * Kandidaten mit eigenem Transport (z. B. WoT Gen 2 mit Relay, Inbox und
+ * Log-Sync) laufen nicht über das Netz des Prüfstands. Sie verwalten ihre
+ * Inhalte selbst; der Prüfstand schaltet Geräte nur online/offline.
+ * Partition: Nur die erste Gruppe erreicht das Relay, alle anderen sind offline.
+ */
+export interface OwnTransport {
+  setOnline(device: Device, online: boolean): Promise<void>
+  /** Wartet, bis der Kandidat zur Ruhe gekommen ist, und aktualisiert members()/read(). */
+  settle(): Promise<void>
+  write(device: Device, text: string): Promise<void>
+  read(device: Device): string[]
+  /** Summe der Wartezeit beim Abfragen in settle(), in ms (für S9: aktive Zeit = gesamt − Leerlauf). */
+  idleMs(): number
+}
+
 /** Ein Kandidat hinter dem Prüfstand. Eine Instanz = eine Gruppe. */
 export interface Candidate {
   readonly id: string
   readonly capabilities: ReadonlySet<Capability>
+  /** Gesetzt, wenn der Kandidat seinen eigenen Transport mitbringt. */
+  readonly transport?: OwnTransport
+  /** Räumt Timer und Verbindungen auf. */
+  dispose?(): Promise<void>
 
   /** Legt ein Gerät an. Gehört die Person schon zur Gruppe, soll das Gerät nach Sync mitlesen (S5). */
   addDevice(person: Person, device: Device): Promise<void>

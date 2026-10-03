@@ -2,11 +2,14 @@ import { World } from './world'
 import type { Candidate } from './types'
 
 export interface LoadResult {
+  readonly runs?: number
   readonly members: number
   readonly operations: number
   readonly ms: number
   /** Laufzeit pro Autoritätsoperation inkl. Zustellung an alle Geräte. */
   readonly msPerOp: number
+  /** Nur bei eigenem Transport: davon Wartezeit beim Abfragen (Relay-Debounce, Ruhe-Erkennung). */
+  readonly idleMs?: number
   readonly error?: string
 }
 
@@ -45,9 +48,32 @@ export async function runLoad(make: () => Candidate, members = 30, operations = 
     }
     await w.flush()
     const ms = performance.now() - t0
-    return { members, operations, ms, msPerOp: ms / operations }
+    const idleMs = candidate.transport?.idleMs()
+    return { members, operations, ms, msPerOp: ms / operations, ...(idleMs === undefined ? {} : { idleMs }) }
   } catch (e) {
     const ms = performance.now() - t0
     return { members, operations, ms, msPerOp: ms / operations, error: (e as Error).message }
+  } finally {
+    // Auch nach einem Fehler: Adapter, Timer und Verbindungen schließen,
+    // damit keine Hintergrundarbeit in den nächsten Lauf hineinwirkt.
+    await candidate.dispose?.().catch(() => {})
   }
+}
+
+/**
+ * Mehrere Läufe, gemeldet wird der Median. Browser runden
+ * `performance.now()` teils auf ganze Millisekunden (Firefox, vermutlich
+ * auch Vanadium); einzelne kurze Läufe sind dann nicht aussagekräftig.
+ */
+export async function runLoadMedian(make: () => Candidate, runs = 5, members = 30, operations = 500): Promise<LoadResult> {
+  if (!Number.isInteger(runs) || runs <= 0) throw new RangeError(`runs muss eine positive ganze Zahl sein, war ${runs}`)
+  const results: LoadResult[] = []
+  for (let i = 0; i < runs; i++) {
+    const r = await runLoad(make, members, operations)
+    if (r.error) return { ...r, runs: i + 1 }
+    results.push(r)
+  }
+  results.sort((a, b) => a.ms - b.ms)
+  const median = results[Math.floor(results.length / 2)]!
+  return { ...median, runs }
 }

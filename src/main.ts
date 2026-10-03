@@ -1,6 +1,6 @@
 import { candidates } from './candidates'
 import { runAll } from './lab/scenarios'
-import { runLoad, type LoadResult } from './lab/load'
+import { runLoadMedian, type LoadResult } from './lab/load'
 import type { ScenarioResult } from './lab/types'
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
@@ -9,6 +9,11 @@ const copyBtn = $<HTMLButtonElement>('copy')
 const out = $('out')
 const state = $('state')
 const json = $<HTMLTextAreaElement>('json')
+const deviceInput = $<HTMLInputElement>('device')
+try { deviceInput.value = localStorage.getItem('port-experimente:geraet') ?? '' } catch {}
+deviceInput.addEventListener('change', () => {
+  try { localStorage.setItem('port-experimente:geraet', deviceInput.value) } catch {}
+})
 
 const env = {
   userAgent: navigator.userAgent,
@@ -32,7 +37,7 @@ function render(title: string, results: ScenarioResult[], load: LoadResult) {
   sec.append(el('h2', title))
   const l = el('div', load.error
     ? `S9 Last: Fehler ${load.error}`
-    : `S9 Last: ${load.members} Mitglieder, ${load.operations} Operationen in ${load.ms.toFixed(0)} ms (${load.msPerOp.toFixed(2)} ms je Operation)`, 'load')
+    : `S9 Last (Median aus ${load.runs ?? 1} Läufen): ${load.members} Mitglieder, ${load.operations} Operationen in ${load.ms.toFixed(0)} ms (${load.msPerOp.toFixed(3)} ms je Operation)${load.idleMs === undefined ? '' : `, davon ${load.idleMs.toFixed(0)} ms Warten auf Ruhe`}`, 'load')
   sec.append(l)
   const wrap = el('div', undefined, 'scroll')
   const t = el('table')
@@ -60,12 +65,12 @@ runBtn.addEventListener('click', async () => {
     state.textContent = `läuft: ${c.id} …`
     await new Promise((r) => setTimeout(r, 0))
     const results = await runAll(c.make)
-    const load = await runLoad(c.make)
+    const load = await runLoadMedian(c.make, c.loadRuns)
     report.push({ candidate: c.id, results, load })
     render(c.title, results, load)
   }
   state.textContent = 'fertig'
-  json.value = JSON.stringify({ at: new Date().toISOString(), env, report }, null, 1)
+  json.value = JSON.stringify({ at: new Date().toISOString(), device: deviceInput.value.trim() || null, env, report }, null, 1)
   runBtn.disabled = false
   copyBtn.disabled = false
 })
