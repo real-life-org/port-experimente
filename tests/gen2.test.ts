@@ -15,15 +15,15 @@ describe('Kandidat WoT Gen 2', () => {
       S2: 'bestanden',
       S3: 'bestanden',
       S4a: 'bestanden', // Relay sperrt Bobs veraltete Generation
-      S4b: 'nicht bestanden', // befördeter Admin kann nicht durchsetzen (Relay kennt nur den Gründer)
-      S4c: 'bestanden', // nur der Gründer kann durchsetzen; Bobs Entfernung bleibt vorgemerkt
+      S4b: 'nicht bestanden', // befördeter Admin: adapter-yjs 0.3.0 sendet kein admin-add (Sync 005 verlangt es)
+      S4c: 'bestanden', // formal: Bob kann aus demselben Grund nicht durchsetzen, nichts ist gleichzeitig
       S4d: 'nicht abbildbar', // keine Rotation ohne Mitgliedschaftsänderung
       S4e: 'nicht abbildbar', // keine Gruppenregeln
-      S4f: 'bestanden', // ohne Relay erreicht Mallorys Einladung niemanden
-      S5: 'bestanden', // PersonalDoc-Sync durch geteilten Speicher ersetzt
+      S4f: 'bestanden', // formal: Mallorys Kette entsteht offline gar nicht
+      S5: 'nicht abbildbar', // Zweitgerät läuft über das PersonalDoc (Singleton im Prozess)
       S6: 'bestanden',
       S7: 'nicht abbildbar',
-      S8: 'nicht bestanden', // ohne Gründer kann niemand entfernen
+      S8: 'nicht bestanden', // wie S4b: Relay erfährt nie von Bobs Beförderung
     })
   }, 240_000)
 })

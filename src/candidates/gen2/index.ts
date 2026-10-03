@@ -30,10 +30,6 @@ interface PersonState {
   identity: PublicIdentitySession
   did: string
   encKey: Uint8Array
-  // Geteilt zwischen den Geräten einer Person: ersetzt den PersonalDoc-Sync
-  // (der ist im Prozess ein Singleton und hier nicht nutzbar).
-  keyManagement: InMemoryKeyManagementAdapter
-  metadataStorage: InMemorySpaceMetadataStorage
 }
 
 interface DeviceState {
@@ -41,6 +37,7 @@ interface DeviceState {
   // Wie produktiv (RLS): Outbox puffert Nachrichten, solange das Gerät offline ist.
   messaging: OutboxMessagingAdapter
   adapter: YjsReplicationAdapter
+  keyManagement: InMemoryKeyManagementAdapter
   handle?: SpaceHandle<Doc>
   online: boolean
 }
@@ -73,8 +70,6 @@ export function gen2(): Candidate {
       identity,
       did: identity.getDid(),
       encKey: await identity.getEncryptionPublicKeyBytes(),
-      keyManagement: new InMemoryKeyManagementAdapter(),
-      metadataStorage: new InMemorySpaceMetadataStorage(),
     }
     people.set(p, state)
     byDid.set(state.did, p)
@@ -100,7 +95,7 @@ export function gen2(): Candidate {
     const h = info ? await handle(d) : undefined
     const items = h ? Object.values(h.getDoc().items ?? {}).map((i) => i.title) : []
     const members = (info?.members ?? []).map((did) => byDid.get(did) ?? did).sort()
-    const gen = spaceId ? await people.get(s.person)!.keyManagement.getCurrentGeneration(spaceId).catch(() => -1) : -1
+    const gen = spaceId ? await s.keyManagement.getCurrentGeneration(spaceId).catch(() => -1) : -1
     return { members, items: items.sort(), status: `gen=${gen}` }
   }
 
@@ -131,7 +126,10 @@ export function gen2(): Candidate {
 
   return {
     id: 'gen2',
-    capabilities: new Set<Capability>(['roles', 'multi-device']),
+    // Kein 'multi-device': Zweitgeräte laufen produktiv über das PersonalDoc,
+    // das im Prozess ein Singleton ist. Speicher zu teilen hieße, den Weg zu
+    // umgehen, den S5 prüfen soll.
+    capabilities: new Set<Capability>(['roles']),
 
     transport: {
       async setOnline(d, online) {
@@ -161,13 +159,14 @@ export function gen2(): Candidate {
       const docLogStore = new InMemoryDocLogStore()
       await docLogStore.init()
       const deviceId = globalThis.crypto.randomUUID()
+      const keyManagement = new InMemoryKeyManagementAdapter()
       await docLogStore.setDeviceId(deviceId)
       const adapter = new YjsReplicationAdapter({
         identity: ps.identity,
         messaging,
         brokerUrls: BROKER_URLS,
-        keyManagement: ps.keyManagement,
-        metadataStorage: ps.metadataStorage,
+        keyManagement,
+        metadataStorage: new InMemorySpaceMetadataStorage(),
         compactStore: new InMemoryCompactStore(),
         docLogStore,
         deviceId,
@@ -187,10 +186,7 @@ export function gen2(): Candidate {
         },
       })
       await adapter.start()
-      devices.set(d, { person: p, messaging, adapter, online: true })
-      // Weiteres Gerät einer Person, die schon im Space ist: Schlüssel und
-      // Metadaten liegen im geteilten Speicher, der Inhalt kommt per Catch-up.
-      if (spaceId && (await adapter.getSpace(spaceId))) await adapter.requestSync(spaceId)
+      devices.set(d, { person: p, messaging, adapter, keyManagement, online: true })
     },
 
     async createGroup(d) {
