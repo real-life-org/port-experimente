@@ -8,3 +8,10 @@ it('S9-Last läuft für den Klartext-Kandidaten fehlerfrei durch', async () => {
   expect(r.operations).toBe(500)
   expect(r.msPerOp).toBeGreaterThan(0)
 })
+
+it('meldet bei mehreren Läufen den Median', async () => {
+  const { runLoadMedian } = await import('../src/lab/load')
+  const r = await runLoadMedian(klartext, 3, 10, 50)
+  expect(r.runs).toBe(3)
+  expect(r.error).toBeUndefined()
+})

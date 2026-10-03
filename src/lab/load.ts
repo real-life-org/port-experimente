@@ -2,6 +2,7 @@ import { World } from './world'
 import type { Candidate } from './types'
 
 export interface LoadResult {
+  readonly runs?: number
   readonly members: number
   readonly operations: number
   readonly ms: number
@@ -50,4 +51,21 @@ export async function runLoad(make: () => Candidate, members = 30, operations = 
     const ms = performance.now() - t0
     return { members, operations, ms, msPerOp: ms / operations, error: (e as Error).message }
   }
+}
+
+/**
+ * Mehrere Läufe, gemeldet wird der Median. Browser runden
+ * `performance.now()` teils auf ganze Millisekunden (Firefox, vermutlich
+ * auch Vanadium); einzelne kurze Läufe sind dann nicht aussagekräftig.
+ */
+export async function runLoadMedian(make: () => Candidate, runs = 5, members = 30, operations = 500): Promise<LoadResult> {
+  const results: LoadResult[] = []
+  for (let i = 0; i < runs; i++) {
+    const r = await runLoad(make, members, operations)
+    if (r.error) return { ...r, runs: i + 1 }
+    results.push(r)
+  }
+  results.sort((a, b) => a.ms - b.ms)
+  const median = results[Math.floor(results.length / 2)]!
+  return { ...median, runs }
 }
