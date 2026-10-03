@@ -22,6 +22,7 @@ describe('Kandidat WoT Gen 2', () => {
       S4f: 'bestanden', // formal: Mallorys Kette entsteht offline gar nicht
       S5: 'nicht abbildbar', // Zweitgerät läuft über das PersonalDoc (Singleton im Prozess)
       S6: 'bestanden',
+      S6b: 'bestanden',
       S7: 'nicht abbildbar',
       S8: 'nicht bestanden', // wie S4b: Relay erfährt nie von Bobs Beförderung
     })

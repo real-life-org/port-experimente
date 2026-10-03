@@ -21,6 +21,7 @@ describe('Kandidat p2panda (WebAssembly)', () => {
       S4f: 'bestanden', // Mallorys Kette wird transitiv ungültig
       S5: 'nicht abbildbar', // verschachtelte Gruppen für Geräte noch nicht verdrahtet
       S6: 'bestanden',
+      S6b: 'bestanden',
       S7: 'nicht abbildbar',
       S8: 'bestanden', // Admin entfernt ohne Gründerin
     })

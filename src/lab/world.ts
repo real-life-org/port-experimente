@@ -131,11 +131,6 @@ export class World {
     throw new Error(`flush: nach ${maxRounds} Runden nicht ruhig`)
   }
 
-  /** Alle Nachrichten ab einer Log-Position (für den Angreifer in S7). */
-  messagesSince(position: number): Msg[] {
-    return this.log.slice(position)
-  }
-
   private doc(device: Device): Y.Doc {
     const doc = this.docs.get(device)
     if (!doc) throw new Error(`unbekanntes Gerät ${device}`)

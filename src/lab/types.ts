@@ -79,9 +79,12 @@ export interface Candidate {
   status(device: Device): string
 
   /** S7: Kopie des geheimen Zustands eines Geräts (Angreifer erbeutet das Gerät). */
-  steal(device: Device): unknown
-  /** S7: Kann ein passiver Angreifer mit dem erbeuteten Zustand diese Nachricht entschlüsseln? */
-  attackerOpen(stolen: unknown, msg: Msg): Uint8Array | null
+  steal(device: Device): unknown | Promise<unknown>
+  /**
+   * S7: Kann ein passiver Angreifer mit dem erbeuteten Zustand diese Nachricht
+   * entschlüsseln? Er sieht allen Verkehr (Nachrichten in Log-Reihenfolge).
+   */
+  attackerOpen(stolen: unknown, msg: Msg): Uint8Array | null | Promise<Uint8Array | null>
 }
 
 export type Outcome = 'bestanden' | 'nicht bestanden' | 'nicht abbildbar'

@@ -22,6 +22,7 @@ describe('Prüfstand mit Klartext-Kandidat', () => {
       S4f: 'nicht bestanden', // Mallorys Kette bleibt
       S5: 'bestanden',
       S6: 'bestanden',
+      S6b: 'bestanden',
       S7: 'nicht bestanden', // Angreifer liest alles
       S8: 'nicht bestanden', // Dave liest weiter
     })
