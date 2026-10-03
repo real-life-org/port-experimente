@@ -1,0 +1,41 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+use p2panda_encryption::key_bundle::{KeyBundleError, LongTermKeyBundle};
+use p2panda_encryption::traits::KeyBundle;
+
+use crate::MemberId;
+
+/// A group member and their long-term key bundle.
+#[derive(Debug)]
+pub struct Member {
+    id: MemberId,
+    key_bundle: LongTermKeyBundle,
+}
+
+impl Member {
+    // @NOTE(adz) **Security:** This struct does _not_ guarantee if the member's handle / id is
+    // authentic. We or applications will need to provide an authentication scheme and validate
+    // `Member` before using it anywhere to prevent impersonation attacks.
+    //
+    // Since we're currently not allowing to construct `Member` from "the outside" (all instances
+    // are provided by our API which derived everything from signed messages) I don't see an issue
+    // yet, but care will be required as soon as `Member` gets constructable, serializable etc.
+    pub(crate) fn new(id: MemberId, key_bundle: LongTermKeyBundle) -> Self {
+        Self { id, key_bundle }
+    }
+
+    /// Identifier for this member.
+    pub fn id(&self) -> MemberId {
+        self.id
+    }
+
+    /// Long-term key bundle for this member.
+    pub fn key_bundle(&self) -> &LongTermKeyBundle {
+        &self.key_bundle
+    }
+
+    /// Verify the key bundle.
+    pub fn verify(&self) -> Result<(), KeyBundleError> {
+        self.key_bundle.verify()
+    }
+}

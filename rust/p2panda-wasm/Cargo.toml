@@ -1,0 +1,46 @@
+[package]
+name = "p2panda-wasm"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Prüfstand-Hülle: p2panda-spaces 0.7.1 im Browser und in Node"
+license = "MIT OR Apache-2.0"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+p2panda-core = "=0.7.1"
+p2panda-auth = "=0.7.1"
+p2panda-encryption = "=0.7.1"
+p2panda-spaces = "=0.7.1"
+p2panda-store = { version = "=0.7.1", default-features = false, features = ["spaces"] }
+serde = "1"
+hex = "0.4"
+tokio = { version = "1", default-features = false, features = ["sync"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros", "sync"] }
+
+[workspace]
+resolver = "3"
+members = [".", "vendor/p2panda-store", "vendor/p2panda-spaces", "vendor/p2panda-encryption", "vendor/p2panda-core"]
+
+# Gepatchte Kopie von p2panda-store 0.7.1: Traits ohne sqlite (vendor/README.md).
+
+# Gepatchte Kopien von p2panda 0.7.1 (vendor/README.md): Speicher-Traits ohne
+# sqlite (store, spaces) und web-time statt std::time (encryption, core).
+[patch.crates-io]
+p2panda-store = { path = "vendor/p2panda-store" }
+p2panda-spaces = { path = "vendor/p2panda-spaces" }
+p2panda-encryption = { path = "vendor/p2panda-encryption" }
+p2panda-core = { path = "vendor/p2panda-core" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
+getrandom03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
+getrandom04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
+wasm-bindgen = "=0.2.129"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+console_error_panic_hook = "0.1"

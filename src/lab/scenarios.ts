@@ -22,10 +22,14 @@ const same = (a: string[], b: string[]) => JSON.stringify([...a].sort()) === JSO
 const verdict = (ok: boolean): Outcome => (ok ? 'bestanden' : 'nicht bestanden')
 
 /** Gründung mit Alice (Admin), Bob und Carol, alles zugestellt. */
-async function base(w: World, extra: Array<[string, 'admin' | 'member']> = []) {
-  const people: Array<[string, 'admin' | 'member']> = [['bob', 'member'], ['carol', 'member'], ...extra]
+async function base(w: World, extra: Array<[string, 'admin' | 'member']> = [], bob: 'admin' | 'member' = 'member') {
+  // Rollen werden beim Aufnehmen vergeben (p2panda-spaces 0.7.1 kennt kein
+  // nachträgliches Befördern; Gen 2 befördert intern direkt nach dem Aufnehmen).
+  const people: Array<[string, 'admin' | 'member']> = [['bob', bob], ['carol', 'member'], ...extra]
   await w.device('alice', 'alice')
   for (const [p] of people) await w.device(p, p)
+  // Geräte machen sich bekannt (z. B. Key-Bundles/Pre-Keys), bevor jemand einlädt.
+  await w.flush()
   await w.createGroup('alice')
   for (const [p, role] of people) await w.add('alice', p, role)
   await w.flush()
@@ -122,9 +126,7 @@ export const scenarios: Scenario[] = [
     title: 'Zwei Admins entfernen gleichzeitig verschiedene Personen',
     needs: ['roles'],
     async run(w) {
-      await base(w, [['dave', 'member']])
-      await w.add('alice', 'bob', 'admin')
-      await w.flush()
+      await base(w, [['dave', 'member']], 'admin')
       await w.partition(['alice', 'carol'], ['bob', 'dave'])
       await w.remove('alice', 'carol')
       await w.remove('bob', 'dave')
@@ -148,9 +150,7 @@ export const scenarios: Scenario[] = [
     title: 'Gegenseitige Entfernung zweier Admins',
     needs: ['roles'],
     async run(w) {
-      await base(w)
-      await w.add('alice', 'bob', 'admin')
-      await w.flush()
+      await base(w, [], 'admin')
       await w.partition(['alice'], ['bob'])
       await w.remove('alice', 'bob')
       await w.remove('bob', 'alice')
@@ -174,9 +174,7 @@ export const scenarios: Scenario[] = [
     title: 'Entfernung neben Rotation eines anderen Mitglieds',
     needs: ['roles', 'rotate'],
     async run(w) {
-      await base(w)
-      await w.add('alice', 'bob', 'admin')
-      await w.flush()
+      await base(w, [], 'admin')
       await w.partition(['alice', 'carol'], ['bob'])
       await w.remove('alice', 'carol')
       await w.candidate.rotate('bob')
@@ -200,9 +198,7 @@ export const scenarios: Scenario[] = [
     title: 'Zwei gleichzeitige Änderungen der Gruppenregeln',
     needs: ['roles', 'policy'],
     async run(w) {
-      await base(w)
-      await w.add('alice', 'bob', 'admin')
-      await w.flush()
+      await base(w, [], 'admin')
       await w.partition(['alice'], ['bob'])
       await w.candidate.changePolicy('alice', 'regel-a')
       await w.candidate.changePolicy('bob', 'regel-b')
@@ -226,6 +222,7 @@ export const scenarios: Scenario[] = [
       await base(w, [['mallory', 'admin']])
       await w.device('x', 'x')
       await w.device('y', 'y')
+      await w.flush()
       await w.partition(['alice', 'bob', 'carol'], ['mallory', 'x', 'y'])
       await w.remove('alice', 'mallory')
       await w.add('mallory', 'x', 'admin')
@@ -278,6 +275,7 @@ export const scenarios: Scenario[] = [
       for (const t of ['alt-1', 'alt-2', 'alt-3']) await w.write('alice', t)
       await w.flush()
       await w.device('dave', 'dave')
+      await w.flush()
       await w.add('alice', 'dave')
       await w.flush()
       const r = w.read('dave')
@@ -313,9 +311,7 @@ export const scenarios: Scenario[] = [
     title: 'Ersteller fällt weg, Gruppe bleibt handlungsfähig',
     needs: ['roles'],
     async run(w) {
-      await base(w, [['dave', 'member']])
-      await w.add('alice', 'bob', 'admin')
-      await w.flush()
+      await base(w, [['dave', 'member']], 'admin')
       await w.partition(['bob', 'carol', 'dave'], ['alice'])
       await w.remove('bob', 'dave')
       await w.flush()

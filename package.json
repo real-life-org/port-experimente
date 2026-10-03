@@ -10,7 +10,9 @@
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "wasm": "sh scripts/build-wasm.sh",
+    "test:rust": "cargo +1.96 test --manifest-path rust/p2panda-wasm/Cargo.toml --test peer"
   },
   "dependencies": {
     "@web_of_trust/adapter-yjs": "0.3.0",
