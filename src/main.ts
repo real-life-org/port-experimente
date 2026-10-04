@@ -1,4 +1,4 @@
-import { candidates } from './candidates'
+import { candidates, transportLabel } from './candidates'
 import { runAll } from './lab/scenarios'
 import { runContentLoad, runLoadMedian, type LoadResult } from './lab/load'
 import type { ScenarioResult } from './lab/types'
@@ -38,9 +38,10 @@ function loadLine(name: string, load: LoadResult) {
     : `${name}${load.runs ? ` (Median aus ${load.runs} Läufen)` : ''}: ${load.members} Mitglieder, ${load.operations} Operationen in ${load.ms.toFixed(0)} ms (${load.msPerOp.toFixed(3)} ms je Operation)${load.idleMs === undefined ? '' : `, davon ${load.idleMs.toFixed(0)} ms Warten auf Ruhe`}${load.msPerDelivery === undefined ? '' : `; je Gerät und Nachricht ${load.msPerDelivery.toFixed(2)} ms`}`
 }
 
-function render(title: string, results: ScenarioResult[], load: LoadResult, content: LoadResult) {
+function render(title: string, transport: string, results: ScenarioResult[], load: LoadResult, content: LoadResult) {
   const sec = el('section')
   sec.append(el('h2', title))
+  sec.append(el('div', `Transport: ${transport}. Laufzeiten nur innerhalb derselben Transportklasse vergleichbar.`, 'load'))
   const l = el('div', loadLine('S9 Autorität', load), 'load')
   sec.append(l)
   sec.append(el('div', loadLine('S9b Inhalte', content), 'load'))
@@ -65,11 +66,11 @@ runBtn.addEventListener('click', async () => {
   runBtn.disabled = true
   copyBtn.disabled = true
   out.replaceChildren()
-  const report: Array<{ candidate: string; results: ScenarioResult[]; load: LoadResult; content: LoadResult }> = []
+  const report: Array<{ candidate: string; transport: string; results: ScenarioResult[]; load: LoadResult; content: LoadResult }> = []
   for (const c of candidates) {
     if (c.nodeOnly || !c.make) {
       const sec = el('section')
-      sec.append(el('h2', c.title), el('p', `Im Browser nicht ausführbar: ${c.nodeOnly ?? 'nur in Node'}.`))
+      sec.append(el('h2', c.title), el('div', `Transport: ${transportLabel[c.transport]}.`, 'load'), el('p', `Im Browser nicht ausführbar: ${c.nodeOnly ?? 'nur in Node'}.`))
       out.append(sec)
       continue
     }
@@ -78,8 +79,8 @@ runBtn.addEventListener('click', async () => {
     const results = await runAll(c.make)
     const load = await runLoadMedian(c.make, c.loadRuns)
     const content = await runContentLoad(c.make)
-    report.push({ candidate: c.id, results, load, content })
-    render(c.title, results, load, content)
+    report.push({ candidate: c.id, transport: c.transport, results, load, content })
+    render(c.title, transportLabel[c.transport], results, load, content)
   }
   state.textContent = 'fertig'
   json.value = JSON.stringify({ at: new Date().toISOString(), device: deviceInput.value.trim() || null, env, report }, null, 1)

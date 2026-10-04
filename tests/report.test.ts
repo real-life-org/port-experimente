@@ -6,7 +6,7 @@ import { allCandidates as candidates } from '../src/candidates/node-only'
 it.runIf(process.env.REPORT)('Bericht', async () => {
   for (const c of candidates) {
     for (const r of await runAll(c.make)) {
-      process.stdout.write([c.id, r.scenario, r.outcome, r.authority, r.keys, `${r.ms.toFixed(1)} ms`].join(' | ') + '\n')
+      process.stdout.write([c.id, c.transport, r.scenario, r.outcome, r.authority, r.keys, `${r.ms.toFixed(1)} ms`].join(' | ') + '\n')
     }
   }
 })
