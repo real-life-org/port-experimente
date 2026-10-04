@@ -20,6 +20,11 @@ Port ab. Plan und Begründung: `rltp/design/port-experimente-2026-10.md`.
   (Port-Notizen). Kandidaten mit `nodeOnly` (Keyhive über ARK braucht einen
   lokalen Subduction-Server) laufen nur in Node und in der CI; die
   Browser-Seite nennt den Grund.
+- Jeder Kandidat hat eine **Transportklasse**: `prüfstand-relay` (das
+  simulierte Netz, ein blindes Store-and-Forward-Relay, setzt nichts
+  durch) oder `eigener-server` (Gen 2, Keyhive über ARK). Autorität und
+  Schlüssel sind über die Klassen hinweg vergleichbar, Laufzeiten nur
+  innerhalb einer Klasse: Beim eigenen Server steckt in S9 fast nur Warten.
 
 ## Befehle
 
