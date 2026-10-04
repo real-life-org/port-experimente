@@ -17,12 +17,15 @@ Port ab. Plan und Begründung: `rltp/design/port-experimente-2026-10.md`.
   Autorität und Schlüsseln.
 - `src/lab/load.ts`: S9-Last (30 Mitglieder, 500 Autoritätsoperationen).
 - `src/candidates/<id>/`: ein Kandidat je Verzeichnis, mit `NOTES.md`
-  (Port-Notizen).
+  (Port-Notizen). Kandidaten mit `nodeOnly` (Keyhive über ARK braucht einen
+  lokalen Subduction-Server) laufen nur in Node und in der CI; die
+  Browser-Seite nennt den Grund.
 
 ## Befehle
 
 ```sh
 pnpm install
+pnpm server:fetch              # Subduction-Server (Rust-Binary) für Keyhive, Lauf a
 pnpm test                      # Prüfstand-Tests
 REPORT=1 pnpm vitest run report # Ergebnistabelle aller Kandidaten
 pnpm dev                       # Browser-Lauf lokal

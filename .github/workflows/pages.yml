@@ -40,6 +40,8 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Subduction-Server für den Keyhive-Lauf a (ARK)
+        run: sh scripts/fetch-subduction.sh
       - run: pnpm test
       - run: pnpm build
         env:

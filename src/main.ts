@@ -67,6 +67,12 @@ runBtn.addEventListener('click', async () => {
   out.replaceChildren()
   const report: Array<{ candidate: string; results: ScenarioResult[]; load: LoadResult; content: LoadResult }> = []
   for (const c of candidates) {
+    if (c.nodeOnly || !c.make) {
+      const sec = el('section')
+      sec.append(el('h2', c.title), el('p', `Im Browser nicht ausführbar: ${c.nodeOnly ?? 'nur in Node'}.`))
+      out.append(sec)
+      continue
+    }
     state.textContent = `läuft: ${c.id} …`
     await new Promise((r) => setTimeout(r, 0))
     const results = await runAll(c.make)

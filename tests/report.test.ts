@@ -1,6 +1,6 @@
 import { it } from 'vitest'
 import { runAll } from '../src/lab/scenarios'
-import { candidates } from '../src/candidates'
+import { allCandidates as candidates } from '../src/candidates/node-only'
 
 // Gibt die Ergebnistabelle aller Kandidaten aus: REPORT=1 pnpm test report
 it.runIf(process.env.REPORT)('Bericht', async () => {

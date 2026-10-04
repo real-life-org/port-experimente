@@ -88,6 +88,9 @@ export interface Candidate {
   attackerOpen(stolen: unknown, msg: Msg): Uint8Array[] | Promise<Uint8Array[]>
 }
 
+/** Baut einen Kandidaten; darf asynchron sein (Node-only-Kandidaten werden erst beim Aufruf geladen). */
+export type CandidateFactory = () => Candidate | Promise<Candidate>
+
 export type Outcome = 'bestanden' | 'nicht bestanden' | 'nicht abbildbar'
 
 export interface ScenarioResult {

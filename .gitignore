@@ -3,3 +3,4 @@ dist
 *.log
 rust/*/target
 src/candidates/p2panda/pkg
+.cache

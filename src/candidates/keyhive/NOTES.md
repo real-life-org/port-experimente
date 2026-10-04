@@ -3,7 +3,7 @@
 Stand 03.10.2026. `@keyhive/keyhive` 0.3.0-alpha.1 (Tag `next`), die
 WebAssembly-Bindings des Rust-Kerns, ohne Automerge. Inhalt bleibt Yjs. Ohne
 Server: alle Nachrichten gehen über das Netz des Prüfstands an alle. Ein Gerät
-je Person. Lauf a (Automerge über ARK) folgt getrennt.
+je Person. Lauf a (Automerge über ARK und Subduction) steht in `../keyhive-ark/NOTES.md`, mit Vergleich der beiden Läufe.
 
 Aufbau wie in der README und in ARK: eine **Admin-Gruppe ist Miteigentümerin
 des Dokuments**. Admins kommen in die Gruppe, Mitglieder direkt ans Dokument.
