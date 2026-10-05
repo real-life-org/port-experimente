@@ -46,6 +46,27 @@ describe('E7: Geräte und Personen', () => {
     return { c, w }
   }
 
+  it('Review #11: unberechtigte Entfernung in einer Partition schließt niemanden von einer gültigen Aufnahme aus', async () => {
+    const c = rltpBeekem()
+    const w = new World(c)
+    for (const p of ['alice', 'carol', 'eve']) await w.device(p, p)
+    await w.flush()
+    await w.createGroup('alice')
+    await w.add('alice', 'carol', 'member')
+    await w.flush()
+    await w.partition(['alice', 'eve'], ['carol'])
+    await w.add('alice', 'eve', 'member')
+    await w.remove('carol', 'alice') // Carol ist kein Admin
+    await w.flush()
+    await w.heal()
+    await w.flush()
+    for (const d of ['alice', 'carol', 'eve']) expect(w.members(d), d).toEqual(['alice', 'carol', 'eve'])
+    await w.write('alice', 'mit-eve')
+    await w.flush()
+    expect(w.read('eve')).toEqual(['mit-eve'])
+    expect(w.read('carol')).toEqual(['mit-eve'])
+  })
+
   it('#13: Person lässt sich nach Widerruf ihres letzten Geräts entfernen', async () => {
     const { w } = await gruppe()
     await w.removeDevice('alice', 'bob')

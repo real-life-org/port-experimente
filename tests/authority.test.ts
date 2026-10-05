@@ -73,6 +73,18 @@ describe('Autoritätslog nach der Konfliktmatrix', () => {
     expect(names(a.members())).toEqual(['bob', 'carol'])
   })
 
+  it('unberechtigte gleichzeitige Entfernung unterdrückt keine gültige Aufnahme (Review #11)', async () => {
+    const a = await setup()
+    const heads = a.heads()
+    const addEve = { ...(await a.make('add', 'alice', 'eve', 'member')), preds: heads }
+    const rmAlice = { ...(await a.make('remove', 'carol', 'alice')), preds: heads } // Carol ist kein Admin
+    a.add(addEve)
+    a.add(rmAlice)
+    expect(a.isValid(rmAlice.id)).toBe(false)
+    expect(a.isValid(addEve.id)).toBe(true)
+    expect(names(a.members())).toEqual(['alice', 'bob', 'carol', 'dave', 'eve'])
+  })
+
   it('Zustellreihenfolge ändert das Ergebnis nicht', async () => {
     const a = await setup()
     const heads = a.heads()

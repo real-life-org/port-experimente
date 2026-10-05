@@ -105,12 +105,13 @@ export class AuthorityLog {
     const anc = this.ancestors(order)
     const concurrent = (a: AuthOp, b: AuthOp) => a.id !== b.id && !anc.get(a.id)!.has(b.id) && !anc.get(b.id)!.has(a.id)
     let valid = new Set(order.map((o) => o.id))
-    // Fixpunkt: Ungültigkeit kann weitere Operationen ungültig machen, nie umgekehrt.
-    for (;;) {
-      const next = new Set<string>()
-      // Zustand an jeder Position: Mitglieder nach den gültigen Vorfahren.
+    // Fixpunkt. Jede Runde prüft jede Operation neu (eine ausgeschlossene kann
+    // wieder gültig werden, wenn der Grund dafür selbst fällt, Review zu #11).
+    // Schranke gegen Pendeln: mehr Runden als Operationen braucht kein Fixpunkt.
+    for (let round = 0; round <= order.length + 1; round++) {
+      // 1. Autorität an jeder Position: Mitglieder nach den gültigen Vorfahren.
+      const authorized = new Set<string>()
       for (const op of order) {
-        if (!valid.has(op.id)) continue
         const state = new Map<string, Role>()
         let created = false
         for (const prior of order) {
@@ -119,16 +120,22 @@ export class AuthorityLog {
           if (prior.kind === 'create') created = true
         }
         const authorIsAdmin = state.get(op.author) === 'admin'
-        const ok = op.kind === 'create' ? !created && op.author === op.subject : authorIsAdmin
-        if (!ok) continue
-        // Strong Removal: gleichzeitige gültige Entfernung des Autors.
-        const removedBy = order.filter((r) => valid.has(r.id) && r.kind === 'remove' && r.subject === op.author && concurrent(r, op))
+        if (op.kind === 'create' ? !created && op.author === op.subject : authorIsAdmin) authorized.add(op.id)
+      }
+      // 2. Strong Removal: nur eine Entfernung MIT Autorität trifft den Autor
+      //    einer gleichzeitigen Operation. Eine unberechtigte Entfernung
+      //    unterdrückt nichts.
+      const next = new Set<string>()
+      for (const op of order) {
+        if (!authorized.has(op.id)) continue
+        const removedBy = order.filter((r) => authorized.has(r.id) && r.kind === 'remove' && r.subject === op.author && concurrent(r, op))
         const mutual = op.kind === 'remove' && removedBy.some((r) => r.author === op.subject)
         if (removedBy.length && !mutual) continue
         next.add(op.id)
       }
-      if (next.size === valid.size) break
+      const same = next.size === valid.size && [...next].every((id) => valid.has(id))
       valid = next
+      if (same) break
     }
     const members = new Map<string, Role>()
     for (const op of order) if (valid.has(op.id)) apply(members, op)
