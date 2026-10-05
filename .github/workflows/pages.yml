@@ -34,8 +34,10 @@ jobs:
       - run: sh scripts/build-wasm.sh
         env:
           RUST_TOOLCHAIN: '1.96'
-      - name: Rust-Tests der Hüllen (u. a. die beiden p2panda-Befunde)
-        run: pnpm test:rust
+      - name: Rust-Tests der Hüllen (u. a. die beiden p2panda-Befunde, KV1–KV6)
+        run: |
+          cargo +1.96 test --manifest-path rust/p2panda-wasm/Cargo.toml --test peer
+          cargo +1.96 test --manifest-path rust/beekem-wasm/Cargo.toml
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
