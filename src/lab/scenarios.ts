@@ -430,6 +430,92 @@ export const scenarios: Scenario[] = [
       }
     },
   },
+
+  {
+    id: 'S10a',
+    title: 'Dienst: Entfernter schreibt gleichzeitig, das Relay verwirft (kein Residual)',
+    needs: ['service'],
+    async run(w) {
+      await base(w)
+      await w.partition(['alice', 'carol'], ['bob'])
+      await w.remove('alice', 'bob')
+      await w.write('bob', 'bob-gleichzeitig')
+      await w.flush()
+      await w.heal()
+      await w.flush()
+      await w.write('alice', 'danach')
+      await w.flush()
+      const bobMsg = w.log.find((m) => m.from === 'bob' && m.label === 'content')
+      const verdict10 = bobMsg ? w.verdicts.get(bobMsg.id) ?? 'kein Urteil' : 'kein Rahmen'
+      const residual = ['alice', 'carol'].filter((d) => w.read(d).includes('bob-gleichzeitig'))
+      const bobOut = !w.members('alice').includes('bob')
+      const bobReadsAfter = w.read('bob').includes('danach')
+      const served = w.candidate.service!.serves('bob')
+      return {
+        outcome: verdict(bobOut && residual.length === 0 && !bobReadsAfter && !served && verdict10 === 'verwerfen'),
+        authority: `Bob raus: ${bobOut ? 'ja' : 'nein'}; Urteil über Bobs Eintrag: ${verdict10}; Dienst bedient Bob: ${served ? 'ja' : 'nein'}; ${w.candidate.service!.status()}`,
+        keys: `Residual bei ${residual.length ? residual.join(',') : 'niemandem'}; Bob liest danach: ${bobReadsAfter ? 'ja' : 'nein'}`,
+      }
+    },
+  },
+  {
+    id: 'S10b',
+    title: 'Dienst: Entfernung ohne Relay, der Entfernte schreibt am Relay weiter (veraltete Sicht)',
+    needs: ['service', 'roles'],
+    async run(w) {
+      await base(w, [['dave', 'member']])
+      await w.partition(['bob', 'carol', 'dave'], ['alice'])
+      await w.remove('alice', 'dave')
+      await w.write('dave', 'stale-1')
+      await w.flush()
+      const stale = w.read('carol').includes('stale-1')
+      await w.heal()
+      await w.flush()
+      const before = w.log.length
+      await w.write('dave', 'stale-2')
+      await w.flush()
+      // Ohne Schlüssel schreibt Dave womöglich gar nicht mehr („kein Rahmen“); mit altem Zustand verwirft das Relay.
+      const second = w.log.slice(before).find((m) => m.from === 'dave' && m.label === 'content')
+      const v2 = second ? w.verdicts.get(second.id) ?? 'kein Urteil' : 'kein Rahmen'
+      const leak = ['alice', 'bob', 'carol'].filter((d) => w.read(d).includes('stale-2'))
+      return {
+        outcome: verdict(stale && (v2 === 'verwerfen' || v2 === 'kein Rahmen') && leak.length === 0 && !w.candidate.service!.serves('dave')),
+        authority: `Daves Eintrag vor Zustellung der Entfernung kam durch: ${stale ? 'ja (Sicht veraltet, erwartet)' : 'nein'}; danach: ${v2}; ${w.candidate.service!.status()}`,
+        keys: `stale-2 bei ${leak.length ? leak.join(',') : 'niemandem'}`,
+      }
+    },
+  },
+  {
+    id: 'S10c',
+    title: 'Dienst: gegenseitige Entfernung lässt nur ein Mitglied, Quorum der Sicht',
+    needs: ['service', 'roles'],
+    async run(w) {
+      await base(w, [], 'admin')
+      await w.partition(['alice', 'carol'], ['bob'])
+      await w.remove('alice', 'bob')
+      await w.remove('bob', 'alice')
+      await w.flush()
+      await w.heal()
+      await w.flush()
+      await w.write('carol', 'allein')
+      await w.flush()
+      await w.write('alice', 'alice-danach')
+      await w.flush()
+      const aliceMsg = w.log.filter((m) => m.from === 'alice' && m.label === 'content').at(-1)
+      const v = aliceMsg ? w.verdicts.get(aliceMsg.id) ?? 'kein Urteil' : 'kein Rahmen'
+      const servedOut = ['alice', 'bob'].filter((d) => w.candidate.service!.serves(d))
+      // Verdrängte Geräte bekommen vom Dienst nichts mehr; ob sie von ihrer
+      // Entfernung erfahren, ist eine Frage der Zustellung (Access §10.2), nicht der Sicht.
+      const served = ['alice', 'bob', 'carol'].filter((d) => w.candidate.service!.serves(d))
+      const m = membersAgree(w, served)
+      const informed = ['alice', 'bob'].filter((d) => !w.members(d).includes(d))
+      return {
+        outcome: verdict(m.agree && same(w.members('carol'), ['carol']) && servedOut.length === 0 && (v === 'verwerfen' || v === 'kein Rahmen')),
+        authority: `bediente Geräte ${m.text}; Dienst bedient noch: ${servedOut.length ? servedOut.join(',') : 'niemanden der Entfernten'}; wissen von ihrer Entfernung: ${informed.length ? informed.join(',') : 'keiner'}; Urteil über Alices Eintrag: ${v}; ${w.candidate.service!.status()}`,
+        keys: `Carol liest ${fmt(w.read('carol'))}`,
+      }
+    },
+  },
 ]
 
 export async function runScenario(make: CandidateFactory, s: Scenario): Promise<ScenarioResult> {

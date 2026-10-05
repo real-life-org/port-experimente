@@ -77,7 +77,7 @@ runBtn.addEventListener('click', async () => {
     state.textContent = `läuft: ${c.id} …`
     await new Promise((r) => setTimeout(r, 0))
     const results = await runAll(c.make)
-    const load = await runLoadMedian(c.make, c.loadRuns)
+    const load = await runLoadMedian(c.make, c.loadRuns, c.loadSize?.members, c.loadSize?.operations)
     const content = await runContentLoad(c.make)
     report.push({ candidate: c.id, transport: c.transport, results, load, content })
     render(c.title, transportLabel[c.transport], results, load, content)

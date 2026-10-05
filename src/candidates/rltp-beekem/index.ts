@@ -1,6 +1,7 @@
-import type { Candidate, Capability, Device, Msg, Person } from '../../lab/types'
+import type { Candidate, Capability, Device, EnforcingService, Msg, Person } from '../../lab/types'
 import { AuthorityLog, type AuthOp, type Role } from './authority'
 import { BeekemPeer, loadWasm } from './load'
+import { LogReplicaService, ViewService, viewHash, type ViewAck, type ViewProposal } from './service'
 
 // E6: BeeKEM pur als Schlüssel-Adapter. Die Mitgliedschaft entscheidet ein
 // minimales Autoritätslog nach der Konfliktmatrix (authority.ts), BeeKEM
@@ -10,7 +11,11 @@ import { BeekemPeer, loadWasm } from './load'
 // Vorgänger, verschlüsselt mit seinem eigenen.
 // E7: Ein Blatt je Gerät. Das Autoritätslog kennt nur Personen; die Karte
 // eines Geräts bindet es an seine Person, und die Geräte einer Person nehmen
-// ihre eigenen neuen Blätter in den Baum auf. Port-Notizen: NOTES.md.
+// ihre eigenen neuen Blätter in den Baum auf.
+// E8: Optional ein durchsetzender Dienst am Relay (service.ts). Mit Sichten
+// schlägt jedes Mitgliedsgerät nach jeder Änderung die Sicht seines Stands
+// vor (Access §7.3); der Dienst nimmt sie mit Quorum an und bestätigt.
+// Port-Notizen: NOTES.md.
 
 const enc = new TextEncoder()
 const dec = new TextDecoder()
@@ -39,6 +44,8 @@ type Wire =
   /** Widerruf eines einzelnen Geräts (verloren); die Person bleibt. */
   | { t: 'revoke'; id: string }
   | { t: 'content'; c: string; iv: string; tab: string; ref: string }
+  | ViewProposal
+  | ViewAck
 
 interface KeyState {
   peer: BeekemPeer
@@ -61,14 +68,21 @@ interface DeviceState extends KeyState {
   cards: Map<string, Card>
   /** Widerrufene Geräte (hex der ID), wie dieses Gerät sie empfangen hat. */
   revoked: Set<string>
+  /** E8 Sichten: letzte vom Dienst bestätigte Sicht und eigener letzter Vorschlag. */
+  ack: { seq: number; hash: string | null; identities: string[] }
+  proposed: string | null
   waitingAuth: Array<{ op: AuthOp; cgka: string[] }>
   outgoing: Array<{ label: string; body: Uint8Array }>
   joined: boolean
   notes: string[]
 }
 
-export function rltpBeekem(): Candidate {
+export type DienstVariante = 'sichten' | 'logreplik'
+
+export function rltpBeekem(options: { dienst?: DienstVariante } = {}): Candidate {
   const devices = new Map<Device, DeviceState>()
+  const service: EnforcingService | undefined =
+    options.dienst === 'sichten' ? new ViewService() : options.dienst === 'logreplik' ? new LogReplicaService() : undefined
   // Karten und Widerrufe leben je Replika und ändern sich nur durch
   // empfangene Rahmen; sonst wüssten getrennte Repliken Dinge, die das
   // Netz noch nicht zugestellt hat (Review zu PR #12, Issue #14).
@@ -209,19 +223,78 @@ export function rltpBeekem(): Candidate {
     }
   }
 
+  /**
+   * E8 Sichten: Weicht der eigene Stand von der zuletzt bestätigten Sicht ab,
+   * schlägt das Gerät die Sicht seines Stands vor (seq+1, Vorgänger = Hash
+   * der bestätigten). Alle Mitgliedsgeräte tun das; der Dienst zählt
+   * gleichlautende Vorschläge als Unterschriften. m für die nächste Sicht:
+   * 2, sobald zwei Identitäten da sind (Empfehlung in §7.3).
+   */
+  function proposeView(s: DeviceState) {
+    if (options.dienst !== 'sichten') return
+    const members = s.auth.members()
+    if (!members.has(s.person)) return
+    const identities = [...members.keys()].flatMap((p) => cardsOf(s, p).map((c) => hex(c.id))).sort()
+    const me = hex(new Uint8Array(s.peer.id))
+    if (!identities.includes(me)) return
+    if (JSON.stringify(identities) === JSON.stringify(s.ack.identities)) return
+    const v: ViewProposal = { t: 'view', seq: s.ack.seq + 1, prev: s.ack.hash, identities, m: Math.min(2, identities.length), signer: me }
+    const h = viewHash(v)
+    if (h === s.proposed) return
+    s.proposed = h
+    send(s, v)
+  }
+
   function personMembers(s: DeviceState): Person[] {
     return [...s.auth.members().keys()].sort()
   }
 
+  async function handle(s: DeviceState, m: Wire): Promise<{ content: Uint8Array[] }> {
+    switch (m.t) {
+      case 'card':
+        s.cards.set(m.id, { person: m.person, id: unhex(m.id), shareKey: unhex(m.shareKey) })
+        await ensureOwnLeaves(s)
+        return { content: [] }
+      case 'revoke':
+        s.revoked.add(m.id)
+        await heal(s)
+        return { content: [] }
+      case 'view':
+        return { content: [] } // Vorschläge anderer gehen an den Dienst
+      case 'ack':
+        s.ack = { seq: m.seq, hash: m.hash, identities: m.identities }
+        s.proposed = null
+        return { content: [] }
+      case 'auth':
+        if (m.group && !groupId) groupId = unhex(m.group)
+        ensureJoined(s)
+        await processAuth(s, m.op, m.cgka)
+        return { content: await drain(s) }
+      case 'cgka':
+        ensureJoined(s)
+        try {
+          s.peer.receive(unb64(m.op))
+        } catch (e) {
+          s.notes.push(`cgka: ${(e as Error).message}`)
+        }
+        await ensureOwnLeaves(s)
+        return { content: await drain(s) }
+      case 'content':
+        s.pending.push(m)
+        return { content: await drain(s) }
+    }
+  }
+
   return {
-    id: 'rltp-beekem',
-    capabilities: new Set<Capability>(['roles', 'rotate', 'steal', 'multi-device', 'device-remove']),
+    id: options.dienst ? `rltp-beekem-${options.dienst}` : 'rltp-beekem',
+    capabilities: new Set<Capability>(['roles', 'rotate', 'steal', 'multi-device', 'device-remove', ...(service ? (['service'] as Capability[]) : [])]),
+    service,
 
     async addDevice(person, device) {
       await loadWasm()
       const peer = new BeekemPeer()
       const card: Card = { person, id: new Uint8Array(peer.id), shareKey: new Uint8Array(peer.shareKey) }
-      const s: DeviceState = { person, peer, auth: new AuthorityLog(), cards: new Map([[hex(card.id), card]]), revoked: new Set(), waitingAuth: [], keys: new Map(), heads: [], pending: [], outgoing: [], joined: false, notes: [] }
+      const s: DeviceState = { person, peer, auth: new AuthorityLog(), cards: new Map([[hex(card.id), card]]), revoked: new Set(), ack: { seq: 0, hash: null, identities: [] }, proposed: null, waitingAuth: [], keys: new Map(), heads: [], pending: [], outgoing: [], joined: false, notes: [] }
       devices.set(device, s)
       send(s, { t: 'card', person, id: hex(card.id), shareKey: hex(card.shareKey) })
     },
@@ -234,6 +307,7 @@ export function rltpBeekem(): Candidate {
       const op = await s.auth.make('create', s.person, s.person)
       s.auth.add(op)
       send(s, { t: 'auth', op, group: hex(groupId), cgka: ops.map(b64) })
+      proposeView(s)
     },
 
     async addMember(by, p, role: Role) {
@@ -251,6 +325,7 @@ export function rltpBeekem(): Candidate {
         }
       }
       send(s, { t: 'auth', op, cgka })
+      proposeView(s)
     },
 
     async removeMember(by, p) {
@@ -274,6 +349,7 @@ export function rltpBeekem(): Candidate {
         }
       }
       send(s, { t: 'auth', op, cgka })
+      proposeView(s)
     },
 
     async removeDevice(by, device) {
@@ -290,6 +366,7 @@ export function rltpBeekem(): Candidate {
       } catch (e) {
         notes.push(`${by} entfernt Gerät ${device}: ${(e as Error).message}`)
       }
+      proposeView(s)
     },
 
     async rotate(by) {
@@ -326,35 +403,12 @@ export function rltpBeekem(): Candidate {
     async receive(d, msg: Msg) {
       const s = dev(d)
       const m = JSON.parse(dec.decode(msg.body)) as Wire
-      switch (m.t) {
-        case 'card':
-          s.cards.set(m.id, { person: m.person, id: unhex(m.id), shareKey: unhex(m.shareKey) })
-          await ensureOwnLeaves(s)
-          return { content: [] }
-        case 'revoke':
-          s.revoked.add(m.id)
-          await heal(s)
-          return { content: [] }
-        case 'auth':
-          if (m.group && !groupId) groupId = unhex(m.group)
-          ensureJoined(s)
-          await processAuth(s, m.op, m.cgka)
-          return { content: await drain(s) }
-        case 'cgka':
-          ensureJoined(s)
-          try {
-            s.peer.receive(unb64(m.op))
-          } catch (e) {
-            s.notes.push(`cgka: ${(e as Error).message}`)
-          }
-          await ensureOwnLeaves(s)
-          return { content: await drain(s) }
-        case 'content':
-          s.pending.push(m)
-          return { content: await drain(s) }
+      try {
+        return await handle(s, m)
+      } finally {
+        proposeView(s)
       }
     },
-
     members: (d) => personMembers(dev(d)),
     status: (d) => {
       const s = dev(d)

@@ -13,7 +13,7 @@ Port ab. Plan und Begründung: `rltp/design/port-experimente-2026-10.md`.
 - `src/lab/world.ts`: simulierte Welt mit einem Y.Doc je Gerät und einem
   Store-and-Forward-Netz mit Partitionen. Jede Nachricht erreicht jedes
   Gerät, auch entfernte Mitglieder.
-- `src/lab/scenarios.ts`: Szenarien S1 bis S8, Ergebnisse getrennt nach
+- `src/lab/scenarios.ts`: Szenarien S1 bis S10, Ergebnisse getrennt nach
   Autorität und Schlüsseln.
 - `src/lab/load.ts`: S9-Last (30 Mitglieder, 500 Autoritätsoperationen).
 - `src/candidates/<id>/`: ein Kandidat je Verzeichnis, mit `NOTES.md`
