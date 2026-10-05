@@ -3,6 +3,7 @@ import { klartext } from './klartext'
 import { gen2 } from './gen2'
 import { p2panda } from './p2panda'
 import { keyhive } from './keyhive'
+import { rltpBeekem } from './rltp-beekem'
 
 export type TransportClass = 'prüfstand-relay' | 'eigener-server'
 
@@ -31,6 +32,7 @@ export const candidates: CandidateEntry[] = [
   { id: 'gen2', title: 'WoT Gen 2 (@web_of_trust/core 0.6.0, adapter-yjs 0.3.0, Relay im Prozess)', make: gen2, loadRuns: 1, transport: 'eigener-server' },
   { id: 'p2panda', title: 'p2panda-spaces 0.7.1 (WebAssembly, ohne Server)', make: p2panda, loadRuns: 3, transport: 'prüfstand-relay' },
   { id: 'keyhive', title: 'Keyhive 0.3.0-alpha.1 (WebAssembly, Inhalt Yjs, ohne Server)', make: keyhive, loadRuns: 3, transport: 'prüfstand-relay' },
+  { id: 'rltp-beekem', title: 'RLTP-Autorität über BeeKEM 0.4.0 (E6: Matrix entscheidet, BeeKEM liefert Schlüssel, Inhalt Yjs)', make: rltpBeekem, loadRuns: 3, transport: 'prüfstand-relay' },
   // Nur Metadaten: Der Code (Automerge-Wasm, Node-Prozesse) bleibt aus dem
   // Browser-Build heraus; die Tests laden ihn über node-only.ts.
   {
