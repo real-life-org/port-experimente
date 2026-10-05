@@ -20,7 +20,9 @@ describe('Kandidat RLTP-Autorität über BeeKEM', () => {
       S4d: 'bestanden', // Rotation neben Entfernung (KV5, KV6)
       S4e: 'nicht abbildbar', // keine Gruppenregeln im Experiment
       S4f: 'bestanden', // Strong Removal transitiv: Mallorys Kette ungültig, Baum geheilt
-      S5: 'nicht abbildbar',
+      S5: 'bestanden', // E7: ein Blatt je Gerät, Person bleibt Subjekt im Log
+      S5b: 'bestanden', // E7: eigenes Gerät entfernen = neues Geheimnis ohne dessen Blatt (KV1), Person bleibt
+      S5c: 'bestanden', // E7: Entfernen der Person entfernt alle ihre Blätter
       S6: 'nicht bestanden', // Historie erst über die Kette des nächsten Eintrags (wie Keyhive b)
       S6b: 'bestanden',
       S7: 'bestanden', // PCS: passiver Dieb liest nach der Rotation nichts mehr (KV5)

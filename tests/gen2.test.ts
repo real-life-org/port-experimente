@@ -21,6 +21,8 @@ describe('Kandidat WoT Gen 2', () => {
       S4e: 'nicht abbildbar', // keine Gruppenregeln
       S4f: 'bestanden', // formal: Mallorys Kette entsteht offline gar nicht
       S5: 'nicht abbildbar', // Zweitgerät läuft über das PersonalDoc (Singleton im Prozess)
+      S5b: 'nicht abbildbar',
+      S5c: 'nicht abbildbar',
       S6: 'bestanden',
       S6b: 'bestanden',
       S7: 'nicht abbildbar',
