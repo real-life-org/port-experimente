@@ -21,6 +21,8 @@ describe('Kandidat Keyhive über ARK und Subduction', () => {
       S4e: 'nicht abbildbar',
       S4f: 'nicht bestanden', // ARK behält Einladungen des Entfernten (retain_all_other_members)
       S5: 'nicht abbildbar',
+      S5b: 'nicht abbildbar',
+      S5c: 'nicht abbildbar',
       S6: 'bestanden', // ARKs Nudge öffnet die Historie sofort
       S6b: 'bestanden',
       S7: 'nicht abbildbar', // Angreifer gegen Sedimentree-Blobs nicht verdrahtet

@@ -50,6 +50,10 @@ export class World {
   async remove(by: Device, person: Person) {
     await this.candidate.removeMember(by, person)
   }
+  async removeDevice(by: Device, device: Device) {
+    if (!this.candidate.removeDevice) throw new Error('Kandidat kennt kein Entfernen einzelner Geräte')
+    await this.candidate.removeDevice(by, device)
+  }
 
   /** Schreibt einen Eintrag ins Y.Doc des Geräts; der Kandidat versiegelt das Update. */
   async write(device: Device, text: string): Promise<void> {

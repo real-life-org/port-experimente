@@ -268,6 +268,68 @@ export const scenarios: Scenario[] = [
     },
   },
   {
+    id: 'S5b',
+    title: 'Gerät verloren: Person entfernt ihr eigenes Gerät, der Finder liest nicht weiter',
+    needs: ['multi-device', 'device-remove', 'steal'],
+    async run(w) {
+      await base(w)
+      await w.device('bob', 'bob-2')
+      await w.flush()
+      await w.write('alice', 'vorher')
+      await w.flush()
+      // Verlust: Der Finder hat den ganzen Zustand von bob-2 und liest allen Verkehr mit.
+      const theft = w.log.length
+      const stolen = await w.candidate.steal('bob-2')
+      const finderDoc = new Y.Doc()
+      Y.applyUpdate(finderDoc, Y.encodeStateAsUpdate(w.docs.get('bob-2')!))
+      // Positivkontrolle: bis zum Entfernen liest er mit.
+      await w.write('alice', 'vor-entfernen')
+      await w.flush()
+      await w.removeDevice('bob', 'bob-2')
+      await w.flush()
+      await w.write('carol', 'nach-entfernen')
+      await w.flush()
+      for (const m of w.log.slice(theft)) {
+        for (const u of await w.candidate.attackerOpen(stolen, m)) Y.applyUpdate(finderDoc, u)
+      }
+      const seen = finderDoc.getArray<string>('eintraege').toArray()
+      const control = seen.includes('vor-entfernen')
+      const leaked = seen.includes('nach-entfernen')
+      const bobReads = w.read('bob').includes('nach-entfernen')
+      const bobStays = w.members('alice').includes('bob') && w.members('carol').includes('bob')
+      return {
+        outcome: verdict(control && !leaked && bobReads && bobStays),
+        authority: `Bob bleibt Mitglied: ${bobStays ? 'ja' : 'nein'}; Mitglieder laut Alice: ${fmt(w.members('alice'))}`,
+        keys: `Finder liest vor dem Entfernen: ${control ? 'ja' : 'NEIN (Angreifer-Modell wirkungslos)'}; danach: ${leaked ? 'ja' : 'nein'}; Bobs erstes Gerät liest weiter: ${bobReads ? 'ja' : 'nein'}`,
+      }
+    },
+  },
+  {
+    id: 'S5c',
+    title: 'Person mit zwei Geräten wird entfernt; keines liest Neues',
+    needs: ['multi-device'],
+    async run(w) {
+      await base(w)
+      await w.device('bob', 'bob-2')
+      await w.flush()
+      await w.write('alice', 'vorher')
+      await w.flush()
+      await w.remove('alice', 'bob')
+      await w.flush()
+      await w.write('carol', 'nachher')
+      await w.flush()
+      const bothBefore = ['bob', 'bob-2'].every((d) => w.read(d).includes('vorher'))
+      const leaks = ['bob', 'bob-2'].filter((d) => w.read(d).includes('nachher'))
+      const m = membersAgree(w, ['alice', 'carol'])
+      const out = !w.members('alice').includes('bob')
+      return {
+        outcome: verdict(bothBefore && leaks.length === 0 && m.agree && out && w.read('carol').includes('nachher')),
+        authority: m.text,
+        keys: `beide Geräte lasen vorher: ${bothBefore ? 'ja' : 'nein'}; lesen Neues: ${leaks.length ? leaks.join(',') : 'keines'}`,
+      }
+    },
+  },
+  {
     id: 'S6',
     title: 'Neues Mitglied liest die Historie',
     needs: [],

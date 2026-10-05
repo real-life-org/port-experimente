@@ -20,6 +20,8 @@ describe('Kandidat p2panda (WebAssembly)', () => {
       S4e: 'nicht abbildbar', // keine Gruppenregeln
       S4f: 'bestanden', // Mallorys Kette wird transitiv ungültig
       S5: 'nicht abbildbar', // verschachtelte Gruppen für Geräte noch nicht verdrahtet
+      S5b: 'nicht abbildbar',
+      S5c: 'nicht abbildbar',
       S6: 'bestanden',
       S6b: 'bestanden',
       S7: 'nicht abbildbar',

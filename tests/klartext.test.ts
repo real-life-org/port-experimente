@@ -21,6 +21,8 @@ describe('Prüfstand mit Klartext-Kandidat', () => {
       S4e: 'nicht bestanden', // Ankunftsreihenfolge entscheidet → uneinig
       S4f: 'nicht bestanden', // Mallorys Kette bleibt
       S5: 'bestanden',
+      S5b: 'nicht abbildbar', // kein Entfernen einzelner Geräte im Null-Kandidaten
+      S5c: 'nicht bestanden', // Klartext: Entfernte lesen weiter
       S6: 'bestanden',
       S6b: 'bestanden',
       S7: 'nicht bestanden', // Angreifer liest alles
