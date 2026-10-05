@@ -18,6 +18,7 @@ export type Capability =
   | 'rotate' // Rotation ohne Mitgliedschaftsänderung
   | 'policy' // Änderung der Gruppenregeln (S4e)
   | 'multi-device' // weiteres Gerät einer bestehenden Person (S5)
+  | 'device-remove' // einzelnes Gerät einer Person entfernen, die Person bleibt (S5b)
   | 'steal' // Zustand eines Geräts für den PCS-Test entwenden (S7)
 
 /** Eine Nachricht auf der Leitung. Der Prüfstand sieht nur Bytes. */
@@ -66,6 +67,8 @@ export interface Candidate {
   removeMember(by: Device, person: Person): Promise<void>
   rotate(by: Device): Promise<void>
   changePolicy(by: Device, tag: string): Promise<void>
+  /** S5b: Entfernt ein einzelnes Gerät (verloren, erbeutet); die Person bleibt Mitglied. */
+  removeDevice?(by: Device, device: Device): Promise<void>
 
   /** Verschlüsselt ein lokales Inhalts-Update und legt es in den Ausgang. */
   sealContent(device: Device, update: Uint8Array): Promise<void>

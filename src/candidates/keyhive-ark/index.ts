@@ -240,6 +240,9 @@ export function keyhiveArk(): Candidate {
     // 4 s: Auf dem CI-Runner kamen Blobs nach einer Pause von über 2,5 s noch an (S4b).
     const quietMs = Number(globalThis.process?.env?.ARK_QUIET_MS ?? 4_000) // für Timing-Experimente
     const minUntil = Math.max(lastOnlineChange + 1_500, start + quietMs)
+    // Geräte, die das Dokument erst in diesem settle bekommen (neue Mitglieder):
+    // Das Handle allein heißt nicht, dass die Historie schon da ist (CI, S6).
+    const fresh = new Set([...devices].filter(([, s]) => !s.handle).map(([d]) => d))
     let last = ''
     let stable = 0
     while (Date.now() < deadline) {
@@ -258,7 +261,17 @@ export function keyhiveArk(): Candidate {
         const members = view.get(writer)?.members ?? []
         return [...devices].some(([d, s]) => s.online && members.includes(s.person) && !(view.get(d)?.items ?? []).includes(text))
       })
-      const expectationsDone = unmet.length === 0 || Date.now() > start + 12_000
+      // Frisch aufgenommene Online-Geräte müssen alles lesen, was die anderen
+      // Online-Mitglieder ihrer Sicht lesen; gleiche Obergrenze 12 s.
+      const freshUnmet = [...fresh].filter((d) => {
+        const s = dev(d)
+        const v = view.get(d)
+        if (!s.online || !s.handle || !v) return false
+        const others = [...devices].filter(([o, t]) => o !== d && t.online && t.handle && v.members.includes(t.person))
+        const union = new Set(others.flatMap(([o]) => view.get(o)?.items ?? []))
+        return [...union].some((x) => !v.items.includes(x))
+      })
+      const expectationsDone = (unmet.length === 0 && freshUnmet.length === 0) || Date.now() > start + 12_000
       const fp = JSON.stringify(views)
       stable = fp === last ? stable + 1 : 0
       last = fp

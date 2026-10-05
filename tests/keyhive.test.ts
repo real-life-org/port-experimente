@@ -20,6 +20,8 @@ describe('Kandidat Keyhive (Yjs über @keyhive/keyhive)', () => {
       S4e: 'nicht abbildbar', // keine Gruppenregeln
       S4f: 'nicht bestanden', // Mallorys Kette bleibt (offene Beobachtung, siehe NOTES)
       S5: 'nicht abbildbar', // Geräte als Gruppe der Person, im Prüfstand noch nicht verdrahtet
+      S5b: 'nicht abbildbar',
+      S5c: 'nicht abbildbar',
       S6: 'nicht bestanden', // Historie erst nach dem nächsten Eintrag
       S6b: 'bestanden', // über die Vorgänger-Kette (wie ARK, hier für Yjs)
       S7: 'bestanden', // PCS: nach forcePcsUpdate öffnet der Angreifer nichts
