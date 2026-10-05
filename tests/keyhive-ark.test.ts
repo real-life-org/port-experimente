@@ -27,6 +27,9 @@ describe('Kandidat Keyhive über ARK und Subduction', () => {
       S6b: 'bestanden',
       S7: 'nicht abbildbar', // Angreifer gegen Sedimentree-Blobs nicht verdrahtet
       S8: 'bestanden',
+      S10a: 'nicht abbildbar',
+      S10b: 'nicht abbildbar',
+      S10c: 'nicht abbildbar',
     })
   }, 600_000)
 })

@@ -1,4 +1,4 @@
-# Port-Notizen: RLTP-Autorität über BeeKEM (E6, E7)
+# Port-Notizen: RLTP-Autorität über BeeKEM (E6, E7, E8)
 
 Stand 05.10.2026. Das Experiment zum Schnitt aus der Synthese: **Autorität
 bei uns, Schlüsselvereinbarung als Adapter.** Ein minimales Autoritätslog
@@ -27,6 +27,7 @@ BeeKEM-Blatt je Gerät, das Log kennt nur Personen.
 | S6b | bestanden | |
 | S7 | bestanden | passiver Dieb (ganzer Zustand, voller Mitleser) liest nach der Rotation nichts mehr (KV5) |
 | S8 | bestanden | Gründerin ohne Sonderrolle |
+| S10a–c | nicht abbildbar | ohne Dienst; Ergebnisse der Dienst-Varianten unter E8 |
 
 Last (Node): S9b 0,67 ms je Gerät und empfangener Nachricht (Keyhive b
 0,46, p2panda 8,3, Klartext 0,06). S9 (30 Mitglieder, 500 Operationen)
@@ -146,6 +147,99 @@ Was das für den Port heißt:
   gleichzeitig ein drittes auf (doppelte Aufnahme in BeeKEM); hier nicht
   getestet.
 
+## E8: Durchsetzender, schlüsselblinder Dienst am Relay
+
+Frage: Was bringt Durchsetzung am Relay über die Durchsetzung in den Repliken
+hinaus, und was muss der Dienst dafür wissen? Zwei Varianten desselben
+Kandidaten (`service.ts`), Transportklasse „Prüfstand-Relay, durchsetzend“:
+
+- **Sichten (Access §7.3).** Der Dienst kennt den Log nicht. Jedes
+  Mitgliedsgerät schlägt nach jeder Änderung die Sicht seines Stands vor
+  (seq, Vorgänger-Hash, identities = Geräte-IDs, m für die nächste Sicht);
+  der Dienst zählt gleichlautende Vorschläge von Geräten, die in alter und
+  neuer Sicht stehen, als Quorum (m = 1 bei einer Identität, sonst 2) und
+  bestätigt die angenommene Sicht an alle (`ack`). Vorschläge gehen an den
+  Dienst allein („behalten“).
+- **Log-Replik (Kontrolle, wie Gen 2).** Der Dienst führt eine Replik des
+  Autoritätslogs und wertet sie selbst aus.
+
+Beide binden ein Gerät über seine eigene Karte an seine BeeKEM-ID (ohne
+Besitznachweis; §7.3 verlangt eine Challenge) und bedienen nur Geräte, die
+laut Sicht bzw. Log Mitglied sind (Verdrängung, §9.3). Beide lassen
+**Autoritätsoperationen immer durch**, auch von Entfernten, und gaten nur
+Inhalt, Schlüsseloperationen und Widerrufe.
+
+| | Sichten | Log-Replik | Grund |
+|---|---|---|---|
+| S1–S8 | wie ohne Dienst | wie ohne Dienst | S4a: der gleichzeitige Eintrag des Entfernten erreicht niemanden mehr |
+| S10a Entfernter schreibt gleichzeitig | bestanden | bestanden | Relay verwirft, kein Residual; Bob wird nicht mehr bedient |
+| S10b Entfernung ohne Relay, Entfernter schreibt am Relay | bestanden | bestanden | Dienst lässt durch, bis die Entfernung ihn erreicht (Sicht veraltet, erwartet); danach verworfen |
+| S10c gegenseitige Entfernung lässt nur Carol | **nicht bestanden** | bestanden | Sichten: m=2 der alten Sicht ist mit einer Identität nicht mehr erfüllbar, der Dienst friert ein und bedient Alice weiter (§7.3 „stated residual“). Log-Replik: wertet selbst aus |
+
+### Befunde
+
+1. **Evidenz ist nie gated.** Die erste Fassung verwarf auch
+   Autoritätsoperationen von Nicht-Mitgliedern. Damit sah bei gegenseitiger
+   Entfernung die Relay-Seite Bobs Entfernung von Alice nie, die Repliken
+   liefen auseinander, und mit Sichten fror der Dienst auf einem falschen
+   Stand ein. Access §9.3 sagt das schon („non-effecting evidence transport
+   of 3.6 is never gated“); das Experiment zeigt, dass es keine Feinheit ist,
+   sondern die Konfliktmatrix daran hängt. Für den Port: Der Dienst gated
+   Wirkung (Inhalt, Schlüssel), nie Evidenz (Autoritätsoperationen).
+2. **Verdrängte erfahren nichts.** Wen der Dienst nicht mehr bedient, der
+   bekommt auch die Operation nicht, die ihn entfernt hat (S10c: Bob sieht
+   weiter {bob, carol}). Ohne Dienst lernte er es aus dem Mesh. Das ist der
+   Platz von Access §10.2 `removal-notice`: eine Zustellung an einen, kein
+   Replikationsrahmen. Für E11 der erste harte Delivery-Fall aus der Gruppe
+   heraus.
+3. **Quorum friert ein.** Sichten mit festem m aus der Vorgängersicht
+   scheitern an genau den Fällen, die die Matrix löst: gegenseitige
+   Entfernung, die das Quorum unterschreitet. Die Spec nennt das „stated
+   residual“ und verlangt, m vorher zu senken; bei gleichzeitigen
+   Entfernungen gibt es kein Vorher. Die Log-Replik hat das Problem nicht,
+   weil sie dieselbe Matrix rechnet wie die Repliken. Für den Guss: Entweder
+   m folgt der Sicht selbst (m = min(2, |identities|) der **neuen** Sicht,
+   dann ist ein Einzelsignierer bei Schrumpfen auf eins zulässig), oder der
+   Dienst bekommt den Log. Sichten kaufen hier nichts, was die Log-Replik
+   nicht hat, kosten aber Verkehr (unten).
+4. **Sichten sind teuer.** Jedes Mitgliedsgerät schlägt nach jedem Rahmen
+   vor, bis der Dienst bestätigt; bei 30 Mitgliedern und 500 Operationen war
+   S9 nach zehn Minuten nicht fertig (ohne Dienst 193 ms je Operation).
+   Kleiner skaliert es noch: 10 × 100: ohne Dienst 14,6, Log-Replik 11,3,
+   Sichten 11,4 ms je Operation; 30 × 100: Sichten 59; 30 × 200: Sichten 74,
+   Log-Replik 54. Der Dienst spart sogar Arbeit (verworfene Rahmen erreichen
+   niemanden), aber die Sichten wachsen überproportional mit der Zahl der
+   Operationen. Auf der Seite läuft diese Variante deshalb nur 30 × 100
+   (`loadSize`). Abgelehnte Vorschläge
+   (falsche seq, weil die Bestätigung noch nicht da war) sind der Normalfall,
+   nicht die Ausnahme: 5 bis 10 je Szenario mit drei bis vier Geräten.
+5. **Was der Dienst lernt.** Sichten: Geräte-IDs aller Mitglieder, seq,
+   Gruppenzugehörigkeit der IDs; die IDs sind hier gruppenübergreifend gleich
+   (ein BeeKEM-Schlüsselpaar je Gerät), ein Dienst für mehrere Gruppen könnte
+   Gruppen über Geräte verbinden. Log-Replik: zusätzlich Personen, Rollen und
+   die ganze Operationsgeschichte. Gen 3 sieht Member-Anker je Gruppe vor
+   (Gerät × Gruppe); das wäre hier ein eigener Share-Key je Gruppe.
+
+### Delivery-Hypothesen DV1–DV6 (von der Delivery-Session, nicht entschieden)
+
+Lesart: „bricht“ heißt bricht **am Kandidaten**; die Hypothese steht dann
+als Anforderung an den Port, nicht als widerlegt. Ein Dienst ohne diese
+Zusagen tut genau das, was die Tabelle zeigt.
+
+| | Dienst-Rahmen in E8 | Befund |
+|---|---|---|
+| DV1 Ack ist Ankunft, nie Entscheidung | `ack` bestätigt eine **angenommene** Sicht, also ein Quorum-Verdikt, kein Ankunftssignal. Für einen Vorschlag gibt es kein Ankunftssignal | bricht am Kandidaten: Verdikt und Ankunft brauchen zwei getrennte Rahmen |
+| DV2 Nichts Angenommenes endet still | Verworfene Inhalte (S10a) und abgelehnte Vorschläge (falsche seq) verschwinden ohne Rückmeldung; der Schreiber merkt nichts | bricht am Kandidaten: genau der Fehler, den DV2 verbietet |
+| DV3 Mindestens einmal, idempotent über den Inhalt | Vorschläge sind über ihren Inhalt idempotent (gleicher Hash = gleiche Unterschrift); Sequenz ist die Ordnung, Hash die Identität | hält |
+| DV4 Träger lernt nichts Verbindendes | siehe Befund 5: Geräte-IDs sind global | bricht am Kandidaten: globale Geräteschlüssel; Anker je Gruppe (Gerät × Gruppe) heilen es |
+| DV5 Ablehnungen wiederholbar, ohne Aussage über Beteiligte | es gibt keine Ablehnungen (siehe DV2) | nicht anwendbar |
+| DV6 Adresse je Beziehung oder Gruppe, nicht global | Adresse im Prüfstand ist der Gerätename; im Dienst die globale Geräte-ID | bricht am Kandidaten, wie DV4 |
+
+Ordnung: Der Dienst braucht für Sichten eine totale Ordnung (seq +1,
+Vorgänger-Hash); die Repliken selbst brauchen nur kausale. Dienstwechsel ist
+nicht getestet; mit Sichten müsste der neue Dienst die Kette ab einer
+registrierten Sicht übernehmen, mit Log-Replik den Log nachziehen.
+
 ## Antworten auf die sieben Fragen
 
 - **Ordnung:** kausal, durch Vorgänger in Autoritätsoperationen und in
@@ -154,10 +248,13 @@ Was das für den Port heißt:
   Blattgeheimnisse), Schlüsseltabelle der Kette.
 - **Identität:** Ed25519 je Gerät (Mitglieds-ID im Baum), X25519-Share-Key
   als Pre-Key; Karte mit Personenangabe vorab an alle. Person = Name im Log.
-- **Transport:** fünf Rahmen: Karte, Autoritätsoperation mit angehängten
-  BeeKEM-Operationen, lose BeeKEM-Operation (Rotation, Heilung, Geräte-
-  aufnahme, Update beim Schreiben), Gerätewiderruf, Inhalt mit Kette. Alle
-  an alle.
+- **Transport:** fünf Rahmen an alle (Replication): Karte,
+  Autoritätsoperation mit angehängten BeeKEM-Operationen, lose
+  BeeKEM-Operation (Rotation, Heilung, Geräteaufnahme, Update beim
+  Schreiben), Gerätewiderruf, Inhalt mit Kette. Mit Dienst zwei weitere an
+  einen (Delivery): Sichtvorschlag an den Dienst, Bestätigung des Dienstes
+  an die bedienten Geräte. Einzelempfänger-Kandidat ohne Dienst ist nur die
+  BeeKEM-Willkommensnachricht, die hier im Add-Op an alle mitreist.
 - **Autorität:** unser Log; Strong Removal mit gegenseitiger Entfernung als
   Ausnahme; Gründer ohne Sonderrolle. Hier ohne Signaturen und ohne Politik
   (Experiment).
