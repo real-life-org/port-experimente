@@ -69,6 +69,29 @@ Was ein echter Adapter zusätzlich klären muss:
    nach der Aufnahme bräuchte den Nudge von ARK (ein Eintrag unter dem neuen
    Schlüssel nach jeder Aufnahme).
 
+## Autoritätslog: Befund aus dem Review zu PR #11
+
+Die erste Fassung des Fixpunkts begann mit „alle Operationen gültig“ und
+nahm für Strong Removal jede noch nicht ausgeschlossene Entfernung, auch eine
+ohne Autorität. Eine unberechtigte Entfernung (Mitglied entfernt Admin)
+unterdrückte so eine gleichzeitige gültige Aufnahme, und weil der Fixpunkt
+Ausgeschlossene nie wieder prüfte, blieb das so (Repro: Alice nimmt Eve auf,
+Carol entfernt zugleich unberechtigt Alice; Eve fehlte bei allen). Jetzt
+bestimmt jede Runde zuerst die Autorität jeder Operation aus ihren gültigen
+Vorfahren; Strong Removal trifft nur durch Entfernungen **mit** Autorität,
+und jede Runde prüft alle Operationen neu (Schranke: Operationen + 2
+Runden). Lehre für den Guss: „gültig“ sind zwei Prüfungen in fester
+Reihenfolge, Autorität vor Gleichzeitigkeit, und nur die erste darf die
+zweite speisen.
+
+Offen, für Anton: Ketten gleichzeitiger Entfernungen. A entfernt B, B
+entfernt zugleich C (beide Admins). Heute: B's Entfernung hat Autorität und
+unterdrückt C's gleichzeitige Aufnahmen, ist aber selbst durch A ungültig,
+also bleibt C Mitglied. Konsequent wäre entweder „Entfernungen mit Autorität
+gelten immer, nur Aufnahmen eines Entfernten verfallen“ (Verallgemeinerung
+von Entscheidung 2, dann ist C raus) oder „nur gültige Entfernungen
+unterdrücken“ (dann pendelt ein Dreier-Zyklus und braucht einen Tiebreak).
+
 ## E7: Personen im Log, Geräte im Baum
 
 Die Frage war, ob der Schlüssel-Port Personen oder Geräte als Mitglieder
