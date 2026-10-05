@@ -113,6 +113,12 @@ Was das für den Port heißt:
   (S5 liest „vorher“ erst mit dem nächsten Eintrag). Ein direkter Schlüssel-
   Transfer zwischen den Geräten einer Person (an den Share-Key des neuen
   Geräts) wäre schneller und wäre die Lösung für S6 im Fall Gerätewechsel.
+- Karten und Widerrufe sind Wissen je Replika und ändern sich nur durch
+  empfangene Rahmen. In einer Partition heilt ein Admin deshalb nichts, was
+  er nicht zugestellt bekommen hat; nach der Zustellung konvergieren alle
+  (Test „#14“). Ob eine Person entfernt werden kann, entscheidet das Log,
+  nicht die Kartentabelle: Nach Widerruf ihres letzten Geräts hat sie keine
+  Karte mehr, ist aber Mitglied (Test „#13“).
 - Offen: zwei Geräte derselben Person nehmen in einer Partition
   gleichzeitig ein drittes auf (doppelte Aufnahme in BeeKEM); hier nicht
   getestet.

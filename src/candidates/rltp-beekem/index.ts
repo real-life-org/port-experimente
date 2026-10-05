@@ -48,9 +48,19 @@ interface KeyState {
   pending: Wire[]
 }
 
+interface Card {
+  person: Person
+  id: Uint8Array
+  shareKey: Uint8Array
+}
+
 interface DeviceState extends KeyState {
   person: Person
   auth: AuthorityLog
+  /** Gerätekarten nach BeeKEM-ID (hex), wie dieses Gerät sie empfangen hat. Mehrere je Person. */
+  cards: Map<string, Card>
+  /** Widerrufene Geräte (hex der ID), wie dieses Gerät sie empfangen hat. */
+  revoked: Set<string>
   waitingAuth: Array<{ op: AuthOp; cgka: string[] }>
   outgoing: Array<{ label: string; body: Uint8Array }>
   joined: boolean
@@ -59,11 +69,10 @@ interface DeviceState extends KeyState {
 
 export function rltpBeekem(): Candidate {
   const devices = new Map<Device, DeviceState>()
-  /** Gerätekarten nach BeeKEM-ID (hex). Mehrere je Person. */
-  const cards = new Map<string, { person: Person; id: Uint8Array; shareKey: Uint8Array }>()
-  /** Widerrufene Geräte (hex der ID). */
-  const revoked = new Set<string>()
-  const cardsOf = (p: Person) => [...cards.values()].filter((c) => c.person === p && !revoked.has(hex(c.id)))
+  // Karten und Widerrufe leben je Replika und ändern sich nur durch
+  // empfangene Rahmen; sonst wüssten getrennte Repliken Dinge, die das
+  // Netz noch nicht zugestellt hat (Review zu PR #12, Issue #14).
+  const cardsOf = (s: DeviceState, p: Person) => [...s.cards.values()].filter((c) => c.person === p && !s.revoked.has(hex(c.id)))
   let groupId: Uint8Array | undefined
   const notes: string[] = []
 
@@ -169,7 +178,7 @@ export function rltpBeekem(): Candidate {
     const inTree = new Set((s.peer.members() as Uint8Array[]).map(hex))
     const me = hex(new Uint8Array(s.peer.id))
     if (!inTree.has(me)) return
-    for (const c of cardsOf(s.person)) {
+    for (const c of cardsOf(s, s.person)) {
       if (inTree.has(hex(c.id)) || hex(c.id) === me) continue
       try {
         const op = (await s.peer.add(c.id, c.shareKey)) as Uint8Array | null
@@ -188,7 +197,7 @@ export function rltpBeekem(): Candidate {
   async function heal(s: DeviceState) {
     const members = s.auth.members()
     if (members.get(s.person) !== 'admin') return
-    const allowed = new Set([...members.keys()].flatMap((p) => cardsOf(p).map((c) => hex(c.id))))
+    const allowed = new Set([...members.keys()].flatMap((p) => cardsOf(s, p).map((c) => hex(c.id))))
     for (const idBytes of s.peer.members() as Uint8Array[]) {
       if (allowed.has(hex(idBytes))) continue
       try {
@@ -211,9 +220,8 @@ export function rltpBeekem(): Candidate {
     async addDevice(person, device) {
       await loadWasm()
       const peer = new BeekemPeer()
-      const card = { person, id: new Uint8Array(peer.id), shareKey: new Uint8Array(peer.shareKey) }
-      cards.set(hex(card.id), card)
-      const s: DeviceState = { person, peer, auth: new AuthorityLog(), waitingAuth: [], keys: new Map(), heads: [], pending: [], outgoing: [], joined: false, notes: [] }
+      const card: Card = { person, id: new Uint8Array(peer.id), shareKey: new Uint8Array(peer.shareKey) }
+      const s: DeviceState = { person, peer, auth: new AuthorityLog(), cards: new Map([[hex(card.id), card]]), revoked: new Set(), waitingAuth: [], keys: new Map(), heads: [], pending: [], outgoing: [], joined: false, notes: [] }
       devices.set(device, s)
       send(s, { t: 'card', person, id: hex(card.id), shareKey: hex(card.shareKey) })
     },
@@ -230,7 +238,7 @@ export function rltpBeekem(): Candidate {
 
     async addMember(by, p, role: Role) {
       const s = dev(by)
-      const known = cardsOf(p)
+      const known = cardsOf(s, p)
       if (!known.length) throw new Error(`unbekannte Person ${p}`)
       const op = await s.auth.make('add', s.person, p, role)
       s.auth.add(op)
@@ -247,14 +255,15 @@ export function rltpBeekem(): Candidate {
 
     async removeMember(by, p) {
       const s = dev(by)
-      if (!cardsOf(p).length) throw new Error(`unbekannte Person ${p}`)
+      // Ob p entfernt werden kann, entscheidet das Log, nicht die Kartentabelle:
+      // Nach Widerruf des letzten Geräts hat p keine Karte mehr, ist aber Mitglied (Issue #13).
       const op = await s.auth.make('remove', s.person, p)
       s.auth.add(op)
       const cgka: string[] = []
       if (s.auth.isValid(op.id)) {
         // Die Person geht, also jedes ihrer Blätter.
         const inTree = new Set((s.peer.members() as Uint8Array[]).map(hex))
-        for (const card of cardsOf(p)) {
+        for (const card of cardsOf(s, p)) {
           if (!inTree.has(hex(card.id))) continue
           try {
             const c = (await s.peer.remove(card.id)) as Uint8Array | null
@@ -273,7 +282,7 @@ export function rltpBeekem(): Candidate {
       const id = new Uint8Array(target.peer.id)
       const admin = s.auth.members().get(s.person) === 'admin'
       if (target.person !== s.person && !admin) throw new Error(`${by} darf ${device} nicht entfernen`)
-      revoked.add(hex(id))
+      s.revoked.add(hex(id))
       send(s, { t: 'revoke', id: hex(id) })
       try {
         const c = (await s.peer.remove(id)) as Uint8Array | null
@@ -319,11 +328,11 @@ export function rltpBeekem(): Candidate {
       const m = JSON.parse(dec.decode(msg.body)) as Wire
       switch (m.t) {
         case 'card':
-          cards.set(m.id, { person: m.person, id: unhex(m.id), shareKey: unhex(m.shareKey) })
+          s.cards.set(m.id, { person: m.person, id: unhex(m.id), shareKey: unhex(m.shareKey) })
           await ensureOwnLeaves(s)
           return { content: [] }
         case 'revoke':
-          revoked.add(m.id)
+          s.revoked.add(m.id)
           await heal(s)
           return { content: [] }
         case 'auth':
