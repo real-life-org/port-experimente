@@ -18,6 +18,7 @@ describe('Kandidat Keyhive (Yjs über @keyhive/keyhive)', () => {
       S4c: 'bestanden', // Bob kann die Gründerin nicht entfernen (Seniorität)
       S4d: 'bestanden', // forcePcsUpdate neben Entfernung
       S4e: 'nicht abbildbar', // keine Gruppenregeln
+      S4j: 'nicht abbildbar',
       S4f: 'nicht bestanden', // Mallorys Kette bleibt (offene Beobachtung, siehe NOTES)
       S5: 'nicht abbildbar', // Geräte als Gruppe der Person, im Prüfstand noch nicht verdrahtet
       S5b: 'nicht abbildbar',

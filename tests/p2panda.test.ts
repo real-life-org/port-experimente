@@ -18,6 +18,7 @@ describe('Kandidat p2panda (WebAssembly)', () => {
       S4c: 'bestanden', // gegenseitige Entfernung: beide raus
       S4d: 'nicht abbildbar', // keine Rotation ohne Mitgliedschaftsänderung (SpaceUpdate nicht umgesetzt)
       S4e: 'nicht abbildbar', // keine Gruppenregeln
+      S4j: 'nicht abbildbar',
       S4f: 'bestanden', // Mallorys Kette wird transitiv ungültig
       S5: 'nicht abbildbar', // verschachtelte Gruppen für Geräte noch nicht verdrahtet
       S5b: 'nicht abbildbar',

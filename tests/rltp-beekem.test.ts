@@ -19,7 +19,8 @@ describe('Kandidat RLTP-Autorität über BeeKEM', () => {
       S4b: 'bestanden', // zwei Entfernungen gleichzeitig: beide gelten, niemand liest mit (KV2, KV6)
       S4c: 'bestanden', // gegenseitige Entfernung: beide raus (Matrix-Entscheidung 2)
       S4d: 'bestanden', // Rotation neben Entfernung (KV5, KV6)
-      S4e: 'nicht abbildbar', // keine Gruppenregeln im Experiment
+      S4e: 'bestanden', // E9: zwei policy.change gleichzeitig → Fork, alle einig
+      S4j: 'bestanden', // E9: policy.change neben Entfernung → Fork, Entfernung verfällt; Ende durch policy.change auf beide
       S4f: 'bestanden', // Strong Removal transitiv: Mallorys Kette ungültig, Baum geheilt
       S5: 'bestanden', // E7: ein Blatt je Gerät, Person bleibt Subjekt im Log
       S5b: 'bestanden', // E7: eigenes Gerät entfernen = neues Geheimnis ohne dessen Blatt (KV1), Person bleibt
@@ -33,6 +34,70 @@ describe('Kandidat RLTP-Autorität über BeeKEM', () => {
       S10c: 'nicht abbildbar',
     })
   }, 120_000)
+})
+
+// Regressionen aus dem Review zu PR #16 (E9).
+describe('E9: Politik am Kandidaten', () => {
+  it('#18: eine fehlgeschlagene Admin-Aufnahme hinterlässt keine Rechte', async () => {
+    const c = rltpBeekem()
+    const w = new World(c)
+    for (const p of ['alice', 'bob', 'carol']) await w.device(p, p)
+    await w.flush()
+    await w.createGroup('alice')
+    await w.add('alice', 'carol')
+    await w.flush()
+    await c.changePolicy('alice', 'add:vouch:1')
+    await w.flush()
+    // Ohne Bürgschaft ungültig; die Beförderung hängt an dieser Aufnahme.
+    await w.add('alice', 'bob', 'admin')
+    await w.flush()
+    expect(w.members('carol')).toEqual(['alice', 'carol'])
+    await c.changePolicy('alice', 'add:any-member')
+    await w.add('alice', 'bob', 'member')
+    await w.flush()
+    expect(w.members('carol')).toEqual(['alice', 'bob', 'carol'])
+    await w.remove('bob', 'alice')
+    await w.flush()
+    expect(w.members('carol')).toEqual(['alice', 'bob', 'carol'])
+    expect(w.members('bob')).toEqual(['alice', 'bob', 'carol'])
+  })
+})
+
+describe('E9 Schritt 1b: der Baum folgt dem Zustand', () => {
+  it('eine Aufnahme, die erst durch eine spätere Operation gültig wird, kommt in den Baum', async () => {
+    const c = rltpBeekem()
+    const w = new World(c)
+    for (const p of ['alice', 'bob', 'carol', 'dave', 'x']) await w.device(p, p)
+    await w.flush()
+    await w.createGroup('alice')
+    await w.add('alice', 'bob', 'admin')
+    await w.add('alice', 'carol', 'admin')
+    await w.add('alice', 'dave')
+    await w.flush()
+    // Drei Partitionen: Alice entfernt Bob; Bob nimmt x auf; Carol ändert die
+    // Regeln. Dave sieht erst Alices Entfernung von Bob, dann Bobs Aufnahme
+    // von x als unterdrückt; erst Carols Regeländerung (Fork mit der
+    // Entfernung, beide verfallen) macht die Aufnahme nachträglich gültig.
+    await w.partition(['alice', 'dave'], ['bob', 'x'], ['carol'])
+    await w.remove('alice', 'bob')
+    await w.flush()
+    await w.add('bob', 'x')
+    await c.changePolicy('carol', 'regel-c')
+    await w.flush()
+    await w.heal()
+    await w.flush()
+    const all = ['alice', 'bob', 'carol', 'dave', 'x']
+    for (const d of all) expect(w.members(d), d).toEqual(all)
+    for (const d of all) expect(c.status(d), d).toContain('fork=ja')
+    await w.write('dave', 'nachher')
+    await w.flush()
+    for (const d of ['alice', 'carol', 'dave', 'x']) expect(w.read(d), d).toContain('nachher')
+    // Bob ist wieder Mitglied, aber sein Blatt wurde durch die (später
+    // verfallene) Entfernung aus dem Baum genommen; die Wiederaufnahme unter
+    // demselben Share-Key gibt ihm keinen Schlüssel zurück. Er braucht eine
+    // frische Karte (Befund 8 in NOTES.md). Festgehalten, nicht gelöst.
+    expect(w.read('bob')).toEqual([])
+  })
 })
 
 // Regressionen aus dem Review zu PR #12 (Issues #13, #14).
