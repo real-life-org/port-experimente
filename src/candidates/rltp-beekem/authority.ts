@@ -118,6 +118,13 @@ interface Situation {
 }
 
 const KEYS: OpKey[] = ['member.add', 'member.remove', 'policy.change']
+
+/** Nimmt p in die actors der Aufnahme- und Entfernungsregel auf, rekursiv; alles andere bleibt. */
+export function promoteInPolicy(policy: Policy, p: Person): Policy {
+  const promote = (r: Rule): Rule =>
+    r.type === 'actors' ? (r.actors.includes(p) ? r : { ...r, actors: [...r.actors, p] }) : r.type === 'all' || r.type === 'any' ? { ...r, of: r.of.map(promote) } : r
+  return { ...policy, 'member.add': promote(policy['member.add']), 'member.remove': promote(policy['member.remove']) }
+}
 const opKey = (op: AuthOp): OpKey | undefined => (op.kind === 'add' ? 'member.add' : op.kind === 'remove' ? 'member.remove' : op.kind === 'policy' ? 'policy.change' : undefined)
 const isEnforcement = (op: AuthOp) => op.kind === 'remove' || op.kind === 'policy'
 
@@ -143,9 +150,23 @@ export class AuthorityLog {
     return { ...hull, id, vouches, sigs }
   }
 
-  /** Nimmt eine Operation auf; 'wartet', wenn Vorgänger fehlen. Prüft nichts: Gültigkeit entscheidet die Faltung. */
-  add(op: AuthOp): 'neu' | 'bekannt' | 'wartet' {
-    if (this.opsById.has(op.id)) return 'bekannt'
+  /**
+   * Nimmt eine Operation auf; 'wartet', wenn Vorgänger fehlen. Prüft nichts:
+   * Gültigkeit entscheidet die Faltung. Beweise sind nicht Teil der id: eine
+   * zweite Kopie derselben Hülle bringt ihre Signaturen und Bürgschaften
+   * mit ('ergänzt'), sonst gingen nachgereichte Mitsignaturen verloren und
+   * zwei Repliken könnten dieselbe Operation verschieden beurteilen.
+   */
+  add(op: AuthOp): 'neu' | 'bekannt' | 'ergänzt' | 'wartet' {
+    const known = this.opsById.get(op.id)
+    if (known) {
+      const sigs = new Map([...known.sigs, ...op.sigs].map((x) => [`${x.signer}|${x.sig}`, x]))
+      const vouches = new Map([...(known.vouches ?? []), ...(op.vouches ?? [])].map((v) => [`${v.voucher}|${v.sig}`, v]))
+      if (sigs.size === known.sigs.length && vouches.size === (known.vouches?.length ?? 0)) return 'bekannt'
+      this.opsById.set(op.id, { ...known, sigs: [...sigs.values()], vouches: known.vouches || op.vouches ? [...vouches.values()] : undefined })
+      this.cache = undefined
+      return 'ergänzt'
+    }
     if (!op.preds.every((p) => this.opsById.has(p))) return 'wartet'
     this.opsById.set(op.id, op)
     this.cache = undefined
@@ -338,7 +359,7 @@ export class AuthorityLog {
         break
       case 'add':
         st.members.add(op.subject!)
-        st.keys.set(op.subject!, op.key!)
+        if (!st.keys.has(op.subject!)) st.keys.set(op.subject!, op.key!)
         break
       case 'remove':
         st.members.delete(op.subject!)
@@ -378,7 +399,16 @@ export class AuthorityLog {
     }
     if (!st.created || !st.policy) return false
     const key = opKey(op)!
-    if (op.kind === 'add' && (!op.subject || !op.key)) return false
+    if (op.kind === 'add') {
+      if (!op.subject || !op.key) return false
+      // Eine Aufnahme bindet einen Schlüssel an einen Namen und ersetzt nie
+      // eine bestehende Bindung (#17): wer schon einen Schlüssel hat, kommt
+      // nur unter demselben wieder; ein Schlüsselwechsel braucht eine eigene
+      // Regel. Ein Mitglied wird nicht erneut aufgenommen.
+      const bound = st.keys.get(op.subject)
+      if (bound !== undefined && bound !== op.key) return false
+      if (st.members.has(op.subject)) return false
+    }
     if (op.kind === 'remove' && (!op.subject || !st.members.has(op.subject))) return false
     if (op.kind === 'policy' && (!op.policy || !this.structurallyValid(op.policy))) return false
     const s = this.situation(op, st)
@@ -393,22 +423,29 @@ export class AuthorityLog {
     let valid = new Set(order.map((o) => o.id))
     let forks: Array<[AuthOp, AuthOp]> = []
     let joins = new Set<string>()
+    let region = new Set<string>() // im Fork verfallene Durchsetzung, keine Geschwister
+    let siblings = new Set<string>()
     // Fixpunkt. Jede Runde prüft jede Operation neu; Schranke gegen Pendeln.
     for (let round = 0; round <= order.length + 1; round++) {
       // 1. Autorität an jeder Position: Zustand nach den gültigen Vorfahren.
       const authorized = new Set<string>()
+      /** Geprüfte Signierer je Operation an ihrer Position (nie die behaupteten Namen). */
+      const verified = new Map<string, Set<Person>>()
       for (const op of order) {
         const st = emptyState()
         for (const prior of order) {
           if (prior.id === op.id || !anc.get(op.id)!.has(prior.id) || !valid.has(prior.id)) continue
           this.apply(st, prior)
         }
-        if (this.authorized(op, st)) authorized.add(op.id)
+        if (this.authorized(op, st)) {
+          authorized.add(op.id)
+          verified.set(op.id, op.kind === 'create' ? new Set([op.subject!]) : this.situation(op, st).A)
+        }
       }
-      // 2. Strong Removal: nur eine Entfernung MIT Autorität trifft den Autor
-      //    (= einen ihrer gültigen Signierer) einer gleichzeitigen Operation.
+      // 2. Strong Removal: nur eine Entfernung MIT Autorität trifft einen
+      //    geprüften Signierer einer gleichzeitigen Operation.
       const next = new Set<string>()
-      const signersOf = (op: AuthOp) => new Set(op.sigs.map((s) => s.signer))
+      const signersOf = (op: AuthOp) => verified.get(op.id) ?? new Set<Person>()
       for (const op of order) {
         if (!authorized.has(op.id)) continue
         const mine = signersOf(op)
@@ -417,32 +454,59 @@ export class AuthorityLog {
         if (removedBy.length && !mutual) continue
         next.add(op.id)
       }
+      // 2b. Zwei gleichzeitige Aufnahmen derselben Person unter verschiedenen
+      //     Schlüsseln: keine Bindung gewinnt, beide verfallen (fail-closed).
+      for (const a of order) {
+        if (a.kind !== 'add' || !next.has(a.id)) continue
+        for (const b of order) {
+          if (b.kind !== 'add' || b.id === a.id || !next.has(b.id) || b.subject !== a.subject || b.key === a.key || !concurrent(a, b)) continue
+          next.delete(a.id)
+          next.delete(b.id)
+        }
+      }
       // 3. Klassenregel 3: policy.change neben Durchsetzung → beide verfallen;
-      //    im Fork verfällt jede Durchsetzung bis zu einem policy.change auf beide.
-      const live = order.filter((o) => next.has(o.id))
-      forks = []
-      for (const p of live) {
-        if (p.kind !== 'policy') continue
-        for (const q of live) {
-          if (q.id <= p.id && q.kind === 'policy') continue // jedes Paar einmal
-          if (isEnforcement(q) && concurrent(p, q)) forks.push([p, q])
-        }
-      }
-      joins = new Set()
-      for (const [p, q] of forks) {
-        next.delete(p.id)
-        next.delete(q.id)
-        for (const op of live) {
-          const a = anc.get(op.id)!
-          if (op.id === p.id || op.id === q.id || (!a.has(p.id) && !a.has(q.id))) continue
-          if (op.kind === 'policy' && a.has(p.id) && a.has(q.id)) {
-            joins.add(op.id)
-            continue
+      //    im Fork verfällt jede Durchsetzung bis zu einem policy.change auf
+      //    beide. Eine im Fork verfallene Durchsetzung bildet selbst kein
+      //    weiteres Paar mehr; deshalb innen iterieren, bis die Paare stehen.
+      region = new Set()
+      siblings = new Set()
+      for (let pass = 0; pass <= order.length; pass++) {
+        // Paare nur unter Operationen, die nicht schon im Fork verfallen sind;
+        // verfallen kann aber jede Durchsetzung in `next`.
+        const candidates = order.filter((o) => next.has(o.id))
+        const live = candidates.filter((o) => !region.has(o.id))
+        forks = []
+        for (const p of live) {
+          if (p.kind !== 'policy') continue
+          for (const q of live) {
+            if (q.id <= p.id && q.kind === 'policy') continue // jedes Paar einmal
+            if (isEnforcement(q) && concurrent(p, q)) forks.push([p, q])
           }
-          const afterJoin = [...joins].some((j) => a.has(j))
-          if (isEnforcement(op) && !afterJoin) next.delete(op.id)
         }
+        joins = new Set()
+        const nowRegion = new Set<string>()
+        siblings = new Set()
+        for (const [p, q] of forks) {
+          siblings.add(p.id)
+          siblings.add(q.id)
+          // Nur ein policy.change auf BEIDE Geschwister dieses Paars beendet es.
+          // Ein Join ist Struktur (Nachfolger beider Geschwister), unabhängig
+          // davon, ob er für ein anderes Paar selbst im Fork verfällt.
+          const pairJoins = new Set(candidates.filter((o) => o.kind === 'policy' && o.id !== p.id && o.id !== q.id && anc.get(o.id)!.has(p.id) && anc.get(o.id)!.has(q.id)).map((o) => o.id))
+          for (const j of pairJoins) joins.add(j)
+          for (const op of candidates) {
+            const a = anc.get(op.id)!
+            if (op.id === p.id || op.id === q.id || (!a.has(p.id) && !a.has(q.id)) || pairJoins.has(op.id)) continue
+            const afterJoin = [...pairJoins].some((j) => a.has(j))
+            if (isEnforcement(op) && !afterJoin) nowRegion.add(op.id)
+          }
+        }
+        const stable = nowRegion.size === region.size && [...nowRegion].every((id) => region.has(id))
+        region = nowRegion
+        if (stable) break
       }
+      for (const id of siblings) next.delete(id)
+      for (const id of region) next.delete(id)
       const same = next.size === valid.size && [...next].every((id) => valid.has(id))
       valid = next
       if (same) break

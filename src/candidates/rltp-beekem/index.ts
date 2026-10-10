@@ -1,5 +1,5 @@
 import type { Candidate, Capability, Device, EnforcingService, Msg, Person } from '../../lab/types'
-import { AuthorityLog, Signer, type AuthOp, type Policy } from './authority'
+import { AuthorityLog, Signer, promoteInPolicy, type AuthOp, type Policy } from './authority'
 import { BeekemPeer, loadWasm } from './load'
 import { LogReplicaService, ViewService, viewHash, type ViewAck, type ViewProposal } from './service'
 
@@ -76,6 +76,8 @@ interface DeviceState extends KeyState {
   ack: { seq: number; hash: string | null; identities: string[] }
   proposed: string | null
   waitingAuth: Array<{ op: AuthOp; cgka: string[] }>
+  /** BeeKEM-Anhänge, die schon in den Baum gingen (je Operation einmal). */
+  appliedCgka: Set<string>
   outgoing: Array<{ label: string; body: Uint8Array }>
   joined: boolean
   notes: string[]
@@ -89,7 +91,6 @@ const adminPolicy = (admins: Person[]): Policy => ({
   'member.remove': { type: 'actors', actors: admins, k: 1 },
   'policy.change': { type: 'strongest' },
 })
-const adminsOf = (p: Policy): Person[] => (p['member.remove']?.type === 'actors' ? p['member.remove'].actors : [])
 
 export function rltpBeekem(options: { dienst?: DienstVariante } = {}): Candidate {
   const devices = new Map<Device, DeviceState>()
@@ -164,14 +165,19 @@ export function rltpBeekem(options: { dienst?: DienstVariante } = {}): Candidate
     return out
   }
 
-  /** Autoritätsoperation einarbeiten; BeeKEM-Operationen nur, wenn sie gültig ist. */
+  /**
+   * Autoritätsoperation einarbeiten; BeeKEM-Operationen nur, wenn sie gültig
+   * ist. Eine Operation kann erst durch nachgereichte Signaturen gültig
+   * werden ('ergänzt'); ihre Anhänge gehen dann genau einmal in den Baum.
+   */
   function applyAuth(s: DeviceState, op: AuthOp, cgka: string[]) {
     const r = s.auth.add(op)
     if (r === 'wartet') {
       s.waitingAuth.push({ op, cgka })
       return
     }
-    if (r === 'neu' && s.auth.isValid(op.id)) {
+    if (r !== 'bekannt' && !s.appliedCgka.has(op.id) && s.auth.isValid(op.id)) {
+      s.appliedCgka.add(op.id)
       for (const c of cgka) {
         try {
           s.peer.receive(unb64(c))
@@ -314,7 +320,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante } = {}): Candidate
       signerOf(person)
       const peer = new BeekemPeer()
       const card: Card = { person, id: new Uint8Array(peer.id), shareKey: new Uint8Array(peer.shareKey) }
-      const s: DeviceState = { person, peer, auth: new AuthorityLog(), cards: new Map([[hex(card.id), card]]), revoked: new Set(), ack: { seq: 0, hash: null, identities: [] }, proposed: null, waitingAuth: [], keys: new Map(), heads: [], pending: [], outgoing: [], joined: false, notes: [] }
+      const s: DeviceState = { person, peer, auth: new AuthorityLog(), cards: new Map([[hex(card.id), card]]), revoked: new Set(), ack: { seq: 0, hash: null, identities: [] }, proposed: null, waitingAuth: [], appliedCgka: new Set(), keys: new Map(), heads: [], pending: [], outgoing: [], joined: false, notes: [] }
       devices.set(device, s)
       send(s, { t: 'card', person, id: hex(card.id), shareKey: hex(card.shareKey) })
     },
@@ -349,9 +355,10 @@ export function rltpBeekem(options: { dienst?: DienstVariante } = {}): Candidate
       send(s, { t: 'auth', op, cgka })
       // „Admin“ ist kein Rollen-Flag, sondern ein Eintrag in den actors der Politik.
       if (role === 'admin') {
-        const admins = adminsOf(s.auth.policy())
-        if (!admins.includes(p)) {
-          const change = s.auth.make({ kind: 'policy', policy: adminPolicy([...admins, p]) }, [signerOf(s.person)])
+        const current = s.auth.policy()
+        const next = promoteInPolicy(current, p)
+        if (JSON.stringify(next) !== JSON.stringify(current)) {
+          const change = s.auth.make({ kind: 'policy', policy: next }, [signerOf(s.person)])
           s.auth.add(change)
           send(s, { t: 'auth', op: change, cgka: [] }, 'policy')
         }
@@ -413,8 +420,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante } = {}): Candidate
     async changePolicy(by, tag) {
       const s = dev(by)
       const current = s.auth.policy()
-      const admins = adminsOf(current)
-      const next: Policy = { ...adminPolicy(admins.length ? admins : [s.person]), 'member.remove': current['member.remove'], 'member.add': current['member.add'] }
+      const next: Policy = { ...current }
       const m = /^(remove|add):(threshold|vouch|any-member)(?::(\d+))?$/.exec(tag)
       if (m) {
         const key = m[1] === 'remove' ? 'member.remove' : 'member.add'

@@ -317,3 +317,103 @@ describe('Fork: policy.change neben Durchsetzung', () => {
     expect(a.policyVersion()).toBe(3)
   })
 })
+
+describe('Review zu PR #16', () => {
+  it('#17: eine Aufnahme ersetzt keine bestehende Schlüsselbindung', async () => {
+    const a = new AuthorityLog()
+    const open: Policy = { ...admins('alice'), 'member.add': { type: 'any-member' } }
+    a.add(await a.make({ kind: 'create', subject: 'alice', key: key.alice.pub, policy: open }, [key.alice]))
+    a.add(await a.make({ kind: 'add', subject: 'bob', key: key.bob.pub }, [key.alice]))
+    const attacker = Signer.generate('alice')
+    const takeover = await a.make({ kind: 'add', subject: 'alice', key: attacker.pub }, [key.bob])
+    a.add(takeover)
+    expect(a.isValid(takeover.id)).toBe(false)
+    expect(a.keyOf('alice')).toBe(key.alice.pub)
+    const forged = await a.make({ kind: 'remove', subject: 'bob' }, [attacker])
+    a.add(forged)
+    expect(a.isValid(forged.id)).toBe(false)
+    expect(names(a.members())).toEqual(['alice', 'bob'])
+  })
+
+  it('#17: Wiederaufnahme nur unter demselben Schlüssel; gleichzeitige Aufnahmen mit verschiedenen Schlüsseln verfallen beide', async () => {
+    const a = await setup()
+    a.add(await a.make({ kind: 'remove', subject: 'carol' }, [key.alice]))
+    const other = Signer.generate('carol')
+    const wrong = await a.make({ kind: 'add', subject: 'carol', key: other.pub }, [key.alice])
+    a.add(wrong)
+    expect(a.isValid(wrong.id)).toBe(false)
+    a.add(await a.make({ kind: 'add', subject: 'carol', key: key.carol.pub }, [key.alice]))
+    expect(names(a.members())).toEqual(['alice', 'bob', 'carol', 'dave'])
+    // gleichzeitig, verschiedene Schlüssel
+    const b = await setup()
+    const heads = b.heads()
+    const eve2 = Signer.generate('eve')
+    const x1 = await on(b, heads).make({ kind: 'add', subject: 'eve', key: key.eve.pub }, [key.alice])
+    const x2 = await on(b, heads).make({ kind: 'add', subject: 'eve', key: eve2.pub }, [key.bob])
+    b.add(x1)
+    b.add(x2)
+    expect(b.isValid(x1.id)).toBe(false)
+    expect(b.isValid(x2.id)).toBe(false)
+    expect(names(b.members())).toEqual(['alice', 'bob', 'carol', 'dave'])
+  })
+
+  it('nachgereichte Signaturen derselben Hülle werden zusammengeführt', async () => {
+    const a = new AuthorityLog()
+    const genesis = await a.make({ kind: 'create', subject: 'alice', key: key.alice.pub, policy: admins('alice') }, [key.alice])
+    expect(a.add({ ...genesis, sigs: [] })).toBe('neu')
+    expect(a.isValid(genesis.id)).toBe(false)
+    expect(a.add(genesis)).toBe('ergänzt')
+    expect(a.isValid(genesis.id)).toBe(true)
+    expect(a.add(genesis)).toBe('bekannt')
+    // threshold 2: zwei Kopien mit je einer Signatur ergeben die Operation
+    const b = await setup()
+    b.add(await b.make({ kind: 'policy', policy: { ...admins('alice', 'bob'), 'member.remove': { type: 'threshold', k: 2 } } }, [key.alice]))
+    const rm = await b.make({ kind: 'remove', subject: 'carol' }, [key.alice, key.bob])
+    b.add({ ...rm, sigs: [rm.sigs[0]!] })
+    expect(b.isValid(rm.id)).toBe(false)
+    b.add({ ...rm, sigs: [rm.sigs[1]!] })
+    expect(b.isValid(rm.id)).toBe(true)
+  })
+
+  it('Strong Removal zählt geprüfte Signierer, nicht behauptete Namen', async () => {
+    const a = await setup()
+    const heads = a.heads()
+    const addEve = await on(a, heads).make({ kind: 'add', subject: 'eve', key: key.eve.pub }, [key.alice])
+    const rmBob = await on(a, heads).make({ kind: 'remove', subject: 'bob' }, [key.alice])
+    // Jemand hängt an Alices Aufnahme eine ungültige Signatur unter Bobs Namen.
+    a.add({ ...addEve, sigs: [...addEve.sigs, { signer: 'bob', sig: addEve.sigs[0]!.sig }] })
+    a.add(rmBob)
+    expect(a.isValid(addEve.id)).toBe(true)
+    expect(names(a.members())).toEqual(['alice', 'carol', 'dave', 'eve'])
+  })
+
+  it('ein Join beendet nur seinen eigenen Fork', async () => {
+    const a = await setup()
+    a.add(await a.make({ kind: 'add', subject: 'eve', key: key.eve.pub }, [key.alice]))
+    a.add(await a.make({ kind: 'policy', policy: admins('alice', 'bob', 'carol') }, [key.alice]))
+    const heads = a.heads()
+    const p1 = await on(a, heads).make({ kind: 'policy', policy: admins('alice', 'bob', 'carol') }, [key.alice])
+    const rm = await on(a, heads).make({ kind: 'remove', subject: 'dave' }, [key.bob])
+    const p3 = await on(a, heads).make({ kind: 'policy', policy: admins('alice', 'bob', 'carol') }, [key.carol])
+    for (const op of [p1, rm, p3]) a.add(op)
+    expect(a.forked()).toBe(true)
+    // Join nur über p1 und rm; p3 bleibt offen.
+    const j1 = await a.make({ kind: 'policy', policy: admins('alice', 'bob', 'carol') }, [key.alice], [p1.id, rm.id])
+    a.add(j1)
+    const e = await a.make({ kind: 'remove', subject: 'eve' }, [key.alice], [j1.id])
+    a.add(e)
+    expect(a.forked()).toBe(true)
+    expect(a.isValid(e.id)).toBe(false)
+    expect(names(a.members())).toEqual(['alice', 'bob', 'carol', 'dave', 'eve'])
+    // Ein Join über alle drei beendet alles.
+    const all = await a.make({ kind: 'policy', policy: admins('alice', 'bob', 'carol') }, [key.alice], [j1.id, p3.id])
+    a.add(all)
+    expect(a.forked()).toBe(false)
+  })
+
+  it('Befördern erweitert die Regeln, statt sie zu ersetzen', async () => {
+    const { promoteInPolicy } = await import('../src/candidates/rltp-beekem/authority')
+    const p: Policy = { 'member.add': { type: 'all', of: [{ type: 'actors', actors: ['alice'], k: 1 }, { type: 'vouch', count: 2 }] }, 'member.remove': { type: 'threshold', k: 2 }, 'policy.change': { type: 'strongest' } }
+    expect(promoteInPolicy(p, 'bob')).toEqual({ ...p, 'member.add': { type: 'all', of: [{ type: 'actors', actors: ['alice', 'bob'], k: 1 }, { type: 'vouch', count: 2 }] } })
+  })
+})

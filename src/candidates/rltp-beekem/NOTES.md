@@ -307,6 +307,34 @@ Sicht, Challenge; S10c', S10d) steht aus.
 | S10c (Sichten) | unverändert nicht bestanden | Schritt 2 |
 | S9 | 267 ms je Operation (30 × 500, Median aus 3; E6: 183) | Signaturen prüfen je Faltung neu, und die Faltung ist noch quadratisch; S9b 0,46 ms je Gerät und Zustellung (5 × 200), unverändert |
 
+### Aus dem Review zu PR #16 (Codex, CodeRabbit)
+
+- **Eine Aufnahme ersetzt keine Schlüsselbindung (#17).** Die erste Fassung
+  setzte bei jeder gültigen Aufnahme den Schlüssel des Subjekts neu; unter
+  `member.add = any-member` konnte ein Mitglied Alices Namen an einen eigenen
+  Schlüssel binden und danach als Alice entfernen. Jetzt: Wer schon einen
+  Schlüssel hat, kommt nur unter demselben wieder; ein Mitglied wird nicht
+  erneut aufgenommen; zwei gleichzeitige Aufnahmen derselben Person unter
+  verschiedenen Schlüsseln verfallen beide. Ein Schlüsselwechsel braucht
+  eine eigene Regel (Access `anchor.rotate`), hier nicht gebaut. Für den
+  Guss: Die Bindung Name → Schlüssel ist ein eigener Zustand neben der
+  Mitgliedschaft; welche Operation sie setzen darf, gehört ausgesprochen.
+- **Beweise derselben Hülle werden zusammengeführt.** Signaturen und
+  Bürgschaften sind nicht Teil der id; eine zweite Kopie bringt ihre mit
+  (`'ergänzt'`), sonst gehen nachgereichte Mitsignaturen verloren und zwei
+  Repliken beurteilen dieselbe Operation verschieden. Der Kandidat nimmt
+  BeeKEM-Anhänge genau einmal in den Baum, auch wenn die Operation erst
+  durch Nachlieferung gültig wird.
+- **Strong Removal zählt geprüfte Signierer**, nie behauptete Namen; sonst
+  könnte eine angehängte ungültige Signatur unter dem Namen eines gerade
+  Entfernten eine gültige Operation zu Fall bringen.
+- **Join je Fork-Paar.** Ein `policy.change` beendet nur den Fork, dessen
+  beide Geschwister es als Vorgänger hat; eine im Fork verfallene
+  Durchsetzung bildet selbst kein weiteres Paar (sonst poisoniert ein
+  verfallenes `remove` den Join, der den Fork beenden soll).
+- **Befördern erweitert die Regeln**, statt sie durch `actors(k=1)` zu
+  ersetzen; `threshold` und `vouch` bleiben erhalten.
+
 ### Wo der Code vom Guss abweichen musste (Befund für 0.57)
 
 1. **Autor einer k-of-n-Operation.** Die Spec disponiert „eine Entfernung
@@ -340,4 +368,5 @@ Sicht, Challenge; S10c', S10d) steht aus.
 6. **Nicht modelliert:** pending exits in der policy currency (5.4, kein
    `member.leave` im Prüfstand); der Transportkosten-Bound der Politik
    (§4.4); `strongest` jenseits von 16 Mitgliedern (symbolische Ordnung
-   nötig, die Spec erlaubt sie).
+   nötig, die Spec erlaubt sie); Schlüsselwechsel einer Person
+   (`anchor.rotate`).
