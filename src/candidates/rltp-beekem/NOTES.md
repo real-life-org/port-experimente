@@ -334,6 +334,17 @@ Sicht, Challenge; S10c', S10d) steht aus.
   verfallenes `remove` den Join, der den Fork beenden soll).
 - **Befördern erweitert die Regeln**, statt sie durch `actors(k=1)` zu
   ersetzen; `threshold` und `vouch` bleiben erhalten.
+- **Eine Beförderung gilt nur, solange ihre Aufnahme gilt (#18).** Ein
+  kausaler Vorgänger bindet nicht: Unter `add:vouch:1` war die Aufnahme
+  ungültig, die nachfolgende `policy.change` aber gültig, und eine spätere
+  gewöhnliche Aufnahme machte die verwaisten actors-Rechte wirksam. Neu in
+  der Hülle: `dependsOn`, eine Gültigkeitsabhängigkeit, die der Fixpunkt in
+  jeder Runde prüft (nachgereichte Beweise und spätere Invalidierung
+  eingeschlossen; nur Vorgänger erlaubt). Für den Guss: Die Spec kennt
+  Autorität nur je Position; „gilt nur mit X“ ist ein eigener Mechanismus,
+  den die Admission Chain der Membership Tasks (invite → accept → add) für
+  die Aufnahme schon leistet. Für Politik, die an einer Aufnahme hängt,
+  fehlt er, und `actors`, die Nicht-Mitglieder nennen, sind der Grund.
 
 ### Wo der Code vom Guss abweichen musste (Befund für 0.57)
 

@@ -54,6 +54,12 @@ export interface AuthOp {
   readonly group?: string
   readonly nonce: string
   readonly preds: readonly string[]
+  /**
+   * Gültigkeitsabhängigkeit: diese Operation gilt nur, solange die genannten
+   * Vorgänger gelten (nachgereichte Beweise und spätere Invalidierung
+   * eingeschlossen). Ein kausaler Vorgänger allein bindet nicht.
+   */
+  readonly dependsOn?: readonly string[]
   /** Beweise, nicht Teil der Hülle. */
   readonly vouches?: readonly Vouch[]
   readonly sigs: readonly Sig[]
@@ -63,7 +69,7 @@ export type Body =
   | { kind: 'create'; subject: Person; key: string; policy: Policy; group?: string }
   | { kind: 'add'; subject: Person; key: string; vouchers?: Signer[] }
   | { kind: 'remove'; subject: Person }
-  | { kind: 'policy'; policy: Policy }
+  | { kind: 'policy'; policy: Policy; dependsOn?: string[] }
 
 const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('')
 const unhex = (h: string) => Uint8Array.from(h.match(/../g)?.map((x) => parseInt(x, 16)) ?? [])
@@ -98,8 +104,8 @@ function verify(sig: string, msg: string, pub: string): boolean {
 
 const vouchMsg = (subject: Person, nonce: string) => `vouch|${subject}|${nonce}`
 /** Die Hülle: alles außer Beweisen. Signiert wird ihr Digest, und der ist die id. */
-const hullDigest = (h: Pick<AuthOp, 'kind' | 'subject' | 'key' | 'policy' | 'group' | 'nonce' | 'preds'>) =>
-  digest(JSON.stringify({ kind: h.kind, subject: h.subject, key: h.key, policy: h.policy, group: h.group, nonce: h.nonce, preds: h.preds }))
+const hullDigest = (h: Pick<AuthOp, 'kind' | 'subject' | 'key' | 'policy' | 'group' | 'nonce' | 'preds' | 'dependsOn'>) =>
+  digest(JSON.stringify({ kind: h.kind, subject: h.subject, key: h.key, policy: h.policy, group: h.group, nonce: h.nonce, preds: h.preds, dependsOn: h.dependsOn }))
 
 interface State {
   created: boolean
@@ -143,6 +149,7 @@ export class AuthorityLog {
       group: body.kind === 'create' ? body.group : undefined,
       nonce,
       preds,
+      dependsOn: body.kind === 'policy' ? body.dependsOn : undefined,
     }
     const id = hullDigest(hull)
     const vouches = body.kind === 'add' ? (body.vouchers ?? []).map((v) => ({ voucher: v.name, sig: v.sign(vouchMsg(body.subject, nonce)) })) : undefined
@@ -437,7 +444,9 @@ export class AuthorityLog {
           if (prior.id === op.id || !anc.get(op.id)!.has(prior.id) || !valid.has(prior.id)) continue
           this.apply(st, prior)
         }
-        if (this.authorized(op, st)) {
+        const deps = op.dependsOn ?? []
+        const depsHold = deps.every((d) => valid.has(d) && anc.get(op.id)!.has(d) && d !== op.id)
+        if (depsHold && this.authorized(op, st)) {
           authorized.add(op.id)
           verified.set(op.id, op.kind === 'create' ? new Set([op.subject!]) : this.situation(op, st).A)
         }

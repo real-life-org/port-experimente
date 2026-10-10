@@ -36,6 +36,33 @@ describe('Kandidat RLTP-Autorität über BeeKEM', () => {
   }, 120_000)
 })
 
+// Regressionen aus dem Review zu PR #16 (E9).
+describe('E9: Politik am Kandidaten', () => {
+  it('#18: eine fehlgeschlagene Admin-Aufnahme hinterlässt keine Rechte', async () => {
+    const c = rltpBeekem()
+    const w = new World(c)
+    for (const p of ['alice', 'bob', 'carol']) await w.device(p, p)
+    await w.flush()
+    await w.createGroup('alice')
+    await w.add('alice', 'carol')
+    await w.flush()
+    await c.changePolicy('alice', 'add:vouch:1')
+    await w.flush()
+    // Ohne Bürgschaft ungültig; die Beförderung hängt an dieser Aufnahme.
+    await w.add('alice', 'bob', 'admin')
+    await w.flush()
+    expect(w.members('carol')).toEqual(['alice', 'carol'])
+    await c.changePolicy('alice', 'add:any-member')
+    await w.add('alice', 'bob', 'member')
+    await w.flush()
+    expect(w.members('carol')).toEqual(['alice', 'bob', 'carol'])
+    await w.remove('bob', 'alice')
+    await w.flush()
+    expect(w.members('carol')).toEqual(['alice', 'bob', 'carol'])
+    expect(w.members('bob')).toEqual(['alice', 'bob', 'carol'])
+  })
+})
+
 // Regressionen aus dem Review zu PR #12 (Issues #13, #14).
 describe('E7: Geräte und Personen', () => {
   async function gruppe(carolRole: 'admin' | 'member' = 'member') {

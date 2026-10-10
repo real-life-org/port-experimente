@@ -429,6 +429,53 @@ describe('Review zu PR #16', () => {
     expect(a.forked()).toBe(false)
   })
 
+  it('#18: eine Beförderung gilt nur, solange ihre Aufnahme gilt', async () => {
+    const a = await setup()
+    const vouched: Policy = { ...admins('alice'), 'member.add': { type: 'all', of: [{ type: 'actors', actors: ['alice'], k: 1 }, { type: 'vouch', count: 1 }] } }
+    a.add(await a.make({ kind: 'policy', policy: vouched }, [key.alice]))
+    a.add(await a.make({ kind: 'remove', subject: 'bob' }, [key.alice]))
+    // Aufnahme ohne Bürgschaft: ungültig. Die Beförderung hängt an ihr.
+    const add = await a.make({ kind: 'add', subject: 'bob', key: key.bob.pub }, [key.alice])
+    a.add(add)
+    const promote = await a.make({ kind: 'policy', policy: { ...vouched, 'member.remove': { type: 'actors', actors: ['alice', 'bob'], k: 1 } }, dependsOn: [add.id] }, [key.alice])
+    a.add(promote)
+    expect(a.isValid(add.id)).toBe(false)
+    expect(a.isValid(promote.id)).toBe(false)
+    // Später: Regel gelockert, Bob gewöhnlich aufgenommen. Er hat keine Entfernungsrechte.
+    a.add(await a.make({ kind: 'policy', policy: { ...vouched, 'member.add': { type: 'any-member' } } }, [key.alice]))
+    a.add(await a.make({ kind: 'add', subject: 'bob', key: key.bob.pub }, [key.alice]))
+    expect(names(a.members())).toEqual(['alice', 'bob', 'carol', 'dave'])
+    const rm = await a.make({ kind: 'remove', subject: 'alice' }, [key.bob])
+    a.add(rm)
+    expect(a.isValid(rm.id)).toBe(false)
+    expect(names(a.members())).toEqual(['alice', 'bob', 'carol', 'dave'])
+    // Gegenprobe: mit nachgereichter Bürgschaft wird die Aufnahme gültig, und die Beförderung mit ihr.
+    const b = await setup()
+    b.add(await b.make({ kind: 'policy', policy: vouched }, [key.alice]))
+    const add2 = await b.make({ kind: 'add', subject: 'eve', key: key.eve.pub, vouchers: [key.carol] }, [key.alice, key.eve])
+    b.add({ ...add2, vouches: [] })
+    const promote2 = await b.make({ kind: 'policy', policy: { ...vouched, 'member.remove': { type: 'actors', actors: ['alice', 'eve'], k: 1 } }, dependsOn: [add2.id] }, [key.alice])
+    b.add(promote2)
+    expect(b.isValid(promote2.id)).toBe(false)
+    b.add(add2)
+    expect(b.isValid(add2.id)).toBe(true)
+    expect(b.isValid(promote2.id)).toBe(true)
+    expect(b.may('eve', 'member.remove')).toBe(true)
+  })
+
+  it('dependsOn muss ein Vorgänger sein und ist Teil der Hülle', async () => {
+    const a = await setup()
+    const heads = a.heads()
+    const x = await on(a, heads).make({ kind: 'add', subject: 'eve', key: key.eve.pub }, [key.alice])
+    const y = await on(a, heads).make({ kind: 'policy', policy: admins('alice', 'bob', 'eve'), dependsOn: [x.id] }, [key.alice])
+    a.add(x)
+    a.add(y)
+    expect(a.isValid(y.id)).toBe(false) // x ist kein Vorgänger von y
+    const z = await a.make({ kind: 'policy', policy: admins('alice', 'bob', 'eve') }, [key.alice])
+    a.add({ ...z, dependsOn: [] })
+    expect(a.isValid(z.id)).toBe(false) // geänderte Hülle
+  })
+
   it('Befördern erweitert die Regeln, statt sie zu ersetzen', async () => {
     const { promoteInPolicy } = await import('../src/candidates/rltp-beekem/authority')
     const p: Policy = { 'member.add': { type: 'all', of: [{ type: 'actors', actors: ['alice'], k: 1 }, { type: 'vouch', count: 2 }] }, 'member.remove': { type: 'threshold', k: 2 }, 'policy.change': { type: 'strongest' } }

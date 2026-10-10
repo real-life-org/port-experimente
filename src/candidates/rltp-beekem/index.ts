@@ -353,12 +353,15 @@ export function rltpBeekem(options: { dienst?: DienstVariante } = {}): Candidate
         }
       }
       send(s, { t: 'auth', op, cgka })
-      // „Admin“ ist kein Rollen-Flag, sondern ein Eintrag in den actors der Politik.
+      // „Admin“ ist kein Rollen-Flag, sondern ein Eintrag in den actors der
+      // Politik. Die Beförderung gilt nur, solange diese Aufnahme gilt (#18):
+      // sonst bliebe eine verwaiste Beförderung liegen und würde bei einer
+      // späteren gewöhnlichen Aufnahme wirksam.
       if (role === 'admin') {
         const current = s.auth.policy()
         const next = promoteInPolicy(current, p)
         if (JSON.stringify(next) !== JSON.stringify(current)) {
-          const change = s.auth.make({ kind: 'policy', policy: next }, [signerOf(s.person)])
+          const change = s.auth.make({ kind: 'policy', policy: next, dependsOn: [op.id] }, [signerOf(s.person)])
           s.auth.add(change)
           send(s, { t: 'auth', op: change, cgka: [] }, 'policy')
         }
