@@ -498,6 +498,30 @@ describe('Review zu PR #16', () => {
     expect(a.isValid(z.id)).toBe(false) // geänderte Hülle
   })
 
+  it('#19: ein missgebildeter Rahmen wird verworfen und bringt die Auswertung nicht zu Fall', async () => {
+    const a = await setup()
+    const ok = await a.make({ kind: 'policy', policy: admins('alice', 'bob') }, [key.alice])
+    const bad = [
+      { ...ok, dependsOn: 'not-an-array' },
+      { ...ok, dependsOn: [42] },
+      { ...ok, preds: 'x' },
+      { ...ok, sigs: [{ signer: 'alice' }] },
+      { ...ok, sigs: 'none' },
+      { ...ok, kind: 'destroy' },
+      { ...ok, policy: 'open' },
+      { ...ok, vouches: [{ voucher: 1, sig: 2 }] },
+      null,
+      'op',
+    ] as unknown as AuthOp[]
+    for (const op of bad) {
+      expect(a.add(op), JSON.stringify(op)).toBe('verworfen')
+      expect(a.has(ok.id)).toBe(false)
+      expect(names(a.members())).toEqual(['alice', 'bob', 'carol', 'dave'])
+    }
+    expect(a.add(ok)).toBe('neu')
+    expect(a.isValid(ok.id)).toBe(true)
+  })
+
   it('Befördern erweitert die Regeln, statt sie zu ersetzen', async () => {
     const { promoteInPolicy } = await import('../src/candidates/rltp-beekem/authority')
     const p: Policy = { 'member.add': { type: 'all', of: [{ type: 'actors', actors: ['alice'], k: 1 }, { type: 'vouch', count: 2 }] }, 'member.remove': { type: 'threshold', k: 2 }, 'policy.change': { type: 'strongest' } }

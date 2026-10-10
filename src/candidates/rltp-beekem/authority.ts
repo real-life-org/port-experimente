@@ -105,6 +105,24 @@ function verify(sig: string, msg: string, pub: string): boolean {
 }
 
 const vouchMsg = (subject: Person, nonce: string) => `vouch|${subject}|${nonce}`
+
+const isStr = (x: unknown): x is string => typeof x === 'string' && x.length > 0
+const isStrArray = (x: unknown): x is string[] => Array.isArray(x) && x.every(isStr)
+const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x)
+/** Form einer Operation, wie sie von der Leitung kommt. Inhaltliche Gültigkeit entscheidet die Faltung. */
+export function wellFormed(x: unknown): x is AuthOp {
+  if (!isObj(x)) return false
+  if (!isStr(x.id) || !isStr(x.nonce) || !isStrArray(x.preds)) return false
+  if (!['create', 'add', 'remove', 'policy'].includes(x.kind as string)) return false
+  if (x.subject !== undefined && !isStr(x.subject)) return false
+  if (x.key !== undefined && !isStr(x.key)) return false
+  if (x.group !== undefined && !isStr(x.group)) return false
+  if (x.policy !== undefined && !isObj(x.policy)) return false
+  if (x.dependsOn !== undefined && !isStrArray(x.dependsOn)) return false
+  if (!Array.isArray(x.sigs) || !x.sigs.every((s) => isObj(s) && isStr(s.signer) && isStr(s.sig))) return false
+  if (x.vouches !== undefined && (!Array.isArray(x.vouches) || !x.vouches.every((v) => isObj(v) && isStr(v.voucher) && isStr(v.sig)))) return false
+  return true
+}
 /** Die Hülle: alles außer Beweisen. Signiert wird ihr Digest, und der ist die id. */
 const hullDigest = (h: Pick<AuthOp, 'kind' | 'subject' | 'key' | 'policy' | 'group' | 'nonce' | 'preds' | 'dependsOn'>) =>
   digest(JSON.stringify({ kind: h.kind, subject: h.subject, key: h.key, policy: h.policy, group: h.group, nonce: h.nonce, preds: h.preds, dependsOn: h.dependsOn }))
@@ -166,7 +184,11 @@ export class AuthorityLog {
    * mit ('ergänzt'), sonst gingen nachgereichte Mitsignaturen verloren und
    * zwei Repliken könnten dieselbe Operation verschieden beurteilen.
    */
-  add(op: AuthOp): 'neu' | 'bekannt' | 'ergänzt' | 'wartet' {
+  add(op: AuthOp): 'neu' | 'bekannt' | 'ergänzt' | 'wartet' | 'verworfen' {
+    // Ein Rahmen von der Leitung ist Daten, kein Typ: Form prüfen, bevor er
+    // ins Log kommt (#19). Was nicht die Form einer Operation hat, wird
+    // verworfen, nie gespeichert, und wirft nie.
+    if (!wellFormed(op)) return 'verworfen'
     const known = this.opsById.get(op.id)
     if (known) {
       const sigs = new Map([...known.sigs, ...op.sigs].map((x) => [`${x.signer}|${x.sig}`, x]))
