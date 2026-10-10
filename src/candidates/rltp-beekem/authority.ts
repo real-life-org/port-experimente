@@ -456,14 +456,18 @@ export class AuthorityLog {
       }
       // 2b. Zwei gleichzeitige Aufnahmen derselben Person unter verschiedenen
       //     Schlüsseln: keine Bindung gewinnt, beide verfallen (fail-closed).
-      for (const a of order) {
-        if (a.kind !== 'add' || !next.has(a.id)) continue
-        for (const b of order) {
-          if (b.kind !== 'add' || b.id === a.id || !next.has(b.id) || b.subject !== a.subject || b.key === a.key || !concurrent(a, b)) continue
-          next.delete(a.id)
-          next.delete(b.id)
+      //     Erst alle Konflikte sammeln, dann entfernen: sonst überlebt bei
+      //     A/A/B die zweite A-Aufnahme, weil ihre Gegner schon fehlen.
+      const conflicting = new Set<string>()
+      const adds = order.filter((o) => o.kind === 'add' && next.has(o.id))
+      for (const a of adds) {
+        for (const b of adds) {
+          if (b.id === a.id || b.subject !== a.subject || b.key === a.key || !concurrent(a, b)) continue
+          conflicting.add(a.id)
+          conflicting.add(b.id)
         }
       }
+      for (const id of conflicting) next.delete(id)
       // 3. Klassenregel 3: policy.change neben Durchsetzung → beide verfallen;
       //    im Fork verfällt jede Durchsetzung bis zu einem policy.change auf
       //    beide. Eine im Fork verfallene Durchsetzung bildet selbst kein

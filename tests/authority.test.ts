@@ -357,6 +357,24 @@ describe('Review zu PR #16', () => {
     expect(names(b.members())).toEqual(['alice', 'bob', 'carol', 'dave'])
   })
 
+  it('drei gleichzeitige Aufnahmen mit Schlüsseln A/A/B verfallen alle; A/A allein ist idempotent', async () => {
+    const a = await setup()
+    a.add(await a.make({ kind: 'policy', policy: admins('alice', 'bob', 'carol') }, [key.alice]))
+    const heads = a.heads()
+    const eve2 = Signer.generate('eve')
+    const x1 = await on(a, heads).make({ kind: 'add', subject: 'eve', key: key.eve.pub }, [key.alice])
+    const x2 = await on(a, heads).make({ kind: 'add', subject: 'eve', key: key.eve.pub }, [key.bob])
+    const x3 = await on(a, heads).make({ kind: 'add', subject: 'eve', key: eve2.pub }, [key.carol])
+    for (const op of [x1, x2, x3]) a.add(op)
+    expect([x1, x2, x3].map((o) => a.isValid(o.id))).toEqual([false, false, false])
+    expect(names(a.members())).toEqual(['alice', 'bob', 'carol', 'dave'])
+    const b = await setup()
+    const h = b.heads()
+    b.add(await on(b, h).make({ kind: 'add', subject: 'eve', key: key.eve.pub }, [key.alice]))
+    b.add(await on(b, h).make({ kind: 'add', subject: 'eve', key: key.eve.pub }, [key.bob]))
+    expect(names(b.members())).toEqual(['alice', 'bob', 'carol', 'dave', 'eve'])
+  })
+
   it('nachgereichte Signaturen derselben Hülle werden zusammengeführt', async () => {
     const a = new AuthorityLog()
     const genesis = await a.make({ kind: 'create', subject: 'alice', key: key.alice.pub, policy: admins('alice') }, [key.alice])
