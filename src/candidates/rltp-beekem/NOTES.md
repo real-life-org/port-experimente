@@ -85,7 +85,7 @@ Runden). Lehre für den Guss: „gültig“ sind zwei Prüfungen in fester
 Reihenfolge, Autorität vor Gleichzeitigkeit, und nur die erste darf die
 zweite speisen.
 
-Offen, für Anton: Ketten gleichzeitiger Entfernungen. A entfernt B, B
+Entschieden 05.10. (seit E9 Schritt 1b im Kandidaten): Ketten gleichzeitiger Entfernungen. A entfernt B, B
 entfernt zugleich C (beide Admins). Heute: B's Entfernung hat Autorität und
 unterdrückt C's gleichzeitige Aufnahmen, ist aber selbst durch A ungültig,
 also bleibt C Mitglied. Konsequent wäre entweder „Entfernungen mit Autorität
@@ -346,6 +346,51 @@ Sicht, Challenge; S10c', S10d) steht aus.
   die Aufnahme schon leistet. Für Politik, die an einer Aufnahme hängt,
   fehlt er, und `actors`, die Nicht-Mitglieder nennen, sind der Grund.
 
+### Schritt 1b: Invarianten (Konsolidierung nach dem Review)
+
+Die vier Review-Runden waren Spezialfälle einer Klasse: Reihenfolge,
+geteilte Beweise, konkurrierende Aufnahmen, Abhängigkeiten. Statt weitere
+Repros zu flicken, gelten jetzt vier Invarianten, drei davon als
+Eigenschaftstests mit seeded Graphen (`tests/authority-props.test.ts`, 60
+Graphen, Partitionen, Beweise auf Kopien verteilt, Schlüsselkonflikte,
+unberechtigte Signierer, Beförderungen mit dependsOn):
+
+- **I1 Determinismus.** Gleicher Evidenzbestand ergibt gleichen Zustand
+  (Mitglieder, Politik, Version, Fork, Gültigkeit je Operation), unabhängig
+  von Zustellreihenfolge und davon, wie Beweise auf Kopien verteilt sind.
+- **I2 Keine Rechte aus gescheiterten Aufnahmen.** Eine Beförderung gilt
+  nur, wenn jede Aufnahme gilt, von der sie abhängt; jedes Mitglied hat eine
+  gültige Aufnahme, und sein Schlüssel stammt aus ihr.
+- **I3 Schlüssel gewinnen nie durch Kopien.** Je Person höchstens ein
+  Schlüssel unter allen gültigen Aufnahmen; zusätzliche Kopien oder
+  Teil-Beweise ändern den Zustand nicht (Monotonie der Zusammenführung).
+- **I4 Der Baum folgt dem Zustand.** Die Schlüsselseite reagiert nicht je
+  Rahmen, sondern gleicht sich nach jeder Faltung und vor jedem Verschlüsseln
+  mit dem Zustand ab (`reconcile`): Blätter von Nicht-Mitgliedern entfernen,
+  fehlende Blätter von Mitgliedern nachziehen (nach einer Rotation, wenn
+  gerade kein gemeinsamer Schlüssel gehalten wird), eigene Geräte nachziehen.
+  Jedes Mitglied mit Schlüssel repariert, ohne Politik-Quorum (löst Befund 5).
+  **Designänderung gegenüber E6 (Notiz 4 dort):** BeeKEM-Anhänge gehen
+  immer in den Baum, ob die Autoritätsoperation gilt oder nicht. Der Baum
+  hat seine eigene kausale Geschichte; spielt eine Replik einen Anhang nicht
+  ein, kann sie keine Operation mehr einspielen, die darauf aufbaut (etwa die
+  Rotation eines Schreibers), und die Repliken laufen auseinander (Repro:
+  Carol, die eine im Fork verfallene Entfernung nie eingespielt hatte, konnte
+  Daves Eintrag nicht öffnen). Autorität wirkt deshalb als Reparatur nach der
+  Faltung, nicht als Tor vor dem Baum; KV1 hält, weil die Reparatur vor dem
+  Verschlüsseln läuft und BeeKEM gleichzeitige Reparaturen zusammenführt.
+  Das ist auch, was Keyhive tut (Delegationen und BeeKEM werden getrennt
+  zusammengeführt, die Kaskade repariert). Repro, der vorher fehlschlug:
+  Daves Replik sah Alices Entfernung von Bob zuerst, dann Bobs Aufnahme von
+  x als unterdrückt; Carols gleichzeitige Regeländerung ließ die Entfernung
+  im Fork verfallen, die Aufnahme wurde gültig, und x fehlte im Baum
+  (`tests/rltp-beekem.test.ts`).
+- **Entfernungsketten nach dem Entscheid vom 05.10.** nachgezogen: Entfernungen
+  mit Autorität gelten immer, nur die übrigen Operationen eines gleichzeitig
+  Entfernten verfallen (A entfernt B, B entfernt zugleich C: beide raus).
+  Der Kandidat hatte seit E6 noch die alte Regel (B's Entfernung verfiel).
+  Eine selbst verfallene Entfernung (Fork, Autorität) unterdrückt nichts.
+
 ### Wo der Code vom Guss abweichen musste (Befund für 0.57)
 
 1. **Autor einer k-of-n-Operation.** Die Spec disponiert „eine Entfernung
@@ -370,12 +415,23 @@ Sicht, Challenge; S10c', S10d) steht aus.
    hier kein Ja des Subjekts; in der Spec liefert das die Membership Tasks
    (accept), außerhalb des Logs. Die Bürgschaft ist an die Nonce der
    Aufnahme gebunden, nicht an ein Accept-Dokument (Vereinfachung).
-5. **Heilung unter Quorum.** Wer den Schlüsselbaum heilt (Blatt eines
-   Nicht-Mitglieds entfernen), bestimmt hier `may(person, member.remove)`
-   allein. Unter `threshold 2` darf das niemand allein, und der Baum bleibt
-   ungeheilt. Heilung ist eine Pflicht der Durchsetzung, keine
-   Mitgliedschaftsentscheidung; sie sollte ohne Politik-Quorum erlaubt sein
-   (jedes Mitglied darf den Baum der Mitgliedschaft angleichen).
+5. **Heilung unter Quorum.** In Schritt 1 heilte nur, wer
+   `may(person, member.remove)` erfüllte; unter `threshold 2` niemand. Seit
+   Schritt 1b repariert jedes Mitglied mit Schlüssel (I4): Heilung ist das
+   Angleichen des Baums an die Mitgliedschaft, keine Mitgliedschafts-
+   entscheidung. Für den Guss: so aussprechen.
+7. **Gültigkeitsabhängigkeit** (`dependsOn`, aus #18): „gilt nur mit X“ ist
+   ein eigener Mechanismus neben Autorität je Position; die Admission Chain
+   der Membership Tasks leistet ihn für die Aufnahme, für Politik, die an
+   einer Aufnahme hängt, fehlt er, und `actors`, die Nicht-Mitglieder
+   nennen, sind der Grund.
+8. **Wiederaufnahme nach verfallener Entfernung.** Verfällt eine
+   Entfernung nachträglich (Fork), ist das Blatt des Betroffenen schon aus
+   dem Baum; die Wiederaufnahme unter demselben Share-Key gibt ihm keinen
+   Schlüssel zurück (Bob liest den nächsten Eintrag nicht,
+   `tests/rltp-beekem.test.ts`). Er braucht frisches Blattmaterial, also
+   eine neue Karte; das passt zur Spec (ein Schlüsselzustand nach einer
+   Entfernung wird nie wiederverwendet), ist hier aber nicht gebaut.
 6. **Nicht modelliert:** pending exits in der policy currency (5.4, kein
    `member.leave` im Prüfstand); der Transportkosten-Bound der Politik
    (§4.4); `strongest` jenseits von 16 Mitgliedern (symbolische Ordnung

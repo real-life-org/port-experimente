@@ -166,9 +166,13 @@ export function rltpBeekem(options: { dienst?: DienstVariante } = {}): Candidate
   }
 
   /**
-   * Autoritätsoperation einarbeiten; BeeKEM-Operationen nur, wenn sie gültig
-   * ist. Eine Operation kann erst durch nachgereichte Signaturen gültig
-   * werden ('ergänzt'); ihre Anhänge gehen dann genau einmal in den Baum.
+   * Autoritätsoperation ins Log; ihre BeeKEM-Anhänge gehen in den Baum, ob
+   * die Operation gilt oder nicht (I4, Schritt 1b). Der Baum hat seine eigene
+   * kausale Geschichte: Spielt eine Replik einen Anhang nicht ein, kann sie
+   * keine Operation mehr einspielen, die darauf aufbaut (etwa die Rotation
+   * eines Schreibers), und die Repliken laufen auseinander. Autorität wirkt
+   * deshalb nicht als Tor vor dem Baum, sondern als Reparatur danach:
+   * reconcile() gleicht den Baum nach jeder Faltung mit dem Zustand ab.
    */
   function applyAuth(s: DeviceState, op: AuthOp, cgka: string[]) {
     const r = s.auth.add(op)
@@ -176,13 +180,65 @@ export function rltpBeekem(options: { dienst?: DienstVariante } = {}): Candidate
       s.waitingAuth.push({ op, cgka })
       return
     }
-    if (r !== 'bekannt' && !s.appliedCgka.has(op.id) && s.auth.isValid(op.id)) {
-      s.appliedCgka.add(op.id)
-      for (const c of cgka) {
+    if (s.appliedCgka.has(op.id)) return
+    s.appliedCgka.add(op.id)
+    for (const c of cgka) {
+      try {
+        s.peer.receive(unb64(c))
+      } catch (e) {
+        s.notes.push(`cgka: ${(e as Error).message}`)
+      }
+    }
+  }
+
+  /**
+   * Der Schlüsselbaum folgt dem Zustand, nie umgekehrt (I4): Blätter von
+   * Nicht-Mitgliedern entfernen, fehlende Blätter von Mitgliedern nachziehen,
+   * eigene Geräte nachziehen. Jedes Gerät mit Schlüssel repariert; die
+   * Reihenfolge Reparatur vor Verschlüsseln hält KV1, und gleichzeitige
+   * Reparaturen führt BeeKEM zusammen (KV6).
+   */
+  async function reconcile(s: DeviceState) {
+    await heal(s)
+    await ensureMemberLeaves(s)
+    await ensureOwnLeaves(s)
+  }
+
+  /**
+   * Die andere Richtung der Heilung: Fehlt das Blatt eines Mitglieds im Baum
+   * (eine Entfernung ist nachträglich verfallen, oder eine Aufnahme wurde erst
+   * durch eine andere Operation gültig, nachdem ihre Anhänge nicht mehr
+   * passten), nimmt jedes Gerät mit Schlüssel es auf. Gleichzeitige
+   * Aufnahmen desselben Blatts führt BeeKEM zusammen (KV6).
+   */
+  async function ensureMemberLeaves(s: DeviceState) {
+    if (!s.auth.members().has(s.person)) return
+    const inTree = new Set((s.peer.members() as Uint8Array[]).map(hex))
+    const me = hex(new Uint8Array(s.peer.id))
+    if (!inTree.has(me)) return
+    const missing = [...s.auth.members()].flatMap((p) => cardsOf(s, p).filter((c) => !inTree.has(hex(c.id))))
+    if (!missing.length) return
+    // Ohne gemeinsamen Schlüssel (nach gleichzeitigen Strukturänderungen zeigt
+    // BeeKEM bis zur nächsten eigenen Operation den alten Stand) erst
+    // rotieren; sonst bliebe die Reparatur bis zum nächsten Schreiben liegen,
+    // und dieser Eintrag ginge am fehlenden Mitglied vorbei.
+    if (!s.peer.hasKey()) {
+      try {
+        const op = (await s.peer.rotate()) as Uint8Array
+        send(s, { t: 'cgka', op: b64(op) }, 'heal-rotate')
+      } catch (e) {
+        s.notes.push(`Reparatur-Rotation: ${(e as Error).message}`)
+        return
+      }
+    }
+    for (const p of s.auth.members()) {
+      for (const c of cardsOf(s, p)) {
+        if (inTree.has(hex(c.id))) continue
         try {
-          s.peer.receive(unb64(c))
+          const op = (await s.peer.add(c.id, c.shareKey)) as Uint8Array | null
+          if (op) send(s, { t: 'cgka', op: b64(op) }, 'heal-add')
         } catch (e) {
-          s.notes.push(`cgka: ${(e as Error).message}`)
+          s.notes.push(`Blatt nachziehen: ${(e as Error).message}`)
         }
       }
     }
@@ -203,8 +259,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante } = {}): Candidate
       }
       s.waitingAuth = rest
     }
-    await heal(s)
-    await ensureOwnLeaves(s)
+    await reconcile(s)
   }
 
   /**
@@ -230,12 +285,14 @@ export function rltpBeekem(options: { dienst?: DienstVariante } = {}): Candidate
 
   /**
    * Heilung: Steht jemand im Schlüsselbaum, der laut Log nicht Mitglied ist
-   * (eine Aufnahme wurde nachträglich ungültig), entfernt ihn ein Admin aus
-   * BeeKEM. Doppelte Entfernungen sind in BeeKEM No-ops.
+   * (Aufnahme ungültig, Entfernung ohne Autorität eingespielt), entfernt ihn
+   * jedes Mitglied mit Schlüssel aus BeeKEM. Das ist keine
+   * Mitgliedschaftsentscheidung (die trifft das Log), sondern das Angleichen
+   * des Baums; deshalb kein Politik-Quorum. Doppelte Entfernungen sind No-ops.
    */
   async function heal(s: DeviceState) {
     const members = s.auth.members()
-    if (!s.auth.may(s.person, 'member.remove')) return
+    if (!members.has(s.person) || !s.peer.hasKey()) return
     const allowed = new Set([...members.keys()].flatMap((p) => cardsOf(s, p).map((c) => hex(c.id))))
     for (const idBytes of s.peer.members() as Uint8Array[]) {
       if (allowed.has(hex(idBytes))) continue
@@ -278,11 +335,11 @@ export function rltpBeekem(options: { dienst?: DienstVariante } = {}): Candidate
     switch (m.t) {
       case 'card':
         s.cards.set(m.id, { person: m.person, id: unhex(m.id), shareKey: unhex(m.shareKey) })
-        await ensureOwnLeaves(s)
+        await reconcile(s)
         return { content: [] }
       case 'revoke':
         s.revoked.add(m.id)
-        await heal(s)
+        await reconcile(s)
         return { content: [] }
       case 'view':
         return { content: [] } // Vorschläge anderer gehen an den Dienst
@@ -302,7 +359,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante } = {}): Candidate
         } catch (e) {
           s.notes.push(`cgka: ${(e as Error).message}`)
         }
-        await ensureOwnLeaves(s)
+        await reconcile(s)
         return { content: await drain(s) }
       case 'content':
         s.pending.push(m)
@@ -334,6 +391,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante } = {}): Candidate
       s.joined = true
       const op = s.auth.make({ kind: 'create', subject: s.person, key: signerOf(s.person).pub, policy: adminPolicy([s.person]), group: group.pub }, [signerOf(s.person), group])
       s.auth.add(op)
+      s.appliedCgka.add(op.id)
       send(s, { t: 'auth', op, group: hex(groupId), cgka: ops.map(b64) })
       proposeView(s)
     },
@@ -352,6 +410,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante } = {}): Candidate
           if (c) cgka.push(b64(c))
         }
       }
+      s.appliedCgka.add(op.id)
       send(s, { t: 'auth', op, cgka })
       // „Admin“ ist kein Rollen-Flag, sondern ein Eintrag in den actors der
       // Politik. Die Beförderung gilt nur, solange diese Aufnahme gilt (#18):
@@ -389,6 +448,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante } = {}): Candidate
           }
         }
       }
+      s.appliedCgka.add(op.id)
       send(s, { t: 'auth', op, cgka })
       proposeView(s)
     },
@@ -438,6 +498,8 @@ export function rltpBeekem(options: { dienst?: DienstVariante } = {}): Candidate
 
     async sealContent(d, update) {
       const s = dev(d)
+      // Erst der Baum zum Zustand, dann verschlüsseln (I4).
+      await reconcile(s)
       try {
         const ref = await sha256(update)
         const r = (await s.peer.encrypt(ref, s.heads, update)) as { ciphertext: Uint8Array; updateOp: Uint8Array | null; appKey: Uint8Array }

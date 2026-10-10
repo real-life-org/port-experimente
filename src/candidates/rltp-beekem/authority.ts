@@ -9,8 +9,10 @@
 //   Regel aus any-member, threshold, actors, vouch, all, any, strongest.
 //   Gültigkeit über Satisfaction-Mengen (§4.4), nicht syntaktisch. Rollen
 //   gibt es nicht: „Admin“ ist actors(k=1).
-// - Strong Removal wie bisher: eine Entfernung MIT Autorität trifft den Autor
-//   einer gleichzeitigen Operation, transitiv; gegenseitige Entfernung: beide.
+// - Strong Removal nach dem Entscheid vom 05.10. (Synthese): Entfernungen
+//   mit Autorität gelten immer; nur die ÜBRIGEN Operationen eines gleichzeitig
+//   Entfernten verfallen, transitiv. Gegenseitige Entfernung und Ketten
+//   (A entfernt B, B entfernt zugleich C) lassen damit alle Betroffenen raus.
 // - Klassenregel 3 (§3.6, RLTP-ACC-3495): policy.change neben einer
 //   Durchsetzung (remove, policy.change) forkt. Beide Geschwister verfallen,
 //   im Fork verfällt jede weitere Durchsetzung (fail-closed), Aufnahmen gehen
@@ -451,16 +453,20 @@ export class AuthorityLog {
           verified.set(op.id, op.kind === 'create' ? new Set([op.subject!]) : this.situation(op, st).A)
         }
       }
-      // 2. Strong Removal: nur eine Entfernung MIT Autorität trifft einen
-      //    geprüften Signierer einer gleichzeitigen Operation.
+      // 2. Strong Removal: eine gültige Entfernung trifft die übrigen
+      //    Operationen (nie Entfernungen) eines gleichzeitig entfernten
+      //    geprüften Signierers. Eine Entfernung, die selbst verfallen ist
+      //    (Fork, Autorität), trifft nichts; das kommt über `valid` aus der
+      //    vorigen Runde in den Fixpunkt.
       const next = new Set<string>()
       const signersOf = (op: AuthOp) => verified.get(op.id) ?? new Set<Person>()
       for (const op of order) {
         if (!authorized.has(op.id)) continue
-        const mine = signersOf(op)
-        const removedBy = order.filter((r) => authorized.has(r.id) && r.kind === 'remove' && mine.has(r.subject!) && concurrent(r, op))
-        const mutual = op.kind === 'remove' && removedBy.some((r) => signersOf(r).has(op.subject!))
-        if (removedBy.length && !mutual) continue
+        if (op.kind !== 'remove') {
+          const mine = signersOf(op)
+          const removedBy = order.some((r) => r.kind === 'remove' && authorized.has(r.id) && valid.has(r.id) && mine.has(r.subject!) && concurrent(r, op))
+          if (removedBy) continue
+        }
         next.add(op.id)
       }
       // 2b. Zwei gleichzeitige Aufnahmen derselben Person unter verschiedenen

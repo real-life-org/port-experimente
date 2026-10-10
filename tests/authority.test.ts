@@ -84,6 +84,28 @@ describe('E9 Autoritätslog: Matrix wie bisher', () => {
     expect(a.isValid(addY.id)).toBe(false)
   })
 
+  it('Entfernungskette: A entfernt B, B entfernt zugleich C — beide raus (Entscheid 05.10.)', async () => {
+    const a = await setup()
+    a.add(await a.make({ kind: 'policy', policy: admins('alice', 'bob', 'carol') }, [key.alice]))
+    const heads = a.heads()
+    a.add(await on(a, heads).make({ kind: 'remove', subject: 'bob' }, [key.alice]))
+    a.add(await on(a, heads).make({ kind: 'remove', subject: 'carol' }, [key.bob]))
+    expect(names(a.members())).toEqual(['alice', 'dave'])
+  })
+
+  it('eine im Fork verfallene Entfernung unterdrückt keine gleichzeitige Aufnahme', async () => {
+    const a = await setup()
+    const heads = a.heads()
+    const rm = await on(a, heads).make({ kind: 'remove', subject: 'bob' }, [key.alice])
+    const addX = await on(a, heads).make({ kind: 'add', subject: 'x', key: key.x.pub }, [key.bob])
+    const pc = await on(a, heads).make({ kind: 'policy', policy: admins('alice', 'bob') }, [key.alice])
+    for (const op of [rm, addX, pc]) a.add(op)
+    expect(a.forked()).toBe(true)
+    expect(a.isValid(rm.id)).toBe(false)
+    expect(a.isValid(addX.id)).toBe(true)
+    expect(names(a.members())).toEqual(['alice', 'bob', 'carol', 'dave', 'x'])
+  })
+
   it('Gründerin ohne Sonderrolle: ein anderer Admin kann sie entfernen', async () => {
     const a = await setup()
     a.add(await a.make({ kind: 'remove', subject: 'alice' }, [key.bob]))
