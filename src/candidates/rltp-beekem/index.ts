@@ -1,5 +1,5 @@
 import type { Candidate, Capability, Device, EnforcingService, Msg, Person } from '../../lab/types'
-import { AuthorityLog, type AuthOp, type Role } from './authority'
+import { AuthorityLog, Signer, type AuthOp, type Policy } from './authority'
 import { BeekemPeer, loadWasm } from './load'
 import { LogReplicaService, ViewService, viewHash, type ViewAck, type ViewProposal } from './service'
 
@@ -15,6 +15,10 @@ import { LogReplicaService, ViewService, viewHash, type ViewAck, type ViewPropos
 // E8: Optional ein durchsetzender Dienst am Relay (service.ts). Mit Sichten
 // schlägt jedes Mitgliedsgerät nach jeder Änderung die Sicht seines Stands
 // vor (Access §7.3); der Dienst nimmt sie mit Quorum an und bestätigt.
+// E9: Signaturen, Politik als Daten, Fork. Jede Person signiert mit einem
+// Ed25519-Schlüssel (geteilt über ihre Geräte, wie heute der Seed); die
+// Gruppe regiert sich über eine Politik nach Access §4, „Admin“ ist
+// actors(k=1); policy.change neben Durchsetzung forkt (§3.6).
 // Port-Notizen: NOTES.md.
 
 const enc = new TextEncoder()
@@ -79,8 +83,23 @@ interface DeviceState extends KeyState {
 
 export type DienstVariante = 'sichten' | 'logreplik'
 
+/** Politik, in der die Genannten allein aufnehmen, entfernen und Regeln ändern (strongest = die stärkste davon). */
+const adminPolicy = (admins: Person[]): Policy => ({
+  'member.add': { type: 'actors', actors: admins, k: 1 },
+  'member.remove': { type: 'actors', actors: admins, k: 1 },
+  'policy.change': { type: 'strongest' },
+})
+const adminsOf = (p: Policy): Person[] => (p['member.remove']?.type === 'actors' ? p['member.remove'].actors : [])
+
 export function rltpBeekem(options: { dienst?: DienstVariante } = {}): Candidate {
   const devices = new Map<Device, DeviceState>()
+  // Ein Signierschlüssel je Person, über ihre Geräte geteilt (wie heute der Seed).
+  const persons = new Map<Person, Signer>()
+  const signerOf = (p: Person) => {
+    let k = persons.get(p)
+    if (!k) persons.set(p, (k = Signer.generate(p)))
+    return k
+  }
   const service: EnforcingService | undefined =
     options.dienst === 'sichten' ? new ViewService() : options.dienst === 'logreplik' ? new LogReplicaService() : undefined
   // Karten und Widerrufe leben je Replika und ändern sich nur durch
@@ -210,7 +229,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante } = {}): Candidate
    */
   async function heal(s: DeviceState) {
     const members = s.auth.members()
-    if (members.get(s.person) !== 'admin') return
+    if (!s.auth.may(s.person, 'member.remove')) return
     const allowed = new Set([...members.keys()].flatMap((p) => cardsOf(s, p).map((c) => hex(c.id))))
     for (const idBytes of s.peer.members() as Uint8Array[]) {
       if (allowed.has(hex(idBytes))) continue
@@ -287,11 +306,12 @@ export function rltpBeekem(options: { dienst?: DienstVariante } = {}): Candidate
 
   return {
     id: options.dienst ? `rltp-beekem-${options.dienst}` : 'rltp-beekem',
-    capabilities: new Set<Capability>(['roles', 'rotate', 'steal', 'multi-device', 'device-remove', ...(service ? (['service'] as Capability[]) : [])]),
+    capabilities: new Set<Capability>(['roles', 'policy', 'rotate', 'steal', 'multi-device', 'device-remove', ...(service ? (['service'] as Capability[]) : [])]),
     service,
 
     async addDevice(person, device) {
       await loadWasm()
+      signerOf(person)
       const peer = new BeekemPeer()
       const card: Card = { person, id: new Uint8Array(peer.id), shareKey: new Uint8Array(peer.shareKey) }
       const s: DeviceState = { person, peer, auth: new AuthorityLog(), cards: new Map([[hex(card.id), card]]), revoked: new Set(), ack: { seq: 0, hash: null, identities: [] }, proposed: null, waitingAuth: [], keys: new Map(), heads: [], pending: [], outgoing: [], joined: false, notes: [] }
@@ -301,20 +321,22 @@ export function rltpBeekem(options: { dienst?: DienstVariante } = {}): Candidate
 
     async createGroup(d) {
       const s = dev(d)
-      groupId = new Uint8Array(new BeekemPeer().id) // ein Ed25519-Verifying-Key als Gruppen-ID
+      // Gruppen-DID: ein Ed25519-Schlüssel, der die Genesis mitsigniert und danach verworfen wird (RLTP-ACC-3060).
+      const group = Signer.generate('group')
+      groupId = unhex(group.pub)
       const ops = (await s.peer.create(groupId)) as Uint8Array[]
       s.joined = true
-      const op = await s.auth.make('create', s.person, s.person)
+      const op = s.auth.make({ kind: 'create', subject: s.person, key: signerOf(s.person).pub, policy: adminPolicy([s.person]), group: group.pub }, [signerOf(s.person), group])
       s.auth.add(op)
       send(s, { t: 'auth', op, group: hex(groupId), cgka: ops.map(b64) })
       proposeView(s)
     },
 
-    async addMember(by, p, role: Role) {
+    async addMember(by, p, role) {
       const s = dev(by)
       const known = cardsOf(s, p)
       if (!known.length) throw new Error(`unbekannte Person ${p}`)
-      const op = await s.auth.make('add', s.person, p, role)
+      const op = s.auth.make({ kind: 'add', subject: p, key: signerOf(p).pub }, [signerOf(s.person)])
       s.auth.add(op)
       const cgka: string[] = []
       if (s.auth.isValid(op.id)) {
@@ -325,6 +347,15 @@ export function rltpBeekem(options: { dienst?: DienstVariante } = {}): Candidate
         }
       }
       send(s, { t: 'auth', op, cgka })
+      // „Admin“ ist kein Rollen-Flag, sondern ein Eintrag in den actors der Politik.
+      if (role === 'admin') {
+        const admins = adminsOf(s.auth.policy())
+        if (!admins.includes(p)) {
+          const change = s.auth.make({ kind: 'policy', policy: adminPolicy([...admins, p]) }, [signerOf(s.person)])
+          s.auth.add(change)
+          send(s, { t: 'auth', op: change, cgka: [] }, 'policy')
+        }
+      }
       proposeView(s)
     },
 
@@ -332,7 +363,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante } = {}): Candidate
       const s = dev(by)
       // Ob p entfernt werden kann, entscheidet das Log, nicht die Kartentabelle:
       // Nach Widerruf des letzten Geräts hat p keine Karte mehr, ist aber Mitglied (Issue #13).
-      const op = await s.auth.make('remove', s.person, p)
+      const op = s.auth.make({ kind: 'remove', subject: p }, [signerOf(s.person)])
       s.auth.add(op)
       const cgka: string[] = []
       if (s.auth.isValid(op.id)) {
@@ -356,7 +387,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante } = {}): Candidate
       const s = dev(by)
       const target = dev(device)
       const id = new Uint8Array(target.peer.id)
-      const admin = s.auth.members().get(s.person) === 'admin'
+      const admin = s.auth.may(s.person, 'member.remove')
       if (target.person !== s.person && !admin) throw new Error(`${by} darf ${device} nicht entfernen`)
       s.revoked.add(hex(id))
       send(s, { t: 'revoke', id: hex(id) })
@@ -374,8 +405,26 @@ export function rltpBeekem(options: { dienst?: DienstVariante } = {}): Candidate
       const op = (await s.peer.rotate()) as Uint8Array
       send(s, { t: 'cgka', op: b64(op) }, 'rotate')
     },
-    async changePolicy() {
-      throw new Error('keine Gruppenregeln')
+    /**
+     * Regeländerung als policy.change. Der Tag wählt die Regel:
+     * remove:threshold:N · remove:any-member · add:vouch:N · sonst dieselben
+     * Regeln neu beschlossen (eine Änderung muss nichts ändern).
+     */
+    async changePolicy(by, tag) {
+      const s = dev(by)
+      const current = s.auth.policy()
+      const admins = adminsOf(current)
+      const next: Policy = { ...adminPolicy(admins.length ? admins : [s.person]), 'member.remove': current['member.remove'], 'member.add': current['member.add'] }
+      const m = /^(remove|add):(threshold|vouch|any-member)(?::(\d+))?$/.exec(tag)
+      if (m) {
+        const key = m[1] === 'remove' ? 'member.remove' : 'member.add'
+        const n = Number(m[3] ?? 1)
+        next[key] = m[2] === 'threshold' ? { type: 'threshold', k: n } : m[2] === 'any-member' ? { type: 'any-member' } : { type: 'all', of: [next[key], { type: 'vouch', count: n }] }
+      }
+      const op = s.auth.make({ kind: 'policy', policy: next }, [signerOf(s.person)])
+      s.auth.add(op)
+      send(s, { t: 'auth', op, cgka: [] }, 'policy')
+      proposeView(s)
     },
 
     async sealContent(d, update) {
@@ -412,7 +461,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante } = {}): Candidate
     members: (d) => personMembers(dev(d)),
     status: (d) => {
       const s = dev(d)
-      return [`baum=${(s.peer.members() as Uint8Array[]).length}`, `schlüssel=${s.peer.hasKey() ? 'ja' : 'nein'}`, ...s.notes.slice(0, 3), ...notes.slice(0, 2)].join('; ')
+      return [`baum=${(s.peer.members() as Uint8Array[]).length}`, `schlüssel=${s.peer.hasKey() ? 'ja' : 'nein'}`, `fork=${s.auth.forked() ? 'ja' : 'nein'}`, `regeln=v${s.auth.policyVersion()}`, ...s.notes.slice(0, 3), ...notes.slice(0, 2)].join('; ')
     },
 
     async steal(d) {

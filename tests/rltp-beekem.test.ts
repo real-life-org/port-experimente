@@ -19,7 +19,8 @@ describe('Kandidat RLTP-Autorität über BeeKEM', () => {
       S4b: 'bestanden', // zwei Entfernungen gleichzeitig: beide gelten, niemand liest mit (KV2, KV6)
       S4c: 'bestanden', // gegenseitige Entfernung: beide raus (Matrix-Entscheidung 2)
       S4d: 'bestanden', // Rotation neben Entfernung (KV5, KV6)
-      S4e: 'nicht abbildbar', // keine Gruppenregeln im Experiment
+      S4e: 'bestanden', // E9: zwei policy.change gleichzeitig → Fork, alle einig
+      S4j: 'bestanden', // E9: policy.change neben Entfernung → Fork, Entfernung verfällt; Ende durch policy.change auf beide
       S4f: 'bestanden', // Strong Removal transitiv: Mallorys Kette ungültig, Baum geheilt
       S5: 'bestanden', // E7: ein Blatt je Gerät, Person bleibt Subjekt im Log
       S5b: 'bestanden', // E7: eigenes Gerät entfernen = neues Geheimnis ohne dessen Blatt (KV1), Person bleibt

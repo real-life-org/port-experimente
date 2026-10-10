@@ -19,6 +19,7 @@ describe('Kandidat WoT Gen 2', () => {
       S4c: 'bestanden', // formal: Bob kann aus demselben Grund nicht durchsetzen, nichts ist gleichzeitig
       S4d: 'nicht abbildbar', // keine Rotation ohne Mitgliedschaftsänderung
       S4e: 'nicht abbildbar', // keine Gruppenregeln
+      S4j: 'nicht abbildbar',
       S4f: 'bestanden', // formal: Mallorys Kette entsteht offline gar nicht
       S5: 'nicht abbildbar', // Zweitgerät läuft über das PersonalDoc (Singleton im Prozess)
       S5b: 'nicht abbildbar',
