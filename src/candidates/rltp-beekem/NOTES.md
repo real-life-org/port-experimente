@@ -424,6 +424,29 @@ Entscheidung steht aus. Bei gleichzeitigen Entfernungen gibt es kein
 „vorher“, deshalb trägt die Spec-Regel genau den Fall nicht, den die
 Matrix löst (S4c), und die Gruppe verliert ihre Dienstbindung.
 
+### Schritt 3: Fixpunkt, schneller Pfad
+
+Die 267 ms je Operation (Schritt 1) kamen nicht aus der Faltung, sondern
+daraus, dass nach jeder Operation komplett neu gefaltet wurde (jede Faltung
+quadratisch, 500 Operationen → kubisch). Jetzt gibt es einen schnellen
+Pfad: Eine Operation, die auf allen aktuellen Köpfen aufbaut, ist mit nichts
+gleichzeitig; sie kann keine frühere Operation verfallen lassen (Strong
+Removal und Klassenregel 3 brauchen Gleichzeitigkeit) und keinen Fork
+öffnen oder beenden, der nicht schon durch ihre Vorgänger bestimmt ist. Ihre
+Gültigkeit hängt nur vom gefalteten Zustand ab, also genügt ein Schritt.
+Erst eine gleichzeitige Operation oder eine Nachlieferung von Beweisen löst
+die volle Faltung aus. Die volle Faltung selbst ist unverändert quadratisch.
+
+Eigenschaftstest I5 (`authority-props.test.ts`): schneller Pfad und volle
+Faltung liefern nach jeder einzelnen Operation denselben Zustand, über die
+60 seeded Graphen mit Partitionen, Forks, dependsOn und Kopien.
+
+| | vorher | nachher |
+|---|---|---|
+| S9 (30 × 500, Median aus 3) | 267 ms/Op (E6 ohne Signaturen: 183) | **17,8 ms/Op** (Keyhive b: 51) |
+| S9b (5 × 200) | 0,46 ms je Gerät und Zustellung | 0,50 |
+| Sichten, 30 × 100 | 59 ms/Op (E8) | 31,9 ms/Op |
+
 ### Wo der Code vom Guss abweichen musste (Befund für 0.57)
 
 1. **Autor einer k-of-n-Operation.** Die Spec disponiert „eine Entfernung
