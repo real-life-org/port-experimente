@@ -279,11 +279,15 @@ export class LogReplicaService extends Base {
 
   override accept(msg: Msg) {
     const m = JSON.parse(dec.decode(msg.body)) as ServiceWire
-    if (m.t === 'card') {
-      const c = m as { person: string; deviceKey: string }
-      this.personOf.set(c.deviceKey, c.person)
+    const verdict = super.accept(msg)
+    // Die Person zu einem Schlüssel erst merken, wenn die Karte gebunden wurde
+    // (#21): eine verworfene fremde Karte darf die Zuordnung eines legitimen
+    // Geräts nicht überschreiben.
+    if (m.t === 'card' && verdict === 'weiter') {
+      const c = m as { person?: unknown; deviceKey: string }
+      if (typeof c.person === 'string' && !this.personOf.has(c.deviceKey)) this.personOf.set(c.deviceKey, c.person)
     }
-    return super.accept(msg)
+    return verdict
   }
 
   status() {

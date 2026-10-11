@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Signer } from '../src/candidates/rltp-beekem/authority'
-import { ViewService, signView, viewHash, type ChallengeAnswer, type ViewProposal } from '../src/candidates/rltp-beekem/service'
+import { LogReplicaService, ViewService, signView, viewHash, type ChallengeAnswer, type ViewProposal } from '../src/candidates/rltp-beekem/service'
 import type { Msg } from '../src/lab/types'
 
 // E9 Schritt 2, S10d: der Sichten-Dienst prüft Signaturen und Besitz, nicht
@@ -120,6 +120,19 @@ describe('S10d: Sichten-Dienst prüft Signaturen und Besitz', () => {
     }
     propose(svc, 'a', { ...v1, sigs: [signView(v1, k.a)] })
     expect(acks(svc).map((x) => x.seq)).toEqual([1])
+  })
+
+  it('#21: eine verworfene fremde Karte ändert in der Log-Replik die Zuordnung Schlüssel → Person nicht', () => {
+    const svc = new LogReplicaService()
+    const k = keys()
+    svc.accept(frame('a', { t: 'card', person: 'a', id: 'id-a', deviceKey: k.a.pub }))
+    const ch = svc.takeOutgoing().map((o) => JSON.parse(dec.decode(o.body)) as { nonce: string })[0]!
+    svc.accept(frame('a', { t: 'challenge-answer', signer: k.a.pub, nonce: ch.nonce, sig: k.a.sign(`challenge|${ch.nonce}`) }))
+    // Mallory kündigt a's Schlüssel unter ihrem Namen an: verworfen, und a bleibt a.
+    expect(svc.accept(frame('mallory', { t: 'card', person: 'mallory', id: 'id-m', deviceKey: k.a.pub }))).toBe('verwerfen')
+    expect(svc.serves('a')).toBe(true) // vor der Gründung bedient die Log-Replik jeden gebundenen
+    expect(svc.accept(frame('a', { t: 'content', c: '' }))).toBe('weiter')
+    expect((svc as unknown as { personOf: Map<string, string> }).personOf.get(k.a.pub)).toBe('a')
   })
 
   it("S10c': Schrumpfen unter das Quorum — Vorgänger-m friert ein, m der neuen Sicht nicht", () => {
