@@ -1,7 +1,7 @@
 import type { Candidate, Capability, Device, EnforcingService, Msg, Person } from '../../lab/types'
 import { AuthorityLog, Signer, promoteInPolicy, type AuthOp, type Policy } from './authority'
 import { BeekemPeer, loadWasm } from './load'
-import { LogReplicaService, ViewService, viewHash, type ViewAck, type ViewProposal } from './service'
+import { LogReplicaService, ViewService, signView, viewHash, type Challenge, type ChallengeAnswer, type MRule, type ViewAck, type ViewProposal } from './service'
 
 // E6: BeeKEM pur als Schlüssel-Adapter. Die Mitgliedschaft entscheidet ein
 // minimales Autoritätslog nach der Konfliktmatrix (authority.ts), BeeKEM
@@ -42,7 +42,7 @@ async function openTable(key: Uint8Array, iv: Uint8Array, ct: Uint8Array) {
 }
 
 type Wire =
-  | { t: 'card'; person: Person; id: string; shareKey: string }
+  | { t: 'card'; person: Person; id: string; shareKey: string; deviceKey: string }
   | { t: 'auth'; op: AuthOp; group?: string; cgka: string[] }
   | { t: 'cgka'; op: string }
   /** Widerruf eines einzelnen Geräts (verloren); die Person bleibt. */
@@ -50,6 +50,8 @@ type Wire =
   | { t: 'content'; c: string; iv: string; tab: string; ref: string }
   | ViewProposal
   | ViewAck
+  | Challenge
+  | ChallengeAnswer
 
 interface KeyState {
   peer: BeekemPeer
@@ -63,11 +65,15 @@ interface Card {
   person: Person
   id: Uint8Array
   shareKey: Uint8Array
+  /** Ed25519-Schlüssel des Geräts (hex): seine Identität gegenüber dem Dienst (Sichten, Besitznachweis). */
+  deviceKey: string
 }
 
 interface DeviceState extends KeyState {
   person: Person
   auth: AuthorityLog
+  /** Geräteschlüssel; signiert Sichtvorschläge und die Challenge des Dienstes. */
+  deviceSigner: Signer
   /** Gerätekarten nach BeeKEM-ID (hex), wie dieses Gerät sie empfangen hat. Mehrere je Person. */
   cards: Map<string, Card>
   /** Widerrufene Geräte (hex der ID), wie dieses Gerät sie empfangen hat. */
@@ -92,7 +98,7 @@ const adminPolicy = (admins: Person[]): Policy => ({
   'policy.change': { type: 'strongest' },
 })
 
-export function rltpBeekem(options: { dienst?: DienstVariante } = {}): Candidate {
+export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } = {}): Candidate {
   const devices = new Map<Device, DeviceState>()
   // Ein Signierschlüssel je Person, über ihre Geräte geteilt (wie heute der Seed).
   const persons = new Map<Person, Signer>()
@@ -102,7 +108,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante } = {}): Candidate
     return k
   }
   const service: EnforcingService | undefined =
-    options.dienst === 'sichten' ? new ViewService() : options.dienst === 'logreplik' ? new LogReplicaService() : undefined
+    options.dienst === 'sichten' ? new ViewService(options.mRule) : options.dienst === 'logreplik' ? new LogReplicaService() : undefined
   // Karten und Widerrufe leben je Replika und ändern sich nur durch
   // empfangene Rahmen; sonst wüssten getrennte Repliken Dinge, die das
   // Netz noch nicht zugestellt hat (Review zu PR #12, Issue #14).
@@ -316,14 +322,16 @@ export function rltpBeekem(options: { dienst?: DienstVariante } = {}): Candidate
     if (options.dienst !== 'sichten') return
     const members = s.auth.members()
     if (!members.has(s.person)) return
-    const identities = [...members.keys()].flatMap((p) => cardsOf(s, p).map((c) => hex(c.id))).sort()
-    const me = hex(new Uint8Array(s.peer.id))
+    // identities = Geräteschlüssel aller Geräte der Mitglieder (7.3: eine Identität je Gerät).
+    const identities = [...members.keys()].flatMap((p) => cardsOf(s, p).map((c) => c.deviceKey)).sort()
+    const me = s.deviceSigner.pub
     if (!identities.includes(me)) return
     if (JSON.stringify(identities) === JSON.stringify(s.ack.identities)) return
-    const v: ViewProposal = { t: 'view', seq: s.ack.seq + 1, prev: s.ack.hash, identities, m: Math.min(2, identities.length), signer: me }
-    const h = viewHash(v)
+    const body = { seq: s.ack.seq + 1, prev: s.ack.hash, identities, m: Math.min(2, identities.length) }
+    const h = viewHash(body)
     if (h === s.proposed) return
     s.proposed = h
+    const v: ViewProposal = { t: 'view', ...body, sigs: [signView(body, s.deviceSigner)] }
     send(s, v)
   }
 
@@ -334,9 +342,18 @@ export function rltpBeekem(options: { dienst?: DienstVariante } = {}): Candidate
   async function handle(s: DeviceState, m: Wire): Promise<{ content: Uint8Array[] }> {
     switch (m.t) {
       case 'card':
-        s.cards.set(m.id, { person: m.person, id: unhex(m.id), shareKey: unhex(m.shareKey) })
+        s.cards.set(m.id, { person: m.person, id: unhex(m.id), shareKey: unhex(m.shareKey), deviceKey: m.deviceKey })
         await reconcile(s)
         return { content: [] }
+      case 'challenge':
+        // Besitznachweis gegenüber dem Dienst (7.3): nur die eigene Challenge beantworten.
+        if (m.to === s.deviceSigner.pub) {
+          const a: ChallengeAnswer = { t: 'challenge-answer', signer: s.deviceSigner.pub, nonce: m.nonce, sig: s.deviceSigner.sign(`challenge|${m.nonce}`) }
+          send(s, a)
+        }
+        return { content: [] }
+      case 'challenge-answer':
+        return { content: [] } // Antworten anderer gehen an den Dienst
       case 'revoke':
         s.revoked.add(m.id)
         await reconcile(s)
@@ -368,7 +385,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante } = {}): Candidate
   }
 
   return {
-    id: options.dienst ? `rltp-beekem-${options.dienst}` : 'rltp-beekem',
+    id: options.dienst ? `rltp-beekem-${options.dienst}${options.mRule === 'new' ? '-m-neu' : ''}` : 'rltp-beekem',
     capabilities: new Set<Capability>(['roles', 'policy', 'rotate', 'steal', 'multi-device', 'device-remove', ...(service ? (['service'] as Capability[]) : [])]),
     service,
 
@@ -376,10 +393,11 @@ export function rltpBeekem(options: { dienst?: DienstVariante } = {}): Candidate
       await loadWasm()
       signerOf(person)
       const peer = new BeekemPeer()
-      const card: Card = { person, id: new Uint8Array(peer.id), shareKey: new Uint8Array(peer.shareKey) }
-      const s: DeviceState = { person, peer, auth: new AuthorityLog(), cards: new Map([[hex(card.id), card]]), revoked: new Set(), ack: { seq: 0, hash: null, identities: [] }, proposed: null, waitingAuth: [], appliedCgka: new Set(), keys: new Map(), heads: [], pending: [], outgoing: [], joined: false, notes: [] }
+      const deviceSigner = Signer.generate(device)
+      const card: Card = { person, id: new Uint8Array(peer.id), shareKey: new Uint8Array(peer.shareKey), deviceKey: deviceSigner.pub }
+      const s: DeviceState = { person, peer, auth: new AuthorityLog(), deviceSigner, cards: new Map([[hex(card.id), card]]), revoked: new Set(), ack: { seq: 0, hash: null, identities: [] }, proposed: null, waitingAuth: [], appliedCgka: new Set(), keys: new Map(), heads: [], pending: [], outgoing: [], joined: false, notes: [] }
       devices.set(device, s)
-      send(s, { t: 'card', person, id: hex(card.id), shareKey: hex(card.shareKey) })
+      send(s, { t: 'card', person, id: hex(card.id), shareKey: hex(card.shareKey), deviceKey: card.deviceKey })
     },
 
     async createGroup(d) {

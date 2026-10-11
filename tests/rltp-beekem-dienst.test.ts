@@ -28,14 +28,24 @@ const gemeinsam = {
 }
 
 describe('E8: Dienst am Relay', () => {
-  it('Variante 1: Sichten (Access §7.3)', async () => {
+  it('Variante 1: Sichten (Access 0.56 §7.3, Quorum der Vorgängersicht)', async () => {
     const results = await runAll(() => rltpBeekem({ dienst: 'sichten' }))
     const byId = Object.fromEntries(results.map((r) => [r.scenario, r.outcome]))
     expect(byId, JSON.stringify(results, null, 1)).toEqual({
       ...gemeinsam,
       // Gegenseitige Entfernung lässt nur Carol: m=2 aus der alten Sicht ist nicht mehr
-      // erfüllbar, der Dienst bleibt auf der alten Sicht (§7.3 „stated residual“).
+      // erfüllbar, der Dienst bleibt auf der alten Sicht. Das ist der „stated residual“
+      // von Access 0.56 §7.3, wie geschrieben (E9 Schritt 2: S10c').
       S10c: 'nicht bestanden',
+    })
+  }, 120_000)
+
+  it("Variante 1b: Sichten, m folgt der neuen Sicht (Guss-Plan 0.54; S10c')", async () => {
+    const results = await runAll(() => rltpBeekem({ dienst: 'sichten', mRule: 'new' }))
+    const byId = Object.fromEntries(results.map((r) => [r.scenario, r.outcome]))
+    expect(byId, JSON.stringify(results, null, 1)).toEqual({
+      ...gemeinsam,
+      S10c: 'bestanden',
     })
   }, 120_000)
 
