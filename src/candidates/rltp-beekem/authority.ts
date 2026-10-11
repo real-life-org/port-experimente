@@ -1,76 +1,357 @@
-// Minimales Autoritätslog nach der Konfliktmatrix (Synthese §5):
-// kausaler DAG von Mitgliedschaftsoperationen, deterministisch gefaltet.
+// Autoritätslog in der Spec-Form (E9, Access 0.56): kausaler DAG signierter
+// Operationen, deterministisch gefaltet.
 //
-// Regeln:
-// - Gültig ist eine Operation, deren Autor an ihrer Position Admin ist
-//   (`create` nur einmal, der Gründer wird Admin ohne Sonderrolle danach).
-// - Strong Removal: Wird der Autor von einer gleichzeitigen, gültigen
-//   Entfernung getroffen, ist seine Operation ungültig, und damit transitiv
-//   alles, was auf ihr aufbaut (Matrix (a), (b), (d)).
-// - Gegenseitige Entfernung (A entfernt B, B entfernt A gleichzeitig): beide
-//   gelten, beide sind raus (Vorschlag der Synthese, Entscheidung 2).
-// - Zwei Entfernungen verschiedener Personen gleichzeitig: beide gelten.
-// Keine Gruppenregeln, keine Signaturen (Experiment; Fälschung ist nicht Thema).
+// - Jede Operation trägt ein signature-set über ihre Hülle (id = Digest des
+//   Körpers ohne Beweise). Ein Signierer zählt, wenn seine Signatur unter dem
+//   Schlüssel prüft, den die gültige Aufnahme (oder die Genesis) für ihn im
+//   Log registriert hat, und er an der Position Mitglied ist (policy currency).
+// - Die Gruppe regiert sich über eine Politik als Daten (§4): je Operation eine
+//   Regel aus any-member, threshold, actors, vouch, all, any, strongest.
+//   Gültigkeit über Satisfaction-Mengen (§4.4), nicht syntaktisch. Rollen
+//   gibt es nicht: „Admin“ ist actors(k=1).
+// - Strong Removal nach dem Entscheid vom 05.10. (Synthese): Entfernungen
+//   mit Autorität gelten immer; nur die ÜBRIGEN Operationen eines gleichzeitig
+//   Entfernten verfallen, transitiv. Gegenseitige Entfernung und Ketten
+//   (A entfernt B, B entfernt zugleich C) lassen damit alle Betroffenen raus.
+// - Klassenregel 3 (§3.6, RLTP-ACC-3495): policy.change neben einer
+//   Durchsetzung (remove, policy.change) forkt. Beide Geschwister verfallen,
+//   im Fork verfällt jede weitere Durchsetzung (fail-closed), Aufnahmen gehen
+//   weiter. Ende: ein policy.change, dessen Vorgänger beide Zweige enthalten.
+// Ed25519 über @noble/curves (synchron, damit die Faltung synchron bleibt).
+// Fixpunkt noch wie E6 (quadratisch); inkrementell ist Folgearbeit.
 
-export type Role = 'admin' | 'member'
+import { ed25519 } from '@noble/curves/ed25519.js'
+import { sha256 } from '@noble/hashes/sha2.js'
+
+export type Person = string
+export type OpKey = 'member.add' | 'member.remove' | 'policy.change'
+export type Rule =
+  | { type: 'any-member' }
+  | { type: 'threshold'; k: number }
+  | { type: 'actors'; actors: Person[]; k: number }
+  | { type: 'vouch'; count: number }
+  | { type: 'all'; of: Rule[] }
+  | { type: 'any'; of: Rule[] }
+  | { type: 'strongest' }
+export type Policy = Record<OpKey, Rule>
+
+export interface Sig {
+  readonly signer: Person
+  readonly sig: string
+}
+/** Bürgschaft für genau eine Aufnahme: Signatur über (Subjekt, Nonce der Aufnahme). */
+export interface Vouch {
+  readonly voucher: Person
+  readonly sig: string
+}
+
 export interface AuthOp {
   readonly id: string
-  readonly kind: 'create' | 'add' | 'remove'
-  readonly author: string
-  readonly subject: string
-  readonly role?: Role
+  readonly kind: 'create' | 'add' | 'remove' | 'policy'
+  readonly subject?: Person
+  /** Öffentlicher Schlüssel (hex) des Subjekts bei create/add. */
+  readonly key?: string
+  readonly policy?: Policy
+  /** Gruppenschlüssel (hex) der Genesis; signiert als 'group' mit. */
+  readonly group?: string
+  readonly nonce: string
   readonly preds: readonly string[]
+  /**
+   * Gültigkeitsabhängigkeit: diese Operation gilt nur, solange die genannten
+   * Vorgänger gelten (nachgereichte Beweise und spätere Invalidierung
+   * eingeschlossen). Ein kausaler Vorgänger allein bindet nicht.
+   */
+  readonly dependsOn?: readonly string[]
+  /** Beweise, nicht Teil der Hülle. */
+  readonly vouches?: readonly Vouch[]
+  readonly sigs: readonly Sig[]
 }
 
-async function sha256Hex(s: string): Promise<string> {
-  const b = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)))
-  return Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('')
+export type Body =
+  | { kind: 'create'; subject: Person; key: string; policy: Policy; group?: string }
+  | { kind: 'add'; subject: Person; key: string; vouchers?: Signer[] }
+  | { kind: 'remove'; subject: Person }
+  | { kind: 'policy'; policy: Policy; dependsOn?: string[] }
+
+const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('')
+const unhex = (h: string) => Uint8Array.from(h.match(/../g)?.map((x) => parseInt(x, 16)) ?? [])
+const enc = new TextEncoder()
+const digest = (s: string) => hex(sha256(enc.encode(s)))
+
+export class Signer {
+  private constructor(readonly name: Person, private readonly priv: Uint8Array, readonly pub: string) {}
+  static generate(name: Person) {
+    const priv = ed25519.utils.randomSecretKey()
+    return new Signer(name, priv, hex(ed25519.getPublicKey(priv)))
+  }
+  sign(msg: string): string {
+    return hex(ed25519.sign(enc.encode(msg), this.priv))
+  }
 }
+
+const verifyCache = new Map<string, boolean>()
+function verify(sig: string, msg: string, pub: string): boolean {
+  const k = `${pub}|${msg}|${sig}`
+  let r = verifyCache.get(k)
+  if (r === undefined) {
+    try {
+      r = ed25519.verify(unhex(sig), enc.encode(msg), unhex(pub))
+    } catch {
+      r = false
+    }
+    verifyCache.set(k, r)
+  }
+  return r
+}
+
+const vouchMsg = (subject: Person, nonce: string) => `vouch|${subject}|${nonce}`
+
+const isStr = (x: unknown): x is string => typeof x === 'string' && x.length > 0
+const isStrArray = (x: unknown): x is string[] => Array.isArray(x) && x.every(isStr)
+const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x)
+/** Form einer Operation, wie sie von der Leitung kommt. Inhaltliche Gültigkeit entscheidet die Faltung. */
+export function wellFormed(x: unknown): x is AuthOp {
+  if (!isObj(x)) return false
+  if (!isStr(x.id) || !isStr(x.nonce) || !isStrArray(x.preds)) return false
+  if (!['create', 'add', 'remove', 'policy'].includes(x.kind as string)) return false
+  if (x.subject !== undefined && !isStr(x.subject)) return false
+  if (x.key !== undefined && !isStr(x.key)) return false
+  if (x.group !== undefined && !isStr(x.group)) return false
+  if (x.policy !== undefined && !isObj(x.policy)) return false
+  if (x.dependsOn !== undefined && !isStrArray(x.dependsOn)) return false
+  if (!Array.isArray(x.sigs) || !x.sigs.every((s) => isObj(s) && isStr(s.signer) && isStr(s.sig))) return false
+  if (x.vouches !== undefined && (!Array.isArray(x.vouches) || !x.vouches.every((v) => isObj(v) && isStr(v.voucher) && isStr(v.sig)))) return false
+  return true
+}
+/** Die Hülle: alles außer Beweisen. Signiert wird ihr Digest, und der ist die id. */
+const hullDigest = (h: Pick<AuthOp, 'kind' | 'subject' | 'key' | 'policy' | 'group' | 'nonce' | 'preds' | 'dependsOn'>) =>
+  digest(JSON.stringify({ kind: h.kind, subject: h.subject, key: h.key, policy: h.policy, group: h.group, nonce: h.nonce, preds: h.preds, dependsOn: h.dependsOn }))
+
+interface State {
+  created: boolean
+  members: Set<Person>
+  keys: Map<Person, string>
+  policy: Policy | undefined
+  policyVersion: number
+}
+const emptyState = (): State => ({ created: false, members: new Set(), keys: new Map(), policy: undefined, policyVersion: 0 })
+
+/** Beweislage einer Operation: Signierer A und Bürgen P (§4.4), plus das Ja des Subjekts. */
+interface Situation {
+  A: Set<Person>
+  P: Set<Person>
+  subjectConsent: boolean
+}
+
+const KEYS: OpKey[] = ['member.add', 'member.remove', 'policy.change']
+
+/** Nimmt p in die actors der Aufnahme- und Entfernungsregel auf, rekursiv; alles andere bleibt. */
+export function promoteInPolicy(policy: Policy, p: Person): Policy {
+  const promote = (r: Rule): Rule =>
+    r.type === 'actors' ? (r.actors.includes(p) ? r : { ...r, actors: [...r.actors, p] }) : r.type === 'all' || r.type === 'any' ? { ...r, of: r.of.map(promote) } : r
+  return { ...policy, 'member.add': promote(policy['member.add']), 'member.remove': promote(policy['member.remove']) }
+}
+const opKey = (op: AuthOp): OpKey | undefined => (op.kind === 'add' ? 'member.add' : op.kind === 'remove' ? 'member.remove' : op.kind === 'policy' ? 'policy.change' : undefined)
+const isEnforcement = (op: AuthOp) => op.kind === 'remove' || op.kind === 'policy'
 
 export class AuthorityLog {
-  private readonly ops = new Map<string, AuthOp>()
-  private cache: { valid: Set<string>; members: Map<string, Role> } | undefined
+  private readonly opsById = new Map<string, AuthOp>()
+  private cache: { valid: Set<string>; state: State; forked: boolean } | undefined
 
-  /** Neue Operation auf den aktuellen Köpfen. */
-  async make(kind: AuthOp['kind'], author: string, subject: string, role?: Role): Promise<AuthOp> {
-    const preds = this.heads()
-    const body = JSON.stringify({ kind, author, subject, role: role ?? null, preds })
-    return { id: await sha256Hex(body), kind, author, subject, role, preds }
+  /** Neue signierte Operation auf den aktuellen Köpfen (oder den genannten). */
+  make(body: Body, signers: Signer[], preds: string[] = this.heads()): AuthOp {
+    const nonce = hex(crypto.getRandomValues(new Uint8Array(16)))
+    const hull = {
+      kind: body.kind,
+      subject: 'subject' in body ? body.subject : undefined,
+      key: 'key' in body ? body.key : undefined,
+      policy: 'policy' in body ? body.policy : undefined,
+      group: body.kind === 'create' ? body.group : undefined,
+      nonce,
+      preds,
+      dependsOn: body.kind === 'policy' ? body.dependsOn : undefined,
+    }
+    const id = hullDigest(hull)
+    const vouches = body.kind === 'add' ? (body.vouchers ?? []).map((v) => ({ voucher: v.name, sig: v.sign(vouchMsg(body.subject, nonce)) })) : undefined
+    const sigs = signers.map((s) => ({ signer: s.name, sig: s.sign(id) }))
+    return { ...hull, id, vouches, sigs }
   }
 
-  /** Nimmt eine Operation auf; false, wenn schon bekannt oder Vorgänger fehlen. */
-  add(op: AuthOp): 'neu' | 'bekannt' | 'wartet' {
-    if (this.ops.has(op.id)) return 'bekannt'
-    if (!op.preds.every((p) => this.ops.has(p))) return 'wartet'
-    this.ops.set(op.id, op)
+  /**
+   * Nimmt eine Operation auf; 'wartet', wenn Vorgänger fehlen. Prüft nichts:
+   * Gültigkeit entscheidet die Faltung. Beweise sind nicht Teil der id: eine
+   * zweite Kopie derselben Hülle bringt ihre Signaturen und Bürgschaften
+   * mit ('ergänzt'), sonst gingen nachgereichte Mitsignaturen verloren und
+   * zwei Repliken könnten dieselbe Operation verschieden beurteilen.
+   */
+  add(op: AuthOp): 'neu' | 'bekannt' | 'ergänzt' | 'wartet' | 'verworfen' {
+    // Ein Rahmen von der Leitung ist Daten, kein Typ: Form prüfen, bevor er
+    // ins Log kommt (#19). Was nicht die Form einer Operation hat, wird
+    // verworfen, nie gespeichert, und wirft nie.
+    if (!wellFormed(op)) return 'verworfen'
+    const known = this.opsById.get(op.id)
+    if (known) {
+      const sigs = new Map([...known.sigs, ...op.sigs].map((x) => [`${x.signer}|${x.sig}`, x]))
+      const vouches = new Map([...(known.vouches ?? []), ...(op.vouches ?? [])].map((v) => [`${v.voucher}|${v.sig}`, v]))
+      if (sigs.size === known.sigs.length && vouches.size === (known.vouches?.length ?? 0)) return 'bekannt'
+      this.opsById.set(op.id, { ...known, sigs: [...sigs.values()], vouches: known.vouches || op.vouches ? [...vouches.values()] : undefined })
+      this.cache = undefined
+      return 'ergänzt'
+    }
+    if (!op.preds.every((p) => this.opsById.has(p))) return 'wartet'
+    this.opsById.set(op.id, op)
     this.cache = undefined
     return 'neu'
   }
 
   has(id: string) {
-    return this.ops.has(id)
+    return this.opsById.has(id)
+  }
+  ops(): AuthOp[] {
+    return [...this.opsById.values()]
   }
 
   heads(): string[] {
     const referenced = new Set<string>()
-    for (const op of this.ops.values()) for (const p of op.preds) referenced.add(p)
-    return [...this.ops.keys()].filter((id) => !referenced.has(id)).sort()
+    for (const op of this.opsById.values()) for (const p of op.preds) referenced.add(p)
+    return [...this.opsById.keys()].filter((id) => !referenced.has(id)).sort()
   }
 
-  /** Mitglieder mit Rolle nach allen gültigen Operationen. */
-  members(): Map<string, Role> {
-    return new Map(this.fold().members)
+  /** Mitglieder nach allen gültigen Operationen. */
+  members(): Set<Person> {
+    return new Set(this.fold().state.members)
   }
-
+  keyOf(p: Person): string | undefined {
+    return this.fold().state.keys.get(p)
+  }
+  policy(): Policy {
+    return this.fold().state.policy ?? ({} as Policy)
+  }
+  policyVersion(): number {
+    return this.fold().state.policyVersion
+  }
+  forked(): boolean {
+    return this.fold().forked
+  }
   isValid(id: string): boolean {
     return this.fold().valid.has(id)
   }
 
+  /** Darf diese Person die Operation allein, nach der geltenden Politik? */
+  may(p: Person, key: OpKey): boolean {
+    const st = this.fold().state
+    if (!st.policy || !st.members.has(p)) return false
+    return this.sat(st.policy[key], { A: new Set([p]), P: new Set(), subjectConsent: false }, undefined, st.members, st.policy, key)
+  }
+
+  /** Ordnung aus §4.4 über Satisfaction-Mengen, an der aktuellen Mitgliedschaft. */
+  compare(r1: Rule, r2: Rule): '=' | '>=' | '<' | 'incomparable' {
+    const st = this.fold().state
+    return this.order(r1, r2, st.members, st.policy, undefined)
+  }
+
+  // ── Politik ─────────────────────────────────────────────────────────────
+
+  private structurallyValid(policy: Policy): boolean {
+    if (!policy || typeof policy !== 'object') return false
+    const check = (r: Rule, depth: number, key: OpKey, top: boolean): boolean => {
+      if (!r || depth > 4) return false
+      switch (r.type) {
+        case 'any-member':
+          return true
+        case 'threshold':
+          return Number.isInteger(r.k) && r.k >= 1
+        case 'actors':
+          return Array.isArray(r.actors) && r.actors.length > 0 && new Set(r.actors).size === r.actors.length && Number.isInteger(r.k) && r.k >= 1 && r.k <= r.actors.length
+        case 'vouch':
+          return key === 'member.add' && Number.isInteger(r.count) && r.count >= 1 && r.count <= 16
+        case 'all':
+        case 'any':
+          return Array.isArray(r.of) && r.of.length > 0 && r.of.every((x) => check(x, depth + 1, key, false))
+        case 'strongest':
+          return top
+        default:
+          return false
+      }
+    }
+    if (!KEYS.every((k) => check(policy[k], 1, k, true))) return false
+    return KEYS.some((k) => policy[k].type !== 'strongest')
+  }
+
+  private assignable = (r: Rule, key: OpKey): boolean => {
+    if (r.type === 'vouch') return key === 'member.add'
+    if (r.type === 'all' || r.type === 'any') return r.of.every((x) => this.assignable(x, key))
+    return r.type !== 'strongest'
+  }
+  private hasVouch = (r: Rule): boolean => r.type === 'vouch' || ((r.type === 'all' || r.type === 'any') && r.of.some(this.hasVouch))
+
+  private sat(rule: Rule, s: Situation, subject: Person | undefined, currency: Set<Person>, policy: Policy, key: OpKey): boolean {
+    const inC = (set: Set<Person>) => [...set].filter((p) => currency.has(p))
+    switch (rule.type) {
+      case 'any-member':
+        return inC(s.A).length >= 1
+      case 'threshold':
+        return inC(s.A).length >= rule.k
+      case 'actors':
+        return inC(s.A).filter((p) => rule.actors.includes(p)).length >= rule.k
+      case 'vouch':
+        return subject !== undefined && s.subjectConsent && inC(s.P).length >= rule.count
+      case 'all':
+        return rule.of.every((r) => this.sat(r, s, subject, currency, policy, key))
+      case 'any':
+        return rule.of.some((r) => this.sat(r, s, subject, currency, policy, key))
+      case 'strongest': {
+        const resolved = this.resolveStrongest(policy, key, currency, subject)
+        return resolved ? this.sat(resolved, s, subject, currency, policy, key) : false
+      }
+    }
+  }
+
+  /** strongest = all[maximale Elemente der konkreten, zuweisbaren Regeln unter ≥]. */
+  private resolveStrongest(policy: Policy, key: OpKey, currency: Set<Person>, subject: Person | undefined): Rule | undefined {
+    const rest = KEYS.map((k) => policy[k]).filter((r) => r.type !== 'strongest' && this.assignable(r, key))
+    if (!rest.length) return undefined
+    const maxima = rest.filter((r) => !rest.some((o) => o !== r && this.order(o, r, currency, policy, subject) === '>='))
+    return { type: 'all', of: maxima }
+  }
+
+  /** Aufzählung über das endliche Universum (Signierer ⊆ currency, Bürgen ⊆ currency, Ja des Subjekts). */
+  private order(r1: Rule, r2: Rule, currency: Set<Person>, policy: Policy | undefined, subject: Person | undefined): '=' | '>=' | '<' | 'incomparable' {
+    const people = [...currency]
+    if (people.length > 16) throw new Error(`Ordnung über ${people.length} Mitglieder nicht aufgezählt (E9: Schranke 16)`)
+    const withVouch = this.hasVouch(r1) || this.hasVouch(r2)
+    const p = policy ?? ({} as Policy)
+    const key: OpKey = subject ? 'member.add' : 'policy.change'
+    let sub = true
+    let sup = true
+    const n = 1 << people.length
+    for (let a = 0; a < n && (sub || sup); a++) {
+      const A = new Set(people.filter((_, i) => a & (1 << i)))
+      const vouchSets = withVouch ? Array.from({ length: n }, (_, v) => new Set(people.filter((_, i) => v & (1 << i)))) : [new Set<Person>()]
+      const consents = withVouch ? [true, false] : [false]
+      for (const P of vouchSets) {
+        for (const subjectConsent of consents) {
+          const s = { A, P, subjectConsent }
+          const in1 = this.sat(r1, s, subject, currency, p, key)
+          const in2 = this.sat(r2, s, subject, currency, p, key)
+          if (in1 && !in2) sub = false
+          if (in2 && !in1) sup = false
+        }
+      }
+    }
+    if (sub && sup) return '='
+    if (sub) return '>='
+    if (sup) return '<'
+    return 'incomparable'
+  }
+
+  // ── Faltung ─────────────────────────────────────────────────────────────
+
   /** Topologische Ordnung, Gleichstand nach id. */
-  private order(): AuthOp[] {
+  private topo(): AuthOp[] {
     const indeg = new Map<string, number>()
     const children = new Map<string, string[]>()
-    for (const op of this.ops.values()) {
+    for (const op of this.opsById.values()) {
       indeg.set(op.id, op.preds.length)
       for (const p of op.preds) children.set(p, [...(children.get(p) ?? []), op.id])
     }
@@ -78,7 +359,7 @@ export class AuthorityLog {
     const out: AuthOp[] = []
     while (ready.length) {
       const id = ready.shift()!
-      out.push(this.ops.get(id)!)
+      out.push(this.opsById.get(id)!)
       for (const c of (children.get(id) ?? []).sort()) {
         const n = indeg.get(c)! - 1
         indeg.set(c, n)
@@ -88,7 +369,6 @@ export class AuthorityLog {
     return out
   }
 
-  /** Vorfahren je Operation (inkl. sich selbst), für Gleichzeitigkeit. */
   private ancestors(order: AuthOp[]): Map<string, Set<string>> {
     const anc = new Map<string, Set<string>>()
     for (const op of order) {
@@ -99,53 +379,183 @@ export class AuthorityLog {
     return anc
   }
 
+  private apply(st: State, op: AuthOp) {
+    switch (op.kind) {
+      case 'create':
+        st.created = true
+        st.members.add(op.subject!)
+        st.keys.set(op.subject!, op.key!)
+        st.policy = op.policy
+        st.policyVersion = 1
+        break
+      case 'add':
+        st.members.add(op.subject!)
+        if (!st.keys.has(op.subject!)) st.keys.set(op.subject!, op.key!)
+        break
+      case 'remove':
+        st.members.delete(op.subject!)
+        break
+      case 'policy':
+        st.policy = op.policy
+        st.policyVersion += 1
+        break
+    }
+  }
+
+  /** Beweislage: welche Signaturen und Bürgschaften prüfen unter den registrierten Schlüsseln. */
+  private situation(op: AuthOp, st: State): Situation {
+    const A = new Set<Person>()
+    let subjectConsent = false
+    for (const s of op.sigs) {
+      const k = st.keys.get(s.signer)
+      if (k && st.members.has(s.signer) && verify(s.sig, op.id, k)) A.add(s.signer)
+      if (op.kind === 'add' && s.signer === op.subject && op.key && verify(s.sig, op.id, op.key)) subjectConsent = true
+    }
+    const P = new Set<Person>()
+    for (const v of op.vouches ?? []) {
+      const k = st.keys.get(v.voucher)
+      if (k && st.members.has(v.voucher) && op.subject && verify(v.sig, vouchMsg(op.subject, op.nonce), k)) P.add(v.voucher)
+    }
+    return { A, P, subjectConsent }
+  }
+
+  private authorized(op: AuthOp, st: State): boolean {
+    // Eine Hülle, die nicht zu ihrer id passt, ist nicht die signierte Hülle.
+    if (hullDigest(op) !== op.id) return false
+    if (op.kind === 'create') {
+      if (st.created || !op.subject || !op.key || !op.policy || !this.structurallyValid(op.policy)) return false
+      const founder = op.sigs.some((s) => s.signer === op.subject && verify(s.sig, op.id, op.key!))
+      const group = !op.group || op.sigs.some((s) => s.signer === 'group' && verify(s.sig, op.id, op.group!))
+      return founder && group
+    }
+    if (!st.created || !st.policy) return false
+    const key = opKey(op)!
+    if (op.kind === 'add') {
+      if (!op.subject || !op.key) return false
+      // Eine Aufnahme bindet einen Schlüssel an einen Namen und ersetzt nie
+      // eine bestehende Bindung (#17): wer schon einen Schlüssel hat, kommt
+      // nur unter demselben wieder; ein Schlüsselwechsel braucht eine eigene
+      // Regel. Ein Mitglied wird nicht erneut aufgenommen.
+      const bound = st.keys.get(op.subject)
+      if (bound !== undefined && bound !== op.key) return false
+      if (st.members.has(op.subject)) return false
+    }
+    if (op.kind === 'remove' && (!op.subject || !st.members.has(op.subject))) return false
+    if (op.kind === 'policy' && (!op.policy || !this.structurallyValid(op.policy))) return false
+    const s = this.situation(op, st)
+    return this.sat(st.policy[key], s, op.subject, st.members, st.policy, key)
+  }
+
   private fold() {
     if (this.cache) return this.cache
-    const order = this.order()
+    const order = this.topo()
     const anc = this.ancestors(order)
     const concurrent = (a: AuthOp, b: AuthOp) => a.id !== b.id && !anc.get(a.id)!.has(b.id) && !anc.get(b.id)!.has(a.id)
     let valid = new Set(order.map((o) => o.id))
-    // Fixpunkt. Jede Runde prüft jede Operation neu (eine ausgeschlossene kann
-    // wieder gültig werden, wenn der Grund dafür selbst fällt, Review zu #11).
-    // Schranke gegen Pendeln: mehr Runden als Operationen braucht kein Fixpunkt.
+    let forks: Array<[AuthOp, AuthOp]> = []
+    let joins = new Set<string>()
+    let region = new Set<string>() // im Fork verfallene Durchsetzung, keine Geschwister
+    let siblings = new Set<string>()
+    // Fixpunkt. Jede Runde prüft jede Operation neu; Schranke gegen Pendeln.
     for (let round = 0; round <= order.length + 1; round++) {
-      // 1. Autorität an jeder Position: Mitglieder nach den gültigen Vorfahren.
+      // 1. Autorität an jeder Position: Zustand nach den gültigen Vorfahren.
       const authorized = new Set<string>()
+      /** Geprüfte Signierer je Operation an ihrer Position (nie die behaupteten Namen). */
+      const verified = new Map<string, Set<Person>>()
       for (const op of order) {
-        const state = new Map<string, Role>()
-        let created = false
+        const st = emptyState()
         for (const prior of order) {
           if (prior.id === op.id || !anc.get(op.id)!.has(prior.id) || !valid.has(prior.id)) continue
-          apply(state, prior)
-          if (prior.kind === 'create') created = true
+          this.apply(st, prior)
         }
-        const authorIsAdmin = state.get(op.author) === 'admin'
-        if (op.kind === 'create' ? !created && op.author === op.subject : authorIsAdmin) authorized.add(op.id)
+        const deps = op.dependsOn ?? []
+        const depsHold = deps.every((d) => valid.has(d) && anc.get(op.id)!.has(d) && d !== op.id)
+        if (depsHold && this.authorized(op, st)) {
+          authorized.add(op.id)
+          verified.set(op.id, op.kind === 'create' ? new Set([op.subject!]) : this.situation(op, st).A)
+        }
       }
-      // 2. Strong Removal: nur eine Entfernung MIT Autorität trifft den Autor
-      //    einer gleichzeitigen Operation. Eine unberechtigte Entfernung
-      //    unterdrückt nichts.
+      // 2. Strong Removal: eine gültige Entfernung trifft die übrigen
+      //    Operationen (nie Entfernungen) eines gleichzeitig entfernten
+      //    geprüften Signierers. Eine Entfernung, die selbst verfallen ist
+      //    (Fork, Autorität), trifft nichts; das kommt über `valid` aus der
+      //    vorigen Runde in den Fixpunkt.
       const next = new Set<string>()
+      const signersOf = (op: AuthOp) => verified.get(op.id) ?? new Set<Person>()
       for (const op of order) {
         if (!authorized.has(op.id)) continue
-        const removedBy = order.filter((r) => authorized.has(r.id) && r.kind === 'remove' && r.subject === op.author && concurrent(r, op))
-        const mutual = op.kind === 'remove' && removedBy.some((r) => r.author === op.subject)
-        if (removedBy.length && !mutual) continue
+        if (op.kind !== 'remove') {
+          const mine = signersOf(op)
+          const removedBy = order.some((r) => r.kind === 'remove' && authorized.has(r.id) && valid.has(r.id) && mine.has(r.subject!) && concurrent(r, op))
+          if (removedBy) continue
+        }
         next.add(op.id)
       }
+      // 2b. Zwei gleichzeitige Aufnahmen derselben Person unter verschiedenen
+      //     Schlüsseln: keine Bindung gewinnt, beide verfallen (fail-closed).
+      //     Erst alle Konflikte sammeln, dann entfernen: sonst überlebt bei
+      //     A/A/B die zweite A-Aufnahme, weil ihre Gegner schon fehlen.
+      const conflicting = new Set<string>()
+      const adds = order.filter((o) => o.kind === 'add' && next.has(o.id))
+      for (const a of adds) {
+        for (const b of adds) {
+          if (b.id === a.id || b.subject !== a.subject || b.key === a.key || !concurrent(a, b)) continue
+          conflicting.add(a.id)
+          conflicting.add(b.id)
+        }
+      }
+      for (const id of conflicting) next.delete(id)
+      // 3. Klassenregel 3: policy.change neben Durchsetzung → beide verfallen;
+      //    im Fork verfällt jede Durchsetzung bis zu einem policy.change auf
+      //    beide. Eine im Fork verfallene Durchsetzung bildet selbst kein
+      //    weiteres Paar mehr; deshalb innen iterieren, bis die Paare stehen.
+      region = new Set()
+      siblings = new Set()
+      for (let pass = 0; pass <= order.length; pass++) {
+        // Paare nur unter Operationen, die nicht schon im Fork verfallen sind;
+        // verfallen kann aber jede Durchsetzung in `next`.
+        const candidates = order.filter((o) => next.has(o.id))
+        const live = candidates.filter((o) => !region.has(o.id))
+        forks = []
+        for (const p of live) {
+          if (p.kind !== 'policy') continue
+          for (const q of live) {
+            if (q.id <= p.id && q.kind === 'policy') continue // jedes Paar einmal
+            if (isEnforcement(q) && concurrent(p, q)) forks.push([p, q])
+          }
+        }
+        joins = new Set()
+        const nowRegion = new Set<string>()
+        siblings = new Set()
+        for (const [p, q] of forks) {
+          siblings.add(p.id)
+          siblings.add(q.id)
+          // Nur ein policy.change auf BEIDE Geschwister dieses Paars beendet es.
+          // Ein Join ist Struktur (Nachfolger beider Geschwister), unabhängig
+          // davon, ob er für ein anderes Paar selbst im Fork verfällt.
+          const pairJoins = new Set(candidates.filter((o) => o.kind === 'policy' && o.id !== p.id && o.id !== q.id && anc.get(o.id)!.has(p.id) && anc.get(o.id)!.has(q.id)).map((o) => o.id))
+          for (const j of pairJoins) joins.add(j)
+          for (const op of candidates) {
+            const a = anc.get(op.id)!
+            if (op.id === p.id || op.id === q.id || (!a.has(p.id) && !a.has(q.id)) || pairJoins.has(op.id)) continue
+            const afterJoin = [...pairJoins].some((j) => a.has(j))
+            if (isEnforcement(op) && !afterJoin) nowRegion.add(op.id)
+          }
+        }
+        const stable = nowRegion.size === region.size && [...nowRegion].every((id) => region.has(id))
+        region = nowRegion
+        if (stable) break
+      }
+      for (const id of siblings) next.delete(id)
+      for (const id of region) next.delete(id)
       const same = next.size === valid.size && [...next].every((id) => valid.has(id))
       valid = next
       if (same) break
     }
-    const members = new Map<string, Role>()
-    for (const op of order) if (valid.has(op.id)) apply(members, op)
-    this.cache = { valid, members }
+    const state = emptyState()
+    for (const op of order) if (valid.has(op.id)) this.apply(state, op)
+    const forked = forks.some(([p, q]) => ![...joins].some((j) => valid.has(j) && anc.get(j)!.has(p.id) && anc.get(j)!.has(q.id)))
+    this.cache = { valid, state, forked }
     return this.cache
   }
-}
-
-function apply(state: Map<string, Role>, op: AuthOp) {
-  if (op.kind === 'create') state.set(op.subject, 'admin')
-  else if (op.kind === 'add') state.set(op.subject, op.role ?? 'member')
-  else state.delete(op.subject)
 }

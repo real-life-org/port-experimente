@@ -19,6 +19,7 @@ describe('Prüfstand mit Klartext-Kandidat', () => {
       S4c: 'bestanden', // deterministisch, wenn auch ohne Rechteprüfung
       S4d: 'nicht bestanden', // Carol liest weiter
       S4e: 'nicht bestanden', // Ankunftsreihenfolge entscheidet → uneinig
+      S4j: 'nicht bestanden',
       S4f: 'nicht bestanden', // Mallorys Kette bleibt
       S5: 'bestanden',
       S5b: 'nicht abbildbar', // kein Entfernen einzelner Geräte im Null-Kandidaten

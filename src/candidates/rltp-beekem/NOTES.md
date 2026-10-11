@@ -1,4 +1,4 @@
-# Port-Notizen: RLTP-Autorität über BeeKEM (E6, E7, E8)
+# Port-Notizen: RLTP-Autorität über BeeKEM (E6, E7, E8, E9)
 
 Stand 05.10.2026. Das Experiment zum Schnitt aus der Synthese: **Autorität
 bei uns, Schlüsselvereinbarung als Adapter.** Ein minimales Autoritätslog
@@ -85,7 +85,7 @@ Runden). Lehre für den Guss: „gültig“ sind zwei Prüfungen in fester
 Reihenfolge, Autorität vor Gleichzeitigkeit, und nur die erste darf die
 zweite speisen.
 
-Offen, für Anton: Ketten gleichzeitiger Entfernungen. A entfernt B, B
+Entschieden 05.10. (seit E9 Schritt 1b im Kandidaten): Ketten gleichzeitiger Entfernungen. A entfernt B, B
 entfernt zugleich C (beide Admins). Heute: B's Entfernung hat Autorität und
 unterdrückt C's gleichzeitige Aufnahmen, ist aber selbst durch A ungültig,
 also bleibt C Mitglied. Konsequent wäre entweder „Entfernungen mit Autorität
@@ -256,8 +256,184 @@ registrierten Sicht übernehmen, mit Log-Replik den Log nachziehen.
   an die bedienten Geräte. Einzelempfänger-Kandidat ohne Dienst ist nur die
   BeeKEM-Willkommensnachricht, die hier im Add-Op an alle mitreist.
 - **Autorität:** unser Log; Strong Removal mit gegenseitiger Entfernung als
-  Ausnahme; Gründer ohne Sonderrolle. Hier ohne Signaturen und ohne Politik
-  (Experiment).
+  Ausnahme; Gründer ohne Sonderrolle. Seit E9 mit Signaturen und Politik
+  nach Access §4 (unten).
 - **Schlüssel:** BeeKEM. Neues Geheimnis je Entfernung, Rotation auf
   Verlangen, Zusammenführung paralleler Geheimnisse über Konfliktschlüssel.
 - **Historie:** Vorgänger-Kette in der Replik.
+
+## E9: Signaturen, Politik, Fork (Schritt 1)
+
+Frage: Hält der Guss Access 0.54–0.56 am Code? Schritt 1 ersetzt im
+Autoritätslog (`authority.ts`) die Rollen und die unsignierten Operationen
+durch die Spec-Form; der Schnitt (Autorität bei uns, BeeKEM für Schlüssel)
+bleibt. Schritt 2 (Sichten-Kette nach §7.3 mit Signaturen, m aus der neuen
+Sicht, Challenge; S10c', S10d) steht aus.
+
+- **Signaturen.** Jede Operation trägt ein signature-set über ihre Hülle;
+  die id ist der Digest der Hülle (Körper ohne Beweise), eine Hülle, die
+  nicht zur id passt, ist nicht die signierte. Ein Signierer zählt, wenn
+  seine Signatur unter dem Schlüssel prüft, den die gültige Aufnahme (oder
+  die Genesis) für ihn registriert hat, und er an der Position Mitglied ist
+  (policy currency). Ed25519 je Person, über ihre Geräte geteilt (wie heute
+  der Seed); die Gruppen-DID signiert die Genesis mit und wird verworfen
+  (RLTP-ACC-3060). `@noble/curves`, synchron, damit die Faltung synchron
+  bleibt.
+- **Politik als Daten.** `any-member`, `threshold k`, `actors`, `vouch n`,
+  `all`, `any`, `strongest` (§4.2); Gültigkeit über Satisfaction-Mengen
+  (§4.4), `strongest` und die Ordnung ≥ durch Aufzählung über das endliche
+  Universum (Signierer ⊆ Mitglieder, Bürgen ⊆ Mitglieder, Ja des Subjekts;
+  Schranke 16 Mitglieder). Strukturprüfung: Aritäten, Tiefe ≤ 4, nichtleere
+  Kompositionen, vouch nur auf `member.add`, mindestens eine konkrete Regel.
+  Rollen gibt es nicht mehr: „Admin“ ist ein Eintrag in den `actors` von
+  `member.add`/`member.remove`; `policy.change` ist `strongest`. Befördern
+  = `policy.change`, das den Namen anhängt.
+- **Fork (Klassenregel 3, RLTP-ACC-3495).** `policy.change` neben einer
+  Durchsetzung (remove, policy.change): beide verfallen; im Fork verfällt
+  jede weitere Durchsetzung, Aufnahmen gehen weiter; Ende durch ein
+  `policy.change`, dessen Vorgänger beide Zweige enthalten (autorisiert
+  nach der Politik vor dem Fork, weil die Geschwister verfallen sind).
+  Strong Removal läuft vor Klassenregel 3 (§3.6: Dispositionen zuerst).
+
+| | Ergebnis | Grund |
+|---|---|---|
+| S1–S8, S5b/c, S10a/b | unverändert | Regression |
+| S4e | **bestanden** (bisher nicht abbildbar) | zwei `policy.change` gleichzeitig: Fork, alle einig (`fork=ja`) |
+| S4j | bestanden | `policy.change` neben Entfernung: Fork, Carol bleibt; `policy.change` auf beide beendet ihn, danach wirkt die Entfernung |
+| S4g (Log) | bestanden | ohne, gefälschte, fremde Signatur und geänderte Hülle: ungültig; Genesis braucht Gründerin und Gruppenschlüssel |
+| S4h (Log) | bestanden | `threshold 2`: eine Signatur reicht nicht, zwei gleichzeitige Einzelsignaturen bilden keine Entfernung, Nicht-Mitglieder zählen nicht |
+| S4i (Log) | bestanden | `vouch 2`: eine Bürgschaft zu wenig; ohne Ja des Subjekts nichts; Bürgschaften einer anderen Aufnahme zählen nicht; vouch auf `member.remove` strukturell ungültig |
+| strongest (Log) | bestanden | löst zu `actors({alice,bob},2)` auf; `all[actors(a),actors(b)] ≥ threshold(2)` (§4.4) |
+| S10c (Sichten) | unverändert nicht bestanden | Schritt 2 |
+| S9 | 267 ms je Operation (30 × 500, Median aus 3; E6: 183) | Signaturen prüfen je Faltung neu, und die Faltung ist noch quadratisch; S9b 0,46 ms je Gerät und Zustellung (5 × 200), unverändert |
+
+### Aus dem Review zu PR #16 (Codex, CodeRabbit)
+
+- **Eine Aufnahme ersetzt keine Schlüsselbindung (#17).** Die erste Fassung
+  setzte bei jeder gültigen Aufnahme den Schlüssel des Subjekts neu; unter
+  `member.add = any-member` konnte ein Mitglied Alices Namen an einen eigenen
+  Schlüssel binden und danach als Alice entfernen. Jetzt: Wer schon einen
+  Schlüssel hat, kommt nur unter demselben wieder; ein Mitglied wird nicht
+  erneut aufgenommen; zwei gleichzeitige Aufnahmen derselben Person unter
+  verschiedenen Schlüsseln verfallen beide. Ein Schlüsselwechsel braucht
+  eine eigene Regel (Access `anchor.rotate`), hier nicht gebaut. Für den
+  Guss: Die Bindung Name → Schlüssel ist ein eigener Zustand neben der
+  Mitgliedschaft; welche Operation sie setzen darf, gehört ausgesprochen.
+- **Beweise derselben Hülle werden zusammengeführt.** Signaturen und
+  Bürgschaften sind nicht Teil der id; eine zweite Kopie bringt ihre mit
+  (`'ergänzt'`), sonst gehen nachgereichte Mitsignaturen verloren und zwei
+  Repliken beurteilen dieselbe Operation verschieden. Der Kandidat nimmt
+  BeeKEM-Anhänge genau einmal in den Baum, auch wenn die Operation erst
+  durch Nachlieferung gültig wird.
+- **Strong Removal zählt geprüfte Signierer**, nie behauptete Namen; sonst
+  könnte eine angehängte ungültige Signatur unter dem Namen eines gerade
+  Entfernten eine gültige Operation zu Fall bringen.
+- **Join je Fork-Paar.** Ein `policy.change` beendet nur den Fork, dessen
+  beide Geschwister es als Vorgänger hat; eine im Fork verfallene
+  Durchsetzung bildet selbst kein weiteres Paar (sonst poisoniert ein
+  verfallenes `remove` den Join, der den Fork beenden soll).
+- **Befördern erweitert die Regeln**, statt sie durch `actors(k=1)` zu
+  ersetzen; `threshold` und `vouch` bleiben erhalten.
+- **Eine Beförderung gilt nur, solange ihre Aufnahme gilt (#18).** Ein
+  kausaler Vorgänger bindet nicht: Unter `add:vouch:1` war die Aufnahme
+  ungültig, die nachfolgende `policy.change` aber gültig, und eine spätere
+  gewöhnliche Aufnahme machte die verwaisten actors-Rechte wirksam. Neu in
+  der Hülle: `dependsOn`, eine Gültigkeitsabhängigkeit, die der Fixpunkt in
+  jeder Runde prüft (nachgereichte Beweise und spätere Invalidierung
+  eingeschlossen; nur Vorgänger erlaubt). Für den Guss: Die Spec kennt
+  Autorität nur je Position; „gilt nur mit X“ ist ein eigener Mechanismus,
+  den die Admission Chain der Membership Tasks (invite → accept → add) für
+  die Aufnahme schon leistet. Für Politik, die an einer Aufnahme hängt,
+  fehlt er, und `actors`, die Nicht-Mitglieder nennen, sind der Grund.
+
+### Schritt 1b: Invarianten (Konsolidierung nach dem Review)
+
+Die vier Review-Runden waren Spezialfälle einer Klasse: Reihenfolge,
+geteilte Beweise, konkurrierende Aufnahmen, Abhängigkeiten. Statt weitere
+Repros zu flicken, gelten jetzt vier Invarianten, drei davon als
+Eigenschaftstests mit seeded Graphen (`tests/authority-props.test.ts`, 60
+Graphen, Partitionen, Beweise auf Kopien verteilt, Schlüsselkonflikte,
+unberechtigte Signierer, Beförderungen mit dependsOn):
+
+- **I1 Determinismus.** Gleicher Evidenzbestand ergibt gleichen Zustand
+  (Mitglieder, Politik, Version, Fork, Gültigkeit je Operation), unabhängig
+  von Zustellreihenfolge und davon, wie Beweise auf Kopien verteilt sind.
+- **I2 Keine Rechte aus gescheiterten Aufnahmen.** Eine Beförderung gilt
+  nur, wenn jede Aufnahme gilt, von der sie abhängt; jedes Mitglied hat eine
+  gültige Aufnahme, und sein Schlüssel stammt aus ihr.
+- **I3 Schlüssel gewinnen nie durch Kopien.** Je Person höchstens ein
+  Schlüssel unter allen gültigen Aufnahmen; zusätzliche Kopien oder
+  Teil-Beweise ändern den Zustand nicht (Monotonie der Zusammenführung).
+- **I4 Der Baum folgt dem Zustand.** Die Schlüsselseite reagiert nicht je
+  Rahmen, sondern gleicht sich nach jeder Faltung und vor jedem Verschlüsseln
+  mit dem Zustand ab (`reconcile`): Blätter von Nicht-Mitgliedern entfernen,
+  fehlende Blätter von Mitgliedern nachziehen (nach einer Rotation, wenn
+  gerade kein gemeinsamer Schlüssel gehalten wird), eigene Geräte nachziehen.
+  Jedes Mitglied mit Schlüssel repariert, ohne Politik-Quorum (löst Befund 5).
+  **Designänderung gegenüber E6 (Notiz 4 dort):** BeeKEM-Anhänge gehen
+  immer in den Baum, ob die Autoritätsoperation gilt oder nicht. Der Baum
+  hat seine eigene kausale Geschichte; spielt eine Replik einen Anhang nicht
+  ein, kann sie keine Operation mehr einspielen, die darauf aufbaut (etwa die
+  Rotation eines Schreibers), und die Repliken laufen auseinander (Repro:
+  Carol, die eine im Fork verfallene Entfernung nie eingespielt hatte, konnte
+  Daves Eintrag nicht öffnen). Autorität wirkt deshalb als Reparatur nach der
+  Faltung, nicht als Tor vor dem Baum; KV1 hält, weil die Reparatur vor dem
+  Verschlüsseln läuft und BeeKEM gleichzeitige Reparaturen zusammenführt.
+  Das ist auch, was Keyhive tut (Delegationen und BeeKEM werden getrennt
+  zusammengeführt, die Kaskade repariert). Repro, der vorher fehlschlug:
+  Daves Replik sah Alices Entfernung von Bob zuerst, dann Bobs Aufnahme von
+  x als unterdrückt; Carols gleichzeitige Regeländerung ließ die Entfernung
+  im Fork verfallen, die Aufnahme wurde gültig, und x fehlte im Baum
+  (`tests/rltp-beekem.test.ts`).
+- **Entfernungsketten nach dem Entscheid vom 05.10.** nachgezogen: Entfernungen
+  mit Autorität gelten immer, nur die übrigen Operationen eines gleichzeitig
+  Entfernten verfallen (A entfernt B, B entfernt zugleich C: beide raus).
+  Der Kandidat hatte seit E6 noch die alte Regel (B's Entfernung verfiel).
+  Eine selbst verfallene Entfernung (Fork, Autorität) unterdrückt nichts.
+
+### Wo der Code vom Guss abweichen musste (Befund für 0.57)
+
+1. **Autor einer k-of-n-Operation.** Die Spec disponiert „eine Entfernung
+   ihres Autors“ (RLTP-ACC-3400); eine Operation mit signature-set hat
+   keinen einen Autor. Hier verfällt sie, sobald **einer** ihrer gültigen
+   Signierer gleichzeitig entfernt wird (fail-closed). Der Guss sollte das
+   sagen: alle Mitsignierer sind Autoren, oder nur der `author` des
+   Umschlags.
+2. **Befördern ist Verfassung.** Ohne Rollen ist „x wird Admin“ ein
+   `policy.change`. Wer gleichzeitig entfernt wird und jemanden befördert
+   (S4f), löst keinen Fork aus, weil Strong Removal zuerst greift; stünde
+   Klassenregel 3 zuerst, forkte jede Entfernung eines Admins, der gerade
+   befördert. Die Reihenfolge der Dispositionen trägt damit mehr, als §3.6
+   vermuten lässt; sie sollte als Regel mit Rationale stehen.
+3. **Was im Fork weitergeht.** §3.6 sagt „fails closed“. Hier verfällt nur
+   Durchsetzung; Aufnahmen und Inhalte laufen weiter (der Schlüsselbaum
+   folgt der Mitgliedschaft). Ob eine Aufnahme im Fork gelten soll, ist eine
+   Entscheidung für den Guss.
+4. **Konsens des Subjekts.** `vouch` verlangt „A enthält das Subjekt“; hier
+   prüft die Subjekt-Signatur unter dem Schlüssel aus der Aufnahme selbst,
+   bevor das Subjekt Mitglied ist. Eine Aufnahme ohne vouch-Regel braucht
+   hier kein Ja des Subjekts; in der Spec liefert das die Membership Tasks
+   (accept), außerhalb des Logs. Die Bürgschaft ist an die Nonce der
+   Aufnahme gebunden, nicht an ein Accept-Dokument (Vereinfachung).
+5. **Heilung unter Quorum.** In Schritt 1 heilte nur, wer
+   `may(person, member.remove)` erfüllte; unter `threshold 2` niemand. Seit
+   Schritt 1b repariert jedes Mitglied mit Schlüssel (I4): Heilung ist das
+   Angleichen des Baums an die Mitgliedschaft, keine Mitgliedschafts-
+   entscheidung. Für den Guss: so aussprechen.
+7. **Gültigkeitsabhängigkeit** (`dependsOn`, aus #18): „gilt nur mit X“ ist
+   ein eigener Mechanismus neben Autorität je Position; die Admission Chain
+   der Membership Tasks leistet ihn für die Aufnahme, für Politik, die an
+   einer Aufnahme hängt, fehlt er, und `actors`, die Nicht-Mitglieder
+   nennen, sind der Grund.
+8. **Wiederaufnahme nach verfallener Entfernung.** Verfällt eine
+   Entfernung nachträglich (Fork), ist das Blatt des Betroffenen schon aus
+   dem Baum; die Wiederaufnahme unter demselben Share-Key gibt ihm keinen
+   Schlüssel zurück (Bob liest den nächsten Eintrag nicht,
+   `tests/rltp-beekem.test.ts`). Er braucht frisches Blattmaterial, also
+   eine neue Karte; das passt zur Spec (ein Schlüsselzustand nach einer
+   Entfernung wird nie wiederverwendet), ist hier aber nicht gebaut.
+6. **Nicht modelliert:** pending exits in der policy currency (5.4, kein
+   `member.leave` im Prüfstand); der Transportkosten-Bound der Politik
+   (§4.4); `strongest` jenseits von 16 Mitgliedern (symbolische Ordnung
+   nötig, die Spec erlaubt sie); Schlüsselwechsel einer Person
+   (`anchor.rotate`).

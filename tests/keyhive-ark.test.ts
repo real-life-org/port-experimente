@@ -19,6 +19,7 @@ describe('Kandidat Keyhive über ARK und Subduction', () => {
       S4c: 'nicht bestanden', // Gründerin nicht entfernbar; Nicht-Admins sehen Gruppenänderung nicht
       S4d: 'bestanden',
       S4e: 'nicht abbildbar',
+      S4j: 'nicht abbildbar',
       S4f: 'nicht bestanden', // ARK behält Einladungen des Entfernten (retain_all_other_members)
       S5: 'nicht abbildbar',
       S5b: 'nicht abbildbar',

@@ -216,6 +216,37 @@ export const scenarios: Scenario[] = [
     },
   },
   {
+    id: 'S4j',
+    title: 'Regeländerung neben Entfernung: Fork, Ende durch eine Regeländerung auf beide Zweige',
+    needs: ['roles', 'policy'],
+    async run(w) {
+      await base(w, [], 'admin')
+      await w.partition(['alice'], ['bob', 'carol'])
+      await w.candidate.changePolicy('alice', 'remove:threshold:2')
+      await w.remove('bob', 'carol')
+      await w.flush()
+      await w.heal()
+      await w.flush()
+      const all = ['alice', 'bob', 'carol']
+      const forked = all.every((d) => w.candidate.status(d).includes('fork=ja'))
+      const m1 = membersAgree(w, all)
+      const carolStays = w.members('alice').includes('carol')
+      // Ende: eine Regeländerung, die auf beiden Zweigen aufbaut.
+      await w.candidate.changePolicy('alice', 'join')
+      await w.flush()
+      const ended = all.every((d) => w.candidate.status(d).includes('fork=nein'))
+      await w.remove('alice', 'carol')
+      await w.flush()
+      const m2 = membersAgree(w, ['alice', 'bob'])
+      const carolOut = !w.members('alice').includes('carol')
+      return {
+        outcome: verdict(forked && m1.agree && carolStays && ended && m2.agree && carolOut),
+        authority: `im Fork: ${forked ? 'alle sehen fork=ja' : all.map((d) => `${d}:${w.candidate.status(d)}`).join(' | ')}; Carol bleibt: ${carolStays ? 'ja' : 'nein'}; Ende: ${ended ? 'ja' : 'nein'}; danach ${m2.text}`,
+        keys: '—',
+      }
+    },
+  },
+  {
     id: 'S4f',
     title: 'Entfernte lädt gleichzeitig ein, Eingeladener lädt weiter ein',
     needs: ['roles'],
