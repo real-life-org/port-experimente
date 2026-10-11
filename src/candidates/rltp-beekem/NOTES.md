@@ -1,5 +1,6 @@
 # Port-Notizen: RLTP-Autorität über BeeKEM (E6, E7, E8, E9)
 
+
 Stand 05.10.2026. Das Experiment zum Schnitt aus der Synthese: **Autorität
 bei uns, Schlüsselvereinbarung als Adapter.** Ein minimales Autoritätslog
 nach der Konfliktmatrix (`authority.ts`) entscheidet die Mitgliedschaft;
@@ -390,6 +391,38 @@ unberechtigte Signierer, Beförderungen mit dependsOn):
   Entfernten verfallen (A entfernt B, B entfernt zugleich C: beide raus).
   Der Kandidat hatte seit E6 noch die alte Regel (B's Entfernung verfiel).
   Eine selbst verfallene Entfernung (Fork, Autorität) unterdrückt nichts.
+
+### Schritt 2: Sichten-Kette nach §7.3 mit Signaturen
+
+Der Sichten-Dienst (`service.ts`) prüft seit Schritt 2 Signaturen und
+Besitz, keine Behauptungen: jedes Gerät hat einen Ed25519-Geräteschlüssel
+(in der Karte), `identities` einer Sicht sind die Geräteschlüssel aller
+Geräte der Mitglieder (eine Identität je Gerät, E7), ein Sichtvorschlag
+trägt die Signatur des Geräts über den Sichtinhalt (7110), der Dienst führt
+Kopien zusammen und zählt nur Signierer, die in alter und neuer Sicht stehen
+und deren Signatur prüft (7180). Bindung Gerät → Schlüssel über einen
+Besitznachweis: der Dienst stellt auf die Karte eine Challenge, das Gerät
+signiert sie; ohne Antwort zählt kein Vorschlag und kein Schreiben (7.3
+„proof of possession“). Lesen (Zustellung) ist im Prüfstand nicht an den
+Besitznachweis gebunden, weil die Challenge das Gerät erreichen muss; in der
+Spec läuft Lesen über eine authentisierte Session.
+
+| | Ergebnis | Grund |
+|---|---|---|
+| S10d (Dienst) | bestanden | gefälschte Signatur, fremde Signatur unter eigenem Namen, Signierer außerhalb der alten Sicht, Replay einer alten Sicht, falscher Vorgänger, unbeantwortete Challenge: nichts davon zählt; Schreiben ohne Besitznachweis wird verworfen |
+| S10c' Regel `parent` (Access 0.56 §7.3, wie geschrieben) | **nicht bestanden** | Quorum = effektives m der Vorgängersicht (2); nach gegenseitiger Entfernung bleibt eine Identität, der Dienst friert ein: der „stated residual“ der Spec |
+| S10c' Regel `new` (Guss-Plan 0.54: m_effective = min(m_parent, \|identities_new\|)) | bestanden | Carol allein trägt die neue Sicht, Alice und Bob werden nicht mehr bedient |
+| S1–S10b | unverändert | in beiden Regeln und in der Log-Replik |
+
+**Befund 9 (für 0.57): Guss-Plan und Spec widersprechen sich bei m.** Der
+Guss-Plan 0.54 (§7.3-Zeile) beschloss „m folgt der neuen Sicht“, damit
+gegenseitige Entfernung den Dienst nicht einfriert (E8 Befund 3); Access
+0.56 §7.3 hält am Quorum der Vorgängersicht fest und nennt das Einfrieren
+ausdrücklich als „stated residual“ (die Gruppe senkt m vorher, Ausweg ist
+die Neuregistrierung). Beides ist hier gebaut und gemessen; die
+Entscheidung steht aus. Bei gleichzeitigen Entfernungen gibt es kein
+„vorher“, deshalb trägt die Spec-Regel genau den Fall nicht, den die
+Matrix löst (S4c), und die Gruppe verliert ihre Dienstbindung.
 
 ### Wo der Code vom Guss abweichen musste (Befund für 0.57)
 
