@@ -47,5 +47,13 @@ export const candidates: CandidateEntry[] = [
     transport: 'eigener-server',
     nodeOnly: 'braucht einen lokalen Subduction-Server (Rust); läuft in Node und in der CI, nicht im Browser',
   },
+  {
+    id: 'rltp-beekem-pws',
+    title: 'RLTP über BeeKEM auf Portable Web Spaces als blindem Speicher (E12 a: was-teaching-server 0.42 im Prozess, eine Collection je Gruppe, changes-Feed je Gerät; Controller = ein Gruppenschlüssel)',
+    loadRuns: 1,
+    loadSize: { members: 30, operations: 100 },
+    transport: 'eigener-server',
+    nodeOnly: 'braucht Node ≥ 24 (was-teaching-server, @interop/was-client); läuft in Node, nicht im Browser',
+  },
   { id: 'klartext', title: 'Klartext (Null-Kandidat, zeigt nur, dass der Prüfstand Fehler erkennt)', make: klartext, loadRuns: 5, transport: 'prüfstand-relay' },
 ]
