@@ -157,6 +157,10 @@ const isEnforcement = (op: AuthOp) => op.kind === 'remove' || op.kind === 'polic
 export class AuthorityLog {
   private readonly opsById = new Map<string, AuthOp>()
   private cache: { valid: Set<string>; state: State; forked: boolean } | undefined
+  /** Zähler für Messungen: volle Faltungen und Operationen über den schnellen Pfad. */
+  readonly stats = { folds: 0, fast: 0 }
+
+  constructor(private readonly options: { incremental?: boolean } = {}) {}
 
   /** Neue signierte Operation auf den aktuellen Köpfen (oder den genannten). */
   make(body: Body, signers: Signer[], preds: string[] = this.heads()): AuthOp {
@@ -199,9 +203,41 @@ export class AuthorityLog {
       return 'ergänzt'
     }
     if (!op.preds.every((p) => this.opsById.has(p))) return 'wartet'
+    const fast = this.options.incremental !== false && this.cache && this.sequential(op)
     this.opsById.set(op.id, op)
-    this.cache = undefined
+    if (fast) this.extend(op)
+    else this.cache = undefined
     return 'neu'
+  }
+
+  /**
+   * Schneller Pfad (E9, Fixpunkt): Eine Operation, die auf ALLEN aktuellen
+   * Köpfen aufbaut, ist mit nichts gleichzeitig. Sie kann keine frühere
+   * Operation verfallen lassen (Strong Removal und Klassenregel 3 brauchen
+   * Gleichzeitigkeit) und keinen Fork beenden oder öffnen, der nicht schon
+   * durch ihre Vorgänger bestimmt ist; ihre eigene Gültigkeit hängt nur vom
+   * gefalteten Zustand ab. Dann genügt ein Schritt statt einer Faltung.
+   */
+  private sequential(op: AuthOp): boolean {
+    const heads = this.heads()
+    return heads.length > 0 && heads.length === op.preds.length && heads.every((h) => op.preds.includes(h))
+  }
+
+  private extend(op: AuthOp) {
+    const c = this.cache!
+    const deps = op.dependsOn ?? []
+    const depsHold = deps.every((d) => c.valid.has(d) && d !== op.id)
+    // Im offenen Fork verfällt jede Durchsetzung außer einem Join; ein Join
+    // auf allen Köpfen enthält beide Geschwister jedes offenen Forks.
+    const inFork = c.forked && isEnforcement(op)
+    const isJoin = inFork && op.kind === 'policy'
+    const ok = depsHold && (!inFork || isJoin) && this.authorized(op, c.state)
+    if (ok) {
+      c.valid.add(op.id)
+      this.apply(c.state, op)
+      if (isJoin) c.forked = false
+    }
+    this.stats.fast++
   }
 
   has(id: string) {
@@ -448,6 +484,7 @@ export class AuthorityLog {
 
   private fold() {
     if (this.cache) return this.cache
+    this.stats.folds++
     const order = this.topo()
     const anc = this.ancestors(order)
     const concurrent = (a: AuthOp, b: AuthOp) => a.id !== b.id && !anc.get(a.id)!.has(b.id) && !anc.get(b.id)!.has(a.id)

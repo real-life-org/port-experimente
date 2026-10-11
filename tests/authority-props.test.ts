@@ -96,8 +96,8 @@ function generate(seed: number): Gen {
   return { copies, keysOf }
 }
 
-function build(copies: AuthOp[], order: AuthOp[]): AuthorityLog {
-  const log = new AuthorityLog()
+function build(copies: AuthOp[], order: AuthOp[], options: { incremental?: boolean } = {}): AuthorityLog {
+  const log = new AuthorityLog(options)
   let pending = order
   while (pending.length) {
     const rest: AuthOp[] = []
@@ -152,6 +152,31 @@ describe('E9 Eigenschaften (seeded, 60 Graphen)', () => {
         expect(admitted.length, `seed ${seed}: ${m} ist Mitglied ohne gültige Aufnahme`).toBeGreaterThan(0)
         expect(admitted.some((o) => o.key === log.keyOf(m)), `seed ${seed}: Schlüssel von ${m} stammt nicht aus einer gültigen Aufnahme`).toBe(true)
       }
+    }
+  })
+
+  it('I5: der schnelle Pfad liefert denselben Zustand wie die volle Faltung, nach jeder Operation', () => {
+    for (const seed of seeds) {
+      const { copies } = generate(seed)
+      const rnd = mulberry32(seed * 3)
+      const order = shuffle(copies, rnd)
+      const fast = new AuthorityLog()
+      const full = new AuthorityLog({ incremental: false })
+      let pending = order
+      while (pending.length) {
+        const rest: AuthOp[] = []
+        for (const op of pending) {
+          const a = fast.add(op)
+          const b = full.add(op)
+          expect(a, `seed ${seed}`).toBe(b)
+          if (a === 'wartet') rest.push(op)
+          // Nach jeder Operation vergleichen: der schnelle Pfad darf nie etwas anderes sehen.
+          expect(snapshot(fast), `seed ${seed} nach ${op.kind}`).toBe(snapshot(full))
+        }
+        if (rest.length === pending.length) throw new Error('Vorgänger fehlen dauerhaft')
+        pending = rest
+      }
+      expect(fast.stats.fast, `seed ${seed}: schneller Pfad nie genutzt`).toBeGreaterThan(0)
     }
   })
 
