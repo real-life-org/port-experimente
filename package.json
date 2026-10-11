@@ -28,9 +28,14 @@
     "yjs": "^13.6.30"
   },
   "devDependencies": {
+    "@interop/did-method-key": "^7.4.4",
+    "@interop/ed25519-verification-key": "^8.2.1",
+    "@interop/ezcap": "^7.5.1",
+    "@interop/was-client": "^0.96.0",
     "@types/node": "22",
     "typescript": "~5.7.2",
     "vite": "^6.0.7",
-    "vitest": "^4.1.0"
+    "vitest": "^4.1.0",
+    "was-teaching-server": "^0.42.2"
   }
 }

@@ -9,6 +9,10 @@ export const nodeCandidates: Array<CandidateEntry & { make: NonNullable<Candidat
     ...candidates.find((c) => c.id === 'keyhive-ark')!,
     make: async () => (await import('./keyhive-ark')).keyhiveArk(),
   },
+  {
+    ...candidates.find((c) => c.id === 'rltp-beekem-pws')!,
+    make: async () => (await import('./pws')).rltpBeekemPws(),
+  },
 ]
 
 /** Alle Kandidaten mit Code, für Berichte in Node. */
