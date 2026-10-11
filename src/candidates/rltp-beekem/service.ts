@@ -88,9 +88,13 @@ abstract class Base implements EnforcingService {
   protected readonly keyOf = new Map<Device, string>()
   /** BeeKEM-ID je Gerät, aus seiner Karte. */
   protected readonly idOf = new Map<Device, string>()
-  /** Offene Challenges je Geräteschlüssel; bewiesen = Eintrag gelöscht und in `authenticated`. */
-  private readonly challenges = new Map<string, string>()
-  protected readonly authenticated = new Set<string>()
+  /** Welches Gerät einen Schlüssel zuerst angekündigt hat: ein Schlüssel gehört genau einem Gerät. */
+  private readonly deviceOfKey = new Map<string, Device>()
+  /** Offene Challenges je Gerät; bewiesen = Eintrag gelöscht und Gerät in `authenticated`. */
+  private readonly challenges = new Map<Device, string>()
+  /** Besitz bewiesen, je GERÄT (nicht je Schlüssel): ein zweites Gerät erbt keinen Nachweis. */
+  protected readonly authenticated = new Set<Device>()
+  protected rejectedCards = 0
   protected readonly outgoing: Array<{ label: string; body: Uint8Array }> = []
   protected dropped = 0
   protected rejectedAnswers = 0
@@ -101,30 +105,43 @@ abstract class Base implements EnforcingService {
   accept(msg: Msg) {
     const m = JSON.parse(dec.decode(msg.body)) as ServiceWire
     if (m.t === 'card') {
-      const c = m as { id: string; deviceKey: string }
-      // Erste Karte eines Geräts bindet es; eine andere ID oder ein anderer Schlüssel vom selben Gerät wird verworfen.
+      const c = m as { id?: unknown; deviceKey?: unknown }
+      if (typeof c.deviceKey !== 'string' || !c.deviceKey || typeof c.id !== 'string') return this.drop()
+      // Erste Karte eines Geräts bindet es; ein anderer Schlüssel vom selben
+      // Gerät, oder ein Schlüssel, den schon ein anderes Gerät angekündigt hat,
+      // wird verworfen: ein Schlüssel gehört genau einem Gerät, und ein zweites
+      // Gerät kann keinen fremden Besitznachweis erben.
       const known = this.keyOf.get(msg.from)
-      if (known && known !== c.deviceKey) return this.drop()
+      if (known && known !== c.deviceKey) {
+        this.rejectedCards++
+        return this.drop()
+      }
+      const owner = this.deviceOfKey.get(c.deviceKey)
+      if (owner && owner !== msg.from) {
+        this.rejectedCards++
+        return this.drop()
+      }
       if (!known) {
         this.keyOf.set(msg.from, c.deviceKey)
+        this.deviceOfKey.set(c.deviceKey, msg.from)
         this.idOf.set(msg.from, c.id)
         const nonce = Array.from(crypto.getRandomValues(new Uint8Array(16)), (x) => x.toString(16).padStart(2, '0')).join('')
-        this.challenges.set(c.deviceKey, nonce)
+        this.challenges.set(msg.from, nonce)
         const ch: Challenge = { t: 'challenge', to: c.deviceKey, nonce }
         this.outgoing.push({ label: 'challenge', body: enc.encode(JSON.stringify(ch)) })
       }
       return 'weiter'
     }
     if (m.t === 'challenge-answer') {
-      const a = m as ChallengeAnswer
+      const a = m as Partial<ChallengeAnswer>
       const key = this.keyOf.get(msg.from)
-      const nonce = key && this.challenges.get(key)
-      if (!key || key !== a.signer || !nonce || a.nonce !== nonce || !verify(a.sig, `challenge|${nonce}`, key)) {
+      const nonce = this.challenges.get(msg.from)
+      if (!key || typeof a.signer !== 'string' || typeof a.nonce !== 'string' || typeof a.sig !== 'string' || key !== a.signer || !nonce || a.nonce !== nonce || !verify(a.sig, `challenge|${nonce}`, key)) {
         this.rejectedAnswers++
         return 'behalten'
       }
-      this.challenges.delete(key)
-      this.authenticated.add(key)
+      this.challenges.delete(msg.from)
+      this.authenticated.add(msg.from)
       return 'behalten'
     }
     const special = this.ingest(msg.from, m)
@@ -136,7 +153,7 @@ abstract class Base implements EnforcingService {
     if (m.t === 'auth') return 'weiter'
     // Schreiben verlangt bewiesenen Besitz des Geräteschlüssels und Mitgliedschaft.
     const key = this.keyOf.get(msg.from)
-    if (!key || !this.authenticated.has(key) || !this.allows(key)) return this.drop()
+    if (!key || !this.authenticated.has(msg.from) || !this.allows(key)) return this.drop()
     return 'weiter'
   }
   protected drop() {
@@ -187,8 +204,14 @@ export class ViewService extends Base {
     const v = m as ViewProposal
     const key = this.keyOf.get(from)
     // Ein Vorschlag geht an den Dienst, nicht an die anderen Geräte; nur von bewiesenen Geräten.
-    if (!key || !this.authenticated.has(key)) return 'behalten'
-    if (!Array.isArray(v.identities) || !Array.isArray(v.sigs) || v.seq !== this.accepted.seq + 1 || v.prev !== this.accepted.hash) {
+    if (!key || !this.authenticated.has(from)) return 'behalten'
+    // Form zuerst: ein Rahmen von der Leitung ist Daten (vgl. #19).
+    const isStr = (x: unknown): x is string => typeof x === 'string'
+    const wellFormed =
+      Number.isInteger(v.seq) && (v.prev === null || isStr(v.prev)) && Number.isInteger(v.m) &&
+      Array.isArray(v.identities) && v.identities.every(isStr) &&
+      Array.isArray(v.sigs) && v.sigs.every((x) => typeof x === 'object' && x !== null && isStr((x as { signer?: unknown }).signer) && isStr((x as { sig?: unknown }).sig))
+    if (!wellFormed || v.seq !== this.accepted.seq + 1 || v.prev !== this.accepted.hash) {
       this.rejectedViews++
       return 'behalten'
     }
@@ -220,7 +243,7 @@ export class ViewService extends Base {
   }
 
   status() {
-    return `Sicht seq=${this.accepted.seq}, ${this.accepted.identities.size} Identitäten, m=${this.accepted.m} (${this.mRule}), offene Vorschläge=${this.proposals.size}, abgelehnte Sichten/Signaturen=${this.rejectedViews}, abgelehnte Antworten=${this.rejectedAnswers}, verworfen=${this.dropped}`
+    return `Sicht seq=${this.accepted.seq}, ${this.accepted.identities.size} Identitäten, m=${this.accepted.m} (${this.mRule}), offene Vorschläge=${this.proposals.size}, abgelehnte Sichten/Signaturen=${this.rejectedViews}, abgelehnte Antworten=${this.rejectedAnswers}, abgelehnte Karten=${this.rejectedCards}, verworfen=${this.dropped}`
   }
 }
 

@@ -79,6 +79,49 @@ describe('S10d: Sichten-Dienst prüft Signaturen und Besitz', () => {
     expect(acks(svc).map((x) => x.seq)).toEqual([2])
   })
 
+  it('ein zweites Gerät erbt keinen Besitznachweis: derselbe Schlüssel von einem anderen Gerät wird verworfen', () => {
+    const svc = new ViewService()
+    const k = keys()
+    register(svc, k)
+    // Gerät "a2" kündigt a's Schlüssel an.
+    expect(svc.accept(frame('a2', { t: 'card', person: 'a', id: 'id-a2', deviceKey: k.a.pub }))).toBe('verwerfen')
+    expect(svc.takeOutgoing()).toHaveLength(0)
+    expect(svc.accept(frame('a2', { t: 'content', c: '' }))).toBe('verwerfen')
+    const v1 = { seq: 1, prev: null, identities: [k.a.pub, k.b.pub].sort(), m: 2 }
+    propose(svc, 'a2', { ...v1, sigs: [signView(v1, k.a)] })
+    expect(acks(svc)).toHaveLength(0)
+    expect(svc.status()).toContain('abgelehnte Karten=1')
+    // Das echte Gerät a schreibt und schlägt weiter vor.
+    expect(svc.accept(frame('a', { t: 'content', c: '' }))).toBe('weiter')
+    propose(svc, 'a', { ...v1, sigs: [signView(v1, k.a)] })
+    expect(acks(svc).map((x) => x.seq)).toEqual([1])
+  })
+
+  it('missgebildete Vorschläge und Antworten werden abgelehnt, nie geworfen', () => {
+    const svc = new ViewService()
+    const k = keys()
+    register(svc, k)
+    const v1 = { seq: 1, prev: null, identities: [k.a.pub, k.b.pub].sort(), m: 2 }
+    for (const bad of [
+      { ...v1, sigs: [null] },
+      { ...v1, sigs: [{ signer: k.a.pub }] },
+      { ...v1, sigs: 'x' },
+      { ...v1, identities: [1, 2] },
+      { ...v1, identities: 'x' },
+      { ...v1, seq: '1' },
+      { ...v1, prev: 5 },
+      { ...v1, m: 'zwei' },
+    ]) {
+      expect(() => propose(svc, 'a', bad as unknown as Omit<ViewProposal, 't'>)).not.toThrow()
+      expect(acks(svc)).toHaveLength(0)
+    }
+    for (const bad of [{ t: 'challenge-answer' }, { t: 'challenge-answer', signer: 1, nonce: null, sig: {} }, { t: 'card' }, { t: 'card', deviceKey: 7 }]) {
+      expect(() => svc.accept(frame('z', bad))).not.toThrow()
+    }
+    propose(svc, 'a', { ...v1, sigs: [signView(v1, k.a)] })
+    expect(acks(svc).map((x) => x.seq)).toEqual([1])
+  })
+
   it("S10c': Schrumpfen unter das Quorum — Vorgänger-m friert ein, m der neuen Sicht nicht", () => {
     for (const [rule, expectAck] of [['parent', 0], ['new', 1]] as const) {
       const svc = new ViewService(rule)
