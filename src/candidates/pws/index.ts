@@ -10,8 +10,11 @@ import { rltpBeekem } from '../rltp-beekem'
 // der Transport wechselt: statt des Prüfstand-Relays schreibt jedes Gerät
 // seine Rahmen als Resources in EINE Collection eines Spaces auf einem echten
 // WAS-Server (was-teaching-server, im Prozess) und liest die der anderen über
-// den changes-Feed, je Gerät mit eigenem Checkpoint. Der Server sieht
-// Rahmen-Bytes, Resource-IDs, Absender-Label und den Controller des Spaces.
+// den changes-Feed, je Gerät mit eigenem Checkpoint. Der Server sieht die
+// Rahmen im Klartext (nur Base64): Karten mit Personennamen, Autoritäts-
+// operationen mit Subjekt, Signierern, Politik und Schlüsseln, BeeKEM-
+// Operationen. Verschlüsselt ist nur der Inhalt (`content`). Die Spec
+// versiegelt alle Einträge; der Prüfstand-Kandidat tut es nicht (#24).
 //
 // Controller des Spaces ist EIN Gruppenschlüssel (did:key), den alle Geräte
 // halten und mit dem sie signieren: die Gruppe als ein Controller, wie WAS
@@ -164,9 +167,16 @@ export async function rltpBeekemPws(options: PwsOptions = {}): Promise<Candidate
       const s = devices.values().next().value as DeviceState
       const archive = await client(s).space(space!.id).exportBlob()
       const next = await startTestServer({ backend: await openTempBackend() })
-      const was = WasClient.fromSigner({ serverUrl: next.serverUrl, signer: groupKey.signer() })
-      const sp = await was.createSpace({ name: 'gruppe', id: space!.id })
-      const imported = await sp.import(archive)
+      let imported: { resourcesCreated: number; resourcesSkipped: number }
+      try {
+        const was = WasClient.fromSigner({ serverUrl: next.serverUrl, signer: groupKey.signer() })
+        const sp = await was.createSpace({ name: 'gruppe', id: space!.id })
+        imported = (await sp.import(archive)) as typeof imported
+      } catch (e) {
+        // Misslingt der Umzug, bleibt der alte Server aktiv und der neue wird geschlossen (#25).
+        await next.fastify.close().catch(() => {})
+        throw e
+      }
       const old = active
       active = { serverUrl: next.serverUrl, fastify: next.fastify }
       for (const st of devices.values()) {
@@ -174,7 +184,26 @@ export async function rltpBeekemPws(options: PwsOptions = {}): Promise<Candidate
         st.checkpoint = undefined // der Checkpoint ist Fakt des alten Servers; der Feed wird neu gelesen, `seen` filtert
       }
       await old.fastify.close()
-      return imported as { resourcesCreated: number; resourcesSkipped: number }
+      return imported
+    },
+    /** Prüfpunkt 3: was ein Server aus den Rahmen liest, ohne Schlüssel. Je Label die Felder, die im Klartext stehen. */
+    async visible() {
+      const s = devices.values().next().value as DeviceState
+      const col = collection(s)
+      const out: Record<string, Set<string>> = {}
+      const persons = new Set<string>()
+      for await (const item of col.listItems()) {
+        const f = (await col.get(item.id)) as Frame | null
+        if (!f) continue
+        const wire = JSON.parse(dec.decode(unb64(f.b))) as Record<string, unknown>
+        const keys = (out[f.label] ??= new Set())
+        for (const k of Object.keys(wire)) keys.add(k)
+        if (typeof wire.person === 'string') persons.add(wire.person)
+        const op = wire.op as { subject?: string; sigs?: Array<{ signer: string }> } | undefined
+        if (op?.subject) persons.add(op.subject)
+        for (const sg of op?.sigs ?? []) persons.add(sg.signer)
+      }
+      return { fields: Object.fromEntries(Object.entries(out).map(([k, v]) => [k, [...v].sort()])), persons: [...persons].sort() }
     },
   }
 
@@ -253,4 +282,5 @@ export interface PwsHandle {
   readonly stats: { puts: number; pulls: number; pulledDocs: number; bytesUp: number }
   inventory(): Promise<{ controller: string; spaceId: string | undefined; resources: string[] }>
   moveToNewServer(): Promise<{ resourcesCreated: number; resourcesSkipped: number }>
+  visible(): Promise<{ fields: Record<string, string[]>; persons: string[] }>
 }

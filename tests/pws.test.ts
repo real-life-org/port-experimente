@@ -52,6 +52,12 @@ d('E12: RLTP über BeeKEM auf Portable Web Spaces', () => {
       await w.flush()
       const inv = await c.pws.inventory()
       expect(inv.resources.length).toBeGreaterThan(5)
+      // #24: Der Server liest die Rahmen. Personen und Autoritätsoperationen stehen im Klartext; nur Inhalt ist versiegelt.
+      const vis = await c.pws.visible()
+      expect(vis.persons).toEqual(['alice', 'bob', 'carol', 'group']) // 'group' = Mitsignierer der Genesis
+      expect(vis.fields.auth).toContain('op')
+      expect(vis.fields.card).toContain('person')
+      expect(vis.fields.content).toEqual(['c', 'iv', 'ref', 't', 'tab'])
       expect(inv.resources.every((r) => /^[a-z]+-\d{6}$/.test(r))).toBe(true)
       const moved = await c.pws.moveToNewServer()
       expect(moved.resourcesCreated).toBe(inv.resources.length)
@@ -65,7 +71,7 @@ d('E12: RLTP über BeeKEM auf Portable Web Spaces', () => {
       expect(w.read('dave')).toContain('nach-umzug')
       expect(w.read('carol')).toEqual(['nach-umzug', 'vor-umzug'])
       expect(w.members('dave')).toEqual(['alice', 'bob', 'carol', 'dave'])
-      if (process.env.PWS_OUT) writeFileSync(process.env.PWS_OUT, JSON.stringify({ inventory: inv, moved, stats: c.pws.stats }, null, 1))
+      if (process.env.PWS_OUT) writeFileSync(process.env.PWS_OUT, JSON.stringify({ inventory: inv, visible: vis, moved, stats: c.pws.stats }, null, 1))
     } finally {
       await c.dispose?.()
     }

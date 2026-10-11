@@ -47,20 +47,34 @@ Kandidaten (`wartet`, BeeKEM-Vorgänger) tragen jede Reihenfolge.
 
 ### Prüfpunkt 3: was der Server lernt
 
-Aus `inventory()` nach Gründung, zwei Aufnahmen und einem Eintrag: Controller
-`did:key:z6MkhtQ…` (der Gruppenschlüssel), ein Space, eine Collection,
-acht Resources `alice-000000` … `alice-000005`, `bob-000000`,
-`carol-000000`; 12 Puts, 63 Feed-Abfragen, 36 zugestellte Dokumente,
-9,4 KB hochgeladen.
+**Korrektur nach dem Review zu PR #23 (#24):** Die erste Fassung dieser
+Notiz war falsch. Der Server sieht die Rahmen im Klartext, Base64 ist keine
+Verschlüsselung. Aus `visible()` nach Gründung, zwei Aufnahmen und einem
+Eintrag, am HTTP-Payload geprüft:
 
-Der Server sieht: den Controller-DID der Gruppe (einen Schlüssel für alle),
-die Zahl der Geräte und je Gerät die Zahl der Rahmen (die Resource-ID trägt
-Gerätenamen und Laufnummer; ein Pseudonym je Gerät × Gruppe wäre die
-Antwort, E8 Befund 5), die Rahmen-Labels (`card`, `auth`, `policy`,
-`cgka`, `content`, `heal-add`, …) und damit die Struktur der Aktivität,
-die Größen, und die Lesezeitpunkte je Gerät über die Checkpoints. Nicht:
-Mitglieder, Personen, Schlüssel, Inhalte. Das Label gehört nicht in die
-Resource; es ist eine Bequemlichkeit des Prüfstands.
+| Rahmen | im Klartext beim Server |
+|---|---|
+| `card` | Personenname, BeeKEM-ID, Share-Key, Geräteschlüssel |
+| `auth`, `policy` | die ganze Autoritätsoperation: Art, Subjekt, Signierer, Politik, Schlüsselbindung, Vorgänger; dazu die BeeKEM-Anhänge |
+| `cgka` | BeeKEM-Operationen (signiert, Pfadgeheimnisse verschlüsselt) |
+| `content` | nur `c`, `iv`, `tab`, `ref`: versiegelt |
+
+Personen `alice`, `bob`, `carol` sind damit für den Server lesbar, ebenso
+Mitgliedschaft, Regeln und wer wen aufgenommen hat. Nicht lesbar: Inhalte
+und die Gruppengeheimnisse. Der Grund liegt nicht bei PWS, sondern beim
+Prüfstand-Kandidaten: Er versiegelt Inhalte (KV1 ist das Thema von E6–E9),
+nicht die Rahmen; das Prüfstand-Relay war nur per Konvention blind. Die
+Spec versiegelt jeden replizierten Eintrag unter dem Epochenschlüssel
+(Replication Contract, „key-blind by construction“; Access-Envelope) und
+liefert Willkommen und Karten getrennt zu. Für E12 heißt das: Variante (a)
+ist „blind“ nur für Inhalte; ein blinder Träger im Sinn der Spec braucht
+den versiegelten Eintrag, und der gehört in den Träger-Prüfstand (E10/E11)
+als eigene Tür, nicht in diesen Kandidaten.
+
+Zusätzlich sieht der Server: Resource-IDs mit Gerätenamen und Laufnummer
+(ein Pseudonym je Gerät × Gruppe wäre die Antwort, E8 Befund 5), die
+Rahmen-Labels, Größen und die Lesezeitpunkte je Gerät über die
+Checkpoints.
 
 ### Prüfpunkt 4: Serverwechsel
 
