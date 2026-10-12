@@ -2,7 +2,7 @@ import * as Y from 'yjs'
 import { openTempBackend, startTestServer } from 'was-teaching-server/testing'
 import { WasClient } from '@interop/was-client'
 import { Ed25519VerificationKey } from '@interop/ed25519-verification-key'
-import type { Candidate, Capability, Device, Msg, Person } from '../../lab/types'
+import type { Candidate, Capability, CarrierFaults, Device, Msg, Person } from '../../lab/types'
 import { rltpBeekem } from '../rltp-beekem'
 
 // E12 Variante (a): Portable Web Spaces (ex Wallet Attached Storage) als
@@ -43,8 +43,12 @@ interface DeviceState {
   /** Laufende Nummer je Gerät, für eindeutige Resource-IDs. */
   seq: number
   checkpoint: string | undefined
+  /** Letzter Transportfehler, solange der Ausgang nicht leer ist (pre-transport report). */
+  lastError?: string
   /** Resource-IDs, die dieses Gerät schon verarbeitet hat. */
   seen: Set<string>
+  /** Rahmen, die der Träger diesem Gerät vorenthält (#28): der Checkpoint liegt schon dahinter, also hier aufgehoben, bis die Regel fällt. */
+  held: Map<string, Msg>
   was?: WasClient
 }
 
@@ -58,17 +62,30 @@ export interface PwsOptions {
 export async function rltpBeekemPws(options: PwsOptions = {}): Promise<Candidate & { pws: PwsHandle }> {
   const inner = rltpBeekem()
   // Eigener Temp-Speicher je Server: der Default-Backend läge im Paket und wäre allen Servern gemeinsam.
-  const { fastify, serverUrl } = await startTestServer({ backend: await openTempBackend() })
+  const { fastify, serverUrl, faults: serverFaults } = await startTestServer({ backend: await openTempBackend() })
   // Der Gruppenschlüssel: ein did:key, von allen Geräten gehalten.
   const groupKey = await Ed25519VerificationKey.generate()
   groupKey.controller = `did:key:${groupKey.fingerprint()}`
   groupKey.id = `${groupKey.controller}#${groupKey.fingerprint()}`
   const devices = new Map<Device, DeviceState>()
   let space: { id: string } | undefined
-  let active = { serverUrl, fastify }
+  let active = { serverUrl, fastify, serverFaults }
   let idle = 0
   const stats = { puts: 0, pulls: 0, pulledDocs: 0, bytesUp: 0 }
   const notes: string[] = []
+
+  // ── Fehlerinjektion am Träger (E10) ───────────────────────────────────
+  // Der Server ist echt; was er nicht kann, spielt die Hülle: Verlust =
+  // der Put wird vom Server abgewiesen (RequestFaults wäre möglich, hier
+  // zählt die Hülle, weil der Sender sonst einen HTTP-Fehler sähe und das
+  // Verhalten „still verloren“ gerade geprüft werden soll); Zurückhalten je
+  // Gerät = Filter beim Lesen (alle Geräte signieren mit demselben Schlüssel,
+  // der Server kann sie nicht unterscheiden); Veränderung = vor dem Put.
+  const faultState = { drop: [] as Array<(m: Msg) => boolean>, withhold: [] as Array<{ device: Device; match: (m: Msg) => boolean }>, reverse: false, duplicate: false, tamper: [] as Array<{ match: (m: Msg) => boolean; mutate: (b: Uint8Array) => Uint8Array }> }
+  let carriedId = 0
+  let replaySeq = 0
+  const carriedLog: Msg[] = []
+  const toMsg = (f: Frame, id: number): Msg => ({ id, from: f.from, label: f.label, body: unb64(f.b) })
 
   const dev = (d: Device) => {
     const s = devices.get(d)
@@ -101,16 +118,38 @@ export async function rltpBeekemPws(options: PwsOptions = {}): Promise<Candidate
     const col = collection(s)
     let n = 0
     while (s.outbox.length) {
-      const { label, body } = s.outbox[0]!
+      const { label, body: original } = s.outbox[0]!
       const id = `${d}-${String(s.seq).padStart(6, '0')}`
+      const probe: Msg = { id: carriedId + 1, from: d, label, body: original }
+      if (faultState.drop.some((r) => r(probe))) {
+        // Der Träger hat angenommen und verloren: aus Sicht des Senders gesendet.
+        notes.push(`Träger verschluckt ${d}:${label}`)
+        s.seq++
+        s.outbox.shift()
+        s.seen.add(id)
+        n++
+        continue
+      }
+      let body = original
+      for (const r of faultState.tamper) if (r.match(probe)) body = r.mutate(body)
       const frame: Frame = { from: d, label, b: b64(body) }
-      await timed(() => col.put(id, frame))
-      stats.puts++
-      stats.bytesUp += body.length
+      try {
+        await timed(() => col.put(id, frame))
+      } catch (e) {
+        // Nicht angenommen: der Rahmen bleibt im Ausgang und wird in der nächsten
+        // Runde erneut versucht (6.1: pre-transport report, nie Schweigen).
+        s.lastError = `awaiting-transport: ${(e as Error).message}`
+        notes.push(`${d}: ${s.lastError}`)
+        return n
+      }
+      s.lastError = undefined
       s.seq++
       s.outbox.shift()
       s.seen.add(id)
       n++
+      carriedLog.push({ ...probe, id: ++carriedId, body })
+      stats.puts++
+      stats.bytesUp += body.length
     }
     return n
   }
@@ -120,19 +159,38 @@ export async function rltpBeekemPws(options: PwsOptions = {}): Promise<Candidate
     if (!s.online || !space) return 0
     const col = collection(s)
     let n = 0
+    const withheld = (msg: Msg) => faultState.withhold.some((r) => r.device === d && r.match(msg))
+    const deliver = async (id: string, msg: Msg) => {
+      s.seen.add(id)
+      for (let k = 0; k < (faultState.duplicate ? 2 : 1); k++) {
+        const { content } = await inner.receive(d, msg)
+        for (const u of content) Y.applyUpdate(s.doc, u, 'remote')
+      }
+      n++
+    }
+    // Erst das Vorenthaltene, dessen Regel gefallen ist.
+    for (const [id, msg] of [...s.held]) {
+      if (withheld(msg)) continue
+      s.held.delete(id)
+      if (!s.seen.has(id)) await deliver(id, msg)
+    }
     for (;;) {
       const page = await timed(() => col.changes({ checkpoint: s.checkpoint, limit: 200 }))
       stats.pulls++
-      for (const doc of page.documents as Array<{ id: string; kind?: string; deleted?: boolean; data?: Frame }>) {
+      const docs = page.documents as Array<{ id: string; kind?: string; deleted?: boolean; data?: Frame }>
+      for (const doc of faultState.reverse ? [...docs].reverse() : docs) {
         if (doc.kind !== 'resource' || doc.deleted || !doc.data || s.seen.has(doc.id)) continue
-        s.seen.add(doc.id)
         const f = doc.data
-        if (f.from === d) continue
-        stats.pulledDocs++
-        const msg: Msg = { id: stats.pulledDocs, from: f.from, label: f.label, body: unb64(f.b) }
-        const { content } = await inner.receive(d, msg)
-        for (const u of content) Y.applyUpdate(s.doc, u, 'remote')
-        n++
+        if (f.from === d) {
+          s.seen.add(doc.id)
+          continue
+        }
+        const msg = toMsg(f, ++stats.pulledDocs)
+        if (withheld(msg)) {
+          s.held.set(doc.id, msg) // der Träger hält es diesem Gerät vor; der Checkpoint rückt weiter, der Rahmen bleibt hier
+          continue
+        }
+        await deliver(doc.id, msg)
       }
       if (!page.checkpoint || page.documents.length === 0) break
       s.checkpoint = page.checkpoint
@@ -152,7 +210,39 @@ export async function rltpBeekemPws(options: PwsOptions = {}): Promise<Candidate
     throw new Error('PWS: nach 60 Runden nicht ruhig')
   }
 
+  const faults: CarrierFaults & { refuseNextPut(status?: number): void } = {
+    drop: (m) => void faultState.drop.push(m),
+    withhold: (device, m) => void faultState.withhold.push({ device, match: m }),
+    reverse: (on) => void (faultState.reverse = on),
+    duplicate: (on) => void (faultState.duplicate = on),
+    tamper: (m, mutate) => void faultState.tamper.push({ match: m, mutate }),
+    async replay(match) {
+      // Ein alter Rahmen kommt als neue Resource noch einmal; der Server kennt keine Identität des Inhalts.
+      const s = devices.values().next().value as DeviceState
+      const col = collection(s)
+      for (const m of carriedLog) {
+        if (!match(m)) continue
+        const id = `replay-${m.id}-${++replaySeq}`
+        await timed(() => col.put(id, { from: m.from, label: m.label, b: b64(m.body) } as Frame))
+        stats.puts++
+      }
+    },
+    carried: () => carriedLog.slice(),
+    /** Echter Serverfehler: der nächste Put wird vom Server abgewiesen (RequestFaults des Teaching-Servers). */
+    refuseNextPut(status = 503) {
+      active.serverFaults.refuse({ match: { method: 'PUT' }, status })
+    },
+    reset() {
+      faultState.drop = []
+      faultState.withhold = []
+      faultState.reverse = false
+      faultState.duplicate = false
+      faultState.tamper = []
+    },
+  }
+
   const pws: PwsHandle = {
+    faults: faults as PwsHandle['faults'],
     serverUrl: () => active.serverUrl,
     controller: groupKey.controller!,
     stats,
@@ -178,7 +268,7 @@ export async function rltpBeekemPws(options: PwsOptions = {}): Promise<Candidate
         throw e
       }
       const old = active
-      active = { serverUrl: next.serverUrl, fastify: next.fastify }
+      active = { serverUrl: next.serverUrl, fastify: next.fastify, serverFaults: next.faults }
       for (const st of devices.values()) {
         st.was = undefined
         st.checkpoint = undefined // der Checkpoint ist Fakt des alten Servers; der Feed wird neu gelesen, `seen` filtert
@@ -212,6 +302,7 @@ export async function rltpBeekemPws(options: PwsOptions = {}): Promise<Candidate
     capabilities: new Set<Capability>([...inner.capabilities].filter((c) => c !== 'service' && c !== 'steal') as Capability[]),
     pws,
     transport: {
+      faults,
       async setOnline(d, online) {
         dev(d).online = online
       },
@@ -237,7 +328,7 @@ export async function rltpBeekemPws(options: PwsOptions = {}): Promise<Candidate
 
     async addDevice(p, d) {
       await inner.addDevice(p, d)
-      const s: DeviceState = { person: p, online: true, doc: new Y.Doc(), outbox: [], seq: 0, checkpoint: undefined, seen: new Set(), was: undefined }
+      const s: DeviceState = { person: p, online: true, doc: new Y.Doc(), outbox: [], seq: 0, checkpoint: undefined, lastError: undefined, seen: new Set(), held: new Map(), was: undefined }
       devices.set(d, s)
       await ensureSpace(s)
       await push(s, d)
@@ -270,13 +361,15 @@ export async function rltpBeekemPws(options: PwsOptions = {}): Promise<Candidate
     takeOutgoing: () => [],
     receive: (d, m) => inner.receive(d, m),
     members: (d) => inner.members(d),
-    status: (d) => `${inner.status(d)}; pws puts=${stats.puts} pulls=${stats.pulls}${notes.length ? '; ' + notes.slice(0, 2).join('; ') : ''}`,
+    status: (d) => `${inner.status(d)}; pws puts=${stats.puts} pulls=${stats.pulls}${dev(d).outbox.length ? `; ausgang=${dev(d).outbox.length}` : ''}${dev(d).lastError ? `; ${dev(d).lastError}` : ''}${notes.length ? '; ' + notes.slice(0, 2).join('; ') : ''}`,
     steal: (d) => inner.steal(d),
     attackerOpen: (st, m) => inner.attackerOpen(st, m),
   }
 }
 
 export interface PwsHandle {
+  /** Die Fehlerinjektion des Transports, mit dem Server-eigenen `refuseNextPut`. */
+  readonly faults: CarrierFaults & { refuseNextPut(status?: number): void }
   serverUrl(): string
   readonly controller: string
   readonly stats: { puts: number; pulls: number; pulledDocs: number; bytesUp: number }

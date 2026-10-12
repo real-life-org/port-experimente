@@ -1,5 +1,5 @@
 import * as Y from 'yjs'
-import type { Candidate, Device, Msg, Person, Role } from './types'
+import type { Candidate, CarrierFaults, Device, Msg, Person, Role } from './types'
 
 const LOCAL = Symbol('local')
 
@@ -25,6 +25,42 @@ export class World {
   private nextId = 1
 
   constructor(readonly candidate: Candidate) {}
+
+  // ── Fehlerinjektion am Prüfstand-Relay (E10) ──────────────────────────
+  private dropRules: Array<(m: Msg) => boolean> = []
+  private withholdRules: Array<{ device: Device; match: (m: Msg) => boolean }> = []
+  private reverseOrder = false
+  private duplicateAll = false
+  private tamperRules: Array<{ match: (m: Msg) => boolean; mutate: (b: Uint8Array) => Uint8Array }> = []
+  /** Rahmen, die eine Regel verschluckt hat (zur Auswertung). */
+  readonly swallowed: Msg[] = []
+  /** Urteil je Rahmen, einmal gefällt: eine Verlust- oder Veränderungsregel trifft alle Empfänger gleich (wie bei einem echten Träger). */
+  private readonly dropDecided = new Map<number, boolean>()
+  private readonly tampered = new Map<number, Uint8Array>()
+
+  /** Der Träger dieses Laufs: das Prüfstand-Relay, oder der eigene Transport des Kandidaten, sofern er Fehler bietet. */
+  carrier(): CarrierFaults | undefined {
+    if (this.own) return this.own.faults
+    const w = this
+    return {
+      drop: (match) => void w.dropRules.push(match),
+      withhold: (device, match) => void w.withholdRules.push({ device, match }),
+      reverse: (on) => void (w.reverseOrder = on),
+      duplicate: (on) => void (w.duplicateAll = on),
+      tamper: (match, mutate) => void w.tamperRules.push({ match, mutate }),
+      async replay(match) {
+        for (const m of w.log) if (match(m)) for (const seen of w.delivered.values()) seen.delete(m.id)
+      },
+      carried: () => w.log.slice(),
+      reset() {
+        w.dropRules = []
+        w.withholdRules = []
+        w.reverseOrder = false
+        w.duplicateAll = false
+        w.tamperRules = []
+      },
+    }
+  }
 
   /** Geräte, die im Modus „eigener Transport“ gerade offline geschaltet sind. */
   private offline = new Set<Device>()
@@ -163,18 +199,37 @@ export class World {
           moved = true
         }
       }
-      for (let i = 0; i < this.log.length; i++) {
-        const msg = this.log[i]!
+      const order = this.reverseOrder ? [...this.log].reverse() : this.log
+      for (const msg of order) {
         for (const d of this.docs.keys()) {
           if (d === msg.from) continue
           const seen = this.delivered.get(d)!
           if (seen.has(msg.id)) continue
           if (!this.deliverable(msg, d)) continue
+          // Zurückhalten je Gerät: der Rahmen bleibt ungesehen und zählt nicht als Fortschritt;
+          // fällt die Regel, wird er zugestellt.
+          if (this.withholdRules.some((r) => r.device === d && r.match(msg))) continue
           seen.add(msg.id)
           moved = true
-          const { content } = await this.candidate.receive(d, msg)
-          const doc = this.doc(d)
-          for (const u of content) Y.applyUpdate(doc, u, 'remote')
+          let dropped = this.dropDecided.get(msg.id)
+          if (dropped === undefined) this.dropDecided.set(msg.id, (dropped = this.dropRules.some((r) => r(msg))))
+          if (dropped) {
+            if (!this.swallowed.includes(msg)) this.swallowed.push(msg)
+            continue
+          }
+          let body = this.tampered.get(msg.id)
+          if (!body) {
+            body = msg.body
+            for (const r of this.tamperRules) if (r.match(msg)) body = r.mutate(body)
+            this.tampered.set(msg.id, body)
+          }
+          const toDeliver = body === msg.body ? msg : { ...msg, body }
+          const times = this.duplicateAll ? 2 : 1
+          for (let k = 0; k < times; k++) {
+            const { content } = await this.candidate.receive(d, toDeliver)
+            const doc = this.doc(d)
+            for (const u of content) Y.applyUpdate(doc, u, 'remote')
+          }
         }
       }
       if (!moved) return

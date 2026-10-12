@@ -42,7 +42,33 @@ export interface Received {
  * Inhalte selbst; der Prüfstand schaltet Geräte nur online/offline.
  * Partition: Nur die erste Gruppe erreicht das Relay, alle anderen sind offline.
  */
+/**
+ * Fehlerinjektion am Träger (E10/E11, Träger-Prüfstand). Der Prüfstand
+ * bietet sie für sein Relay selbst; ein Kandidat mit eigenem Transport
+ * stellt sie über `transport.faults` bereit, sonst sind T-Szenarien für ihn
+ * nicht abbildbar. Jede Regel gilt ab dem Aufruf, bis `reset()`.
+ */
+export interface CarrierFaults {
+  /** Rahmen, auf die `match` passt, erreichen niemanden (still verloren). */
+  drop(match: (m: Msg) => boolean): void
+  /** Rahmen, auf die `match` passt, erreichen genau dieses Gerät nicht (gezieltes Zurückhalten). */
+  withhold(device: Device, match: (m: Msg) => boolean): void
+  /** Zustellung in umgekehrter Reihenfolge je Runde. */
+  reverse(on: boolean): void
+  /** Jeden Rahmen zweimal zustellen. */
+  duplicate(on: boolean): void
+  /** Rahmen vor der Zustellung verändern (Rückgabe = neue Bytes). */
+  tamper(match: (m: Msg) => boolean, mutate: (body: Uint8Array) => Uint8Array): void
+  /** Einen schon zugestellten Rahmen allen noch einmal zustellen. */
+  replay(match: (m: Msg) => boolean): Promise<void>
+  /** Alles, was der Träger je getragen hat, als Bytes (für T12: was ein Träger liest). */
+  carried(): Msg[]
+  reset(): void
+}
+
 export interface OwnTransport {
+  /** Fehlerinjektion, wenn der Transport sie bietet. */
+  readonly faults?: CarrierFaults
   setOnline(device: Device, online: boolean): Promise<void>
   /** Wartet, bis der Kandidat zur Ruhe gekommen ist, und aktualisiert members()/read(). */
   settle(): Promise<void>
