@@ -77,7 +77,12 @@ export const carrierScenarios: CarrierScenario[] = [
       await w.flush()
       await w.write('dave', 'zwei')
       await w.flush()
-      const ok = agree(w, ['alice', 'bob', 'dave']) && same(w.members('alice'), ['alice', 'bob', 'dave']) && ['alice', 'bob', 'dave'].every((d) => same(w.read(d), ['eins', 'zwei']))
+      // Bobs Entfernung von Carol ist gleichzeitig mit Daves Aufnahme und unter einem Schlüssel ohne Dave
+      // versiegelt; Dave liest sie erst mit dem nächsten Eintrag eines Mitglieds, das sie gelesen hat (Kette).
+      await w.write('bob', 'drei')
+      await w.flush()
+      const all3 = ['eins', 'zwei', 'drei']
+      const ok = agree(w, ['alice', 'bob', 'dave']) && same(w.members('alice'), ['alice', 'bob', 'dave']) && ['alice', 'bob', 'dave'].every((d) => same(w.read(d), all3))
       return { outcome: verdict(ok), authority: `alice ${fmt(w.members('alice'))} bob ${fmt(w.members('bob'))} dave ${fmt(w.members('dave'))}`, keys: ['alice', 'bob', 'dave'].map((d) => `${d}:${fmt(w.read(d))}`).join(' ') }
     },
   },

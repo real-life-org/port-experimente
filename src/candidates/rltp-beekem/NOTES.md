@@ -563,16 +563,35 @@ Prüfstand; E11 ersetzt es durch den Zustellungs-Adapter.
   anderen öffnen sie mit dem alten Schlüssel, den BeeKEM behält. Ohne diese
   Reihenfolge erfuhr Carol in S4j nie von ihrer Entfernung und der Fork fand
   nicht statt.
-- **Der Baum folgt dem Log, aber nur dem vollständigen.** Weil die
-  Anhänge jetzt vorausgehen, läge zwischen Anhang und Operation ein Moment,
-  in dem das Log hinterherhinkt; die Heilung nähme ein eben aufgenommenes
-  Blatt wieder heraus, und die Repliken hielten sich gegenseitig in
-  Bewegung (so sah der erste Lauf aus: Dutzende `heal`/`heal-add`/`welcome`).
-  Deshalb: keine Angleichung, solange versiegelte Autoritätsrahmen
-  ungeöffnet liegen; eine Schlüsseloperation allein löst keine Angleichung
-  aus (das Log hat sich nicht geändert), angeglichen wird nach
-  Autoritätsoperationen und vor dem Schreiben. Dieselbe Regel für die
-  Lückenprüfung: erst öffnen, dann fragen.
+- **Zwei getrennte Steuerungen (Review zu #31, drei Runden).** Die erste
+  Fassung hängte Baumangleichung und Lückenreparatur an dieselbe Bedingung
+  „keine ungeöffneten Autoritätsrahmen“; das war ein Zirkel: warten auf
+  Vollständigkeit und zugleich den Weg dorthin sperren, und jeder beschädigte
+  Rahmen sperrte dauerhaft. Jetzt:
+  - *Lückenreparatur ohne Sperre.* Belege kommen nur aus geöffneten
+    Einträgen (der Schreiber hatte den Schlüssel) und aus wartenden
+    Operationen. Ungeöffnete Rahmen belegen nichts, ihr Umschlag ist
+    unverbürgt; sie halten auch nichts auf. Ein beschädigter Rahmen, gleich
+    wo beschädigt, ist damit für die Reparatur unsichtbar; was er enthielt,
+    holt der nächste intakte Beleg. Nebeneffekt: die Anfragen sind weniger
+    geworden (T2 vorher 7 Anfragen und drei dreifache Antworten, jetzt 2).
+  - *Baumangleichung mit Zurückhaltung.* Ein ungeöffneter Autoritätsrahmen
+    heißt: diese Replik weiß, dass ihr Log hinter dem Umlauf liegt. Ob er noch
+    aufgeht, nie aufgeht (Epoche ohne uns, bis die Tabelle eines späteren
+    Eintrags ihn bringt) oder beschädigt ist, kann sie nicht unterscheiden.
+    In allen drei Fällen gleicht sie den Baum nicht an, sonst nähme sie das
+    Blatt eines eben Aufgenommenen heraus oder das eines eben Entfernten
+    wieder hinein (so sah der erste Lauf aus: Dutzende `heal`/`heal-add`,
+    und in T2 brachte Dave Carol zurück in den Baum). Angleichen tun die
+    Mitglieder auf dem Stand (I4: jedes Mitglied mit Schlüssel). Für die
+    zurückliegende Replik heißt das Zurückhaltung, nie Stillstand: Lesen,
+    Schreiben, Reparatur laufen weiter. Eine Schlüsseloperation allein löst
+    keine Angleichung aus; angeglichen wird nach Autoritätsoperationen und
+    vor dem Schreiben.
+  - *Folge für T2:* Bobs Entfernung von Carol ist gleichzeitig mit Daves
+    Aufnahme und unter einem Schlüssel ohne Dave versiegelt. Dave liest sie
+    erst mit dem nächsten Eintrag eines Mitglieds, das sie gelesen hat
+    (Kette, wie Keyhive b); T2 schreibt deshalb am Ende noch einmal.
 - **Der Umschlag ist unverbürgt (#32).** `kind` im Klartext steuert nur
   die Ausnahme des Dienstes (Autoritätsrahmen passieren ohne
   Mitgliedschaftsgate, weil sie Evidenz für die Konfliktmatrix sind, aber
