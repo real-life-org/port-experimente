@@ -65,6 +65,7 @@ export type MRule = 'parent' | 'new'
 type ServiceWire =
   | { t: 'card'; person: string; id: string; deviceKey: string }
   | { t: 'auth'; op: AuthOp }
+  | { t: 'sealed'; kind: string }
   | ViewProposal
   | ChallengeAnswer
   | { t: string }
@@ -150,7 +151,7 @@ abstract class Base implements EnforcingService {
     // Entfernungen, Strong Removal) und gehen immer durch; ob sie gelten,
     // entscheidet jede Replik selbst (Access §9.3: Evidenztransport ist nie
     // gated). Gated sind Inhalt, Schlüsseloperationen und Widerrufe.
-    if (m.t === 'auth') return 'weiter'
+    if (m.t === 'auth' || (m.t === 'sealed' && (m as { kind?: unknown }).kind === 'auth')) return 'weiter'
     // Schreiben verlangt bewiesenen Besitz des Geräteschlüssels und Mitgliedschaft.
     const key = this.keyOf.get(msg.from)
     if (!key || !this.authenticated.has(msg.from) || !this.allows(key)) return this.drop()

@@ -111,8 +111,8 @@ export const carrierScenarios: CarrierScenario[] = [
       await w.add('alice', 'carol')
       await w.flush()
       const c = w.carrier()!
-      // Die Entfernung von damals kommt noch einmal.
-      await c.replay((m) => m.from === 'alice' && m.label === 'auth' && dec.decode(m.body).includes('"remove"'))
+      // Alices Autoritätsrahmen von damals kommen noch einmal, die Entfernung darunter (versiegelt: der Träger kann sie nicht gezielt auswählen).
+      await c.replay((m) => m.from === 'alice' && m.label === 'auth')
       await w.flush()
       await w.write('carol', 'noch-da')
       await w.flush()
@@ -130,14 +130,19 @@ export const carrierScenarios: CarrierScenario[] = [
       const c = w.carrier()!
       await w.device('dave', 'dave')
       await w.flush()
-      // Alices Aufnahme von Dave wird unterwegs zu einer Entfernung von Bob umgeschrieben; ihre Aufnahme von Eve wird zu Müll.
-      // Entscheidung nach Inhalt, damit jeder Träger dieselben zwei Rahmen trifft.
+      // Alices nächste zwei Autoritätsrahmen (Aufnahme von Dave, von Eve) werden unterwegs verändert: im ersten
+      // kippt ein Byte des Chiffretexts, der zweite wird zu Müll. Versiegelt kann der Träger nichts Gezieltes
+      // mehr schreiben (eine Aufnahme zur Entfernung umdeuten); er kann nur zerstören.
       await w.device('eve', 'eve')
       await w.flush()
+      let hit = 0
       c.tamper(isAuthFrom('alice'), (body) => {
-        const text = dec.decode(body)
-        if (text.includes('"subject":"dave"')) return enc.encode(text.replace('"kind":"add"', '"kind":"remove"').replace('"subject":"dave"', '"subject":"bob"'))
-        if (text.includes('"subject":"eve"')) return enc.encode('{"t":"auth","op":')
+        hit++
+        if (hit === 1) {
+          const f = JSON.parse(dec.decode(body)) as { c: string }
+          return enc.encode(JSON.stringify({ ...f, c: (f.c[0] === 'A' ? 'B' : 'A') + f.c.slice(1) }))
+        }
+        if (hit === 2) return enc.encode('{"t":"sealed","kind":"auth","c":')
         return body
       })
       await w.add('alice', 'dave')
@@ -149,8 +154,9 @@ export const carrierScenarios: CarrierScenario[] = [
       c.reset()
       const bobStays = ['alice', 'bob', 'carol'].every((d) => w.members(d).includes('bob'))
       const noNewcomers = ['bob', 'carol'].every((d) => !w.members(d).includes('dave') && !w.members(d).includes('eve'))
-      const garbageNoted = w.candidate.status('bob').includes('verworfen')
-      return { outcome: verdict(bobStays && noNewcomers && garbageNoted && agree(w, ['bob', 'carol'])), authority: `bob ${fmt(w.members('bob'))} carol ${fmt(w.members('carol'))}; Müll notiert: ${garbageNoted ? 'ja' : 'nein'}; Zustand bob: ${w.candidate.status('bob')}`, keys: '—' }
+      const st = w.candidate.status('bob')
+      const garbageNoted = st.includes('verworfen') && st.includes('ungeöffnet=1')
+      return { outcome: verdict(bobStays && noNewcomers && garbageNoted && agree(w, ['bob', 'carol'])), authority: `bob ${fmt(w.members('bob'))} carol ${fmt(w.members('carol'))}; Müll notiert und zerstörter Rahmen ungeöffnet: ${garbageNoted ? 'ja' : 'nein'}; Zustand bob: ${st}`, keys: '—' }
     },
   },
   {

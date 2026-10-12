@@ -19,7 +19,7 @@ describe('Träger-Prüfstand: rltp-beekem über das Prüfstand-Relay', () => {
       T7: 'bestanden', // blind: Carol wird bedient, kann aber nichts öffnen (KV1)
       T8: 'nicht abbildbar', // ein Prüfstand-Relay kennt keinen Wechsel
       T11: 'nicht abbildbar', // ein Kandidat trägt eine Gruppe
-      T12: 'nicht bestanden', // Rahmen im Klartext (Befund #24)
+      T12: 'bestanden', // versiegelte Rahmen: der Träger liest nur Chiffretext, Karten gehen über die Begegnung
     })
   }, 300_000)
 

@@ -111,9 +111,27 @@ export async function rltpBeekemPws(options: PwsOptions = {}): Promise<Candidate
     await timed(() => sp.createCollection({ name: 'frames', id: 'frames' }))
   }
 
+  /** Begegnungskanal: Karten gehen nicht über den Server, sondern direkt an die anderen Geräte, sobald sie online sind. */
+  const direct: Array<{ msg: Msg; delivered: Set<Device> }> = []
+  async function deliverDirect(s: DeviceState, d: Device): Promise<number> {
+    if (!s.online) return 0
+    let n = 0
+    for (const e of direct) {
+      if (e.msg.from === d || e.delivered.has(d)) continue
+      e.delivered.add(d)
+      const { content } = await inner.receive(d, e.msg)
+      for (const u of content) Y.applyUpdate(s.doc, u, 'remote')
+      n++
+    }
+    return n
+  }
+
   /** Alle ausstehenden Rahmen eines Geräts zum Server. */
   async function push(s: DeviceState, d: Device): Promise<number> {
-    s.outbox.push(...inner.takeOutgoing(d))
+    for (const o of inner.takeOutgoing(d)) {
+      if (o.direct) direct.push({ msg: { id: ++carriedId, from: d, label: o.label, body: o.body }, delivered: new Set() })
+      else s.outbox.push(o)
+    }
     if (!s.online || !space) return 0
     const col = collection(s)
     let n = 0
@@ -156,9 +174,9 @@ export async function rltpBeekemPws(options: PwsOptions = {}): Promise<Candidate
 
   /** Den Feed ab dem eigenen Checkpoint lesen und fremde Rahmen dem Kandidaten zustellen. */
   async function pull(s: DeviceState, d: Device): Promise<number> {
-    if (!s.online || !space) return 0
+    let n = await deliverDirect(s, d)
+    if (!s.online || !space) return n
     const col = collection(s)
-    let n = 0
     const withheld = (msg: Msg) => faultState.withhold.some((r) => r.device === d && r.match(msg))
     const deliver = async (id: string, msg: Msg) => {
       s.seen.add(id)

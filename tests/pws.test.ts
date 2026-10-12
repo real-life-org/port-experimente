@@ -28,7 +28,7 @@ d('E12: RLTP über BeeKEM auf Portable Web Spaces', () => {
       S5: 'bestanden',
       S5b: 'nicht abbildbar', // kein Diebstahl über den Feed (der Prüfstand sieht die Rahmen nicht)
       S5c: 'bestanden',
-      S6: 'nicht bestanden', // wie ohne Server: Historie erst über die Kette
+      S6: 'bestanden', // E10: Historie über die Tabellen der versiegelten Autoritätsrahmen, wie am Relay
       S6b: 'bestanden',
       S7: 'nicht abbildbar',
       S8: 'bestanden',
@@ -53,7 +53,7 @@ d('E12: RLTP über BeeKEM auf Portable Web Spaces', () => {
       T7: 'bestanden', // blind: der Server bedient Carol weiter, sie öffnet nichts (KV1)
       T8: 'bestanden', // Umzug per Export/Import mitten im Leben, danach Aufnahme und Schreiben auf dem neuen Server
       T11: 'nicht abbildbar', // ein Kandidat trägt eine Gruppe
-      T12: 'nicht bestanden', // Rahmen im Klartext (#24)
+      T12: 'bestanden', // versiegelte Rahmen: der Server liest nur Chiffretext
     })
   }, 600_000)
 
@@ -121,13 +121,14 @@ d('E12: RLTP über BeeKEM auf Portable Web Spaces', () => {
       await w.flush()
       const inv = await c.pws.inventory()
       expect(inv.resources.length).toBeGreaterThan(5)
-      // #24: Der Server liest die Rahmen. Personen und Autoritätsoperationen stehen im Klartext; nur Inhalt ist versiegelt.
+      // #24 war: der Server las Personen und Autoritätsoperationen im Klartext. Seit E10 (versiegelte Rahmen)
+      // liest er nur Chiffretext mit Umschlag; Karten gehen über die Begegnung, nicht über den Server.
       const vis = await c.pws.visible()
-      expect(vis.persons).toEqual(['alice', 'bob', 'carol', 'group']) // 'group' = Mitsignierer der Genesis
-      expect(vis.fields.auth).toContain('op')
-      expect(vis.fields.card).toContain('person')
-      // Umschlag (E10, I12): Köpfe des Schreibers und sein Geräteschlüssel stehen im Klartext, der Inhalt bleibt versiegelt.
-      expect(vis.fields.content).toEqual(['by', 'c', 'heads', 'iv', 'ref', 't', 'tab'])
+      expect(vis.persons).toEqual([])
+      expect(vis.fields.card).toBeUndefined()
+      expect(vis.fields.auth).toEqual(['by', 'c', 'heads', 'iv', 'keyOp', 'kind', 'ref', 't', 'tab'])
+      expect(vis.fields.content).toEqual(['by', 'c', 'heads', 'iv', 'keyOp', 'kind', 'ref', 't', 'tab'])
+      expect(vis.fields.welcome).toEqual(['c', 'eph', 'iv', 't', 'to'])
       expect(inv.resources.every((r) => /^[a-z]+-\d{6}$/.test(r))).toBe(true)
       const moved = await c.pws.moveToNewServer()
       expect(moved.resourcesCreated).toBe(inv.resources.length)

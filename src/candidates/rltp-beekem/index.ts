@@ -2,6 +2,9 @@ import type { Candidate, Capability, Device, EnforcingService, Msg, Person } fro
 import { AuthorityLog, Signer, promoteInPolicy, wellFormed, type AuthOp, type Policy } from './authority'
 import { BeekemPeer, loadWasm } from './load'
 import { LogReplicaService, ViewService, signView, viewHash, type Challenge, type ChallengeAnswer, type MRule, type ViewAck, type ViewProposal } from './service'
+import { x25519 } from '@noble/curves/ed25519.js'
+import { hkdf } from '@noble/hashes/hkdf.js'
+import { sha256 as sha256Sync } from '@noble/hashes/sha2.js'
 
 // E6: BeeKEM pur als Schlüssel-Adapter. Die Mitgliedschaft entscheidet ein
 // minimales Autoritätslog nach der Konfliktmatrix (authority.ts), BeeKEM
@@ -19,14 +22,35 @@ import { LogReplicaService, ViewService, signView, viewHash, type Challenge, typ
 // Ed25519-Schlüssel (geteilt über ihre Geräte, wie heute der Seed); die
 // Gruppe regiert sich über eine Politik nach Access §4, „Admin“ ist
 // actors(k=1); policy.change neben Durchsetzung forkt (§3.6).
+// E10: Versiegelte Rahmen. Alles, was über den Träger der Gruppe geht, ist
+// ein Eintrag unter dem Epochenschlüssel (Replication „key-blind by
+// construction“): Autoritätsoperationen, Widerrufe, Reparaturanfragen,
+// Inhalte. Nur drei Dinge bleiben außen: BeeKEM-Operationen (selbst
+// Chiffretext an die Blätter), das Willkommen an ein neues Gerät (an dessen
+// Gerätschlüssel verschlüsselt, minimale Zustellung im Prüfstand) und die
+// Karten, die über den Begegnungskanal gehen, nicht über den Träger.
 // Port-Notizen: NOTES.md.
 
 const enc = new TextEncoder()
 const dec = new TextDecoder()
-const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('')
-const unhex = (h: string) => Uint8Array.from(h.match(/../g)!.map((x) => parseInt(x, 16)))
-const b64 = (b: Uint8Array) => btoa(String.fromCharCode(...b))
-const unb64 = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0))
+// Kodierungen: in Node über Buffer (die zeichenweisen Varianten waren im Profil der Lastmessung 40 % der Zeit), im Browser über atob/btoa.
+const B = (globalThis as { Buffer?: { from(x: string | Uint8Array, enc?: string): { toString(enc: string): string; buffer: ArrayBuffer; byteOffset: number; byteLength: number } } }).Buffer
+const hex = (b: Uint8Array) => (B ? B.from(b).toString('hex') : Array.from(b, (x) => x.toString(16).padStart(2, '0')).join(''))
+const unhex = (h: string) => {
+  if (B) {
+    const x = B.from(h, 'hex')
+    return new Uint8Array(x.buffer, x.byteOffset, x.byteLength).slice()
+  }
+  return Uint8Array.from(h.match(/../g)!.map((x) => parseInt(x, 16)))
+}
+const b64 = (b: Uint8Array) => (B ? B.from(b).toString('base64') : btoa(String.fromCharCode(...b)))
+const unb64 = (s: string) => {
+  if (B) {
+    const x = B.from(s, 'base64')
+    return new Uint8Array(x.buffer, x.byteOffset, x.byteLength).slice()
+  }
+  return Uint8Array.from(atob(s), (c) => c.charCodeAt(0))
+}
 const sha256 = async (b: Uint8Array) => new Uint8Array(await crypto.subtle.digest('SHA-256', b))
 
 /** Vorgänger-Tabelle (je 32 B Referenz + 32 B Schlüssel) unter dem Eintragsschlüssel, AES-GCM. */
@@ -36,19 +60,49 @@ async function sealTable(key: Uint8Array, table: Uint8Array) {
   const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, k, table))
   return { iv, ct }
 }
+
+/**
+ * Willkommen an ein Gerät: X25519 (flüchtiger Schlüssel gegen den
+ * Willkommensschlüssel der Karte), HKDF-SHA256, AES-GCM. Die minimale
+ * Zustellung des Prüfstands; E11 ersetzt sie durch den Zustellungs-Adapter.
+ */
+async function sealTo(pub: Uint8Array, plain: Uint8Array) {
+  const ephPriv = x25519.utils.randomSecretKey()
+  const eph = x25519.getPublicKey(ephPriv)
+  const shared = x25519.getSharedSecret(ephPriv, pub)
+  const key = hkdf(sha256Sync, shared, new Uint8Array([...eph, ...pub]), enc.encode('rltp-welcome'), 32)
+  const { iv, ct } = await sealTable(key, plain)
+  return { eph, iv, ct }
+}
+async function openFrom(priv: Uint8Array, eph: Uint8Array, iv: Uint8Array, ct: Uint8Array) {
+  const pub = x25519.getPublicKey(priv)
+  const shared = x25519.getSharedSecret(priv, eph)
+  const key = hkdf(sha256Sync, shared, new Uint8Array([...eph, ...pub]), enc.encode('rltp-welcome'), 32)
+  return openTable(key, iv, ct)
+}
 async function openTable(key: Uint8Array, iv: Uint8Array, ct: Uint8Array) {
   const k = await crypto.subtle.importKey('raw', key, 'AES-GCM', false, ['decrypt'])
   return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, k, ct))
 }
 
 type Wire =
-  | { t: 'card'; person: Person; id: string; shareKey: string; deviceKey: string }
+  /** Karte eines Geräts; geht über den Begegnungskanal, nie über den Träger. `welcomeKey`: X25519 für das Willkommen. */
+  | { t: 'card'; person: Person; id: string; shareKey: string; deviceKey: string; welcomeKey: string }
   | { t: 'auth'; op: AuthOp; group?: string; cgka: string[] }
   | { t: 'cgka'; op: string }
   /** Widerruf eines einzelnen Geräts (verloren); die Person bleibt. */
   | { t: 'revoke'; id: string }
-  /** Inhalt mit Access-Envelope: `heads` sind die Autoritätsköpfe des Schreibers, `by` sein Geräteschlüssel. */
-  | { t: 'content'; c: string; iv: string; tab: string; ref: string; heads: string[]; by: string }
+  /** Inhalt (innen): ein Yjs-Update. */
+  | { t: 'content'; u: string }
+  /**
+   * Versiegelter Eintrag: `c` ist ein innerer Rahmen unter dem Eintragsschlüssel
+   * (BeeKEM), `tab` die Vorgänger-Tabelle. Umschlag im Klartext: `kind` (Art
+   * des inneren Rahmens, für den Dienst), `heads` (Autoritätsköpfe des
+   * Schreibers), `by` (sein Geräteschlüssel).
+   */
+  | { t: 'sealed'; kind: string; c: string; iv: string; tab: string; ref: string; heads: string[]; by: string; keyOp?: string }
+  /** Willkommen an genau ein Gerät (`to` = sein Willkommensschlüssel): Gruppe und Aufnahme, an seinen Schlüssel verschlüsselt. */
+  | { t: 'welcome'; to: string; eph: string; iv: string; c: string }
   /**
    * Reparaturanfrage (Replication I12): adressiert an die Geräte `to`, mit
    * den fehlenden Vorgängern `missing`, dem Beleg `evidence` (die Einträge,
@@ -67,6 +121,13 @@ interface KeyState {
   keys: Map<string, Uint8Array>
   heads: Uint8Array[]
   pending: Wire[]
+  /** Schlüsselgeneration: zählt hoch, wenn ein Schlüssel dazukommt (BeeKEM-Operation, Tabelle). Ein ungeöffneter Rahmen wird nur erneut versucht, wenn sich seitdem etwas geändert hat; sonst wären die Versuche quadratisch. */
+  keyGen: number
+  /** Je Rahmen: Generation des letzten BeeKEM-Versuchs und Zahl der Versuche (höchstens MAX_DECRYPT_TRIES; danach öffnet ihn nur noch eine Tabelle). */
+  tried: Map<string, { gen: number; n: number }>
+  /** Digests der BeeKEM-Operationen, die im Baum sind (keyOpDigest). Ein Rahmen, dessen `keyOp` fehlt, wird gar nicht erst mit BeeKEM versucht; nur die Tabelle kann ihn öffnen. */
+  appliedOps: Set<string>
+  lastKeyOp?: string
 }
 
 interface Card {
@@ -75,6 +136,8 @@ interface Card {
   shareKey: Uint8Array
   /** Ed25519-Schlüssel des Geräts (hex): seine Identität gegenüber dem Dienst (Sichten, Besitznachweis). */
   deviceKey: string
+  /** X25519-Schlüssel des Geräts (hex) für das Willkommen. */
+  welcomeKey: string
 }
 
 interface DeviceState extends KeyState {
@@ -82,6 +145,8 @@ interface DeviceState extends KeyState {
   auth: AuthorityLog
   /** Geräteschlüssel; signiert Sichtvorschläge und die Challenge des Dienstes. */
   deviceSigner: Signer
+  /** Geheimer Willkommensschlüssel (X25519). */
+  welcomePriv: Uint8Array
   /** Gerätekarten nach BeeKEM-ID (hex), wie dieses Gerät sie empfangen hat. Mehrere je Person. */
   cards: Map<string, Card>
   /** Widerrufene Geräte (hex der ID), wie dieses Gerät sie empfangen hat. */
@@ -100,7 +165,9 @@ interface DeviceState extends KeyState {
   envelopes: Map<string, { heads: string[]; by: string }>
   /** Reparaturläufe nach fehlender ID (I12): abfragbar zwischen den Läufen, nie still. `attempts` zählt die Anfragen je Lauf. */
   repairs: Map<string, { evidence: Set<string>; to: Set<string>; outcome: 'awaiting-source' | 'repaired'; attempts: number }>
-  outgoing: Array<{ label: string; body: Uint8Array }>
+  outgoing: Array<{ label: string; body: Uint8Array; direct?: boolean }>
+  /** Rahmen, die noch versiegelt hinaus müssen: aus synchronen Pfaden (repair()) oder weil das Gerät gerade keinen Schlüssel hat (Schreiben wartet, ein Mitglied heilt). */
+  queued: Array<{ inner: Wire; label: string; heads: string[] }>
   joined: boolean
   notes: string[]
 }
@@ -114,7 +181,13 @@ const adminPolicy = (admins: Person[]): Policy => ({
   'policy.change': { type: 'strongest' },
 })
 
-export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } = {}): Candidate {
+/**
+ * `klartext`: Autoritätsoperationen, Widerrufe und Reparaturen gehen
+ * unversiegelt (Inhalte sind immer versiegelt). Nötig für den Dienst der
+ * Klasse Log, der das Autoritätslog liest (Access §9.3); sonst aus.
+ */
+export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; klartext?: boolean } = {}): Candidate {
+  const klartext = options.klartext ?? options.dienst === 'logreplik'
   const devices = new Map<Device, DeviceState>()
   // Ein Signierschlüssel je Person, über ihre Geräte geteilt (wie heute der Seed).
   const persons = new Map<Person, Signer>()
@@ -137,30 +210,139 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
     if (!s) throw new Error(`unbekanntes Gerät ${d}`)
     return s
   }
-  const send = (s: DeviceState, msg: Wire, label: string = msg.t) => {
-    if (msg.t === 'auth') s.authFrames.set(msg.op.id, { op: msg.op, cgka: msg.cgka, group: msg.group, label })
-    s.outgoing.push({ label, body: enc.encode(JSON.stringify(msg)) })
+  const send = (s: DeviceState, msg: Wire, label: string = msg.t, direct = false) => {
+    if (msg.t === 'cgka') noteOp(s, unb64(msg.op))
+    s.outgoing.push({ label, body: enc.encode(JSON.stringify(msg)), direct })
+  }
+  /** Eine BeeKEM-Operation ist im Baum (eigene oder empfangene): Digest merken, Generation erhöhen. */
+  const noteOp = (s: KeyState, op: Uint8Array) => {
+    const d = hex(sha256Sync(op))
+    s.appliedOps.add(d)
+    s.lastKeyOp = d
+    s.keyGen++
+  }
+
+  /**
+   * Ein Eintrag über den Träger: der innere Rahmen unter dem Eintragsschlüssel
+   * (BeeKEM encrypt, wie bisher nur der Inhalt), dazu die Vorgänger-Tabelle,
+   * damit spätere Leser die Schlüssel der Vorgänger bekommen (Historie ab
+   * Genesis, auch für Neulinge). Ohne gemeinsamen Schlüssel erst rotieren.
+   */
+  async function sendSealed(s: DeviceState, inner: Wire, label: string = inner.t, heads: string[] = s.auth.heads()): Promise<boolean> {
+    const built = await buildSealed(s, inner, label, heads)
+    if (built) s.outgoing.push(built)
+    return !!built
+  }
+
+  /**
+   * Den versiegelten Rahmen bauen, ohne ihn zu senden: für Entfernungen, die
+   * unter dem Schlüssel vor der Entfernung versiegelt werden (der Entfernte
+   * muss sie noch öffnen können, Access §10.2) und erst nach den
+   * BeeKEM-Anhängen hinausgehen.
+   */
+  async function buildSealed(s: DeviceState, inner: Wire, label: string, heads: string[]): Promise<{ label: string; body: Uint8Array } | undefined> {
+    try {
+      if (!s.peer.hasKey()) {
+        const op = (await s.peer.rotate()) as Uint8Array
+        send(s, { t: 'cgka', op: b64(op) }, 'seal-rotate')
+      }
+    } catch {
+      // Kein Schlüssel und keine Rotation möglich (das eigene Blatt fehlt im Baum, etwa nach einer
+      // gleichzeitigen Entfernung, die später verfällt): der Rahmen wartet, bis ein Mitglied das Blatt
+      // nachzieht (I4) und der nächste Rahmen den Schlüssel bringt.
+      s.queued.push({ inner, label, heads })
+      return undefined
+    }
+    const plain = enc.encode(JSON.stringify(inner))
+    // Referenz = Hash über Zufall und Klartext: eindeutig auch für gleichlautende Rahmen (eine erneut
+    // gesendete Operation, zwei gleiche Reparaturanfragen), sonst kollidierten ihre Eintragsschlüssel.
+    const ref = await sha256(new Uint8Array([...crypto.getRandomValues(new Uint8Array(16)), ...plain]))
+    let r: { ciphertext: Uint8Array; updateOp: Uint8Array | null; appKey: Uint8Array }
+    try {
+      r = (await s.peer.encrypt(ref, s.heads, plain)) as typeof r
+    } catch {
+      s.queued.push({ inner, label, heads })
+      return undefined
+    }
+    if (r.updateOp) send(s, { t: 'cgka', op: b64(r.updateOp) }, 'update')
+    const entries = s.heads.flatMap((h) => {
+      const k = s.keys.get(hex(h))
+      return k ? [h, k] : []
+    })
+    const table = new Uint8Array(entries.length * 32)
+    entries.forEach((x, i) => table.set(x, i * 32))
+    const { iv, ct } = await sealTable(r.appKey, table)
+    s.keys.set(hex(ref), r.appKey)
+    s.heads = [ref]
+    const frame: Wire = { t: 'sealed', kind: inner.t, c: b64(r.ciphertext), iv: b64(iv), tab: b64(ct), ref: hex(ref), heads, by: s.deviceSigner.pub, keyOp: s.lastKeyOp }
+    return { label, body: enc.encode(JSON.stringify(frame)) }
+  }
+
+  /**
+   * Autoritätsoperation hinaus: ihre BeeKEM-Anhänge gehen als eigene
+   * Rahmen voraus (sie sind selbst Chiffretext an die Blätter und müssen
+   * auch ohne Eintragsschlüssel in den Baum, etwa beim Neuling), die
+   * Operation versiegelt hinterher; im Klartextmodus wie früher in einem Rahmen.
+   */
+  async function sendAuth(s: DeviceState, op: AuthOp, cgka: string[], group?: string, label = 'auth', prebuilt?: { label: string; body: Uint8Array }) {
+    s.authFrames.set(op.id, { op, cgka, group, label })
+    if (klartext) {
+      send(s, { t: 'auth', op, group, cgka }, label)
+      return
+    }
+    for (const c of cgka) send(s, { t: 'cgka', op: c }, 'auth-cgka')
+    if (prebuilt) s.outgoing.push(prebuilt)
+    else await sendSealed(s, { t: 'auth', op, group, cgka: [] }, label, [...op.preds])
+  }
+
+  /** Eine Entfernung wird vor dem Eingriff in den Baum versiegelt (unter dem Schlüssel, den der Entfernte noch hat). */
+  const sealBeforeTree = (s: DeviceState, op: AuthOp) => (klartext ? Promise.resolve(undefined) : buildSealed(s, { t: 'auth', op, cgka: [] }, 'auth', [...op.preds]))
+
+  /** Willkommen an ein Gerät: die Gruppe (und die Aufnahme), an seinen Willkommensschlüssel verschlüsselt. */
+  async function sendWelcome(s: DeviceState, card: Card, op?: AuthOp) {
+    if (!groupId) return
+    const plain = enc.encode(JSON.stringify({ group: hex(groupId), op }))
+    const { eph, iv, ct } = await sealTo(unhex(card.welcomeKey), plain)
+    send(s, { t: 'welcome', to: card.welcomeKey, eph: hex(eph), iv: b64(iv), c: b64(ct) })
   }
 
   function ensureJoined(s: DeviceState) {
     if (!s.joined && groupId) {
       s.peer.join(groupId)
       s.joined = true
+      s.keyGen++
     }
   }
 
-  /** Inhalte öffnen: bekannter Schlüssel, Kette, oder BeeKEM; wiederholen bis Fixpunkt. */
-  async function drain(s: KeyState): Promise<Uint8Array[]> {
+  const MAX_DECRYPT_TRIES = 3
+  /** Versiegelte Einträge öffnen: bekannter Schlüssel, Kette, oder BeeKEM; wiederholen bis Fixpunkt. Inhalte als Bytes, andere innere Rahmen zur Verarbeitung. */
+  async function drain(s: KeyState): Promise<{ content: Uint8Array[]; inner: Wire[] }> {
     const out: Uint8Array[] = []
+    const inner: Wire[] = []
     let progress = true
     while (progress && s.pending.length) {
       progress = false
       const still: Wire[] = []
       for (const m of s.pending) {
-        if (m.t !== 'content') continue
-        const ct = unb64(m.c)
+        if (m.t !== 'sealed') continue
         let plain: Uint8Array | undefined
         let key = s.keys.get(m.ref)
+        // Ohne bekannten Schlüssel nur mit BeeKEM versuchen, wenn die Schlüsseloperation des Schreibers im
+        // Baum ist, sich seit dem letzten Versuch etwas geändert hat und die Versuche nicht erschöpft sind.
+        // Ein BeeKEM-Versuch kostet bei 30 Mitgliedern über 10 ms (Serialisierung und Hashing des Baums),
+        // und ein Rahmen aus einer Epoche ohne uns öffnet sich nie: danach nur noch über die Tabelle eines
+        // späteren Eintrags (die Kette reicht bis zur Genesis).
+        if (!key) {
+          const t = s.tried.get(m.ref)
+          // Kein Gate auf hasKey: ohne aktuellen Schlüssel öffnet BeeKEM noch Einträge früherer Epochen (eine
+          // Entfernung ist unter dem Schlüssel davor versiegelt und kommt nach ihrer Baumoperation an).
+          if ((m.keyOp && !s.appliedOps.has(m.keyOp)) || (t && (t.gen === s.keyGen || t.n >= MAX_DECRYPT_TRIES))) {
+            still.push(m)
+            continue
+          }
+          s.tried.set(m.ref, { gen: s.keyGen, n: (t?.n ?? 0) + 1 })
+        }
+        const ct = unb64(m.c)
         try {
           if (key) {
             plain = BeekemPeer.decryptWithKey(ct, key)
@@ -174,19 +356,50 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
           continue
         }
         s.keys.set(m.ref, key)
+        s.tried.delete(m.ref)
         try {
           const table = await openTable(key, unb64(m.iv), unb64(m.tab))
           for (let i = 0; i + 64 <= table.length; i += 64) {
             const ref = hex(table.subarray(i, i + 32))
-            if (!s.keys.has(ref)) s.keys.set(ref, table.slice(i + 32, i + 64))
+            if (!s.keys.has(ref)) {
+              s.keys.set(ref, table.slice(i + 32, i + 64))
+              s.keyGen++
+            }
           }
         } catch {}
         s.heads.push(unhex(m.ref))
-        out.push(plain)
         progress = true
+        let w: Wire
+        try {
+          w = JSON.parse(dec.decode(plain)) as Wire
+        } catch {
+          continue
+        }
+        if (w.t === 'content') out.push(unb64(w.u))
+        else inner.push(w)
       }
       s.pending = still
     }
+    return { content: out, inner }
+  }
+
+  /**
+   * Versiegelte Rahmen öffnen und die inneren verarbeiten, bis nichts mehr
+   * aufgeht; danach erst die Lückenprüfung (sonst fragte eine Replik nach
+   * Operationen, die noch ungeöffnet bei ihr liegen). `fromKeys`: Geräte,
+   * von denen Rahmen kamen (offene Anfragen an sie wiederholen).
+   */
+  async function drainAll(s: DeviceState, fromKeys: string[] = []): Promise<Uint8Array[]> {
+    const out: Uint8Array[] = []
+    const from = new Set(fromKeys)
+    for (;;) {
+      const { content, inner } = await drain(s)
+      out.push(...content)
+      if (!inner.length) break
+      for (const w of inner) for (const k of await handleInner(s, w)) from.add(k)
+    }
+    repair(s, [...from])
+    await flushQueued(s)
     return out
   }
 
@@ -210,6 +423,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
     for (const c of cgka) {
       try {
         s.peer.receive(unb64(c))
+        noteOp(s, unb64(c))
       } catch {
         s.pendingCgka.push(c)
       }
@@ -224,7 +438,19 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
    * Reparaturen führt BeeKEM zusammen (KV6).
    */
   async function reconcile(s: DeviceState) {
-    // Wartende BeeKEM-Operationen nachziehen, bis nichts mehr durchgeht.
+    retryPendingCgka(s)
+    // Der Baum folgt dem Log. Liegen noch ungeöffnete Autoritätsoperationen bei
+    // uns (ihre BeeKEM-Anhänge gehen voraus), ist das Log bekannt unvollständig:
+    // dann nicht angleichen, sonst nähme die Heilung ein eben aufgenommenes
+    // Blatt wieder heraus, und die Repliken hielten sich gegenseitig in Bewegung.
+    if (s.pending.some((m) => m.t === 'sealed' && m.kind === 'auth')) return
+    await heal(s)
+    await ensureMemberLeaves(s)
+    await ensureOwnLeaves(s)
+  }
+
+  /** Wartende BeeKEM-Operationen nachziehen, bis nichts mehr durchgeht. */
+  function retryPendingCgka(s: DeviceState) {
     let progress = true
     while (progress && s.pendingCgka.length) {
       progress = false
@@ -232,6 +458,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
       for (const c of s.pendingCgka) {
         try {
           s.peer.receive(unb64(c))
+          noteOp(s, unb64(c))
           progress = true
         } catch {
           rest.push(c)
@@ -239,10 +466,16 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
       }
       s.pendingCgka = rest
     }
-    await heal(s)
-    await ensureMemberLeaves(s)
-    await ensureOwnLeaves(s)
-    repair(s)
+  }
+
+  /** Wartende Rahmen hinaus, soweit jetzt ein Schlüssel da ist; ein Durchgang, Rest bleibt stehen. */
+  async function flushQueued(s: DeviceState) {
+    const batch = s.queued.splice(0)
+    for (const q of batch) {
+      // Eine Anfrage, deren Lücke sich inzwischen geschlossen hat, geht nicht mehr hinaus.
+      if (q.inner.t === 'repair' && q.inner.missing.every((id) => s.auth.has(id))) continue
+      await sendSealed(s, q.inner, q.label, q.heads)
+    }
   }
 
   /**
@@ -267,6 +500,11 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
   const MAX_ATTEMPTS = 3
   function repair(s: DeviceState, fromKeys: string[] = []) {
     for (const [id, r] of s.repairs) if (r.outcome === 'awaiting-source' && s.auth.has(id)) r.outcome = 'repaired'
+    // Vor dem Willkommen kann ein Gerät nichts öffnen und nichts belegen: keine Anfragen (sie kämen ohnehin nicht versiegelt hinaus).
+    if (!s.joined) return
+    // Liegen noch ungeöffnete Autoritätsoperationen bei uns (ihr Schlüssel ist unterwegs), ist jeder
+    // Beleg vorläufig: erst öffnen, dann fragen. Was dann noch fehlt, ist eine Lücke.
+    if (s.pending.some((m) => m.t === 'sealed' && m.kind === 'auth')) return
     for (const [ref, e] of s.envelopes) if (e.heads.every((h) => s.auth.has(h))) s.envelopes.delete(ref)
     const found = new Map<string, { evidence: string; to: string[] }>()
     const note = (missing: string, evidence: string, to: string[]) => {
@@ -299,7 +537,11 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
       if (r.outcome !== 'awaiting-source' || ask.has(missing)) continue
       if (fromKeys.some((k) => r.to.has(k))) issue(missing, r)
     }
-    if (ask.size && to.size) send(s, { t: 'repair', from: s.deviceSigner.pub, to: [...to], missing: [...ask], evidence: [...evidence], have: s.auth.heads() })
+    if (ask.size && to.size) {
+      const req: Wire = { t: 'repair', from: s.deviceSigner.pub, to: [...to], missing: [...ask], evidence: [...evidence], have: s.auth.heads() }
+      if (klartext) send(s, req)
+      else s.queued.push({ inner: req, label: 'repair', heads: s.auth.heads() })
+    }
   }
 
   const strings = (x: unknown): x is string[] => Array.isArray(x) && x.every((y) => typeof y === 'string')
@@ -309,7 +551,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
    * Gerät mit dem Abschluss der fehlenden Operationen ohne den Abschluss der
    * Köpfe des Fragenden, in kausaler Reihenfolge, als die ursprünglichen Rahmen.
    */
-  function answerRepair(s: DeviceState, m: Extract<Wire, { t: 'repair' }>) {
+  async function answerRepair(s: DeviceState, m: Extract<Wire, { t: 'repair' }>) {
     if (!m.to.includes(s.deviceSigner.pub)) return
     if (!m.evidence.length) return
     const closure = (roots: string[]) => {
@@ -334,7 +576,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
       if (have.has(id)) continue
       const f = s.authFrames.get(id)
       if (!f) continue
-      s.outgoing.push({ label: f.label, body: enc.encode(JSON.stringify({ t: 'auth', op: f.op, group: f.group, cgka: f.cgka } satisfies Wire)) })
+      await sendAuth(s, f.op, f.cgka, f.group, f.label)
       sent++
     }
     if (sent) s.notes.push(`reparatur beantwortet: ${sent} Rahmen`)
@@ -373,6 +615,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
         try {
           const op = (await s.peer.add(c.id, c.shareKey)) as Uint8Array | null
           if (op) send(s, { t: 'cgka', op: b64(op) }, 'heal-add')
+          await sendWelcome(s, c)
         } catch (e) {
           s.notes.push(`Blatt nachziehen: ${(e as Error).message}`)
         }
@@ -413,6 +656,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
       try {
         const op = (await s.peer.add(c.id, c.shareKey)) as Uint8Array | null
         if (op) send(s, { t: 'cgka', op: b64(op) }, 'device-add')
+        await sendWelcome(s, c)
       } catch (e) {
         s.notes.push(`eigenes Gerät: ${(e as Error).message}`)
       }
@@ -472,7 +716,8 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
   async function handle(s: DeviceState, m: Wire): Promise<{ content: Uint8Array[] }> {
     switch (m.t) {
       case 'card':
-        s.cards.set(m.id, { person: m.person, id: unhex(m.id), shareKey: unhex(m.shareKey), deviceKey: m.deviceKey })
+        if (typeof m.welcomeKey !== 'string') throw new Error('Karte ohne Willkommensschlüssel')
+        s.cards.set(m.id, { person: m.person, id: unhex(m.id), shareKey: unhex(m.shareKey), deviceKey: m.deviceKey, welcomeKey: m.welcomeKey })
         await reconcile(s)
         return { content: [] }
       case 'challenge':
@@ -484,10 +729,6 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
         return { content: [] }
       case 'challenge-answer':
         return { content: [] } // Antworten anderer gehen an den Dienst
-      case 'revoke':
-        s.revoked.add(m.id)
-        await reconcile(s)
-        return { content: [] }
       case 'view':
         return { content: [] } // Vorschläge anderer gehen an den Dienst
       case 'ack':
@@ -495,35 +736,68 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
         s.proposed = null
         return { content: [] }
       case 'auth':
-        if (m.group && !groupId) groupId = unhex(m.group)
-        ensureJoined(s)
-        if (wellFormed(m.op) && !s.authFrames.has(m.op.id)) s.authFrames.set(m.op.id, { op: m.op, cgka: m.cgka, group: m.group, label: m.op.kind === 'policy' ? 'policy' : 'auth' })
-        await processAuth(s, m.op, m.cgka)
-        // Ein Rahmen eines adressierten Geräts: offene Anfragen an es wiederholen.
-        if (wellFormed(m.op)) repair(s, m.op.sigs.flatMap((sig) => cardsOf(s, sig.signer).map((c) => c.deviceKey)))
-        return { content: await drain(s) }
       case 'repair':
-        if (!strings(m.to) || !strings(m.missing) || !strings(m.evidence) || !strings(m.have)) throw new Error('Reparaturanfrage missgebildet')
-        answerRepair(s, m)
-        return { content: [] }
+      case 'revoke':
+        // Klartextmodus (Dienst der Klasse Log) oder ein Rahmen, der versiegelt hätte kommen müssen: Form prüfen, dann wie ein geöffneter.
+        return { content: await drainAll(s, await handleInner(s, m)) }
       case 'cgka':
         ensureJoined(s)
         try {
           s.peer.receive(unb64(m.op))
+          noteOp(s, unb64(m.op))
         } catch {
           // Vorgänger fehlen (Umordnung am Träger) oder schon bekannt: aufheben, reconcile() versucht es wieder.
           s.pendingCgka.push(m.op)
         }
+        // Eine Schlüsseloperation ändert das Log nicht: nur Wartendes nachziehen; angeglichen wird nach Autoritätsoperationen und vor dem Schreiben.
+        retryPendingCgka(s)
+        return { content: await drainAll(s) }
+      case 'welcome': {
+        if (m.to !== hex(x25519.getPublicKey(s.welcomePriv))) return { content: [] } // an ein anderes Gerät
+        if (typeof m.eph !== 'string' || typeof m.iv !== 'string' || typeof m.c !== 'string') throw new Error('Willkommen missgebildet')
+        const w = JSON.parse(dec.decode(await openFrom(s.welcomePriv, unhex(m.eph), unb64(m.iv), unb64(m.c)))) as { group?: string; op?: AuthOp }
+        if (typeof w.group !== 'string') throw new Error('Willkommen ohne Gruppe')
+        if (!groupId) groupId = unhex(w.group)
+        ensureJoined(s)
         await reconcile(s)
-        return { content: await drain(s) }
-      case 'content': {
-        if (!strings(m.heads) || typeof m.by !== 'string' || typeof m.ref !== 'string') throw new Error('Inhalt ohne Umschlag')
-        if (!m.heads.every((h) => s.auth.has(h))) s.envelopes.set(m.ref, { heads: m.heads, by: m.by })
-        s.pending.push(m)
-        const out = await drain(s)
-        repair(s, [m.by])
+        // Erst öffnen, was schon da liegt (die Aufnahme kam meist versiegelt voraus), dann die Aufnahme aus dem Willkommen.
+        const out = await drainAll(s)
+        if (w.op) out.push(...(await drainAll(s, await handleInner(s, { t: 'auth', op: w.op, cgka: [] }))))
         return { content: out }
       }
+      case 'sealed': {
+        if (typeof m.kind !== 'string' || !strings(m.heads) || typeof m.by !== 'string' || typeof m.ref !== 'string' || typeof m.c !== 'string' || (m.keyOp !== undefined && typeof m.keyOp !== 'string')) throw new Error('Eintrag ohne Umschlag')
+        if (!m.heads.every((h) => s.auth.has(h))) s.envelopes.set(m.ref, { heads: m.heads, by: m.by })
+        s.pending.push(m)
+        return { content: await drainAll(s, [m.by]) }
+      }
+      case 'content':
+        throw new Error('Inhalt außerhalb eines Eintrags')
+    }
+  }
+
+  /** Ein innerer Rahmen (geöffnet, aus dem Willkommen, oder im Klartextmodus). Gibt die Geräteschlüssel des Absenders zurück, soweit bekannt. */
+  async function handleInner(s: DeviceState, m: Wire): Promise<string[]> {
+    switch (m.t) {
+      case 'auth':
+        if (!wellFormed(m.op)) throw new Error('Autoritätsoperation missgebildet')
+        if (!Array.isArray(m.cgka) || !m.cgka.every((c) => typeof c === 'string')) throw new Error('Anhänge missgebildet')
+        if (m.group && !groupId) groupId = unhex(m.group)
+        ensureJoined(s)
+        if (!s.authFrames.has(m.op.id)) s.authFrames.set(m.op.id, { op: m.op, cgka: m.cgka, group: m.group, label: m.op.kind === 'policy' ? 'policy' : 'auth' })
+        await processAuth(s, m.op, m.cgka)
+        return m.op.sigs.flatMap((sig) => cardsOf(s, sig.signer).map((c) => c.deviceKey))
+      case 'repair':
+        if (!strings(m.to) || !strings(m.missing) || !strings(m.evidence) || !strings(m.have)) throw new Error('Reparaturanfrage missgebildet')
+        await answerRepair(s, m)
+        return [m.from]
+      case 'revoke':
+        if (typeof m.id !== 'string') throw new Error('Widerruf missgebildet')
+        s.revoked.add(m.id)
+        await reconcile(s)
+        return []
+      default:
+        throw new Error(`innerer Rahmen ${m.t} unerwartet`)
     }
   }
 
@@ -537,10 +811,13 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
       signerOf(person)
       const peer = new BeekemPeer()
       const deviceSigner = Signer.generate(device)
-      const card: Card = { person, id: new Uint8Array(peer.id), shareKey: new Uint8Array(peer.shareKey), deviceKey: deviceSigner.pub }
-      const s: DeviceState = { person, peer, auth: new AuthorityLog(), deviceSigner, cards: new Map([[hex(card.id), card]]), revoked: new Set(), ack: { seq: 0, hash: null, identities: [] }, proposed: null, waitingAuth: [], appliedCgka: new Set(), pendingCgka: [], authFrames: new Map(), envelopes: new Map(), repairs: new Map(), keys: new Map(), heads: [], pending: [], outgoing: [], joined: false, notes: [] }
+      const welcomePriv = x25519.utils.randomSecretKey()
+      const card: Card = { person, id: new Uint8Array(peer.id), shareKey: new Uint8Array(peer.shareKey), deviceKey: deviceSigner.pub, welcomeKey: hex(x25519.getPublicKey(welcomePriv)) }
+      const s: DeviceState = { person, peer, auth: new AuthorityLog(), deviceSigner, welcomePriv, cards: new Map([[hex(card.id), card]]), revoked: new Set(), ack: { seq: 0, hash: null, identities: [] }, proposed: null, waitingAuth: [], appliedCgka: new Set(), pendingCgka: [], authFrames: new Map(), envelopes: new Map(), repairs: new Map(), keys: new Map(), heads: [], pending: [], keyGen: 0, tried: new Map(), appliedOps: new Set(), outgoing: [], queued: [], joined: false, notes: [] }
       devices.set(device, s)
-      send(s, { t: 'card', person, id: hex(card.id), shareKey: hex(card.shareKey), deviceKey: card.deviceKey })
+      // Die Karte geht über den Begegnungskanal, nicht über den Träger der Gruppe; mit Prüfstand-Dienst über
+      // den Dienst, weil der die Gerätebindung aus der Karte lernt (in der Spec aus der Sicht).
+      send(s, { t: 'card', person, id: hex(card.id), shareKey: hex(card.shareKey), deviceKey: card.deviceKey, welcomeKey: card.welcomeKey }, 'card', !service)
     },
 
     async createGroup(d) {
@@ -553,7 +830,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
       const op = s.auth.make({ kind: 'create', subject: s.person, key: signerOf(s.person).pub, policy: adminPolicy([s.person]), group: group.pub }, [signerOf(s.person), group])
       s.auth.add(op)
       s.appliedCgka.add(op.id)
-      send(s, { t: 'auth', op, group: hex(groupId), cgka: ops.map(b64) })
+      await sendAuth(s, op, ops.map(b64), hex(groupId))
       proposeView(s)
     },
 
@@ -572,7 +849,9 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
         }
       }
       s.appliedCgka.add(op.id)
-      send(s, { t: 'auth', op, cgka })
+      await sendAuth(s, op, cgka)
+      // Willkommen an jedes bekannte Gerät der Person: Gruppe und Aufnahme, nur für dieses Gerät lesbar.
+      if (s.auth.isValid(op.id)) for (const card of known) await sendWelcome(s, card, op)
       // „Admin“ ist kein Rollen-Flag, sondern ein Eintrag in den actors der
       // Politik. Die Beförderung gilt nur, solange diese Aufnahme gilt (#18):
       // sonst bliebe eine verwaiste Beförderung liegen und würde bei einer
@@ -583,7 +862,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
         if (JSON.stringify(next) !== JSON.stringify(current)) {
           const change = s.auth.make({ kind: 'policy', policy: next, dependsOn: [op.id] }, [signerOf(s.person)])
           s.auth.add(change)
-          send(s, { t: 'auth', op: change, cgka: [] }, 'policy')
+          await sendAuth(s, change, [], undefined, 'policy')
         }
       }
       proposeView(s)
@@ -595,6 +874,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
       // Nach Widerruf des letzten Geräts hat p keine Karte mehr, ist aber Mitglied (Issue #13).
       const op = s.auth.make({ kind: 'remove', subject: p }, [signerOf(s.person)])
       s.auth.add(op)
+      const prebuilt = await sealBeforeTree(s, op)
       const cgka: string[] = []
       if (s.auth.isValid(op.id)) {
         // Die Person geht, also jedes ihrer Blätter.
@@ -610,7 +890,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
         }
       }
       s.appliedCgka.add(op.id)
-      send(s, { t: 'auth', op, cgka })
+      await sendAuth(s, op, cgka, undefined, 'auth', prebuilt)
       proposeView(s)
     },
 
@@ -621,7 +901,8 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
       const admin = s.auth.may(s.person, 'member.remove')
       if (target.person !== s.person && !admin) throw new Error(`${by} darf ${device} nicht entfernen`)
       s.revoked.add(hex(id))
-      send(s, { t: 'revoke', id: hex(id) })
+      if (klartext) send(s, { t: 'revoke', id: hex(id) })
+      else await sendSealed(s, { t: 'revoke', id: hex(id) })
       try {
         const c = (await s.peer.remove(id)) as Uint8Array | null
         if (c) send(s, { t: 'cgka', op: b64(c) }, 'device-remove')
@@ -653,7 +934,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
       }
       const op = s.auth.make({ kind: 'policy', policy: next }, [signerOf(s.person)])
       s.auth.add(op)
-      send(s, { t: 'auth', op, cgka: [] }, 'policy')
+      await sendAuth(s, op, [], undefined, 'policy')
       proposeView(s)
     },
 
@@ -662,25 +943,13 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
       // Erst der Baum zum Zustand, dann verschlüsseln (I4).
       await reconcile(s)
       try {
-        const ref = await sha256(update)
-        const r = (await s.peer.encrypt(ref, s.heads, update)) as { ciphertext: Uint8Array; updateOp: Uint8Array | null; appKey: Uint8Array }
-        if (r.updateOp) send(s, { t: 'cgka', op: b64(r.updateOp) }, 'update')
-        const entries = s.heads.flatMap((h) => {
-          const k = s.keys.get(hex(h))
-          return k ? [h, k] : []
-        })
-        const table = new Uint8Array(entries.length * 32)
-        entries.forEach((x, i) => table.set(x, i * 32))
-        const { iv, ct } = await sealTable(r.appKey, table)
-        s.keys.set(hex(ref), r.appKey)
-        s.heads = [ref]
-        send(s, { t: 'content', c: b64(r.ciphertext), iv: b64(iv), tab: b64(ct), ref: hex(ref), heads: s.auth.heads(), by: s.deviceSigner.pub })
+        await sendSealed(s, { t: 'content', u: b64(update) }, 'content')
       } catch (e) {
         notes.push(`${d} schreibt: ${(e as Error).message}`)
       }
     },
     takeOutgoing: (d) => dev(d).outgoing.splice(0),
-    rerunRepair(d) {
+    async rerunRepair(d) {
       const s = dev(d)
       const to = new Set<string>()
       for (const r of s.repairs.values()) {
@@ -690,6 +959,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
       }
       // Neuer Lauf: eine frische Anfrage an alle Quellen der offenen Läufe.
       repair(s, [...to])
+      return flushQueued(s)
     },
 
     async receive(d, msg: Msg) {
@@ -716,27 +986,28 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
     members: (d) => personMembers(dev(d)),
     status: (d) => {
       const s = dev(d)
-      return [`baum=${(s.peer.members() as Uint8Array[]).length}`, `schlüssel=${s.peer.hasKey() ? 'ja' : 'nein'}`, `fork=${s.auth.forked() ? 'ja' : 'nein'}`, `regeln=v${s.auth.policyVersion()}`, ...(s.pendingCgka.length ? [`wartende-cgka=${s.pendingCgka.length}`] : []), ...(s.waitingAuth.length ? [`wartende-auth=${s.waitingAuth.length}`] : []), ...(s.repairs.size ? [`lücke=${[...s.repairs.values()].filter((r) => r.outcome === 'awaiting-source').length} (${[...s.repairs.values()].some((r) => r.outcome === 'awaiting-source') ? 'awaiting-source' : `repariert ${[...s.repairs.values()].filter((r) => r.outcome === 'repaired').length}`})`, `anfragen=${[...s.repairs.values()].reduce((n, r) => n + r.attempts, 0)}`] : []), ...s.notes.slice(0, 3), ...notes.slice(0, 2)].join('; ')
+      return [`baum=${(s.peer.members() as Uint8Array[]).length}`, `schlüssel=${s.peer.hasKey() ? 'ja' : 'nein'}`, `fork=${s.auth.forked() ? 'ja' : 'nein'}`, `regeln=v${s.auth.policyVersion()}`, ...(s.pendingCgka.length ? [`wartende-cgka=${s.pendingCgka.length}`] : []), ...(s.waitingAuth.length ? [`wartende-auth=${s.waitingAuth.length}`] : []), ...(s.pending.length ? [`ungeöffnet=${s.pending.length}`] : []), ...(s.repairs.size ? [`lücke=${[...s.repairs.values()].filter((r) => r.outcome === 'awaiting-source').length} (${[...s.repairs.values()].some((r) => r.outcome === 'awaiting-source') ? 'awaiting-source' : `repariert ${[...s.repairs.values()].filter((r) => r.outcome === 'repaired').length}`})`, `anfragen=${[...s.repairs.values()].reduce((n, r) => n + r.attempts, 0)}`] : []), ...s.notes.slice(0, 3), ...notes.slice(0, 2)].join('; ')
     },
 
     async steal(d) {
       const s = dev(d)
-      return { state: new Uint8Array(s.peer.exportState()), keys: new Map([...s.keys].map(([k, v]) => [k, v.slice()] as const)) }
+      return { state: new Uint8Array(s.peer.exportState()), keys: new Map([...s.keys].map(([k, v]) => [k, v.slice()] as const)), appliedOps: new Set(s.appliedOps) }
     },
     async attackerOpen(stolen, msg: Msg) {
       // Passiver Angreifer mit Bobs Zustand: nimmt alle BeeKEM-Operationen auf,
       // öffnet Inhalte wie ein ehrliches Gerät.
-      const st = stolen as { state: Uint8Array; keys: Map<string, Uint8Array>; ks?: KeyState }
-      st.ks ??= { peer: BeekemPeer.fromState(st.state), keys: st.keys, heads: [], pending: [] }
+      const st = stolen as { state: Uint8Array; keys: Map<string, Uint8Array>; appliedOps: Set<string>; ks?: KeyState }
+      st.ks ??= { peer: BeekemPeer.fromState(st.state), keys: st.keys, heads: [], pending: [], keyGen: 0, tried: new Map(), appliedOps: st.appliedOps }
       const m = JSON.parse(dec.decode(msg.body)) as Wire
       const ops = m.t === 'cgka' ? [m.op] : m.t === 'auth' ? m.cgka : []
       for (const op of ops) {
         try {
           st.ks.peer.receive(unb64(op))
+          noteOp(st.ks, unb64(op))
         } catch {}
       }
-      if (m.t === 'content') st.ks.pending.push(m)
-      return drain(st.ks)
+      if (m.t === 'sealed') st.ks.pending.push(m)
+      return (await drain(st.ks)).content
     },
   }
 }

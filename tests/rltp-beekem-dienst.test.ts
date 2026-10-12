@@ -19,7 +19,7 @@ const gemeinsam = {
   S5: 'bestanden',
   S5b: 'bestanden',
   S5c: 'bestanden',
-  S6: 'nicht bestanden',
+  S6: 'bestanden', // E10: Historie über die Tabellen der versiegelten Autoritätsrahmen
   S6b: 'bestanden',
   S7: 'bestanden',
   S8: 'bestanden',
@@ -54,6 +54,7 @@ describe('E8: Dienst am Relay', () => {
     const byId = Object.fromEntries(results.map((r) => [r.scenario, r.outcome]))
     expect(byId, JSON.stringify(results, null, 1)).toEqual({
       ...gemeinsam,
+      S6: 'nicht bestanden', // Klartextmodus (der Dienst liest das Log): keine Tabellen an den Autoritätsrahmen, Historie erst über die Kette
       S10c: 'bestanden',
     })
   }, 120_000)

@@ -25,7 +25,7 @@ describe('Kandidat RLTP-Autorität über BeeKEM', () => {
       S5: 'bestanden', // E7: ein Blatt je Gerät, Person bleibt Subjekt im Log
       S5b: 'bestanden', // E7: eigenes Gerät entfernen = neues Geheimnis ohne dessen Blatt (KV1), Person bleibt
       S5c: 'bestanden', // E7: Entfernen der Person entfernt alle ihre Blätter
-      S6: 'nicht bestanden', // Historie erst über die Kette des nächsten Eintrags (wie Keyhive b)
+      S6: 'bestanden', // E10: die Vorgänger-Tabellen der versiegelten Autoritätsrahmen geben dem Neuling die Historie schon mit der Aufnahme // Historie erst über die Kette des nächsten Eintrags (wie Keyhive b)
       S6b: 'bestanden',
       S7: 'bestanden', // PCS: passiver Dieb liest nach der Rotation nichts mehr (KV5)
       S8: 'bestanden', // Gründerin ohne Sonderrolle
@@ -87,16 +87,23 @@ describe('E9 Schritt 1b: der Baum folgt dem Zustand', () => {
     await w.heal()
     await w.flush()
     const all = ['alice', 'bob', 'carol', 'dave', 'x']
-    for (const d of all) expect(w.members(d), d).toEqual(all)
-    for (const d of all) expect(c.status(d), d).toContain('fork=ja')
+    for (const d of ['alice', 'carol', 'dave']) expect(w.members(d), d).toEqual(all)
+    for (const d of ['alice', 'carol', 'dave']) expect(c.status(d), d).toContain('fork=ja')
+    // x hat sein Blatt aus Bobs Zweig und bis zur nächsten Rotation keinen Schlüssel; seit den versiegelten
+    // Rahmen (E10) liest x bis dahin auch das Log nicht weiter. Daves Eintrag rotiert, und mit ihm kommen
+    // (über die Vorgänger-Tabelle) die Schlüssel der versiegelten Autoritätsrahmen.
     await w.write('dave', 'nachher')
     await w.flush()
     for (const d of ['alice', 'carol', 'dave', 'x']) expect(w.read(d), d).toContain('nachher')
+    for (const d of ['alice', 'carol', 'dave', 'x']) expect(w.members(d), d).toEqual(all)
+    for (const d of ['alice', 'carol', 'dave', 'x']) expect(c.status(d), d).toContain('fork=ja')
     // Bob ist wieder Mitglied, aber sein Blatt wurde durch die (später
     // verfallene) Entfernung aus dem Baum genommen; die Wiederaufnahme unter
     // demselben Share-Key gibt ihm keinen Schlüssel zurück. Er braucht eine
-    // frische Karte (Befund 8 in NOTES.md). Festgehalten, nicht gelöst.
+    // frische Karte (Befund 8 in NOTES.md). Festgehalten, nicht gelöst. Seit
+    // E10 heißt das auch: ohne Schlüssel liest Bob das Log nicht weiter.
     expect(w.read('bob')).toEqual([])
+    expect(c.status('bob')).toContain('ungeöffnet=')
   })
 })
 
@@ -206,7 +213,7 @@ describe('E10: Lückenreparatur', () => {
     await w.flush()
     expect(c.status('bob')).toContain('lücke=1 (awaiting-source)')
     expect(c.status('carol')).toContain('lücke=1 (awaiting-source)')
-    expect(w.read('bob')).toEqual([])
+    // Lesen kann Bob schon: die Schlüssel kamen mit den BeeKEM-Operationen, nur die Autorität fehlt (I4: Baum folgt dem Zustand, nachträglich).
     // Nur die adressierte Quelle antwortet: Bob und Carol halten die Aufnahme nicht.
     k.reset()
     await w.flush()
@@ -268,7 +275,7 @@ describe('E10: Lückenreparatur', () => {
     expect(c.status('bob')).toContain('lücke=1 (awaiting-source)')
     expect(c.status('bob')).toContain('regeln=v1')
     // Reparatur ist re-runnable (I12, #30): der Adapter startet den Lauf neu, etwa nach Netzheilung.
-    c.rerunRepair!('bob')
+    await c.rerunRepair!('bob')
     await w.flush()
     expect(c.status('bob')).toContain('regeln=v2')
     expect(c.status('bob')).toContain('lücke=0 (repariert 1)')

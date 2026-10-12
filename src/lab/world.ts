@@ -81,6 +81,24 @@ export class World {
   }
 
   private pendingSeal: Array<{ device: Device; update: Uint8Array }> = []
+  /** Begegnungskanal: Rahmen, die nicht über den Träger gehen (Karten). Zugestellt, sobald Absender und Empfänger dieselbe Partition teilen. */
+  private readonly direct: Array<{ msg: Msg; delivered: Set<Device> }> = []
+
+  private async deliverDirect(): Promise<boolean> {
+    let moved = false
+    for (const e of this.direct) {
+      for (const d of this.docs.keys()) {
+        if (d === e.msg.from || e.delivered.has(d)) continue
+        if (this.partitionOf.get(d) !== this.partitionOf.get(e.msg.from)) continue
+        e.delivered.add(d)
+        moved = true
+        const { content } = await this.candidate.receive(d, e.msg)
+        const doc = this.doc(d)
+        for (const u of content) Y.applyUpdate(doc, u, 'remote')
+      }
+    }
+    return moved
+  }
 
   async createGroup(device: Device) {
     await this.candidate.createGroup(device)
@@ -194,11 +212,17 @@ export class World {
       for (const d of this.docs.keys()) {
         for (const out of this.candidate.takeOutgoing(d)) {
           const msg = { id: this.nextId++, from: d, label: out.label, body: out.body, partition: this.partitionOf.get(d)! }
+          if (out.direct) {
+            this.direct.push({ msg, delivered: new Set() })
+            moved = true
+            continue
+          }
           this.log.push(msg)
           if (this.candidate.service && this.relaySide(msg.partition)) this.judge(msg)
           moved = true
         }
       }
+      if (await this.deliverDirect()) moved = true
       const order = this.reverseOrder ? [...this.log].reverse() : this.log
       for (const msg of order) {
         for (const d of this.docs.keys()) {
