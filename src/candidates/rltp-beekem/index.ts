@@ -316,8 +316,14 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
   }
 
   const MAX_DECRYPT_TRIES = 3
-  /** Ungeöffnete Autoritätsrahmen, deren Schlüssel noch kommen kann: Schlüsseloperation nicht im Baum oder Versuche nicht erschöpft. */
-  const authInTransit = (s: DeviceState) => s.pending.some((m) => m.t === 'sealed' && m.kind === 'auth' && (s.tried.get(m.ref)?.n ?? 0) < MAX_DECRYPT_TRIES)
+  /**
+   * Ungeöffnete Autoritätsrahmen, die das Log gerade hinter dem Baum zurücklassen: ihre Schlüsseloperation ist
+   * schon im Baum (die Anhänge gehen voraus), der Rahmen aber noch nicht geöffnet, und die Versuche sind nicht
+   * erschöpft. Nur die halten Angleichung und Lückenprüfung an. Ein Rahmen, dessen `keyOp` unbekannt ist, hat
+   * den Baum nicht bewegt und hält nichts auf (sonst sperrte ein beschädigter Umschlag alles dauerhaft, Review
+   * zu #31, Runde 2); kommt seine Operation später doch, zählt er ab dann.
+   */
+  const authInTransit = (s: DeviceState) => s.pending.some((m) => m.t === 'sealed' && m.kind === 'auth' && (!m.keyOp || s.appliedOps.has(m.keyOp)) && (s.tried.get(m.ref)?.n ?? 0) < MAX_DECRYPT_TRIES)
   /** Versiegelte Einträge öffnen: bekannter Schlüssel, Kette, oder BeeKEM; wiederholen bis Fixpunkt. Inhalte als Bytes, andere innere Rahmen zur Verarbeitung. */
   async function drain(s: KeyState): Promise<{ content: Uint8Array[]; inner: Wire[] }> {
     const out: Uint8Array[] = []
