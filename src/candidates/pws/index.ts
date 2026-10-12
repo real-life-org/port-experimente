@@ -326,6 +326,7 @@ export async function rltpBeekemPws(options: PwsOptions = {}): Promise<Candidate
     async dispose() {
       await active.fastify.close()
     },
+    rerunRepair: (d) => inner.rerunRepair?.(d),
 
     async addDevice(p, d) {
       await inner.addDevice(p, d)
