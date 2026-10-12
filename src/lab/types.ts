@@ -105,6 +105,8 @@ export interface Candidate {
   readonly service?: EnforcingService
   /** Räumt Timer und Verbindungen auf. */
   dispose?(): Promise<void>
+  /** Startet erschöpfte Reparaturläufe des Geräts neu (Replication I12: Reparatur ist re-runnable); ruft der Adapter, etwa nach Netzheilung. */
+  rerunRepair?(device: Device): void
 
   /** Legt ein Gerät an. Gehört die Person schon zur Gruppe, soll das Gerät nach Sync mitlesen (S5). */
   addDevice(person: Person, device: Device): Promise<void>

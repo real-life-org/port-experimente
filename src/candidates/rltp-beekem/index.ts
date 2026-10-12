@@ -260,7 +260,9 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
    * eines adressierten Geräts eintrifft (`fromKeys`: die Quelle ist
    * erreichbar, hat aber nicht geantwortet), höchstens `MAX_ATTEMPTS` je
    * Lauf. So gibt es keine Schleife: Anfragen gehen nur auf Verkehr hin
-   * hinaus. Ein Zeithorizont ist im Prüfstand nicht modelliert (keine Uhr).
+   * hinaus. Ein erschöpfter Lauf bleibt sichtbar offen, bis der Adapter ihn
+   * neu startet (`rerunRepair`, etwa nach Netzheilung; #30). Ein Zeithorizont
+   * ist im Prüfstand nicht modelliert (keine Uhr).
    */
   const MAX_ATTEMPTS = 3
   function repair(s: DeviceState, fromKeys: string[] = []) {
@@ -678,6 +680,17 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
       }
     },
     takeOutgoing: (d) => dev(d).outgoing.splice(0),
+    rerunRepair(d) {
+      const s = dev(d)
+      const to = new Set<string>()
+      for (const r of s.repairs.values()) {
+        if (r.outcome !== 'awaiting-source') continue
+        r.attempts = 0
+        for (const k of r.to) to.add(k)
+      }
+      // Neuer Lauf: eine frische Anfrage an alle Quellen der offenen Läufe.
+      repair(s, [...to])
+    },
 
     async receive(d, msg: Msg) {
       const s = dev(d)

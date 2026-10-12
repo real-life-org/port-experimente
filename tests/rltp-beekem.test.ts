@@ -267,5 +267,11 @@ describe('E10: Lückenreparatur', () => {
     await w.flush()
     expect(c.status('bob')).toContain('lücke=1 (awaiting-source)')
     expect(c.status('bob')).toContain('regeln=v1')
+    // Reparatur ist re-runnable (I12, #30): der Adapter startet den Lauf neu, etwa nach Netzheilung.
+    c.rerunRepair!('bob')
+    await w.flush()
+    expect(c.status('bob')).toContain('regeln=v2')
+    expect(c.status('bob')).toContain('lücke=0 (repariert 1)')
+    expect(c.status('bob')).toContain('anfragen=1')
   })
 })

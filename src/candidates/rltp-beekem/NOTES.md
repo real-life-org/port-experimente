@@ -500,7 +500,9 @@ Gebaut nach Replication §5.12, ohne den Träger zu ändern:
   Replik sie, sobald ein Rahmen eines adressierten Geräts eintrifft (die
   Quelle ist erreichbar, hat aber nicht geantwortet), höchstens dreimal je
   Lauf; Anfragen gehen nur auf Verkehr hin hinaus, also keine Schleife.
-  Danach bleibt der Lauf sichtbar offen (`anfragen=3`).
+  Danach bleibt der Lauf sichtbar offen (`anfragen=3`), bis der Adapter ihn
+  mit `rerunRepair(gerät)` neu startet, etwa nach Netzheilung (#30); der
+  Neustart setzt den Zähler zurück und fragt die Quellen erneut.
 - **Antworten.** Nur ein adressiertes Gerät antwortet, nur auf eine belegte
   Anfrage, mit dem Abschluss der fehlenden Operationen ohne den Abschluss
   der Köpfe des Fragenden, in kausaler Reihenfolge, als die ursprünglichen
