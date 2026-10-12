@@ -323,13 +323,18 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
    * Ein ungeöffneter Autoritätsrahmen heißt: diese Replik weiß, dass ihr Log hinter dem liegt, was im Umlauf
    * ist. Ob der Rahmen noch aufgeht (Schlüssel unterwegs), nie aufgeht (Epoche ohne uns, bis die Tabelle eines
    * späteren Eintrags ihn bringt) oder beschädigt ist, kann sie nicht unterscheiden; der Umschlag ist
-   * unverbürgt. In allen drei Fällen gilt dasselbe: Eine Replik, die weiß, dass sie zurückliegt, gleicht den
-   * Baum nicht an (sonst nähme sie etwa das Blatt eines eben Aufgenommenen wieder heraus oder das eines
-   * eben Entfernten wieder hinein, T2). Angleichen tun die Mitglieder, die auf dem Stand sind (I4: jedes
-   * Mitglied mit Schlüssel). Für diese Replik heißt das nur Zurückhaltung, nie Stillstand: Lesen, Schreiben
-   * und die Lückenreparatur laufen weiter.
+   * unverbürgt. In allen drei Fällen gilt dasselbe: Eine Replik, die weiß, dass sie zurückliegt, fasst die
+   * Blätter anderer nicht an: kein Entfernen (Heilung) und kein Nachziehen fremder Blätter, sonst nähme sie
+   * etwa das Blatt eines eben Aufgenommenen wieder heraus oder das eines eben Entfernten wieder hinein (T2).
+   * Das tun die Mitglieder, die auf dem Stand sind (I4: jedes Mitglied mit Schlüssel). Die eigenen Geräte
+   * zieht sie weiter nach (ensureOwnLeaves): dafür bürgt der Baum selbst, ohne Schlüssel geht es nicht.
+   *
+   * Gezielt (Review zu #31, Runde 4): Ein Rahmen zählt nur, wenn seine Schlüsseloperation im Baum ist (oder
+   * er keine nennt), also aus einer Epoche stammt, in der diese Replik dabei ist. Ein Rahmen mit unbekannter
+   * `keyOp` sagt nichts über dieses Log aus und hält nichts auf. Lesen, Schreiben, eigene Geräte und die
+   * Lückenreparatur laufen in jedem Fall weiter.
    */
-  const authInTransit = (s: DeviceState) => s.pending.some((m) => m.t === 'sealed' && m.kind === 'auth')
+  const authInTransit = (s: DeviceState) => s.pending.some((m) => m.t === 'sealed' && m.kind === 'auth' && (!m.keyOp || s.appliedOps.has(m.keyOp)))
   /** Versiegelte Einträge öffnen: bekannter Schlüssel, Kette, oder BeeKEM; wiederholen bis Fixpunkt. Inhalte als Bytes, andere innere Rahmen zur Verarbeitung. */
   async function drain(s: KeyState): Promise<{ content: Uint8Array[]; inner: Wire[] }> {
     const out: Uint8Array[] = []
@@ -466,10 +471,11 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
    */
   async function reconcile(s: DeviceState) {
     retryPendingCgka(s)
-    // Der Baum folgt dem Log, aber nicht mitten in einer Zustellung, in der das Log noch hinterherhinkt (s. authInTransit).
-    if (authInTransit(s)) return
-    await heal(s)
-    await ensureMemberLeaves(s)
+    // Der Baum folgt dem Log; fremde Blätter fasst nur an, wer auf dem Stand ist (s. authInTransit).
+    if (!authInTransit(s)) {
+      await heal(s)
+      await ensureMemberLeaves(s)
+    }
     await ensureOwnLeaves(s)
   }
 

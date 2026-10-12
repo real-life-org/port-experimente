@@ -579,15 +579,20 @@ Prüfstand; E11 ersetzt es durch den Zustellungs-Adapter.
     heißt: diese Replik weiß, dass ihr Log hinter dem Umlauf liegt. Ob er noch
     aufgeht, nie aufgeht (Epoche ohne uns, bis die Tabelle eines späteren
     Eintrags ihn bringt) oder beschädigt ist, kann sie nicht unterscheiden.
-    In allen drei Fällen gleicht sie den Baum nicht an, sonst nähme sie das
-    Blatt eines eben Aufgenommenen heraus oder das eines eben Entfernten
-    wieder hinein (so sah der erste Lauf aus: Dutzende `heal`/`heal-add`,
-    und in T2 brachte Dave Carol zurück in den Baum). Angleichen tun die
-    Mitglieder auf dem Stand (I4: jedes Mitglied mit Schlüssel). Für die
-    zurückliegende Replik heißt das Zurückhaltung, nie Stillstand: Lesen,
-    Schreiben, Reparatur laufen weiter. Eine Schlüsseloperation allein löst
-    keine Angleichung aus; angeglichen wird nach Autoritätsoperationen und
-    vor dem Schreiben.
+    In allen drei Fällen fasst sie fremde Blätter nicht an, weder entfernen
+    (Heilung) noch nachziehen, sonst nähme sie das Blatt eines eben
+    Aufgenommenen heraus oder das eines eben Entfernten wieder hinein (so sah
+    der erste Lauf aus: Dutzende `heal`/`heal-add`, und in T2 brachte Dave
+    Carol zurück in den Baum). Das tun die Mitglieder auf dem Stand (I4:
+    jedes Mitglied mit Schlüssel). Gezielt, nicht pauschal (Runde 4): Es
+    zählen nur Rahmen, deren Schlüsseloperation im Baum ist, also aus einer
+    Epoche, in der diese Replik dabei ist; ein Rahmen mit unbekannter
+    `keyOp` sagt nichts über ihr Log aus und hält nichts auf. Die eigenen
+    Geräte zieht sie immer nach, dafür bürgt der Baum (ohne Schlüssel geht
+    es nicht): ein unlesbarer Rahmen sperrt kein Zweitgerät. Lesen,
+    Schreiben, Reparatur laufen in jedem Fall weiter. Eine Schlüsseloperation
+    allein löst keine Angleichung aus; angeglichen wird nach
+    Autoritätsoperationen und vor dem Schreiben.
   - *Folge für T2:* Bobs Entfernung von Carol ist gleichzeitig mit Daves
     Aufnahme und unter einem Schlüssel ohne Dave versiegelt. Dave liest sie
     erst mit dem nächsten Eintrag eines Mitglieds, das sie gelesen hat

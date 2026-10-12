@@ -327,6 +327,25 @@ describe('E10: Lückenreparatur', () => {
     expect(c.status('bob')).toContain('lücke=0 (repariert')
   })
 
+  it('ein unlesbarer Rahmen sperrt die Aufnahme eines Zweitgeräts nicht (Review zu #31, Runde 4)', async () => {
+    const c = rltpBeekem()
+    const w = new World(c)
+    for (const p of ['alice', 'bob']) await w.device(p, p)
+    await w.flush()
+    await w.createGroup('alice')
+    await w.add('alice', 'bob')
+    await w.flush()
+    // Beiden kommt ein unlesbarer Autoritätsrahmen zu: fremder Chiffretext, fremde ref, unbekannte keyOp.
+    const junk = { t: 'sealed', kind: 'auth', c: 'AAAA', iv: 'AAAAAAAAAAAAAAAA', tab: '', ref: 'ab'.repeat(32), heads: [], by: 'x', keyOp: 'cd'.repeat(32) }
+    for (const d of ['alice', 'bob']) await c.receive(d, { id: 90000, from: 'mallory', label: 'auth', body: enc.encode(JSON.stringify(junk)) })
+    await w.device('bob', 'bob-2')
+    await w.flush()
+    await w.write('alice', 'für-das-zweitgerät')
+    await w.flush()
+    expect(w.read('bob-2')).toEqual(['für-das-zweitgerät'])
+    expect(c.status('bob')).toContain('ungeöffnet=1')
+  })
+
   it('geht die Anfrage verloren, wiederholt die Replik sie beim nächsten Rahmen der Quelle, höchstens dreimal', async () => {
     const c = rltpBeekem()
     const w = new World(c)
