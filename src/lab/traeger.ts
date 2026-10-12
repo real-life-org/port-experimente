@@ -204,6 +204,58 @@ export const carrierScenarios: CarrierScenario[] = [
     },
   },
   {
+    id: 'T7',
+    title: 'Entferntes Gerät fragt weiter',
+    door: 'Dienstklassen §9.3 · KV1',
+    needs: [],
+    async run(w) {
+      await base(w)
+      await w.remove('alice', 'carol')
+      await w.flush()
+      await w.write('alice', 'nach-entfernung')
+      await w.flush()
+      // Blind: der Träger bedient Carol weiter, sie kann den Eintrag nicht öffnen (KV1). Sicht/Log: der Dienst verweigert.
+      const svc = w.candidate.service
+      const served = svc ? svc.serves('carol') : true
+      const reads = w.read('carol').includes('nach-entfernung')
+      const ok = !reads && (!svc || !served)
+      return { outcome: verdict(ok), authority: `Carol ${svc ? (served ? 'wird noch bedient' : 'wird verweigert') : 'wird bedient (blind)'}; Zustand: ${w.candidate.status('carol')}`, keys: `Carol liest nach der Entfernung: ${reads ? 'ja' : 'nein'}` }
+    },
+  },
+  {
+    id: 'T8',
+    title: 'Trägerwechsel mitten im Leben',
+    door: 'I15 Rebinding · Portabilität',
+    needs: [],
+    async run(w) {
+      const c = w.carrier()!
+      if (!c.rebind) return { outcome: 'nicht abbildbar', authority: 'der Träger kennt keinen Wechsel (ein Prüfstand-Relay)', keys: '—' }
+      await base(w)
+      await w.write('alice', 'vorher')
+      await w.flush()
+      await c.rebind()
+      await w.device('dave', 'dave')
+      await w.flush()
+      await w.add('bob', 'dave')
+      await w.flush()
+      await w.write('carol', 'nachher')
+      await w.flush()
+      const all = ['alice', 'bob', 'carol', 'dave']
+      const ok = agree(w, all) && same(w.members('dave'), all) && all.every((d) => same(w.read(d), ['vorher', 'nachher']))
+      return { outcome: verdict(ok), authority: `nach dem Wechsel: dave ${fmt(w.members('dave'))}`, keys: all.map((d) => `${d}:${fmt(w.read(d))}`).join(' ') }
+    },
+  },
+  {
+    id: 'T11',
+    title: 'Zwei Gruppen auf einem Träger',
+    door: 'DV4/DV6 Pseudonym je Gruppe',
+    needs: [],
+    async run() {
+      // Grenze des Harness: ein Kandidat trägt eine Gruppe; was der Träger je Gruppe liest, zeigt T12.
+      return { outcome: 'nicht abbildbar', authority: 'ein Kandidat trägt genau eine Gruppe; Verknüpfung über Gruppen hinweg braucht zwei Gruppen auf einem Träger', keys: '—' }
+    },
+  },
+  {
     id: 'T12',
     title: 'Versiegelter Eintrag: was der Träger liest',
     door: 'I6 key-blindness · Access-Envelope',

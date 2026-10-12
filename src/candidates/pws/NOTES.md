@@ -146,8 +146,12 @@ Eine Lücke (T1) war hier besonders still: Der Put kam beim Server nie an,
 und niemand hat es bemerkt. Zweiter Durchgang mit Lückenreparatur im
 Kandidaten: T1 und T6 bestanden (Bob fordert bei Alice nach, Alice legt den
 Rahmen als neue Resource ab; der Feed trägt ihn dann wie jeden anderen),
-T6b (Feed eingefroren) und T12 weiter nicht. Ein abgewiesener Put bleibt
-daneben im Ausgang und wird wiederholt (`awaiting-transport`).
+T6b (Feed eingefroren) und T12 weiter nicht; T7 bestanden (der Server
+bedient das entfernte Gerät weiter, es öffnet nichts), T8 bestanden
+(`rebind` = Umzug per Export/Import mitten im Leben, danach Aufnahme und
+Schreiben auf dem neuen Server), T11 nicht abbildbar (eine Gruppe je
+Kandidat). Ein abgewiesener Put bleibt daneben im Ausgang und wird
+wiederholt (`awaiting-transport`).
 
 ## Grenzen des Prüfstands
 

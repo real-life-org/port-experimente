@@ -16,7 +16,17 @@ describe('Träger-Prüfstand: rltp-beekem über das Prüfstand-Relay', () => {
       T5: 'bestanden',
       T6: 'bestanden', // bemerkbar, sobald ein Dritter auf dem vorgehaltenen Eintrag aufbaut (kausale Köpfe im Inhalt); reines Zurückhalten des ganzen Feeds bleibt unbemerkbar (D5)
       T6b: 'nicht bestanden', // blind: ein eingefrorener Feed ist ohne beglaubigtes Ziel nicht bemerkbar (Befund, D5)
+      T7: 'bestanden', // blind: Carol wird bedient, kann aber nichts öffnen (KV1)
+      T8: 'nicht abbildbar', // ein Prüfstand-Relay kennt keinen Wechsel
+      T11: 'nicht abbildbar', // ein Kandidat trägt eine Gruppe
       T12: 'nicht bestanden', // Rahmen im Klartext (Befund #24)
     })
+  }, 300_000)
+
+  it('T7 mit Dienst der Klasse Sicht: das entfernte Gerät wird verweigert', async () => {
+    const results = await runCarrier(() => rltpBeekem({ dienst: 'sichten' }))
+    const t7 = results.find((r) => r.scenario === 'T7')!
+    expect(t7.outcome, t7.authority).toBe('bestanden')
+    expect(t7.authority).toContain('wird verweigert')
   }, 300_000)
 })

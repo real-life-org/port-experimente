@@ -50,6 +50,9 @@ d('E12: RLTP über BeeKEM auf Portable Web Spaces', () => {
       T5: 'bestanden',
       T6: 'bestanden', // bemerkbar über die kausalen Köpfe in Daves Eintrag; der Feed selbst bleibt unbeglaubigt (D5)
       T6b: 'nicht bestanden', // blind: ein eingefrorener Feed ist ohne beglaubigtes Ziel nicht bemerkbar (D5)
+      T7: 'bestanden', // blind: der Server bedient Carol weiter, sie öffnet nichts (KV1)
+      T8: 'bestanden', // Umzug per Export/Import mitten im Leben, danach Aufnahme und Schreiben auf dem neuen Server
+      T11: 'nicht abbildbar', // ein Kandidat trägt eine Gruppe
       T12: 'nicht bestanden', // Rahmen im Klartext (#24)
     })
   }, 600_000)
