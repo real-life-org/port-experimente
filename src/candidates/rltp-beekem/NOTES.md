@@ -496,7 +496,14 @@ Gebaut nach Replication §5.12, ohne den Träger zu ändern:
 - **Anfordern.** Ein Rahmen `repair` an die Geräte des Autors des Belegs
   (bei Inhalt `by`, bei Operationen die Geräte der Signierer), mit `missing`,
   `evidence` (die nennenden Einträge) und `have` (eigene Köpfe). Je fehlender
-  ID ein Lauf; ein neuer Beleg löst eine neue Anfrage aus, derselbe nicht.
+  ID ein Lauf. Die Belege hängen an den Autoritätsabhängigkeiten (Umschläge
+  bleiben aufgehoben, bis alle Köpfe im Log sind), nicht am Schlüsselbaum:
+  ein Inhalt kann zu öffnen sein und trotzdem eine Lücke belegen (Review zu
+  #27: verlorene Regeländerung). Geht die Anfrage verloren, wiederholt die
+  Replik sie, sobald ein Rahmen eines adressierten Geräts eintrifft (die
+  Quelle ist erreichbar, hat aber nicht geantwortet), höchstens dreimal je
+  Lauf; Anfragen gehen nur auf Verkehr hin hinaus, also keine Schleife.
+  Danach bleibt der Lauf sichtbar offen (`anfragen=3`).
 - **Antworten.** Nur ein adressiertes Gerät antwortet, nur auf eine belegte
   Anfrage, mit dem Abschluss der fehlenden Operationen ohne den Abschluss
   der Köpfe des Fragenden, in kausaler Reihenfolge, als die ursprünglichen
