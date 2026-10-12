@@ -228,6 +228,7 @@ export async function rltpBeekemPws(options: PwsOptions = {}): Promise<Candidate
       }
     },
     carried: () => carriedLog.slice(),
+    rebind: async () => void (await pws.moveToNewServer()),
     /** Echter Serverfehler: der nächste Put wird vom Server abgewiesen (RequestFaults des Teaching-Servers). */
     refuseNextPut(status = 503) {
       active.serverFaults.refuse({ match: { method: 'PUT' }, status })

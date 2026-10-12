@@ -63,6 +63,8 @@ export interface CarrierFaults {
   replay(match: (m: Msg) => boolean): Promise<void>
   /** Alles, was der Träger je getragen hat, als Bytes (für T12: was ein Träger liest). */
   carried(): Msg[]
+  /** Trägerwechsel mitten im Leben (T8, I15): die Gruppe zieht auf einen neuen Träger um; nur, wenn der Träger das kann. */
+  rebind?(): Promise<void>
   reset(): void
 }
 

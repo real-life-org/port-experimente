@@ -464,11 +464,14 @@ Server). Beide Träger zeigen dasselbe Bild:
 | T5 verändert / Müll | D1 | bestanden | bestanden | Digest der Hülle, Form vor Inhalt; Müll wird notiert, nie geworfen (neu: `receive` wirft nicht mehr) |
 | T6 einem Gerät ein Eintrag vorgehalten | D5, I5 | ~~nicht bestanden~~ bestanden | ~~nicht bestanden~~ bestanden | Erster Durchgang: nicht bemerkbar. Mit den Köpfen im Umschlag bemerkt Carol die Lücke, sobald irgendjemand auf dem vorgehaltenen Eintrag aufbaut (hier Daves Inhalt), und holt ihn bei dem, der aufgebaut hat. Der Träger kann einen einzelnen Eintrag also nicht dauerhaft vorhalten, ohne alles danach ebenfalls vorzuhalten. |
 | T6b Gerät eingefroren (alles vorgehalten) | D5, I5 | nicht bestanden | nicht bestanden | **Blind ist nicht bemerkbar.** Carol sieht einen stehenden Feed und kann ihn nicht von Stille unterscheiden; es gibt kein beglaubigtes Ziel, gegen das sie ihren Stand prüfen könnte. Das ist die Tür, die ein Dienst der Klasse Sicht/Log mit Attestation schließt (Replication §4.1), und die Frage 3 an PWS. |
+| T7 entferntes Gerät fragt weiter | §9.3, KV1 | bestanden | bestanden | Klasse blind bedient Carol weiter, sie öffnet nichts (KV1); mit Dienst der Klasse Sicht wird sie verweigert (zweiter Lauf mit `dienst: 'sichten'`). Die Tür unterscheidet Klassen, nicht Träger. |
+| T8 Trägerwechsel mitten im Leben | I15 | nicht abbildbar | bestanden | Relay: kein Wechsel. PWS: Export/Import, danach Aufnahme und Schreiben auf dem neuen Server, der Neue liest die ganze Historie. Beim Bau: Aufnahme gibt den Schlüssel erst mit der nächsten Rotation (BeeKEM), das Szenario muss zwischen Aufnahme und Schreiben zustellen. |
+| T11 zwei Gruppen auf einem Träger | DV4/DV6 | nicht abbildbar | nicht abbildbar | Grenze des Harness: ein Kandidat trägt eine Gruppe. Was ein Träger je Gruppe liest (Namen, Gerätenummern), zeigt T12. |
 | T12 versiegelter Eintrag | I6 | nicht bestanden | nicht bestanden | Rahmen im Klartext (#24); Inhalt versiegelt |
 
-Nicht gelaufen: T7 (entsprechen S10a/b), T8 (PWS: Umzug bestanden, Relay
-nicht abbildbar), T9/T10 (Zustellungs-Adapter, E11), T11 (zwei Gruppen auf
-einem Träger). T6b kam im zweiten Durchgang dazu.
+Nicht gelaufen: T9/T10 (Zustellungs-Adapter, E11). T6b, T7, T8 und T11
+kamen im zweiten Durchgang dazu; der Trägerwechsel läuft über den
+optionalen Haken `CarrierFaults.rebind`, den nur PWS bietet.
 
 **Was der Träger-Prüfstand damit schon gezeigt hat:** Die roten Zellen
 sind keine Eigenschaften eines Trägers, sondern des Kandidaten bzw. der
