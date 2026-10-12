@@ -96,8 +96,10 @@ interface DeviceState extends KeyState {
   pendingCgka: string[]
   /** Autoritätsrahmen, wie gesendet oder empfangen, nach Operations-ID: Quellenpflicht (I12, Antwort). */
   authFrames: Map<string, { op: AuthOp; cgka: string[]; group?: string; label: string }>
-  /** Reparaturläufe nach fehlender ID (I12): abfragbar zwischen den Läufen, nie still. */
-  repairs: Map<string, { evidence: Set<string>; to: Set<string>; outcome: 'awaiting-source' | 'repaired' }>
+  /** Umschläge empfangener Inhalte (Köpfe, Autor), bis alle genannten Köpfe im Log sind: der Beleg einer Lücke, unabhängig davon, ob der Inhalt zu öffnen war. */
+  envelopes: Map<string, { heads: string[]; by: string }>
+  /** Reparaturläufe nach fehlender ID (I12): abfragbar zwischen den Läufen, nie still. `attempts` zählt die Anfragen je Lauf. */
+  repairs: Map<string, { evidence: Set<string>; to: Set<string>; outcome: 'awaiting-source' | 'repaired'; attempts: number }>
   outgoing: Array<{ label: string; body: Uint8Array }>
   joined: boolean
   notes: string[]
@@ -249,11 +251,21 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
    * und den das Log nicht hält. Die Anfrage geht an die Geräte des Autors
    * des Belegs, trägt den Beleg und die eigenen Köpfe. Ein Lauf endet, wenn
    * der Vorgänger eintrifft (`repaired`); bis dahin ist er `awaiting-source`
-   * und im Status sichtbar. Jeder neue Beleg löst eine neue Anfrage aus; ein
-   * Zeithorizont ist im Prüfstand nicht modelliert (keine Uhr).
+   * und im Status sichtbar. Die Belege hängen an den Autoritätsabhängigkeiten
+   * (Umschläge, wartende Operationen), nicht am Schlüsselbaum: ein Inhalt
+   * kann zu öffnen sein und trotzdem eine Lücke belegen (Review zu #27).
+   *
+   * Wiederholung: Ein neuer Beleg löst eine neue Anfrage aus. Geht die
+   * Anfrage selbst verloren, wiederholt sie die Replik, sobald ein Rahmen
+   * eines adressierten Geräts eintrifft (`fromKeys`: die Quelle ist
+   * erreichbar, hat aber nicht geantwortet), höchstens `MAX_ATTEMPTS` je
+   * Lauf. So gibt es keine Schleife: Anfragen gehen nur auf Verkehr hin
+   * hinaus. Ein Zeithorizont ist im Prüfstand nicht modelliert (keine Uhr).
    */
-  function repair(s: DeviceState) {
+  const MAX_ATTEMPTS = 3
+  function repair(s: DeviceState, fromKeys: string[] = []) {
     for (const [id, r] of s.repairs) if (r.outcome === 'awaiting-source' && s.auth.has(id)) r.outcome = 'repaired'
+    for (const [ref, e] of s.envelopes) if (e.heads.every((h) => s.auth.has(h))) s.envelopes.delete(ref)
     const found = new Map<string, { evidence: string; to: string[] }>()
     const note = (missing: string, evidence: string, to: string[]) => {
       if (!s.auth.has(missing) && !found.has(missing)) found.set(missing, { evidence, to })
@@ -262,22 +274,33 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
       const to = w.op.sigs.flatMap((sig) => cardsOf(s, sig.signer).map((c) => c.deviceKey))
       for (const p of w.op.preds) note(p, w.op.id, to)
     }
-    for (const m of s.pending) if (m.t === 'content') for (const h of m.heads) note(h, m.ref, [m.by])
-    const ask: string[] = []
+    for (const [ref, e] of s.envelopes) for (const h of e.heads) note(h, ref, [e.by])
+    const ask = new Set<string>()
     const evidence = new Set<string>()
     const to = new Set<string>()
+    const issue = (missing: string, r: NonNullable<ReturnType<typeof s.repairs.get>>) => {
+      if (r.attempts >= MAX_ATTEMPTS) return
+      ask.add(missing)
+      for (const e of r.evidence) evidence.add(e)
+      for (const d of r.to) to.add(d)
+      r.attempts++
+    }
     for (const [missing, f] of found) {
       let r = s.repairs.get(missing)
-      if (!r) s.repairs.set(missing, (r = { evidence: new Set(), to: new Set(), outcome: 'awaiting-source' }))
+      if (!r) s.repairs.set(missing, (r = { evidence: new Set(), to: new Set(), outcome: 'awaiting-source', attempts: 0 }))
       if (r.evidence.has(f.evidence)) continue
       r.evidence.add(f.evidence)
       for (const d of f.to) r.to.add(d)
-      ask.push(missing)
-      evidence.add(f.evidence)
-      for (const d of f.to) to.add(d)
+      issue(missing, r)
     }
-    if (ask.length && to.size) send(s, { t: 'repair', from: s.deviceSigner.pub, to: [...to], missing: ask, evidence: [...evidence], have: s.auth.heads() })
+    for (const [missing, r] of s.repairs) {
+      if (r.outcome !== 'awaiting-source' || ask.has(missing)) continue
+      if (fromKeys.some((k) => r.to.has(k))) issue(missing, r)
+    }
+    if (ask.size && to.size) send(s, { t: 'repair', from: s.deviceSigner.pub, to: [...to], missing: [...ask], evidence: [...evidence], have: s.auth.heads() })
   }
+
+  const strings = (x: unknown): x is string[] => Array.isArray(x) && x.every((y) => typeof y === 'string')
 
   /**
    * Quellenpflicht (I12): Eine adressierte, belegte Anfrage beantwortet das
@@ -474,8 +497,11 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
         ensureJoined(s)
         if (wellFormed(m.op) && !s.authFrames.has(m.op.id)) s.authFrames.set(m.op.id, { op: m.op, cgka: m.cgka, group: m.group, label: m.op.kind === 'policy' ? 'policy' : 'auth' })
         await processAuth(s, m.op, m.cgka)
+        // Ein Rahmen eines adressierten Geräts: offene Anfragen an es wiederholen.
+        if (wellFormed(m.op)) repair(s, m.op.sigs.flatMap((sig) => cardsOf(s, sig.signer).map((c) => c.deviceKey)))
         return { content: await drain(s) }
       case 'repair':
+        if (!strings(m.to) || !strings(m.missing) || !strings(m.evidence) || !strings(m.have)) throw new Error('Reparaturanfrage missgebildet')
         answerRepair(s, m)
         return { content: [] }
       case 'cgka':
@@ -488,12 +514,14 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
         }
         await reconcile(s)
         return { content: await drain(s) }
-      case 'content':
-        if (!Array.isArray(m.heads) || typeof m.by !== 'string') throw new Error('Inhalt ohne Umschlag')
+      case 'content': {
+        if (!strings(m.heads) || typeof m.by !== 'string' || typeof m.ref !== 'string') throw new Error('Inhalt ohne Umschlag')
+        if (!m.heads.every((h) => s.auth.has(h))) s.envelopes.set(m.ref, { heads: m.heads, by: m.by })
         s.pending.push(m)
         const out = await drain(s)
-        repair(s)
+        repair(s, [m.by])
         return { content: out }
+      }
     }
   }
 
@@ -508,7 +536,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
       const peer = new BeekemPeer()
       const deviceSigner = Signer.generate(device)
       const card: Card = { person, id: new Uint8Array(peer.id), shareKey: new Uint8Array(peer.shareKey), deviceKey: deviceSigner.pub }
-      const s: DeviceState = { person, peer, auth: new AuthorityLog(), deviceSigner, cards: new Map([[hex(card.id), card]]), revoked: new Set(), ack: { seq: 0, hash: null, identities: [] }, proposed: null, waitingAuth: [], appliedCgka: new Set(), pendingCgka: [], authFrames: new Map(), repairs: new Map(), keys: new Map(), heads: [], pending: [], outgoing: [], joined: false, notes: [] }
+      const s: DeviceState = { person, peer, auth: new AuthorityLog(), deviceSigner, cards: new Map([[hex(card.id), card]]), revoked: new Set(), ack: { seq: 0, hash: null, identities: [] }, proposed: null, waitingAuth: [], appliedCgka: new Set(), pendingCgka: [], authFrames: new Map(), envelopes: new Map(), repairs: new Map(), keys: new Map(), heads: [], pending: [], outgoing: [], joined: false, notes: [] }
       devices.set(device, s)
       send(s, { t: 'card', person, id: hex(card.id), shareKey: hex(card.shareKey), deviceKey: card.deviceKey })
     },
@@ -675,7 +703,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
     members: (d) => personMembers(dev(d)),
     status: (d) => {
       const s = dev(d)
-      return [`baum=${(s.peer.members() as Uint8Array[]).length}`, `schlüssel=${s.peer.hasKey() ? 'ja' : 'nein'}`, `fork=${s.auth.forked() ? 'ja' : 'nein'}`, `regeln=v${s.auth.policyVersion()}`, ...(s.pendingCgka.length ? [`wartende-cgka=${s.pendingCgka.length}`] : []), ...(s.waitingAuth.length ? [`wartende-auth=${s.waitingAuth.length}`] : []), ...(s.repairs.size ? [`lücke=${[...s.repairs.values()].filter((r) => r.outcome === 'awaiting-source').length} (${[...s.repairs.values()].some((r) => r.outcome === 'awaiting-source') ? 'awaiting-source' : `repariert ${[...s.repairs.values()].filter((r) => r.outcome === 'repaired').length}`})`] : []), ...s.notes.slice(0, 3), ...notes.slice(0, 2)].join('; ')
+      return [`baum=${(s.peer.members() as Uint8Array[]).length}`, `schlüssel=${s.peer.hasKey() ? 'ja' : 'nein'}`, `fork=${s.auth.forked() ? 'ja' : 'nein'}`, `regeln=v${s.auth.policyVersion()}`, ...(s.pendingCgka.length ? [`wartende-cgka=${s.pendingCgka.length}`] : []), ...(s.waitingAuth.length ? [`wartende-auth=${s.waitingAuth.length}`] : []), ...(s.repairs.size ? [`lücke=${[...s.repairs.values()].filter((r) => r.outcome === 'awaiting-source').length} (${[...s.repairs.values()].some((r) => r.outcome === 'awaiting-source') ? 'awaiting-source' : `repariert ${[...s.repairs.values()].filter((r) => r.outcome === 'repaired').length}`})`, `anfragen=${[...s.repairs.values()].reduce((n, r) => n + r.attempts, 0)}`] : []), ...s.notes.slice(0, 3), ...notes.slice(0, 2)].join('; ')
     },
 
     async steal(d) {
