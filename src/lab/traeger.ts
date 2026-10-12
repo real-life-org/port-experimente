@@ -152,11 +152,13 @@ export const carrierScenarios: CarrierScenario[] = [
       await w.write('alice', 'x')
       await w.flush()
       c.reset()
+      // Der Träger konnte nur zerstören: Bob bleibt, nichts wurde umgedeutet. Was zerstört wurde, holt die
+      // Lückenreparatur über den Beleg von Alices Inhalt zurück: Dave und Eve kommen doch an.
       const bobStays = ['alice', 'bob', 'carol'].every((d) => w.members(d).includes('bob'))
-      const noNewcomers = ['bob', 'carol'].every((d) => !w.members(d).includes('dave') && !w.members(d).includes('eve'))
+      const repaired = ['bob', 'carol'].every((d) => w.members(d).includes('dave') && w.members(d).includes('eve'))
       const st = w.candidate.status('bob')
-      const garbageNoted = st.includes('verworfen') && st.includes('ungeöffnet=1')
-      return { outcome: verdict(bobStays && noNewcomers && garbageNoted && agree(w, ['bob', 'carol'])), authority: `bob ${fmt(w.members('bob'))} carol ${fmt(w.members('carol'))}; Müll notiert und zerstörter Rahmen ungeöffnet: ${garbageNoted ? 'ja' : 'nein'}; Zustand bob: ${st}`, keys: '—' }
+      const garbageNoted = st.includes('verworfen')
+      return { outcome: verdict(bobStays && repaired && garbageNoted && agree(w, ['alice', 'bob', 'carol'])), authority: `bob ${fmt(w.members('bob'))} carol ${fmt(w.members('carol'))}; Müll notiert: ${garbageNoted ? 'ja' : 'nein'}; zerstörte Rahmen repariert: ${repaired ? 'ja' : 'nein'}; Zustand bob: ${st}`, keys: '—' }
     },
   },
   {
@@ -177,7 +179,7 @@ export const carrierScenarios: CarrierScenario[] = [
       // Carol müsste merken, dass sie zurückliegt. Erkennbar hier nur daran, dass sie Daves Eintrag nicht lesen kann.
       const carolBehind = !w.members('carol').includes('dave')
       const carolReads = w.read('carol').includes('von-dave')
-      const noticed = w.candidate.status('carol').includes('lücke') || w.candidate.status('carol').includes('gap')
+      const noticed = /lücke=[1-9]|repariert [1-9]/.test(w.candidate.status('carol')) // eine offene oder geschlossene Lücke, nicht bloß das Feld
       return {
         outcome: verdict(noticed),
         authority: `Carol sieht ${fmt(w.members('carol'))} (zurück: ${carolBehind ? 'ja' : 'nein'}); bemerkt: ${noticed ? 'ja' : 'nein'}; Zustand: ${w.candidate.status('carol')}`,
@@ -201,7 +203,7 @@ export const carrierScenarios: CarrierScenario[] = [
       await w.flush()
       await w.write('dave', 'von-dave')
       await w.flush()
-      const noticed = w.candidate.status('carol').includes('lücke')
+      const noticed = /lücke=[1-9]/.test(w.candidate.status('carol')) // nur eine offene Lücke zählt; frühere, geschlossene sagen nichts über den eingefrorenen Feed
       return {
         outcome: verdict(noticed),
         authority: `Carol sieht ${fmt(w.members('carol'))}; bemerkt: ${noticed ? 'ja' : 'nein'}; Zustand: ${w.candidate.status('carol')}`,

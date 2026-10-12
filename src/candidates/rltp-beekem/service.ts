@@ -151,7 +151,10 @@ abstract class Base implements EnforcingService {
     // Entfernungen, Strong Removal) und gehen immer durch; ob sie gelten,
     // entscheidet jede Replik selbst (Access §9.3: Evidenztransport ist nie
     // gated). Gated sind Inhalt, Schlüsseloperationen und Widerrufe.
-    if (m.t === 'auth' || (m.t === 'sealed' && (m as { kind?: unknown }).kind === 'auth')) return 'weiter'
+    // Ausnahmeweg, bewusst eng (#32): Autoritätsrahmen passieren ohne Mitgliedschaftsgate, weil sie Evidenz für die
+    // Konfliktmatrix sind, aber nur von Geräten, die ihren Schlüssel einmal bewiesen haben. Der äußere `kind` ist
+    // unverbürgt; was er behauptet, prüft der Empfänger gegen den Inhalt und verwirft Abweichungen.
+    if (m.t === 'auth' || (m.t === 'sealed' && (m as { kind?: unknown }).kind === 'auth')) return this.authenticated.has(msg.from) ? 'weiter' : this.drop()
     // Schreiben verlangt bewiesenen Besitz des Geräteschlüssels und Mitgliedschaft.
     const key = this.keyOf.get(msg.from)
     if (!key || !this.authenticated.has(msg.from) || !this.allows(key)) return this.drop()

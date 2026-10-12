@@ -62,8 +62,10 @@ Eintrag, am HTTP-Payload geprüft:
 | `welcome` | — | an ein Gerät verschlüsselt (`to` = sein Willkommensschlüssel) |
 
 `visible()` nach Gründung, zwei Aufnahmen und einem Eintrag: keine Person,
-keine Karte; jeder Rahmen `by, c, heads, iv, kind, ref, t, tab`. Der Absatz
-darunter beschreibt den Stand vor den versiegelten Rahmen.
+keine Karte; jeder versiegelte Rahmen (`auth`, `policy`, `content`,
+`repair`) nur `by, c, heads, iv, keyOp, kind, ref, t, tab`, das Willkommen
+`c, eph, iv, t, to`, BeeKEM-Operationen `op, t`. Der Absatz darunter
+beschreibt den Stand vor den versiegelten Rahmen.
 
 Personen `alice`, `bob`, `carol` sind damit für den Server lesbar, ebenso
 Mitgliedschaft, Regeln und wer wen aufgenommen hat. Nicht lesbar: Inhalte

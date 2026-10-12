@@ -128,6 +128,7 @@ interface KeyState {
   /** Digests der BeeKEM-Operationen, die im Baum sind (keyOpDigest). Ein Rahmen, dessen `keyOp` fehlt, wird gar nicht erst mit BeeKEM versucht; nur die Tabelle kann ihn öffnen. */
   appliedOps: Set<string>
   lastKeyOp?: string
+  notes: string[]
 }
 
 interface Card {
@@ -315,6 +316,8 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
   }
 
   const MAX_DECRYPT_TRIES = 3
+  /** Ungeöffnete Autoritätsrahmen, deren Schlüssel noch kommen kann: Schlüsseloperation nicht im Baum oder Versuche nicht erschöpft. */
+  const authInTransit = (s: DeviceState) => s.pending.some((m) => m.t === 'sealed' && m.kind === 'auth' && (s.tried.get(m.ref)?.n ?? 0) < MAX_DECRYPT_TRIES)
   /** Versiegelte Einträge öffnen: bekannter Schlüssel, Kette, oder BeeKEM; wiederholen bis Fixpunkt. Inhalte als Bytes, andere innere Rahmen zur Verarbeitung. */
   async function drain(s: KeyState): Promise<{ content: Uint8Array[]; inner: Wire[] }> {
     const out: Uint8Array[] = []
@@ -352,7 +355,10 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
             key = r.appKey
           }
         } catch {
-          still.push(m)
+          // Schlüssel bekannt und trotzdem nicht zu öffnen: der Eintrag ist beschädigt (Träger, T5). Er fliegt
+          // raus und wird notiert; was er enthielt, holt die Lückenreparatur über den Beleg späterer Einträge.
+          if (key) s.notes.push(`verworfen: Eintrag ${m.ref.slice(0, 8)} beschädigt`)
+          else still.push(m)
           continue
         }
         s.keys.set(m.ref, key)
@@ -373,6 +379,13 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
         try {
           w = JSON.parse(dec.decode(plain)) as Wire
         } catch {
+          continue
+        }
+        // Der Umschlag ist Klartext und unverbürgt: Was er behauptet (`kind`), muss der Inhalt einlösen. Sonst
+        // könnte ein entferntes Gerät mit altem Schlüssel Inhalt als Autoritätsoperation deklarieren und am
+        // Dienst vorbei zustellen (#32).
+        if (w.t !== m.kind) {
+          s.notes.push(`verworfen: Eintrag ${m.ref.slice(0, 8)} behauptet ${m.kind}, enthält ${w.t}`)
           continue
         }
         if (w.t === 'content') out.push(unb64(w.u))
@@ -439,11 +452,13 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
    */
   async function reconcile(s: DeviceState) {
     retryPendingCgka(s)
-    // Der Baum folgt dem Log. Liegen noch ungeöffnete Autoritätsoperationen bei
-    // uns (ihre BeeKEM-Anhänge gehen voraus), ist das Log bekannt unvollständig:
-    // dann nicht angleichen, sonst nähme die Heilung ein eben aufgenommenes
-    // Blatt wieder heraus, und die Repliken hielten sich gegenseitig in Bewegung.
-    if (s.pending.some((m) => m.t === 'sealed' && m.kind === 'auth')) return
+    // Der Baum folgt dem Log. Liegen noch Autoritätsoperationen bei uns, deren
+    // Schlüssel unterwegs ist (ihre BeeKEM-Anhänge gehen voraus), ist das Log
+    // bekannt unvollständig: dann nicht angleichen, sonst nähme die Heilung ein
+    // eben aufgenommenes Blatt wieder heraus, und die Repliken hielten sich
+    // gegenseitig in Bewegung. Ein Rahmen, dessen Versuche erschöpft sind
+    // (beschädigt oder aus einer Epoche ohne uns), hält nichts mehr auf.
+    if (authInTransit(s)) return
     await heal(s)
     await ensureMemberLeaves(s)
     await ensureOwnLeaves(s)
@@ -502,9 +517,10 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
     for (const [id, r] of s.repairs) if (r.outcome === 'awaiting-source' && s.auth.has(id)) r.outcome = 'repaired'
     // Vor dem Willkommen kann ein Gerät nichts öffnen und nichts belegen: keine Anfragen (sie kämen ohnehin nicht versiegelt hinaus).
     if (!s.joined) return
-    // Liegen noch ungeöffnete Autoritätsoperationen bei uns (ihr Schlüssel ist unterwegs), ist jeder
-    // Beleg vorläufig: erst öffnen, dann fragen. Was dann noch fehlt, ist eine Lücke.
-    if (s.pending.some((m) => m.t === 'sealed' && m.kind === 'auth')) return
+    // Liegen noch Autoritätsoperationen bei uns, deren Schlüssel unterwegs ist, ist jeder Beleg vorläufig:
+    // erst öffnen, dann fragen. Erschöpfte Rahmen (beschädigt, Epoche ohne uns) zählen nicht: was sie
+    // enthielten, muss die Reparatur über die Belege späterer Einträge holen (Review zu #31).
+    if (authInTransit(s)) return
     for (const [ref, e] of s.envelopes) if (e.heads.every((h) => s.auth.has(h))) s.envelopes.delete(ref)
     const found = new Map<string, { evidence: string; to: string[] }>()
     const note = (missing: string, evidence: string, to: string[]) => {
@@ -997,7 +1013,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
       // Passiver Angreifer mit Bobs Zustand: nimmt alle BeeKEM-Operationen auf,
       // öffnet Inhalte wie ein ehrliches Gerät.
       const st = stolen as { state: Uint8Array; keys: Map<string, Uint8Array>; appliedOps: Set<string>; ks?: KeyState }
-      st.ks ??= { peer: BeekemPeer.fromState(st.state), keys: st.keys, heads: [], pending: [], keyGen: 0, tried: new Map(), appliedOps: st.appliedOps }
+      st.ks ??= { peer: BeekemPeer.fromState(st.state), keys: st.keys, heads: [], pending: [], keyGen: 0, tried: new Map(), appliedOps: st.appliedOps, notes: [] }
       const m = JSON.parse(dec.decode(msg.body)) as Wire
       const ops = m.t === 'cgka' ? [m.op] : m.t === 'auth' ? m.cgka : []
       for (const op of ops) {

@@ -461,7 +461,7 @@ Server). Beide Träger zeigen dasselbe Bild:
 | T2 umordnen | I2 | bestanden | bestanden | Beim Bau kam heraus: lose BeeKEM-Operationen, die vor ihren Vorgängern ankamen, wurden verworfen statt gepuffert. Jetzt `pendingCgka`, bei jeder Reparatur erneut versucht. |
 | T3 doppelt | DV3 | bestanden | bestanden | idempotent über id und Inhalt |
 | T4 alte Entfernung erneut | I8 | bestanden | bestanden | `bekannt`, kein Zustandswechsel. Seit den versiegelten Rahmen spielt der Träger alle alten Autoritätsrahmen von Alice erneut ein; die Entfernung kann er nicht mehr auswählen. |
-| T5 verändert / Müll | D1 | bestanden | bestanden | Digest der Hülle, Form vor Inhalt; Müll wird notiert, nie geworfen (neu: `receive` wirft nicht mehr). Seit den versiegelten Rahmen kann der Träger nichts Gezieltes mehr schreiben (eine Aufnahme zur Entfernung umdeuten); er kann nur zerstören: ein gekipptes Byte bleibt `ungeöffnet`, Müll wird `verworfen`, der Zustand ändert sich nicht. |
+| T5 verändert / Müll | D1 | bestanden | bestanden | Digest der Hülle, Form vor Inhalt; Müll wird notiert, nie geworfen (neu: `receive` wirft nicht mehr). Seit den versiegelten Rahmen kann der Träger nichts Gezieltes mehr schreiben (eine Aufnahme zur Entfernung umdeuten); er kann nur zerstören. Und Zerstörtes holt die Lückenreparatur zurück: Alices nächster Inhalt belegt die fehlenden Operationen, Alice sendet sie erneut, Dave und Eve kommen doch an. Ein beschädigter Eintrag mit bekanntem Schlüssel wird verworfen und notiert; einer ohne Schlüssel bleibt `ungeöffnet`, hält aber nichts mehr auf (Review zu #31). |
 | T6 einem Gerät ein Eintrag vorgehalten | D5, I5 | ~~nicht bestanden~~ bestanden | ~~nicht bestanden~~ bestanden | Erster Durchgang: nicht bemerkbar. Mit den Köpfen im Umschlag bemerkt Carol die Lücke, sobald irgendjemand auf dem vorgehaltenen Eintrag aufbaut (hier Daves Inhalt), und holt ihn bei dem, der aufgebaut hat. Der Träger kann einen einzelnen Eintrag also nicht dauerhaft vorhalten, ohne alles danach ebenfalls vorzuhalten. |
 | T6b Gerät eingefroren (alles vorgehalten) | D5, I5 | nicht bestanden | nicht bestanden | **Blind ist nicht bemerkbar.** Carol sieht einen stehenden Feed und kann ihn nicht von Stille unterscheiden; es gibt kein beglaubigtes Ziel, gegen das sie ihren Stand prüfen könnte. Das ist die Tür, die ein Dienst der Klasse Sicht/Log mit Attestation schließt (Replication §4.1), und die Frage 3 an PWS. |
 | T7 entferntes Gerät fragt weiter | §9.3, KV1 | bestanden | bestanden | Klasse blind bedient Carol weiter, sie öffnet nichts (KV1); mit Dienst der Klasse Sicht wird sie verweigert (zweiter Lauf mit `dienst: 'sichten'`). Die Tür unterscheidet Klassen, nicht Träger. |
@@ -573,6 +573,22 @@ Prüfstand; E11 ersetzt es durch den Zustellungs-Adapter.
   aus (das Log hat sich nicht geändert), angeglichen wird nach
   Autoritätsoperationen und vor dem Schreiben. Dieselbe Regel für die
   Lückenprüfung: erst öffnen, dann fragen.
+- **Der Umschlag ist unverbürgt (#32).** `kind` im Klartext steuert nur
+  die Ausnahme des Dienstes (Autoritätsrahmen passieren ohne
+  Mitgliedschaftsgate, weil sie Evidenz für die Konfliktmatrix sind, aber
+  nur von Geräten mit bewiesenem Schlüssel). Was der Umschlag behauptet, muss
+  der Inhalt einlösen: Stimmt die innere Art nicht mit `kind` überein, wird
+  der Eintrag verworfen und notiert. Sonst könnte ein entferntes Gerät mit
+  aufbewahrtem Zustand frischen Inhalt als `auth` deklarieren und am Dienst
+  vorbei zustellen (Regression im Dienst-Test).
+- **Beschädigte Einträge halten nichts auf.** Die Regel „keine Angleichung
+  und keine Lückenprüfung bei ungeöffneten Autoritätsrahmen“ gilt nur für
+  Rahmen, deren Schlüssel noch kommen kann (Schlüsseloperation nicht im Baum
+  oder Versuche nicht erschöpft). Ein Eintrag, der mit bekanntem Schlüssel
+  nicht aufgeht, ist beschädigt und fliegt raus; einer mit erschöpften
+  Versuchen bleibt liegen, zählt aber nicht. Was sie enthielten, holt die
+  Reparatur über die Belege späterer Einträge (Review zu #31: vorher sperrte
+  ein zerstörter Rahmen jede Reparatur dauerhaft).
 - **Schreiben wartet.** Wer gerade keinen Schlüssel hat und nicht rotieren
   kann (das eigene Blatt fehlt, etwa nach einer gleichzeitigen Entfernung,
   die später verfällt), stellt den Rahmen zurück (`queued`), bis ein

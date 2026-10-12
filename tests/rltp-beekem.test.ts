@@ -3,6 +3,9 @@ import { runAll } from '../src/lab/scenarios'
 import { rltpBeekem } from '../src/candidates/rltp-beekem'
 import { World } from '../src/lab/world'
 
+const enc = new TextEncoder()
+const dec = new TextDecoder()
+
 // E6: Autoritätslog nach der Konfliktmatrix entscheidet die Mitgliedschaft,
 // BeeKEM 0.4.0 (rust/beekem-wasm) liefert die Schlüssel, Inhalt Yjs.
 // Erwartungen halten das Verhalten fest; Begründungen in
@@ -243,6 +246,33 @@ describe('E10: Lückenreparatur', () => {
     expect(w.read('bob')).toEqual(['nach-der-regel'])
     expect(c.status('bob')).toContain('regeln=v2')
     expect(c.status('bob')).toContain('lücke=0 (repariert 1)')
+  })
+
+  it('ein beschädigter Autoritätsrahmen sperrt die Reparatur nicht; der nächste intakte Beleg holt die Operation (Review zu #31)', async () => {
+    const c = rltpBeekem()
+    const w = new World(c)
+    for (const p of ['alice', 'bob']) await w.device(p, p)
+    await w.flush()
+    await w.createGroup('alice')
+    await w.add('alice', 'bob')
+    await w.flush()
+    const k = w.carrier()!
+    let hit = false
+    k.tamper((m) => !hit && m.from === 'alice' && m.label === 'policy' && (hit = true), (body) => {
+      const f = JSON.parse(dec.decode(body)) as { c: string }
+      return enc.encode(JSON.stringify({ ...f, c: 'AAAA' + f.c.slice(4) }))
+    })
+    await c.changePolicy('alice', 'remove:any-member')
+    await w.flush()
+    k.reset()
+    await c.changePolicy('alice', 'add:any-member')
+    await w.write('alice', 'nachher')
+    await w.flush()
+    expect(w.read('bob')).toEqual(['nachher'])
+    expect(c.status('bob')).toContain('verworfen: Eintrag')
+    expect(c.status('bob')).toContain('regeln=v3')
+    expect(c.status('bob')).toContain('lücke=0 (repariert')
+    expect(c.status('bob')).not.toContain('ungeöffnet=')
   })
 
   it('geht die Anfrage verloren, wiederholt die Replik sie beim nächsten Rahmen der Quelle, höchstens dreimal', async () => {
