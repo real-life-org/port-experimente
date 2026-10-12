@@ -57,7 +57,8 @@ Eintrag, am HTTP-Payload geprüft:
 | `card` | Personenname, BeeKEM-ID, Share-Key, Geräteschlüssel |
 | `auth`, `policy` | die ganze Autoritätsoperation: Art, Subjekt, Signierer, Politik, Schlüsselbindung, Vorgänger; dazu die BeeKEM-Anhänge |
 | `cgka` | BeeKEM-Operationen (signiert, Pfadgeheimnisse verschlüsselt) |
-| `content` | nur `c`, `iv`, `tab`, `ref`: versiegelt |
+| `content` | `c`, `iv`, `tab`, `ref`: versiegelt; seit E10 dazu der Umschlag `heads` (Hashes der Autoritätsköpfe) und `by` (Geräteschlüssel des Schreibers) |
+| `repair` | Reparaturanfrage (E10, I12): fehlende und belegende IDs, Köpfe, Adressaten |
 
 Personen `alice`, `bob`, `carol` sind damit für den Server lesbar, ebenso
 Mitgliedschaft, Regeln und wer wen aufgenommen hat. Nicht lesbar: Inhalte
@@ -141,9 +142,12 @@ aufgehoben, bis die Regel fällt (#28): der Checkpoint des Feeds rückt
 weiter, der Rahmen nicht. Ergebnis
 identisch mit dem Relay: T2–T5 bestanden, T1/T6/T12 nicht (Befunde beim
 Kandidaten und bei der Klasse blind, siehe `rltp-beekem/NOTES.md`, E10).
-Eine Lücke (T1) ist hier besonders still: Der Put kam beim Server nie an,
-und niemand hat es bemerkt; mit `RequestFaults` des Servers ließe sich
-dasselbe als HTTP-Fehler spielen, dann sähe der Sender es.
+Eine Lücke (T1) war hier besonders still: Der Put kam beim Server nie an,
+und niemand hat es bemerkt. Zweiter Durchgang mit Lückenreparatur im
+Kandidaten: T1 und T6 bestanden (Bob fordert bei Alice nach, Alice legt den
+Rahmen als neue Resource ab; der Feed trägt ihn dann wie jeden anderen),
+T6b (Feed eingefroren) und T12 weiter nicht. Ein abgewiesener Put bleibt
+daneben im Ausgang und wird wiederholt (`awaiting-transport`).
 
 ## Grenzen des Prüfstands
 

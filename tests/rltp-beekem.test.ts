@@ -178,3 +178,100 @@ describe('E7: Geräte und Personen', () => {
     for (const d of ['alice', 'bob', 'carol']) expect(c.status(d)).toContain('baum=3')
   })
 })
+
+// E10: Lückenreparatur (Replication I12). Ein Eintrag nennt die
+// Autoritätsköpfe seines Schreibers; wer einen Kopf nicht hält, fordert ihn
+// adressiert und mit Beleg nach. Zwischen den Läufen ist der Zustand
+// abfragbar (awaiting-source), nie still.
+describe('E10: Lückenreparatur', () => {
+  it('eine still verlorene Aufnahme wird beim Autor nachgefordert; offline bleibt sie sichtbar offen', async () => {
+    const c = rltpBeekem()
+    const w = new World(c)
+    for (const p of ['alice', 'bob', 'carol', 'dave']) await w.device(p, p)
+    await w.flush()
+    await w.createGroup('alice')
+    await w.add('alice', 'bob')
+    await w.add('alice', 'carol')
+    await w.flush()
+    const k = w.carrier()!
+    let dropped = false
+    k.drop((m) => (!dropped && m.from === 'alice' && m.label === 'auth' ? (dropped = true) : false))
+    await w.add('alice', 'dave')
+    await w.flush()
+    k.reset()
+    expect(w.members('bob')).toEqual(['alice', 'bob', 'carol'])
+    // Alice schreibt; die Nachfragen erreichen sie vorerst nicht.
+    k.withhold('alice', (m) => m.label === 'repair')
+    await w.write('alice', 'danach')
+    await w.flush()
+    expect(c.status('bob')).toContain('lücke=1 (awaiting-source)')
+    expect(c.status('carol')).toContain('lücke=1 (awaiting-source)')
+    expect(w.read('bob')).toEqual([])
+    // Nur die adressierte Quelle antwortet: Bob und Carol halten die Aufnahme nicht.
+    k.reset()
+    await w.flush()
+    for (const d of ['alice', 'bob', 'carol', 'dave']) expect(w.members(d), d).toEqual(['alice', 'bob', 'carol', 'dave'])
+    for (const d of ['bob', 'carol', 'dave']) expect(w.read(d), d).toEqual(['danach'])
+    expect(c.status('bob')).toContain('lücke=0 (repariert 1)')
+  })
+
+  it('eine verlorene Regeländerung wird belegt, obwohl der Inhalt zu öffnen ist (Review zu #27)', async () => {
+    const c = rltpBeekem()
+    const w = new World(c)
+    for (const p of ['alice', 'bob']) await w.device(p, p)
+    await w.flush()
+    await w.createGroup('alice')
+    await w.add('alice', 'bob')
+    await w.flush()
+    const k = w.carrier()!
+    let dropped = false
+    k.drop((m) => (!dropped && m.from === 'alice' && m.label === 'policy' ? (dropped = true) : false))
+    await c.changePolicy('alice', 'remove:any-member')
+    await w.flush()
+    k.reset()
+    expect(c.status('bob')).toContain('regeln=v1')
+    // Der Inhalt ändert am Baum nichts; Bob kann ihn öffnen. Der Umschlag belegt die Lücke trotzdem.
+    await w.write('alice', 'nach-der-regel')
+    await w.flush()
+    expect(w.read('bob')).toEqual(['nach-der-regel'])
+    expect(c.status('bob')).toContain('regeln=v2')
+    expect(c.status('bob')).toContain('lücke=0 (repariert 1)')
+  })
+
+  it('geht die Anfrage verloren, wiederholt die Replik sie beim nächsten Rahmen der Quelle, höchstens dreimal', async () => {
+    const c = rltpBeekem()
+    const w = new World(c)
+    for (const p of ['alice', 'bob']) await w.device(p, p)
+    await w.flush()
+    await w.createGroup('alice')
+    await w.add('alice', 'bob')
+    await w.flush()
+    const k = w.carrier()!
+    let dropped = false
+    k.drop((m) => (!dropped && m.from === 'alice' && m.label === 'policy' ? (dropped = true) : false))
+    await c.changePolicy('alice', 'remove:any-member')
+    await w.flush()
+    k.reset()
+    // Alle Anfragen von Bob gehen verloren; Alice schreibt viermal, Bob fragt dreimal, dann nicht mehr.
+    k.drop((m) => m.from === 'bob' && m.label === 'repair')
+    for (const t of ['eins', 'zwei', 'drei', 'vier']) {
+      await w.write('alice', t)
+      await w.flush()
+    }
+    expect(c.status('bob')).toContain('lücke=1 (awaiting-source)')
+    expect(c.status('bob')).toContain('anfragen=3')
+    expect(w.swallowed.filter((m) => m.label === 'repair')).toHaveLength(3)
+    // Die Leitung wird frei: der Lauf hat seine Höchstzahl erreicht und bleibt sichtbar offen; ein neuer Beleg startet keinen neuen Lauf.
+    k.reset()
+    await w.write('alice', 'fünf')
+    await w.flush()
+    expect(c.status('bob')).toContain('lücke=1 (awaiting-source)')
+    expect(c.status('bob')).toContain('regeln=v1')
+    // Reparatur ist re-runnable (I12, #30): der Adapter startet den Lauf neu, etwa nach Netzheilung.
+    c.rerunRepair!('bob')
+    await w.flush()
+    expect(c.status('bob')).toContain('regeln=v2')
+    expect(c.status('bob')).toContain('lücke=0 (repariert 1)')
+    expect(c.status('bob')).toContain('anfragen=1')
+  })
+})

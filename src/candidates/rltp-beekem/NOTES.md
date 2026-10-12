@@ -457,24 +457,73 @@ Server). Beide Träger zeigen dasselbe Bild:
 
 | | Tür | Relay | PWS | Befund |
 |---|---|---|---|---|
-| T1 Rahmen still verloren | DV2, I12 | nicht bestanden | nicht bestanden | **Keine Lückenreparatur.** Eine verlorene Autoritätsoperation bleibt verloren; die Repliken laufen dauerhaft auseinander, der Sender merkt nichts. I12 verlangt adressierte, endende Reparatur; der Kandidat hat keine Anfrage „mir fehlt Vorgänger X“. Für den Port: Reparatur ist eine Pflicht der Replik, nicht des Trägers. |
+| T1 Rahmen still verloren | DV2, I12 | ~~nicht bestanden~~ bestanden | ~~nicht bestanden~~ bestanden | Erster Durchgang: **keine Lückenreparatur**, eine verlorene Autoritätsoperation blieb verloren. Seit dem zweiten Durchgang nennt jeder Inhalt die Autoritätsköpfe seines Schreibers, und die Replik fordert fehlende Vorgänger beim Autor nach (unten, „Lückenreparatur“). Reparatur ist eine Pflicht der Replik, nicht des Trägers. |
 | T2 umordnen | I2 | bestanden | bestanden | Beim Bau kam heraus: lose BeeKEM-Operationen, die vor ihren Vorgängern ankamen, wurden verworfen statt gepuffert. Jetzt `pendingCgka`, bei jeder Reparatur erneut versucht. |
 | T3 doppelt | DV3 | bestanden | bestanden | idempotent über id und Inhalt |
 | T4 alte Entfernung erneut | I8 | bestanden | bestanden | `bekannt`, kein Zustandswechsel |
 | T5 verändert / Müll | D1 | bestanden | bestanden | Digest der Hülle, Form vor Inhalt; Müll wird notiert, nie geworfen (neu: `receive` wirft nicht mehr) |
-| T6 einem Gerät vorgehalten | D5, I5 | nicht bestanden | nicht bestanden | **Blind ist nicht bemerkbar.** Carol liegt zurück und kann es nicht wissen; es gibt kein beglaubigtes Ziel, gegen das sie ihren Stand prüfen könnte. Das ist die Tür, die ein Dienst der Klasse Sicht/Log mit Attestation schließt (Replication §4.1), und die Frage 3 an PWS. |
+| T6 einem Gerät ein Eintrag vorgehalten | D5, I5 | ~~nicht bestanden~~ bestanden | ~~nicht bestanden~~ bestanden | Erster Durchgang: nicht bemerkbar. Mit den Köpfen im Umschlag bemerkt Carol die Lücke, sobald irgendjemand auf dem vorgehaltenen Eintrag aufbaut (hier Daves Inhalt), und holt ihn bei dem, der aufgebaut hat. Der Träger kann einen einzelnen Eintrag also nicht dauerhaft vorhalten, ohne alles danach ebenfalls vorzuhalten. |
+| T6b Gerät eingefroren (alles vorgehalten) | D5, I5 | nicht bestanden | nicht bestanden | **Blind ist nicht bemerkbar.** Carol sieht einen stehenden Feed und kann ihn nicht von Stille unterscheiden; es gibt kein beglaubigtes Ziel, gegen das sie ihren Stand prüfen könnte. Das ist die Tür, die ein Dienst der Klasse Sicht/Log mit Attestation schließt (Replication §4.1), und die Frage 3 an PWS. |
 | T12 versiegelter Eintrag | I6 | nicht bestanden | nicht bestanden | Rahmen im Klartext (#24); Inhalt versiegelt |
 
 Nicht gelaufen: T7 (entsprechen S10a/b), T8 (PWS: Umzug bestanden, Relay
 nicht abbildbar), T9/T10 (Zustellungs-Adapter, E11), T11 (zwei Gruppen auf
-einem Träger).
+einem Träger). T6b kam im zweiten Durchgang dazu.
 
-**Was der Träger-Prüfstand damit schon gezeigt hat:** Die drei roten Zellen
+**Was der Träger-Prüfstand damit schon gezeigt hat:** Die roten Zellen
 sind keine Eigenschaften eines Trägers, sondern des Kandidaten bzw. der
-Dienstklasse: Lückenreparatur und versiegelte Rahmen fehlen im Kandidaten,
-beglaubigte Ziele fehlen jeder Klasse blind. Ein zweiter Träger (PWS)
-liefert exakt dieselbe Matrixzeile. Für die Auswertung heißt das: Träger
-unterscheiden sich erst bei T7–T11 und in den Kosten.
+Dienstklasse: Lückenreparatur und versiegelte Rahmen fehlten im Kandidaten
+(die erste ist inzwischen gebaut), beglaubigte Ziele fehlen jeder Klasse
+blind. Ein zweiter Träger (PWS) liefert exakt dieselbe Matrixzeile. Für die
+Auswertung heißt das: Träger unterscheiden sich erst bei T7–T11 und in den
+Kosten.
+
+### Lückenreparatur (I12), zweiter Durchgang
+
+Gebaut nach Replication §5.12, ohne den Träger zu ändern:
+
+- **Umschlag.** Jeder Inhalt trägt `heads` (die Autoritätsköpfe des
+  Schreibers beim Schreiben) und `by` (seinen Geräteschlüssel). Das ist der
+  Access-Envelope in kleinster Form; Autoritätsoperationen tragen ihre
+  Vorgänger ohnehin (`preds`, `dependsOn`).
+- **Erkennen.** Eine Lücke ist ein Vorgänger, den ein gehaltener Eintrag
+  nennt und das Log nicht hält: aus wartenden Autoritätsoperationen und aus
+  ungeöffneten Inhalten. Geprüft nach jeder Faltung (`reconcile`) und bei
+  jedem Inhalt.
+- **Anfordern.** Ein Rahmen `repair` an die Geräte des Autors des Belegs
+  (bei Inhalt `by`, bei Operationen die Geräte der Signierer), mit `missing`,
+  `evidence` (die nennenden Einträge) und `have` (eigene Köpfe). Je fehlender
+  ID ein Lauf. Die Belege hängen an den Autoritätsabhängigkeiten (Umschläge
+  bleiben aufgehoben, bis alle Köpfe im Log sind), nicht am Schlüsselbaum:
+  ein Inhalt kann zu öffnen sein und trotzdem eine Lücke belegen (Review zu
+  #27: verlorene Regeländerung). Geht die Anfrage verloren, wiederholt die
+  Replik sie, sobald ein Rahmen eines adressierten Geräts eintrifft (die
+  Quelle ist erreichbar, hat aber nicht geantwortet), höchstens dreimal je
+  Lauf; Anfragen gehen nur auf Verkehr hin hinaus, also keine Schleife.
+  Danach bleibt der Lauf sichtbar offen (`anfragen=3`), bis der Adapter ihn
+  mit `rerunRepair(gerät)` neu startet, etwa nach Netzheilung (#30); der
+  Neustart setzt den Zähler zurück und fragt die Quellen erneut.
+- **Antworten.** Nur ein adressiertes Gerät antwortet, nur auf eine belegte
+  Anfrage, mit dem Abschluss der fehlenden Operationen ohne den Abschluss
+  der Köpfe des Fragenden, in kausaler Reihenfolge, als die ursprünglichen
+  Rahmen (die Replik dedupliziert: `bekannt`). Dazu hält jedes Gerät die
+  Autoritätsrahmen, die es gesendet oder angenommen hat. Unter einem Dienst
+  der Klasse Sicht/Log ist die Anfrage ein Schreiben (Besitznachweis und
+  Mitgliedschaft, I7).
+- **Zustand.** `lücke=N (awaiting-source)` bzw. `lücke=0 (repariert N)` im
+  Status; ein Lauf endet, wenn der Vorgänger eintrifft. Nicht modelliert:
+  `repair-horizon` (der Prüfstand hat keine Uhr) und `awaiting-source` als
+  gemeldetes Ergebnis an den Nutzer; beides sind Aufgaben des Adapters, nicht
+  des Kandidaten.
+
+Prüfung: T1 auf Relay und PWS (Relay: der verlorene Rahmen wird erneut
+zugestellt; PWS: Alice legt ihn als neue Resource ab), dazu der
+Kandidatentest „Lückenreparatur“ (Anfrage vorgehalten: Zustand sichtbar
+offen; freigegeben: repariert, und nur Alice antwortet). Was der Träger
+dabei zusätzlich sieht: Köpfe (Hashes) und Geräteschlüssel je Inhalt, siehe
+`pws/NOTES.md`, Prüfpunkt 3. Für den Port: Der Umschlag macht aus
+„Zurückhalten“ (T6) ein „alles Zurückhalten“ (T6b); erst die beglaubigte
+Sicht schließt auch das.
 
 ### Wo der Code vom Guss abweichen musste (Befund für 0.57)
 
