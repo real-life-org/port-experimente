@@ -47,6 +47,8 @@ interface DeviceState {
   lastError?: string
   /** Resource-IDs, die dieses Gerät schon verarbeitet hat. */
   seen: Set<string>
+  /** Rahmen, die der Träger diesem Gerät vorenthält (#28): der Checkpoint liegt schon dahinter, also hier aufgehoben, bis die Regel fällt. */
+  held: Map<string, Msg>
   was?: WasClient
 }
 
@@ -157,6 +159,21 @@ export async function rltpBeekemPws(options: PwsOptions = {}): Promise<Candidate
     if (!s.online || !space) return 0
     const col = collection(s)
     let n = 0
+    const withheld = (msg: Msg) => faultState.withhold.some((r) => r.device === d && r.match(msg))
+    const deliver = async (id: string, msg: Msg) => {
+      s.seen.add(id)
+      for (let k = 0; k < (faultState.duplicate ? 2 : 1); k++) {
+        const { content } = await inner.receive(d, msg)
+        for (const u of content) Y.applyUpdate(s.doc, u, 'remote')
+      }
+      n++
+    }
+    // Erst das Vorenthaltene, dessen Regel gefallen ist.
+    for (const [id, msg] of [...s.held]) {
+      if (withheld(msg)) continue
+      s.held.delete(id)
+      if (!s.seen.has(id)) await deliver(id, msg)
+    }
     for (;;) {
       const page = await timed(() => col.changes({ checkpoint: s.checkpoint, limit: 200 }))
       stats.pulls++
@@ -169,13 +186,11 @@ export async function rltpBeekemPws(options: PwsOptions = {}): Promise<Candidate
           continue
         }
         const msg = toMsg(f, ++stats.pulledDocs)
-        if (faultState.withhold.some((r) => r.device === d && r.match(msg))) continue // bleibt ungesehen: der Träger hält es diesem Gerät vor
-        s.seen.add(doc.id)
-        for (let k = 0; k < (faultState.duplicate ? 2 : 1); k++) {
-          const { content } = await inner.receive(d, msg)
-          for (const u of content) Y.applyUpdate(s.doc, u, 'remote')
+        if (withheld(msg)) {
+          s.held.set(doc.id, msg) // der Träger hält es diesem Gerät vor; der Checkpoint rückt weiter, der Rahmen bleibt hier
+          continue
         }
-        n++
+        await deliver(doc.id, msg)
       }
       if (!page.checkpoint || page.documents.length === 0) break
       s.checkpoint = page.checkpoint
@@ -313,7 +328,7 @@ export async function rltpBeekemPws(options: PwsOptions = {}): Promise<Candidate
 
     async addDevice(p, d) {
       await inner.addDevice(p, d)
-      const s: DeviceState = { person: p, online: true, doc: new Y.Doc(), outbox: [], seq: 0, checkpoint: undefined, lastError: undefined, seen: new Set(), was: undefined }
+      const s: DeviceState = { person: p, online: true, doc: new Y.Doc(), outbox: [], seq: 0, checkpoint: undefined, lastError: undefined, seen: new Set(), held: new Map(), was: undefined }
       devices.set(d, s)
       await ensureSpace(s)
       await push(s, d)

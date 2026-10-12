@@ -76,6 +76,33 @@ d('E12: RLTP über BeeKEM auf Portable Web Spaces', () => {
     }
   }, 120_000)
 
+  it('Zurückhalten (#28): ein vorgehaltener Rahmen wird nach der Freigabe nachgeliefert, nicht noch einmal', async () => {
+    const { rltpBeekemPws } = await import('../src/candidates/pws')
+    const c = await rltpBeekemPws()
+    const w = new World(c)
+    try {
+      for (const p of ['alice', 'bob']) await w.device(p, p)
+      await w.flush()
+      await w.createGroup('alice')
+      await w.add('alice', 'bob')
+      await w.flush()
+      const k = w.carrier()!
+      k.withhold('bob', (m) => m.from === 'alice' && m.label === 'content')
+      await w.write('alice', 'vorgehalten')
+      await w.flush()
+      expect(w.read('bob')).toEqual([])
+      // Unter aktiver Regel kommt der Feed zur Ruhe (flush würde sonst nicht enden).
+      await w.flush()
+      k.reset()
+      await w.flush()
+      expect(w.read('bob')).toEqual(['vorgehalten'])
+      await w.flush()
+      expect(w.read('bob')).toEqual(['vorgehalten'])
+    } finally {
+      await c.dispose?.()
+    }
+  }, 120_000)
+
   it('Prüfpunkt 3 und 4: was der Server hält, und der Umzug per Export/Import', async () => {
     const { rltpBeekemPws } = await import('../src/candidates/pws')
     const c = await rltpBeekemPws()

@@ -137,7 +137,9 @@ unverändert, wenn das Register offen ist.
 `transport.faults` legt die Fehler des Katalogs T über den echten Server:
 Verlust und Veränderung vor dem Put, Zurückhalten je Gerät und Umordnung
 beim Lesen (alle Geräte signieren mit demselben Schlüssel, der Server kann
-sie nicht unterscheiden), Wiederholung als neue Resource. Ergebnis
+sie nicht unterscheiden), Wiederholung als neue Resource. Vorenthaltene Rahmen bleiben je Gerät
+aufgehoben, bis die Regel fällt (#28): der Checkpoint des Feeds rückt
+weiter, der Rahmen nicht. Ergebnis
 identisch mit dem Relay: T2–T5 bestanden, T1/T6/T12 nicht (Befunde beim
 Kandidaten und bei der Klasse blind, siehe `rltp-beekem/NOTES.md`, E10).
 Eine Lücke (T1) war hier besonders still: Der Put kam beim Server nie an,
