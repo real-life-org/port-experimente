@@ -43,6 +43,8 @@ interface DeviceState {
   /** Laufende Nummer je Gerät, für eindeutige Resource-IDs. */
   seq: number
   checkpoint: string | undefined
+  /** Letzter Transportfehler, solange der Ausgang nicht leer ist (pre-transport report). */
+  lastError?: string
   /** Resource-IDs, die dieses Gerät schon verarbeitet hat. */
   seen: Set<string>
   was?: WasClient
@@ -58,14 +60,14 @@ export interface PwsOptions {
 export async function rltpBeekemPws(options: PwsOptions = {}): Promise<Candidate & { pws: PwsHandle }> {
   const inner = rltpBeekem()
   // Eigener Temp-Speicher je Server: der Default-Backend läge im Paket und wäre allen Servern gemeinsam.
-  const { fastify, serverUrl } = await startTestServer({ backend: await openTempBackend() })
+  const { fastify, serverUrl, faults: serverFaults } = await startTestServer({ backend: await openTempBackend() })
   // Der Gruppenschlüssel: ein did:key, von allen Geräten gehalten.
   const groupKey = await Ed25519VerificationKey.generate()
   groupKey.controller = `did:key:${groupKey.fingerprint()}`
   groupKey.id = `${groupKey.controller}#${groupKey.fingerprint()}`
   const devices = new Map<Device, DeviceState>()
   let space: { id: string } | undefined
-  let active = { serverUrl, fastify }
+  let active = { serverUrl, fastify, serverFaults }
   let idle = 0
   const stats = { puts: 0, pulls: 0, pulledDocs: 0, bytesUp: 0 }
   const notes: string[] = []
@@ -79,6 +81,7 @@ export async function rltpBeekemPws(options: PwsOptions = {}): Promise<Candidate
   // der Server kann sie nicht unterscheiden); Veränderung = vor dem Put.
   const faultState = { drop: [] as Array<(m: Msg) => boolean>, withhold: [] as Array<{ device: Device; match: (m: Msg) => boolean }>, reverse: false, duplicate: false, tamper: [] as Array<{ match: (m: Msg) => boolean; mutate: (b: Uint8Array) => Uint8Array }> }
   let carriedId = 0
+  let replaySeq = 0
   const carriedLog: Msg[] = []
   const toMsg = (f: Frame, id: number): Msg => ({ id, from: f.from, label: f.label, body: unb64(f.b) })
 
@@ -116,18 +119,32 @@ export async function rltpBeekemPws(options: PwsOptions = {}): Promise<Candidate
       const { label, body: original } = s.outbox[0]!
       const id = `${d}-${String(s.seq).padStart(6, '0')}`
       const probe: Msg = { id: carriedId + 1, from: d, label, body: original }
-      s.seq++
-      s.outbox.shift()
-      s.seen.add(id)
-      n++
       if (faultState.drop.some((r) => r(probe))) {
+        // Der Träger hat angenommen und verloren: aus Sicht des Senders gesendet.
         notes.push(`Träger verschluckt ${d}:${label}`)
+        s.seq++
+        s.outbox.shift()
+        s.seen.add(id)
+        n++
         continue
       }
       let body = original
       for (const r of faultState.tamper) if (r.match(probe)) body = r.mutate(body)
       const frame: Frame = { from: d, label, b: b64(body) }
-      await timed(() => col.put(id, frame))
+      try {
+        await timed(() => col.put(id, frame))
+      } catch (e) {
+        // Nicht angenommen: der Rahmen bleibt im Ausgang und wird in der nächsten
+        // Runde erneut versucht (6.1: pre-transport report, nie Schweigen).
+        s.lastError = `awaiting-transport: ${(e as Error).message}`
+        notes.push(`${d}: ${s.lastError}`)
+        return n
+      }
+      s.lastError = undefined
+      s.seq++
+      s.outbox.shift()
+      s.seen.add(id)
+      n++
       carriedLog.push({ ...probe, id: ++carriedId, body })
       stats.puts++
       stats.bytesUp += body.length
@@ -178,7 +195,7 @@ export async function rltpBeekemPws(options: PwsOptions = {}): Promise<Candidate
     throw new Error('PWS: nach 60 Runden nicht ruhig')
   }
 
-  const faults: CarrierFaults = {
+  const faults: CarrierFaults & { refuseNextPut(status?: number): void } = {
     drop: (m) => void faultState.drop.push(m),
     withhold: (device, m) => void faultState.withhold.push({ device, match: m }),
     reverse: (on) => void (faultState.reverse = on),
@@ -190,12 +207,16 @@ export async function rltpBeekemPws(options: PwsOptions = {}): Promise<Candidate
       const col = collection(s)
       for (const m of carriedLog) {
         if (!match(m)) continue
-        const id = `replay-${m.id}`
+        const id = `replay-${m.id}-${++replaySeq}`
         await timed(() => col.put(id, { from: m.from, label: m.label, b: b64(m.body) } as Frame))
         stats.puts++
       }
     },
     carried: () => carriedLog.slice(),
+    /** Echter Serverfehler: der nächste Put wird vom Server abgewiesen (RequestFaults des Teaching-Servers). */
+    refuseNextPut(status = 503) {
+      active.serverFaults.refuse({ match: { method: 'PUT' }, status })
+    },
     reset() {
       faultState.drop = []
       faultState.withhold = []
@@ -206,6 +227,7 @@ export async function rltpBeekemPws(options: PwsOptions = {}): Promise<Candidate
   }
 
   const pws: PwsHandle = {
+    faults: faults as PwsHandle['faults'],
     serverUrl: () => active.serverUrl,
     controller: groupKey.controller!,
     stats,
@@ -231,7 +253,7 @@ export async function rltpBeekemPws(options: PwsOptions = {}): Promise<Candidate
         throw e
       }
       const old = active
-      active = { serverUrl: next.serverUrl, fastify: next.fastify }
+      active = { serverUrl: next.serverUrl, fastify: next.fastify, serverFaults: next.faults }
       for (const st of devices.values()) {
         st.was = undefined
         st.checkpoint = undefined // der Checkpoint ist Fakt des alten Servers; der Feed wird neu gelesen, `seen` filtert
@@ -291,7 +313,7 @@ export async function rltpBeekemPws(options: PwsOptions = {}): Promise<Candidate
 
     async addDevice(p, d) {
       await inner.addDevice(p, d)
-      const s: DeviceState = { person: p, online: true, doc: new Y.Doc(), outbox: [], seq: 0, checkpoint: undefined, seen: new Set(), was: undefined }
+      const s: DeviceState = { person: p, online: true, doc: new Y.Doc(), outbox: [], seq: 0, checkpoint: undefined, lastError: undefined, seen: new Set(), was: undefined }
       devices.set(d, s)
       await ensureSpace(s)
       await push(s, d)
@@ -324,13 +346,15 @@ export async function rltpBeekemPws(options: PwsOptions = {}): Promise<Candidate
     takeOutgoing: () => [],
     receive: (d, m) => inner.receive(d, m),
     members: (d) => inner.members(d),
-    status: (d) => `${inner.status(d)}; pws puts=${stats.puts} pulls=${stats.pulls}${notes.length ? '; ' + notes.slice(0, 2).join('; ') : ''}`,
+    status: (d) => `${inner.status(d)}; pws puts=${stats.puts} pulls=${stats.pulls}${dev(d).outbox.length ? `; ausgang=${dev(d).outbox.length}` : ''}${dev(d).lastError ? `; ${dev(d).lastError}` : ''}${notes.length ? '; ' + notes.slice(0, 2).join('; ') : ''}`,
     steal: (d) => inner.steal(d),
     attackerOpen: (st, m) => inner.attackerOpen(st, m),
   }
 }
 
 export interface PwsHandle {
+  /** Die Fehlerinjektion des Transports, mit dem Server-eigenen `refuseNextPut`. */
+  readonly faults: CarrierFaults & { refuseNextPut(status?: number): void }
   serverUrl(): string
   readonly controller: string
   readonly stats: { puts: number; pulls: number; pulledDocs: number; bytesUp: number }

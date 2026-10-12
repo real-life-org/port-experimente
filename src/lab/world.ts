@@ -34,6 +34,9 @@ export class World {
   private tamperRules: Array<{ match: (m: Msg) => boolean; mutate: (b: Uint8Array) => Uint8Array }> = []
   /** Rahmen, die eine Regel verschluckt hat (zur Auswertung). */
   readonly swallowed: Msg[] = []
+  /** Urteil je Rahmen, einmal gefällt: eine Verlust- oder Veränderungsregel trifft alle Empfänger gleich (wie bei einem echten Träger). */
+  private readonly dropDecided = new Map<number, boolean>()
+  private readonly tampered = new Map<number, Uint8Array>()
 
   /** Der Träger dieses Laufs: das Prüfstand-Relay, oder der eigene Transport des Kandidaten, sofern er Fehler bietet. */
   carrier(): CarrierFaults | undefined {
@@ -203,14 +206,23 @@ export class World {
           const seen = this.delivered.get(d)!
           if (seen.has(msg.id)) continue
           if (!this.deliverable(msg, d)) continue
+          // Zurückhalten je Gerät: der Rahmen bleibt ungesehen und zählt nicht als Fortschritt;
+          // fällt die Regel, wird er zugestellt.
+          if (this.withholdRules.some((r) => r.device === d && r.match(msg))) continue
           seen.add(msg.id)
           moved = true
-          if (this.dropRules.some((r) => r(msg)) || this.withholdRules.some((r) => r.device === d && r.match(msg))) {
-            this.swallowed.push(msg)
+          let dropped = this.dropDecided.get(msg.id)
+          if (dropped === undefined) this.dropDecided.set(msg.id, (dropped = this.dropRules.some((r) => r(msg))))
+          if (dropped) {
+            if (!this.swallowed.includes(msg)) this.swallowed.push(msg)
             continue
           }
-          let body = msg.body
-          for (const r of this.tamperRules) if (r.match(msg)) body = r.mutate(body)
+          let body = this.tampered.get(msg.id)
+          if (!body) {
+            body = msg.body
+            for (const r of this.tamperRules) if (r.match(msg)) body = r.mutate(body)
+            this.tampered.set(msg.id, body)
+          }
           const toDeliver = body === msg.body ? msg : { ...msg, body }
           const times = this.duplicateAll ? 2 : 1
           for (let k = 0; k < times; k++) {

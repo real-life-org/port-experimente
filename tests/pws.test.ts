@@ -53,6 +53,28 @@ d('E12: RLTP über BeeKEM auf Portable Web Spaces', () => {
     })
   }, 600_000)
 
+  it('Serverfehler: ein abgewiesener Put bleibt im Ausgang und wird in der nächsten Runde zugestellt', async () => {
+    const { rltpBeekemPws } = await import('../src/candidates/pws')
+    const c = await rltpBeekemPws()
+    const w = new World(c)
+    try {
+      for (const p of ['alice', 'bob']) await w.device(p, p)
+      await w.flush()
+      await w.createGroup('alice')
+      await w.add('alice', 'bob')
+      await w.flush()
+      c.pws.faults.refuseNextPut(400) // kein Status aus der Retry-Liste des Clients, damit der Fehler bei uns ankommt
+      await w.write('alice', 'erst-abgewiesen')
+      // Der Put ist gescheitert: der Rahmen liegt im Ausgang, der Sender weiß es.
+      expect(c.status('alice')).toContain('awaiting-transport')
+      await w.flush()
+      expect(w.read('bob')).toEqual(['erst-abgewiesen'])
+      expect(c.status('alice')).not.toContain('ausgang=')
+    } finally {
+      await c.dispose?.()
+    }
+  }, 120_000)
+
   it('Prüfpunkt 3 und 4: was der Server hält, und der Umzug per Export/Import', async () => {
     const { rltpBeekemPws } = await import('../src/candidates/pws')
     const c = await rltpBeekemPws()

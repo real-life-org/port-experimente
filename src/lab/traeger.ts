@@ -130,21 +130,27 @@ export const carrierScenarios: CarrierScenario[] = [
       const c = w.carrier()!
       await w.device('dave', 'dave')
       await w.flush()
-      // Alices Aufnahme von Dave wird unterwegs zu einer Entfernung von Bob umgeschrieben, und ein zweiter Rahmen zu Müll.
-      let n = 0
+      // Alices Aufnahme von Dave wird unterwegs zu einer Entfernung von Bob umgeschrieben; ihre Aufnahme von Eve wird zu Müll.
+      // Entscheidung nach Inhalt, damit jeder Träger dieselben zwei Rahmen trifft.
+      await w.device('eve', 'eve')
+      await w.flush()
       c.tamper(isAuthFrom('alice'), (body) => {
-        n++
-        if (n === 1) return enc.encode(dec.decode(body).replace('"kind":"add"', '"kind":"remove"').replace('"subject":"dave"', '"subject":"bob"'))
-        return enc.encode('{"t":"auth","op":')
+        const text = dec.decode(body)
+        if (text.includes('"subject":"dave"')) return enc.encode(text.replace('"kind":"add"', '"kind":"remove"').replace('"subject":"dave"', '"subject":"bob"'))
+        if (text.includes('"subject":"eve"')) return enc.encode('{"t":"auth","op":')
+        return body
       })
       await w.add('alice', 'dave')
+      await w.flush()
+      await w.add('alice', 'eve')
       await w.flush()
       await w.write('alice', 'x')
       await w.flush()
       c.reset()
       const bobStays = ['alice', 'bob', 'carol'].every((d) => w.members(d).includes('bob'))
-      const noDave = ['bob', 'carol'].every((d) => !w.members(d).includes('dave'))
-      return { outcome: verdict(bobStays && noDave && agree(w, ['bob', 'carol'])), authority: `bob ${fmt(w.members('bob'))} carol ${fmt(w.members('carol'))}; Zustand bob: ${w.candidate.status('bob')}`, keys: '—' }
+      const noNewcomers = ['bob', 'carol'].every((d) => !w.members(d).includes('dave') && !w.members(d).includes('eve'))
+      const garbageNoted = w.candidate.status('bob').includes('verworfen')
+      return { outcome: verdict(bobStays && noNewcomers && garbageNoted && agree(w, ['bob', 'carol'])), authority: `bob ${fmt(w.members('bob'))} carol ${fmt(w.members('carol'))}; Müll notiert: ${garbageNoted ? 'ja' : 'nein'}; Zustand bob: ${w.candidate.status('bob')}`, keys: '—' }
     },
   },
   {
