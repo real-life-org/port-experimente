@@ -84,6 +84,8 @@ interface DeviceState extends KeyState {
   waitingAuth: Array<{ op: AuthOp; cgka: string[] }>
   /** BeeKEM-Anhänge, die schon in den Baum gingen (je Operation einmal). */
   appliedCgka: Set<string>
+  /** Lose BeeKEM-Operationen, die der Baum noch nicht annimmt (Vorgänger fehlen): bei jeder Reparatur erneut versuchen (I2). */
+  pendingCgka: string[]
   outgoing: Array<{ label: string; body: Uint8Array }>
   joined: boolean
   notes: string[]
@@ -191,8 +193,8 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
     for (const c of cgka) {
       try {
         s.peer.receive(unb64(c))
-      } catch (e) {
-        s.notes.push(`cgka: ${(e as Error).message}`)
+      } catch {
+        s.pendingCgka.push(c)
       }
     }
   }
@@ -205,6 +207,21 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
    * Reparaturen führt BeeKEM zusammen (KV6).
    */
   async function reconcile(s: DeviceState) {
+    // Wartende BeeKEM-Operationen nachziehen, bis nichts mehr durchgeht.
+    let progress = true
+    while (progress && s.pendingCgka.length) {
+      progress = false
+      const rest: string[] = []
+      for (const c of s.pendingCgka) {
+        try {
+          s.peer.receive(unb64(c))
+          progress = true
+        } catch {
+          rest.push(c)
+        }
+      }
+      s.pendingCgka = rest
+    }
     await heal(s)
     await ensureMemberLeaves(s)
     await ensureOwnLeaves(s)
@@ -373,8 +390,9 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
         ensureJoined(s)
         try {
           s.peer.receive(unb64(m.op))
-        } catch (e) {
-          s.notes.push(`cgka: ${(e as Error).message}`)
+        } catch {
+          // Vorgänger fehlen (Umordnung am Träger) oder schon bekannt: aufheben, reconcile() versucht es wieder.
+          s.pendingCgka.push(m.op)
         }
         await reconcile(s)
         return { content: await drain(s) }
@@ -395,7 +413,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
       const peer = new BeekemPeer()
       const deviceSigner = Signer.generate(device)
       const card: Card = { person, id: new Uint8Array(peer.id), shareKey: new Uint8Array(peer.shareKey), deviceKey: deviceSigner.pub }
-      const s: DeviceState = { person, peer, auth: new AuthorityLog(), deviceSigner, cards: new Map([[hex(card.id), card]]), revoked: new Set(), ack: { seq: 0, hash: null, identities: [] }, proposed: null, waitingAuth: [], appliedCgka: new Set(), keys: new Map(), heads: [], pending: [], outgoing: [], joined: false, notes: [] }
+      const s: DeviceState = { person, peer, auth: new AuthorityLog(), deviceSigner, cards: new Map([[hex(card.id), card]]), revoked: new Set(), ack: { seq: 0, hash: null, identities: [] }, proposed: null, waitingAuth: [], appliedCgka: new Set(), pendingCgka: [], keys: new Map(), heads: [], pending: [], outgoing: [], joined: false, notes: [] }
       devices.set(device, s)
       send(s, { t: 'card', person, id: hex(card.id), shareKey: hex(card.shareKey), deviceKey: card.deviceKey })
     },
@@ -540,9 +558,21 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
 
     async receive(d, msg: Msg) {
       const s = dev(d)
-      const m = JSON.parse(dec.decode(msg.body)) as Wire
+      // Ein Rahmen von der Leitung ist Daten: was sich nicht lesen lässt, wird
+      // verworfen und notiert, nie geworfen (T5, Träger-Prüfstand).
+      let m: Wire
+      try {
+        m = JSON.parse(dec.decode(msg.body)) as Wire
+        if (!m || typeof m !== 'object' || typeof m.t !== 'string') throw new Error('kein Rahmen')
+      } catch (e) {
+        s.notes.push(`verworfen: ${(e as Error).message}`)
+        return { content: [] }
+      }
       try {
         return await handle(s, m)
+      } catch (e) {
+        s.notes.push(`verworfen (${m.t}): ${(e as Error).message}`)
+        return { content: [] }
       } finally {
         proposeView(s)
       }
@@ -550,7 +580,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
     members: (d) => personMembers(dev(d)),
     status: (d) => {
       const s = dev(d)
-      return [`baum=${(s.peer.members() as Uint8Array[]).length}`, `schlüssel=${s.peer.hasKey() ? 'ja' : 'nein'}`, `fork=${s.auth.forked() ? 'ja' : 'nein'}`, `regeln=v${s.auth.policyVersion()}`, ...s.notes.slice(0, 3), ...notes.slice(0, 2)].join('; ')
+      return [`baum=${(s.peer.members() as Uint8Array[]).length}`, `schlüssel=${s.peer.hasKey() ? 'ja' : 'nein'}`, `fork=${s.auth.forked() ? 'ja' : 'nein'}`, `regeln=v${s.auth.policyVersion()}`, ...(s.pendingCgka.length ? [`wartende-cgka=${s.pendingCgka.length}`] : []), ...(s.waitingAuth.length ? [`wartende-auth=${s.waitingAuth.length}`] : []), ...s.notes.slice(0, 3), ...notes.slice(0, 2)].join('; ')
     },
 
     async steal(d) {

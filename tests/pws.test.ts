@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { runAll } from '../src/lab/scenarios'
 import { World } from '../src/lab/world'
+import { runCarrier } from '../src/lab/traeger'
 import { writeFileSync } from 'node:fs'
 
 // E12 Variante (a): PWS als blinder Speicher einer Gruppe. Nur Node ≥ 24
@@ -34,6 +35,21 @@ d('E12: RLTP über BeeKEM auf Portable Web Spaces', () => {
       S10a: 'nicht abbildbar', // der Server ist blind: kein durchsetzender Dienst
       S10b: 'nicht abbildbar',
       S10c: 'nicht abbildbar',
+    })
+  }, 600_000)
+
+  it('Träger-Prüfstand: T-Szenarien über den echten Server', async () => {
+    const { rltpBeekemPws } = await import('../src/candidates/pws')
+    const results = await runCarrier(rltpBeekemPws)
+    const byId = Object.fromEntries(results.map((r) => [r.scenario, r.outcome]))
+    expect(byId, JSON.stringify(results, null, 1)).toEqual({
+      T1: 'nicht bestanden', // kein Reparaturmechanismus (I12); der Put kam beim Server nie an, der Sender merkte nichts
+      T2: 'bestanden',
+      T3: 'bestanden',
+      T4: 'bestanden',
+      T5: 'bestanden',
+      T6: 'nicht bestanden', // blind: der Feed ist nicht beglaubigt (D5)
+      T12: 'nicht bestanden', // Rahmen im Klartext (#24)
     })
   }, 600_000)
 

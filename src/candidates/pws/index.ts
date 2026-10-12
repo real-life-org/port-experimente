@@ -2,7 +2,7 @@ import * as Y from 'yjs'
 import { openTempBackend, startTestServer } from 'was-teaching-server/testing'
 import { WasClient } from '@interop/was-client'
 import { Ed25519VerificationKey } from '@interop/ed25519-verification-key'
-import type { Candidate, Capability, Device, Msg, Person } from '../../lab/types'
+import type { Candidate, Capability, CarrierFaults, Device, Msg, Person } from '../../lab/types'
 import { rltpBeekem } from '../rltp-beekem'
 
 // E12 Variante (a): Portable Web Spaces (ex Wallet Attached Storage) als
@@ -70,6 +70,18 @@ export async function rltpBeekemPws(options: PwsOptions = {}): Promise<Candidate
   const stats = { puts: 0, pulls: 0, pulledDocs: 0, bytesUp: 0 }
   const notes: string[] = []
 
+  // ── Fehlerinjektion am Träger (E10) ───────────────────────────────────
+  // Der Server ist echt; was er nicht kann, spielt die Hülle: Verlust =
+  // der Put wird vom Server abgewiesen (RequestFaults wäre möglich, hier
+  // zählt die Hülle, weil der Sender sonst einen HTTP-Fehler sähe und das
+  // Verhalten „still verloren“ gerade geprüft werden soll); Zurückhalten je
+  // Gerät = Filter beim Lesen (alle Geräte signieren mit demselben Schlüssel,
+  // der Server kann sie nicht unterscheiden); Veränderung = vor dem Put.
+  const faultState = { drop: [] as Array<(m: Msg) => boolean>, withhold: [] as Array<{ device: Device; match: (m: Msg) => boolean }>, reverse: false, duplicate: false, tamper: [] as Array<{ match: (m: Msg) => boolean; mutate: (b: Uint8Array) => Uint8Array }> }
+  let carriedId = 0
+  const carriedLog: Msg[] = []
+  const toMsg = (f: Frame, id: number): Msg => ({ id, from: f.from, label: f.label, body: unb64(f.b) })
+
   const dev = (d: Device) => {
     const s = devices.get(d)
     if (!s) throw new Error(`unbekanntes Gerät ${d}`)
@@ -101,16 +113,24 @@ export async function rltpBeekemPws(options: PwsOptions = {}): Promise<Candidate
     const col = collection(s)
     let n = 0
     while (s.outbox.length) {
-      const { label, body } = s.outbox[0]!
+      const { label, body: original } = s.outbox[0]!
       const id = `${d}-${String(s.seq).padStart(6, '0')}`
-      const frame: Frame = { from: d, label, b: b64(body) }
-      await timed(() => col.put(id, frame))
-      stats.puts++
-      stats.bytesUp += body.length
+      const probe: Msg = { id: carriedId + 1, from: d, label, body: original }
       s.seq++
       s.outbox.shift()
       s.seen.add(id)
       n++
+      if (faultState.drop.some((r) => r(probe))) {
+        notes.push(`Träger verschluckt ${d}:${label}`)
+        continue
+      }
+      let body = original
+      for (const r of faultState.tamper) if (r.match(probe)) body = r.mutate(body)
+      const frame: Frame = { from: d, label, b: b64(body) }
+      await timed(() => col.put(id, frame))
+      carriedLog.push({ ...probe, id: ++carriedId, body })
+      stats.puts++
+      stats.bytesUp += body.length
     }
     return n
   }
@@ -123,15 +143,21 @@ export async function rltpBeekemPws(options: PwsOptions = {}): Promise<Candidate
     for (;;) {
       const page = await timed(() => col.changes({ checkpoint: s.checkpoint, limit: 200 }))
       stats.pulls++
-      for (const doc of page.documents as Array<{ id: string; kind?: string; deleted?: boolean; data?: Frame }>) {
+      const docs = page.documents as Array<{ id: string; kind?: string; deleted?: boolean; data?: Frame }>
+      for (const doc of faultState.reverse ? [...docs].reverse() : docs) {
         if (doc.kind !== 'resource' || doc.deleted || !doc.data || s.seen.has(doc.id)) continue
-        s.seen.add(doc.id)
         const f = doc.data
-        if (f.from === d) continue
-        stats.pulledDocs++
-        const msg: Msg = { id: stats.pulledDocs, from: f.from, label: f.label, body: unb64(f.b) }
-        const { content } = await inner.receive(d, msg)
-        for (const u of content) Y.applyUpdate(s.doc, u, 'remote')
+        if (f.from === d) {
+          s.seen.add(doc.id)
+          continue
+        }
+        const msg = toMsg(f, ++stats.pulledDocs)
+        if (faultState.withhold.some((r) => r.device === d && r.match(msg))) continue // bleibt ungesehen: der Träger hält es diesem Gerät vor
+        s.seen.add(doc.id)
+        for (let k = 0; k < (faultState.duplicate ? 2 : 1); k++) {
+          const { content } = await inner.receive(d, msg)
+          for (const u of content) Y.applyUpdate(s.doc, u, 'remote')
+        }
         n++
       }
       if (!page.checkpoint || page.documents.length === 0) break
@@ -150,6 +176,33 @@ export async function rltpBeekemPws(options: PwsOptions = {}): Promise<Candidate
       if (moved === 0) return
     }
     throw new Error('PWS: nach 60 Runden nicht ruhig')
+  }
+
+  const faults: CarrierFaults = {
+    drop: (m) => void faultState.drop.push(m),
+    withhold: (device, m) => void faultState.withhold.push({ device, match: m }),
+    reverse: (on) => void (faultState.reverse = on),
+    duplicate: (on) => void (faultState.duplicate = on),
+    tamper: (m, mutate) => void faultState.tamper.push({ match: m, mutate }),
+    async replay(match) {
+      // Ein alter Rahmen kommt als neue Resource noch einmal; der Server kennt keine Identität des Inhalts.
+      const s = devices.values().next().value as DeviceState
+      const col = collection(s)
+      for (const m of carriedLog) {
+        if (!match(m)) continue
+        const id = `replay-${m.id}`
+        await timed(() => col.put(id, { from: m.from, label: m.label, b: b64(m.body) } as Frame))
+        stats.puts++
+      }
+    },
+    carried: () => carriedLog.slice(),
+    reset() {
+      faultState.drop = []
+      faultState.withhold = []
+      faultState.reverse = false
+      faultState.duplicate = false
+      faultState.tamper = []
+    },
   }
 
   const pws: PwsHandle = {
@@ -212,6 +265,7 @@ export async function rltpBeekemPws(options: PwsOptions = {}): Promise<Candidate
     capabilities: new Set<Capability>([...inner.capabilities].filter((c) => c !== 'service' && c !== 'steal') as Capability[]),
     pws,
     transport: {
+      faults,
       async setOnline(d, online) {
         dev(d).online = online
       },

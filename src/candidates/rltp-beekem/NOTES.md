@@ -447,6 +447,35 @@ Faltung liefern nach jeder einzelnen Operation denselben Zustand, über die
 | S9b (5 × 200) | 0,46 ms je Gerät und Zustellung | 0,50 |
 | Sichten, 30 × 100 | 59 ms/Op (E8) | 31,9 ms/Op |
 
+## E10: Träger-Prüfstand, erster Durchgang (12.10.)
+
+Der Träger spielt den Gegner (`src/lab/traeger.ts`, Katalog T im Plan).
+Fehlerinjektion am Prüfstand-Relay (`World.carrier()`): verlieren,
+zurückhalten je Gerät, umordnen, verdoppeln, verändern, erneut einspielen;
+derselbe Katalog läuft über PWS (`transport.faults`, Hülle um den echten
+Server). Beide Träger zeigen dasselbe Bild:
+
+| | Tür | Relay | PWS | Befund |
+|---|---|---|---|---|
+| T1 Rahmen still verloren | DV2, I12 | nicht bestanden | nicht bestanden | **Keine Lückenreparatur.** Eine verlorene Autoritätsoperation bleibt verloren; die Repliken laufen dauerhaft auseinander, der Sender merkt nichts. I12 verlangt adressierte, endende Reparatur; der Kandidat hat keine Anfrage „mir fehlt Vorgänger X“. Für den Port: Reparatur ist eine Pflicht der Replik, nicht des Trägers. |
+| T2 umordnen | I2 | bestanden | bestanden | Beim Bau kam heraus: lose BeeKEM-Operationen, die vor ihren Vorgängern ankamen, wurden verworfen statt gepuffert. Jetzt `pendingCgka`, bei jeder Reparatur erneut versucht. |
+| T3 doppelt | DV3 | bestanden | bestanden | idempotent über id und Inhalt |
+| T4 alte Entfernung erneut | I8 | bestanden | bestanden | `bekannt`, kein Zustandswechsel |
+| T5 verändert / Müll | D1 | bestanden | bestanden | Digest der Hülle, Form vor Inhalt; Müll wird notiert, nie geworfen (neu: `receive` wirft nicht mehr) |
+| T6 einem Gerät vorgehalten | D5, I5 | nicht bestanden | nicht bestanden | **Blind ist nicht bemerkbar.** Carol liegt zurück und kann es nicht wissen; es gibt kein beglaubigtes Ziel, gegen das sie ihren Stand prüfen könnte. Das ist die Tür, die ein Dienst der Klasse Sicht/Log mit Attestation schließt (Replication §4.1), und die Frage 3 an PWS. |
+| T12 versiegelter Eintrag | I6 | nicht bestanden | nicht bestanden | Rahmen im Klartext (#24); Inhalt versiegelt |
+
+Nicht gelaufen: T7 (entsprechen S10a/b), T8 (PWS: Umzug bestanden, Relay
+nicht abbildbar), T9/T10 (Zustellungs-Adapter, E11), T11 (zwei Gruppen auf
+einem Träger).
+
+**Was der Träger-Prüfstand damit schon gezeigt hat:** Die drei roten Zellen
+sind keine Eigenschaften eines Trägers, sondern des Kandidaten bzw. der
+Dienstklasse: Lückenreparatur und versiegelte Rahmen fehlen im Kandidaten,
+beglaubigte Ziele fehlen jeder Klasse blind. Ein zweiter Träger (PWS)
+liefert exakt dieselbe Matrixzeile. Für die Auswertung heißt das: Träger
+unterscheiden sich erst bei T7–T11 und in den Kosten.
+
 ### Wo der Code vom Guss abweichen musste (Befund für 0.57)
 
 1. **Autor einer k-of-n-Operation.** Die Spec disponiert „eine Entfernung
