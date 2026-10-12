@@ -180,6 +180,30 @@ export const carrierScenarios: CarrierScenario[] = [
     },
   },
   {
+    id: 'T6b',
+    title: 'Träger friert ein Gerät ein (alles vorgehalten)',
+    door: 'D5 beglaubigtes Konvergenzziel · I5',
+    needs: [],
+    async run(w) {
+      await base(w)
+      const c = w.carrier()!
+      await w.device('dave', 'dave')
+      await w.flush()
+      // Carol bekommt gar nichts mehr: kein Eintrag, der auf das Vorgehaltene aufbaut, erreicht sie.
+      c.withhold('carol', () => true)
+      await w.add('alice', 'dave')
+      await w.flush()
+      await w.write('dave', 'von-dave')
+      await w.flush()
+      const noticed = w.candidate.status('carol').includes('lücke')
+      return {
+        outcome: verdict(noticed),
+        authority: `Carol sieht ${fmt(w.members('carol'))}; bemerkt: ${noticed ? 'ja' : 'nein'}; Zustand: ${w.candidate.status('carol')}`,
+        keys: `Carol liest Daves Eintrag: ${w.read('carol').includes('von-dave') ? 'ja' : 'nein'}`,
+      }
+    },
+  },
+  {
     id: 'T12',
     title: 'Versiegelter Eintrag: was der Träger liest',
     door: 'I6 key-blindness · Access-Envelope',

@@ -43,12 +43,13 @@ d('E12: RLTP über BeeKEM auf Portable Web Spaces', () => {
     const results = await runCarrier(rltpBeekemPws)
     const byId = Object.fromEntries(results.map((r) => [r.scenario, r.outcome]))
     expect(byId, JSON.stringify(results, null, 1)).toEqual({
-      T1: 'nicht bestanden', // kein Reparaturmechanismus (I12); der Put kam beim Server nie an, der Sender merkte nichts
+      T1: 'bestanden', // Lückenreparatur (I12): Bob fordert bei Alice nach, Alice legt den Rahmen erneut ab
       T2: 'bestanden',
       T3: 'bestanden',
       T4: 'bestanden',
       T5: 'bestanden',
-      T6: 'nicht bestanden', // blind: der Feed ist nicht beglaubigt (D5)
+      T6: 'bestanden', // bemerkbar über die kausalen Köpfe in Daves Eintrag; der Feed selbst bleibt unbeglaubigt (D5)
+      T6b: 'nicht bestanden', // blind: ein eingefrorener Feed ist ohne beglaubigtes Ziel nicht bemerkbar (D5)
       T12: 'nicht bestanden', // Rahmen im Klartext (#24)
     })
   }, 600_000)
@@ -95,7 +96,8 @@ d('E12: RLTP über BeeKEM auf Portable Web Spaces', () => {
       expect(vis.persons).toEqual(['alice', 'bob', 'carol', 'group']) // 'group' = Mitsignierer der Genesis
       expect(vis.fields.auth).toContain('op')
       expect(vis.fields.card).toContain('person')
-      expect(vis.fields.content).toEqual(['c', 'iv', 'ref', 't', 'tab'])
+      // Umschlag (E10, I12): Köpfe des Schreibers und sein Geräteschlüssel stehen im Klartext, der Inhalt bleibt versiegelt.
+      expect(vis.fields.content).toEqual(['by', 'c', 'heads', 'iv', 'ref', 't', 'tab'])
       expect(inv.resources.every((r) => /^[a-z]+-\d{6}$/.test(r))).toBe(true)
       const moved = await c.pws.moveToNewServer()
       expect(moved.resourcesCreated).toBe(inv.resources.length)

@@ -9,12 +9,13 @@ describe('Träger-Prüfstand: rltp-beekem über das Prüfstand-Relay', () => {
     const results = await runCarrier(rltpBeekem)
     const byId = Object.fromEntries(results.map((r) => [r.scenario, r.outcome]))
     expect(byId, JSON.stringify(results, null, 1)).toEqual({
-      T1: 'nicht bestanden', // kein Reparaturmechanismus: eine verlorene Operation bleibt verloren (Befund, I12)
+      T1: 'bestanden', // Lückenreparatur (I12): die Replik fordert den fehlenden Vorgänger beim Autor des Belegs nach
       T2: 'bestanden',
       T3: 'bestanden',
       T4: 'bestanden',
       T5: 'bestanden',
-      T6: 'nicht bestanden', // blind: gezieltes Zurückhalten ist nicht bemerkbar (Befund, D5)
+      T6: 'bestanden', // bemerkbar, sobald ein Dritter auf dem vorgehaltenen Eintrag aufbaut (kausale Köpfe im Inhalt); reines Zurückhalten des ganzen Feeds bleibt unbemerkbar (D5)
+      T6b: 'nicht bestanden', // blind: ein eingefrorener Feed ist ohne beglaubigtes Ziel nicht bemerkbar (Befund, D5)
       T12: 'nicht bestanden', // Rahmen im Klartext (Befund #24)
     })
   }, 300_000)

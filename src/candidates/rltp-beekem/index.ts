@@ -1,5 +1,5 @@
 import type { Candidate, Capability, Device, EnforcingService, Msg, Person } from '../../lab/types'
-import { AuthorityLog, Signer, promoteInPolicy, type AuthOp, type Policy } from './authority'
+import { AuthorityLog, Signer, promoteInPolicy, wellFormed, type AuthOp, type Policy } from './authority'
 import { BeekemPeer, loadWasm } from './load'
 import { LogReplicaService, ViewService, signView, viewHash, type Challenge, type ChallengeAnswer, type MRule, type ViewAck, type ViewProposal } from './service'
 
@@ -47,7 +47,15 @@ type Wire =
   | { t: 'cgka'; op: string }
   /** Widerruf eines einzelnen Geräts (verloren); die Person bleibt. */
   | { t: 'revoke'; id: string }
-  | { t: 'content'; c: string; iv: string; tab: string; ref: string }
+  /** Inhalt mit Access-Envelope: `heads` sind die Autoritätsköpfe des Schreibers, `by` sein Geräteschlüssel. */
+  | { t: 'content'; c: string; iv: string; tab: string; ref: string; heads: string[]; by: string }
+  /**
+   * Reparaturanfrage (Replication I12): adressiert an die Geräte `to`, mit
+   * den fehlenden Vorgängern `missing`, dem Beleg `evidence` (die Einträge,
+   * die sie nennen) und den eigenen Köpfen `have`, damit die Quelle nur den
+   * Unterschied schickt.
+   */
+  | { t: 'repair'; from: string; to: string[]; missing: string[]; evidence: string[]; have: string[] }
   | ViewProposal
   | ViewAck
   | Challenge
@@ -86,6 +94,10 @@ interface DeviceState extends KeyState {
   appliedCgka: Set<string>
   /** Lose BeeKEM-Operationen, die der Baum noch nicht annimmt (Vorgänger fehlen): bei jeder Reparatur erneut versuchen (I2). */
   pendingCgka: string[]
+  /** Autoritätsrahmen, wie gesendet oder empfangen, nach Operations-ID: Quellenpflicht (I12, Antwort). */
+  authFrames: Map<string, { op: AuthOp; cgka: string[]; group?: string; label: string }>
+  /** Reparaturläufe nach fehlender ID (I12): abfragbar zwischen den Läufen, nie still. */
+  repairs: Map<string, { evidence: Set<string>; to: Set<string>; outcome: 'awaiting-source' | 'repaired' }>
   outgoing: Array<{ label: string; body: Uint8Array }>
   joined: boolean
   notes: string[]
@@ -123,7 +135,10 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
     if (!s) throw new Error(`unbekanntes Gerät ${d}`)
     return s
   }
-  const send = (s: DeviceState, msg: Wire, label: string = msg.t) => s.outgoing.push({ label, body: enc.encode(JSON.stringify(msg)) })
+  const send = (s: DeviceState, msg: Wire, label: string = msg.t) => {
+    if (msg.t === 'auth') s.authFrames.set(msg.op.id, { op: msg.op, cgka: msg.cgka, group: msg.group, label })
+    s.outgoing.push({ label, body: enc.encode(JSON.stringify(msg)) })
+  }
 
   function ensureJoined(s: DeviceState) {
     if (!s.joined && groupId) {
@@ -225,6 +240,79 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
     await heal(s)
     await ensureMemberLeaves(s)
     await ensureOwnLeaves(s)
+    repair(s)
+  }
+
+  /**
+   * Lückenreparatur (Replication I12). Eine Lücke ist ein Vorgänger, den ein
+   * gehaltener Eintrag nennt (Autoritätsoperation: `preds`; Inhalt: `heads`)
+   * und den das Log nicht hält. Die Anfrage geht an die Geräte des Autors
+   * des Belegs, trägt den Beleg und die eigenen Köpfe. Ein Lauf endet, wenn
+   * der Vorgänger eintrifft (`repaired`); bis dahin ist er `awaiting-source`
+   * und im Status sichtbar. Jeder neue Beleg löst eine neue Anfrage aus; ein
+   * Zeithorizont ist im Prüfstand nicht modelliert (keine Uhr).
+   */
+  function repair(s: DeviceState) {
+    for (const [id, r] of s.repairs) if (r.outcome === 'awaiting-source' && s.auth.has(id)) r.outcome = 'repaired'
+    const found = new Map<string, { evidence: string; to: string[] }>()
+    const note = (missing: string, evidence: string, to: string[]) => {
+      if (!s.auth.has(missing) && !found.has(missing)) found.set(missing, { evidence, to })
+    }
+    for (const w of s.waitingAuth) {
+      const to = w.op.sigs.flatMap((sig) => cardsOf(s, sig.signer).map((c) => c.deviceKey))
+      for (const p of w.op.preds) note(p, w.op.id, to)
+    }
+    for (const m of s.pending) if (m.t === 'content') for (const h of m.heads) note(h, m.ref, [m.by])
+    const ask: string[] = []
+    const evidence = new Set<string>()
+    const to = new Set<string>()
+    for (const [missing, f] of found) {
+      let r = s.repairs.get(missing)
+      if (!r) s.repairs.set(missing, (r = { evidence: new Set(), to: new Set(), outcome: 'awaiting-source' }))
+      if (r.evidence.has(f.evidence)) continue
+      r.evidence.add(f.evidence)
+      for (const d of f.to) r.to.add(d)
+      ask.push(missing)
+      evidence.add(f.evidence)
+      for (const d of f.to) to.add(d)
+    }
+    if (ask.length && to.size) send(s, { t: 'repair', from: s.deviceSigner.pub, to: [...to], missing: ask, evidence: [...evidence], have: s.auth.heads() })
+  }
+
+  /**
+   * Quellenpflicht (I12): Eine adressierte, belegte Anfrage beantwortet das
+   * Gerät mit dem Abschluss der fehlenden Operationen ohne den Abschluss der
+   * Köpfe des Fragenden, in kausaler Reihenfolge, als die ursprünglichen Rahmen.
+   */
+  function answerRepair(s: DeviceState, m: Extract<Wire, { t: 'repair' }>) {
+    if (!m.to.includes(s.deviceSigner.pub)) return
+    if (!m.evidence.length) return
+    const closure = (roots: string[]) => {
+      const seen = new Set<string>()
+      const order: string[] = []
+      const visit = (id: string) => {
+        if (seen.has(id)) return
+        seen.add(id)
+        const f = s.authFrames.get(id)
+        if (!f) return
+        for (const p of f.op.preds) visit(p)
+        for (const d of f.op.dependsOn ?? []) visit(d)
+        order.push(id)
+      }
+      roots.forEach(visit)
+      return { seen, order }
+    }
+    const have = closure(m.have).seen
+    const { order } = closure(m.missing)
+    let sent = 0
+    for (const id of order) {
+      if (have.has(id)) continue
+      const f = s.authFrames.get(id)
+      if (!f) continue
+      s.outgoing.push({ label: f.label, body: enc.encode(JSON.stringify({ t: 'auth', op: f.op, group: f.group, cgka: f.cgka } satisfies Wire)) })
+      sent++
+    }
+    if (sent) s.notes.push(`reparatur beantwortet: ${sent} Rahmen`)
   }
 
   /**
@@ -384,8 +472,12 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
       case 'auth':
         if (m.group && !groupId) groupId = unhex(m.group)
         ensureJoined(s)
+        if (wellFormed(m.op) && !s.authFrames.has(m.op.id)) s.authFrames.set(m.op.id, { op: m.op, cgka: m.cgka, group: m.group, label: m.op.kind === 'policy' ? 'policy' : 'auth' })
         await processAuth(s, m.op, m.cgka)
         return { content: await drain(s) }
+      case 'repair':
+        answerRepair(s, m)
+        return { content: [] }
       case 'cgka':
         ensureJoined(s)
         try {
@@ -397,8 +489,11 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
         await reconcile(s)
         return { content: await drain(s) }
       case 'content':
+        if (!Array.isArray(m.heads) || typeof m.by !== 'string') throw new Error('Inhalt ohne Umschlag')
         s.pending.push(m)
-        return { content: await drain(s) }
+        const out = await drain(s)
+        repair(s)
+        return { content: out }
     }
   }
 
@@ -413,7 +508,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
       const peer = new BeekemPeer()
       const deviceSigner = Signer.generate(device)
       const card: Card = { person, id: new Uint8Array(peer.id), shareKey: new Uint8Array(peer.shareKey), deviceKey: deviceSigner.pub }
-      const s: DeviceState = { person, peer, auth: new AuthorityLog(), deviceSigner, cards: new Map([[hex(card.id), card]]), revoked: new Set(), ack: { seq: 0, hash: null, identities: [] }, proposed: null, waitingAuth: [], appliedCgka: new Set(), pendingCgka: [], keys: new Map(), heads: [], pending: [], outgoing: [], joined: false, notes: [] }
+      const s: DeviceState = { person, peer, auth: new AuthorityLog(), deviceSigner, cards: new Map([[hex(card.id), card]]), revoked: new Set(), ack: { seq: 0, hash: null, identities: [] }, proposed: null, waitingAuth: [], appliedCgka: new Set(), pendingCgka: [], authFrames: new Map(), repairs: new Map(), keys: new Map(), heads: [], pending: [], outgoing: [], joined: false, notes: [] }
       devices.set(device, s)
       send(s, { t: 'card', person, id: hex(card.id), shareKey: hex(card.shareKey), deviceKey: card.deviceKey })
     },
@@ -549,7 +644,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
         const { iv, ct } = await sealTable(r.appKey, table)
         s.keys.set(hex(ref), r.appKey)
         s.heads = [ref]
-        send(s, { t: 'content', c: b64(r.ciphertext), iv: b64(iv), tab: b64(ct), ref: hex(ref) })
+        send(s, { t: 'content', c: b64(r.ciphertext), iv: b64(iv), tab: b64(ct), ref: hex(ref), heads: s.auth.heads(), by: s.deviceSigner.pub })
       } catch (e) {
         notes.push(`${d} schreibt: ${(e as Error).message}`)
       }
@@ -580,7 +675,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule } =
     members: (d) => personMembers(dev(d)),
     status: (d) => {
       const s = dev(d)
-      return [`baum=${(s.peer.members() as Uint8Array[]).length}`, `schlüssel=${s.peer.hasKey() ? 'ja' : 'nein'}`, `fork=${s.auth.forked() ? 'ja' : 'nein'}`, `regeln=v${s.auth.policyVersion()}`, ...(s.pendingCgka.length ? [`wartende-cgka=${s.pendingCgka.length}`] : []), ...(s.waitingAuth.length ? [`wartende-auth=${s.waitingAuth.length}`] : []), ...s.notes.slice(0, 3), ...notes.slice(0, 2)].join('; ')
+      return [`baum=${(s.peer.members() as Uint8Array[]).length}`, `schlüssel=${s.peer.hasKey() ? 'ja' : 'nein'}`, `fork=${s.auth.forked() ? 'ja' : 'nein'}`, `regeln=v${s.auth.policyVersion()}`, ...(s.pendingCgka.length ? [`wartende-cgka=${s.pendingCgka.length}`] : []), ...(s.waitingAuth.length ? [`wartende-auth=${s.waitingAuth.length}`] : []), ...(s.repairs.size ? [`lücke=${[...s.repairs.values()].filter((r) => r.outcome === 'awaiting-source').length} (${[...s.repairs.values()].some((r) => r.outcome === 'awaiting-source') ? 'awaiting-source' : `repariert ${[...s.repairs.values()].filter((r) => r.outcome === 'repaired').length}`})`] : []), ...s.notes.slice(0, 3), ...notes.slice(0, 2)].join('; ')
     },
 
     async steal(d) {

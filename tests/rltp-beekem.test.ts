@@ -178,3 +178,40 @@ describe('E7: Geräte und Personen', () => {
     for (const d of ['alice', 'bob', 'carol']) expect(c.status(d)).toContain('baum=3')
   })
 })
+
+// E10: Lückenreparatur (Replication I12). Ein Eintrag nennt die
+// Autoritätsköpfe seines Schreibers; wer einen Kopf nicht hält, fordert ihn
+// adressiert und mit Beleg nach. Zwischen den Läufen ist der Zustand
+// abfragbar (awaiting-source), nie still.
+describe('E10: Lückenreparatur', () => {
+  it('eine still verlorene Aufnahme wird beim Autor nachgefordert; offline bleibt sie sichtbar offen', async () => {
+    const c = rltpBeekem()
+    const w = new World(c)
+    for (const p of ['alice', 'bob', 'carol', 'dave']) await w.device(p, p)
+    await w.flush()
+    await w.createGroup('alice')
+    await w.add('alice', 'bob')
+    await w.add('alice', 'carol')
+    await w.flush()
+    const k = w.carrier()!
+    let dropped = false
+    k.drop((m) => (!dropped && m.from === 'alice' && m.label === 'auth' ? (dropped = true) : false))
+    await w.add('alice', 'dave')
+    await w.flush()
+    k.reset()
+    expect(w.members('bob')).toEqual(['alice', 'bob', 'carol'])
+    // Alice schreibt; die Nachfragen erreichen sie vorerst nicht.
+    k.withhold('alice', (m) => m.label === 'repair')
+    await w.write('alice', 'danach')
+    await w.flush()
+    expect(c.status('bob')).toContain('lücke=1 (awaiting-source)')
+    expect(c.status('carol')).toContain('lücke=1 (awaiting-source)')
+    expect(w.read('bob')).toEqual([])
+    // Nur die adressierte Quelle antwortet: Bob und Carol halten die Aufnahme nicht.
+    k.reset()
+    await w.flush()
+    for (const d of ['alice', 'bob', 'carol', 'dave']) expect(w.members(d), d).toEqual(['alice', 'bob', 'carol', 'dave'])
+    for (const d of ['bob', 'carol', 'dave']) expect(w.read(d), d).toEqual(['danach'])
+    expect(c.status('bob')).toContain('lücke=0 (repariert 1)')
+  })
+})
