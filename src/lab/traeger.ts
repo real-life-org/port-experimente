@@ -212,7 +212,8 @@ export const carrierScenarios: CarrierScenario[] = [
       // Carol müsste merken, dass sie zurückliegt. Erkennbar hier nur daran, dass sie Daves Eintrag nicht lesen kann.
       const carolBehind = !w.members('carol').includes('dave')
       const carolReads = w.read('carol').includes('von-dave')
-      const noticed = /lücke=[1-9]|repariert [1-9]/.test(w.candidate.status('carol')) // eine offene oder geschlossene Lücke, nicht bloß das Feld
+      // Bemerkt: eine Lücke (offen oder geschlossen), oder über das beglaubigte Ziel des Dienstes etwas Fehlendes bzw. Nachgeholtes (D5).
+      const noticed = /lücke=[1-9]|repariert [1-9]|\([1-9]\d* fehlen|, [1-9]\d* geholt\)/.test(w.candidate.status('carol'))
       return {
         outcome: verdict(noticed),
         authority: `Carol sieht ${fmt(w.members('carol'))} (zurück: ${carolBehind ? 'ja' : 'nein'}); bemerkt: ${noticed ? 'ja' : 'nein'}; Zustand: ${w.candidate.status('carol')}`,
@@ -236,7 +237,8 @@ export const carrierScenarios: CarrierScenario[] = [
       await w.flush()
       await w.write('dave', 'von-dave')
       await w.flush()
-      const noticed = /lücke=[1-9]/.test(w.candidate.status('carol')) // nur eine offene Lücke zählt; frühere, geschlossene sagen nichts über den eingefrorenen Feed
+      // Nur eine offene Lücke zählt, oder ein beglaubigtes Ziel ohne Antwort bzw. mit Fehlendem (D5); frühere, geschlossene Lücken sagen nichts über den eingefrorenen Feed.
+      const noticed = /lücke=[1-9]|ziel=angefragt, keine Antwort|\([1-9]\d* fehlen/.test(w.candidate.status('carol'))
       return {
         outcome: verdict(noticed),
         authority: `Carol sieht ${fmt(w.members('carol'))}; bemerkt: ${noticed ? 'ja' : 'nein'}; Zustand: ${w.candidate.status('carol')}`,

@@ -678,6 +678,65 @@ unverändert bestanden. Für den Port: Der Umschlag im Klartext ist das, was
 ein Träger lernt: Art des Rahmens, Köpfe als Hashes, ein Geräteschlüssel als
 Pseudonym; dazu Größen, Zeiten und die Gerätenamen des Prüfstands.
 
+### Beglaubigtes Ziel für die Klasse Sicht (D5, I5), 13.10.
+
+Der Prüfstand-Dienst beglaubigt jetzt sein Konvergenzziel nach Replication
+§4.1 (Form 0.26, verkürzt: ohne genesisDigest, session, registrationCore):
+`seq` in Kette, `prev` als Digest des Vorgängers, `chain` als Digest des
+ersten Ziels, Signatur unter einem Attestationsschlüssel, der über die
+Sitzung stabil ist (damit Equivocation beweisbar wäre), Scope `stored`:
+ein schlüsselblinder Dienst beglaubigt, was er hält, nie Zulässigkeit.
+`heads` sind hier die Referenzen aller gespeicherten versiegelten
+Einträge (der Dienst sieht die Kette der Einträge nicht, also keine echten
+Köpfe; grow-only, wie die Konsistenzpflicht verlangt). Dazu hält der
+Dienst die durchgelassenen Einträge nach Referenz und liefert sie auf
+`fetch` nach (Quellenpflicht, I1/I12 gegen den Dienst als Quelle).
+
+Auf Geräteseite ein **Sync-Tick** (`Candidate.poll`, vom Prüfstand zu
+Beginn jeder Zustellrunde gerufen, die App kommt in den Vordergrund): mit
+Dienst fragt das Gerät `target-request` mit einer Nonce und `since` (das
+letzte Ziel, das es kennt). Drei getrennte Prüfungen am Ziel (Review zu
+#36, drei Gegenproben): **Signatur** unter dem beim ersten Mal gesehenen
+Schlüssel (TOFU wie §7.3); **Kette**: seq genau +1, `prev` = Digest des
+angenommenen Vorgängers, `chain` = Kettenidentität, sonst liegt das Ziel
+mit Notiz; der Dienst reicht auf `since` die Zwischenziele nach, damit die
+Kette auch dann prüfbar ist, wenn andere Geräte dazwischen gefragt haben;
+**Frische**: die offene Anfrage beantwortet nur ein Ziel mit ihrem Echo
+(signiert) und an dieses Gerät, ein altes gültiges Ziel ist ein
+Kettenglied, nie eine Antwort. Der Fehlbestand ist eine Menge von
+Digests.
+
+**Die Empfangsgrenze (Runde 3, Codex: „‚vorhanden‘ war nacheinander eine
+Zahl, eine Referenz und ein Entschlüsselungserfolg“).** Drei Aussagen,
+drei Zustände, getrennt gehalten:
+
+| Zustand | Aussage | Wo |
+|---|---|---|
+| verifiziert gespeichert | die Bytes dieses Eintrags liegen hier; Identität = Digest der Bytes, dieselbe, die der Dienst beglaubigt | `stored` (Gerät), `stored` nach Digest (Dienst) |
+| entschlüsselt | der Inhalt ist lesbar | `keys`, `heads`, Tabelle |
+| fachlich geprüft | Art stimmt mit dem Umschlag, die Autorität hat geurteilt | Fold, `verworfen`-Notizen |
+
+Der Zielfortschritt kommt **nur** aus dem ersten Zustand: ein Eintrag
+des Ziels ist nachgeliefert, wenn byte-identische Bytes da sind, gleich
+ob sie sich schon öffnen lassen. Eine beschädigte Kopie hat einen anderen
+Digest und zählt nicht; beim nächsten Tick wird alles erneut geholt, was
+das Ziel nennt und nicht gespeichert ist. Die Entschlüsselung und ihr
+Versuchszähler liegen dahinter und sind je Kopie (nach Digest) geführt:
+eine beschädigte Kopie derselben Referenz verbraucht nicht die Versuche
+der richtigen. Dieselben Bytes ein zweites Mal sind ein Duplikat (T3) und
+werden nicht erneut angenommen. Durchgängig geprüft: vorgehalten,
+beschädigt geliefert, richtig nachgeliefert, wiederhergestellt. Beide Anfragen gehen unversiegelt (nur IDs) und sind beim
+Dienst ein Lesen: bewiesener Schlüssel und Mitgliedschaft (I7). Status:
+`ziel=seq N (M fehlen, K geholt)` bzw. `ziel=angefragt, keine Antwort`.
+
+Ergebnis: T6 besteht mit Sicht jetzt über das Ziel (ein Eintrag
+vorgehalten → im Ziel genannt → beim Dienst geholt), T6b besteht (Feed
+eingefroren → Anfrage ohne Antwort, samplebar). Klasse blind bleibt bei
+T6b rot, dort gibt es kein Ziel; PWS ebenso, bis der Feed beglaubigt ist
+(Frage 3 an Dmitri). Nicht modelliert: der Horizont, nach dem „keine
+Antwort“ ein Ergebnis wird; Rotation des Attestationsschlüssels;
+Equivocation-Beweis aus zwei Ketten.
+
 ### Konformitätsmatrix und die Dienstvarianten am Träger (13.10.)
 
 Die Matrix (`src/lab/matrix.ts`, Ausgabe `REPORT=1 pnpm test report` und
@@ -698,7 +757,7 @@ gelaufen; was dabei rot wurde, sind Befunde, nicht Fehler des Prüfstands:
 | T2 Umordnung | ✗ | ✗ | Mit Dienst kommt ein umgeordneter Inhalt vor dem Besitznachweis des Schreibers oder vor der Sicht, die ihn zulässt; der Dienst verwirft ihn endgültig, statt ihn zu halten. Beim blinden Träger trägt die Replik die Reihenfolge, beim Dienst müsste er sie tragen (Access §9.3: Evidenztransport nie gated, Inhalt gated, aber ein Urteil „zu früh“ ist keines von beiden). Offen. |
 | T5 verändert | ✓ | ✗ | Klartextmodus: ein abgeschnittener Autoritätsrahmen wird verworfen, aber Dave und Eve kommen nicht nach, weil im Klartextmodus kein Inhalt sie belegt (s. T1). |
 | T6 ein Eintrag vorgehalten | ✓ | ✗ | wie T1: ohne Schlüssel kein Beleg. |
-| T6b Feed eingefroren | ✗ | ✗ | Klasse Sicht ohne Attestation: wie blind. Die Sicht selbst wäre das beglaubigte Ziel, der Kandidat vergleicht seinen Stand noch nicht damit. Offen: Attestation. |
+| T6b Feed eingefroren | ~~✗~~ ✓ | ✗ | Seit der Attestation (unten): der Dienst der Klasse Sicht beglaubigt sein Ziel, Carol fragt beim Sync-Tick und bekommt keine Antwort, der Zustand sagt es. Log-Replik: Klartextmodus ohne Zielabfrage im Test, Befund bleibt dort. |
 | T12 versiegelt | ✗ | ✗ | Mit Prüfstand-Dienst gehen Karten über den Dienst (Gerätebindung aus der Karte); der Log-Dienst liest das Log im Klartext, das ist seine Klasse (§9.3). Der Träger sieht hier, was der Dienst sehen soll. |
 
 Was die Matrix für die anderen Kandidaten zeigt: Ein T-Szenario, dessen
