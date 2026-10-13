@@ -246,6 +246,13 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
       if (!s.peer.hasKey()) {
         const op = (await s.peer.rotate()) as Uint8Array
         send(s, { t: 'cgka', op: b64(op) }, 'seal-rotate')
+        // Eine Rotation führt gleichzeitige Baumänderungen zusammen (KV6): erst danach stehen etwa die
+        // Blätter aus einem verfallenen Zweig im Baum. Vor dem Verschlüsseln also noch einmal angleichen,
+        // sonst ginge der Eintrag an Blätter, die laut Log nicht Mitglied sind (#33, S4f).
+        if (!authInTransit(s)) {
+          await heal(s)
+          await ensureMemberLeaves(s)
+        }
       }
     } catch {
       // Kein Schlüssel und keine Rotation möglich (das eigene Blatt fehlt im Baum, etwa nach einer
@@ -633,6 +640,8 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
       try {
         const op = (await s.peer.rotate()) as Uint8Array
         send(s, { t: 'cgka', op: b64(op) }, 'heal-rotate')
+        // Die Rotation führt gleichzeitige Änderungen zusammen; Blätter von Nicht-Mitgliedern erst wieder heraus (#33).
+        await heal(s)
       } catch (e) {
         s.notes.push(`Reparatur-Rotation: ${(e as Error).message}`)
         return

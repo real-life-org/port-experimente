@@ -271,10 +271,15 @@ export const scenarios: Scenario[] = [
       await w.flush()
       const m = membersAgree(w, ['alice', 'bob', 'carol'])
       const puppets = ['mallory', 'x', 'y'].filter((p) => w.members('alice').includes(p))
+      // Vertraulichkeit nach der Heilung (#33): neuer Inhalt darf die verfallene Kette nicht erreichen.
+      await w.write('alice', 'nach-der-heilung')
+      await w.flush()
+      const leak = ['mallory', 'x', 'y'].filter((d) => w.read(d).includes('nach-der-heilung'))
+      const members = ['alice', 'bob', 'carol'].every((d) => w.read(d).includes('nach-der-heilung'))
       return {
-        outcome: verdict(m.agree && puppets.length === 0),
+        outcome: verdict(m.agree && puppets.length === 0 && leak.length === 0 && members),
         authority: `${m.text}; übrig aus Mallorys Kette: ${puppets.length ? puppets.join(',') : 'niemand'}; ${chain}`,
-        keys: '—',
+        keys: leak.length ? `LECK: ${leak.join(',')} lesen neuen Inhalt` : `neuer Inhalt nur bei Mitgliedern: ${members ? 'ja' : 'nein'}`,
       }
     },
   },

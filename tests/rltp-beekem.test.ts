@@ -100,13 +100,12 @@ describe('E9 Schritt 1b: der Baum folgt dem Zustand', () => {
     for (const d of ['alice', 'carol', 'dave', 'x']) expect(w.read(d), d).toContain('nachher')
     for (const d of ['alice', 'carol', 'dave', 'x']) expect(w.members(d), d).toEqual(all)
     for (const d of ['alice', 'carol', 'dave', 'x']) expect(c.status(d), d).toContain('fork=ja')
-    // Bob ist wieder Mitglied, aber sein Blatt wurde durch die (später
-    // verfallene) Entfernung aus dem Baum genommen; die Wiederaufnahme unter
-    // demselben Share-Key gibt ihm keinen Schlüssel zurück. Er braucht eine
-    // frische Karte (Befund 8 in NOTES.md). Festgehalten, nicht gelöst. Seit
-    // E10 heißt das auch: ohne Schlüssel liest Bob das Log nicht weiter.
-    expect(w.read('bob')).toEqual([])
-    expect(c.status('bob')).toContain('ungeöffnet=')
+    // Bob ist wieder Mitglied; sein Blatt wurde durch die (später verfallene)
+    // Entfernung aus dem Baum genommen. Seit der Angleichung nach jeder
+    // Rotation (#33) zieht das nächste schreibende Mitglied sein Blatt nach,
+    // und der Eintrag erreicht ihn (Befund 8 damit aufgelöst).
+    expect(w.read('bob')).toContain('nachher')
+    expect(w.members('bob')).toEqual(all)
   })
 })
 
