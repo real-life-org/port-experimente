@@ -25,7 +25,7 @@ const env = {
 }
 $('env').textContent = `${env.userAgent} · ${env.cores} Kerne · WebAssembly ${env.wasm ? 'ja' : 'nein'} · Build ${env.build}`
 
-const cls = (o: ScenarioResult['outcome'] | 'nicht geprüft') => (o === 'bestanden' ? 'ok' : o === 'nicht bestanden' ? 'no' : 'na')
+const cls = (o: ScenarioResult['outcome'] | 'teilweise' | 'nicht geprüft') => (o === 'bestanden' ? 'ok' : o === 'nicht bestanden' ? 'no' : o === 'teilweise' ? 'part' : 'na')
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, className?: string) {
   const e = document.createElement(tag)
@@ -44,7 +44,7 @@ function loadLine(name: string, load: LoadResult) {
 function renderMatrix(m: Matrix) {
   const sec = el('section')
   sec.append(el('h2', 'Konformitätsmatrix'))
-  sec.append(el('div', 'Jede Zelle ist die Summe der gelaufenen Szenarien, die die Zusage prüfen: ✓ bestanden, ✗ nicht bestanden, – nicht abbildbar. „nicht geprüft“ heißt: es gibt noch kein Szenario dafür. Kandidaten nur für Node fehlen hier.', 'load'))
+  sec.append(el('div', 'Eine Zusage gilt nur, wenn jedes zugeordnete Szenario besteht: ✓ bestanden, ✗ nicht bestanden, – nicht abbildbar, ? nicht gelaufen. „teilweise“: ein Teil besteht, der Rest nicht abbildbar oder nicht gelaufen. „nicht geprüft“: noch kein Szenario. Kandidaten nur für Node fehlen hier.', 'load'))
   for (const p of m.ports) {
     sec.append(el('h3', p.title))
     const wrap = el('div', undefined, 'scroll')

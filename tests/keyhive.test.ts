@@ -16,6 +16,7 @@ describe('Kandidat Keyhive (Yjs über @keyhive/keyhive)', () => {
       S4a: 'bestanden', // Bobs gleichzeitiger Eintrag bleibt sichtbar
       S4b: 'bestanden', // gleichzeitige Entfernungen: niemand liest mit
       S4c: 'bestanden', // Bob kann die Gründerin nicht entfernen (Seniorität)
+      S4c2: 'nicht bestanden', // Gründerin nicht entfernbar: Alice bleibt und liest
       S4d: 'bestanden', // forcePcsUpdate neben Entfernung
       S4e: 'nicht abbildbar', // keine Gruppenregeln
       S4j: 'nicht abbildbar',

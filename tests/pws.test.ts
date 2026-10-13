@@ -21,6 +21,7 @@ d('E12: RLTP über BeeKEM auf Portable Web Spaces', () => {
       S4a: 'bestanden',
       S4b: 'bestanden',
       S4c: 'bestanden',
+      S4c2: 'bestanden',
       S4d: 'bestanden',
       S4e: 'bestanden',
       S4f: 'bestanden',

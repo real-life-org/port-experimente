@@ -681,7 +681,14 @@ Pseudonym; dazu Größen, Zeiten und die Gerätenamen des Prüfstands.
 ### Konformitätsmatrix und die Dienstvarianten am Träger (13.10.)
 
 Die Matrix (`src/lab/matrix.ts`, Ausgabe `REPORT=1 pnpm test report` und
-die Seite) läuft S1–S10 und T1–T12 für alle Kandidaten. Für die
+die Seite) läuft S1–S10 und T1–T12 für alle Kandidaten. Eine Zusage gilt
+nur, wenn jedes zugeordnete Szenario besteht; besteht ein Teil und der
+Rest ist nicht abbildbar, steht „teilweise“ (Review zu #35: vorher machte
+ein bestandener Teil eine zusammengesetzte Zusage grün, und A4 „beide
+draußen“ stützte sich auf S4c, das nur Einigkeit verlangt; jetzt prüft
+S4c2 das Soll samt Vertraulichkeit, und das zeigt gleich etwas: p2panda
+lässt nach gegenseitiger Entfernung beide draußen, aber Bob liest Carols
+neuen Eintrag noch, wie in S4b). Für die
 Dienstvarianten dieses Kandidaten ist der Katalog T damit zum ersten Mal
 gelaufen; was dabei rot wurde, sind Befunde, nicht Fehler des Prüfstands:
 

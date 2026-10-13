@@ -31,7 +31,8 @@ export const promises: Promise[] = [
   { id: 'A1', port: 'autorität', title: 'Gründung und Aufnahme: alle sehen dieselbe Mitgliedschaft', ref: 'Access §3', scenarios: ['S1'] },
   { id: 'A2', port: 'autorität', title: 'Entfernung gilt, auch neben einem Schreiben des Entfernten', ref: 'Access §3.6, RLTP-ACC-3400 (Strong Removal)', scenarios: ['S2', 'S4a'] },
   { id: 'A3', port: 'autorität', title: 'Gleichzeitige Entfernungen verschiedener Personen gelten beide', ref: 'Access §3.6 Konfliktmatrix', scenarios: ['S4b'] },
-  { id: 'A4', port: 'autorität', title: 'Gegenseitige Entfernung: beide sind draußen', ref: 'Access §3.6; Entscheid 05.10.', scenarios: ['S4c'] },
+  { id: 'A4', port: 'autorität', title: 'Gegenseitige Entfernung: beide sind draußen, keiner liest Neues', ref: 'Access §3.6; Entscheid 05.10.', scenarios: ['S4c2'] },
+  { id: 'A4a', port: 'autorität', title: 'Gegenseitige Entfernung: alle Verbleibenden sind sich einig (kein festes Soll, was ein Kandidat daraus macht)', ref: 'Access §3.6', scenarios: ['S4c'] },
   { id: 'A5', port: 'autorität', title: 'Entfernung neben Rotation eines anderen Mitglieds', ref: 'Access §3.6', scenarios: ['S4d'] },
   { id: 'A6', port: 'autorität', title: 'Zwei gleichzeitige Regeländerungen: Fork, alle einig', ref: 'Access §3.6 Klassenregel 3', scenarios: ['S4e'] },
   { id: 'A7', port: 'autorität', title: 'Regeländerung neben Durchsetzung: Fork, Durchsetzung verfällt, Ende durch Regeländerung auf beide Zweige', ref: 'Access §3.6, 3565–3568', scenarios: ['S4j'] },
@@ -43,7 +44,7 @@ export const promises: Promise[] = [
   { id: 'A13', port: 'autorität', title: 'Dienst nach Sichten: gegenseitige Entfernung lässt nur ein Mitglied, Quorum der Sicht', ref: 'Access §7.3 (Quorumregel: Befund 9)', scenarios: ['S10c'] },
   // ── Schlüssel-Port ──────────────────────────────────────────────────────
   { id: 'KV1', port: 'schlüssel', title: 'Frisches Geheimnis je Durchsetzung: der Entfernte (oder das entfernte Gerät) liest Neues nicht', ref: 'Port-Synthese KV1; Access §9', scenarios: ['S2', 'S5b', 'S5c'] },
-  { id: 'KV2', port: 'schlüssel', title: 'Genau die Verbleibenden: auch bei gleichzeitigen Durchsetzungen liest niemand Entfernter mit', ref: 'Port-Synthese KV2', scenarios: ['S4b', 'S4c', 'S4f'] },
+  { id: 'KV2', port: 'schlüssel', title: 'Genau die Verbleibenden: auch bei gleichzeitigen Durchsetzungen liest niemand Entfernter mit', ref: 'Port-Synthese KV2', scenarios: ['S4b', 'S4c2', 'S4f'] },
   { id: 'KV3', port: 'schlüssel', title: 'Bindung im Log: das Log bindet die Epoche an das Geheimnis (keyOpDigest)', ref: 'Port-Synthese KV3; Access registration/0.27 keyOpDigest', scenarios: [] },
   { id: 'KV4', port: 'schlüssel', title: 'Historie über die Replik: ein Neuling liest Früheres mit dem aktuellen Geheimnis und der Kette', ref: 'Port-Synthese KV4', scenarios: ['S6', 'S6b'] },
   { id: 'KV5', port: 'schlüssel', title: 'Rotation auf Verlangen: nach erbeutetem Zustand liest der Dieb nach der Rotation nicht weiter (PCS)', ref: 'Port-Synthese KV5', scenarios: ['S7', 'S4d'] },
@@ -72,11 +73,13 @@ export const promises: Promise[] = [
   { id: 'DV2', port: 'replikation', title: 'Zustellung: Quittungsverlust und unerreichbarer Träger enden nie still', ref: 'Delivery 6.1, 6.3 (E11: T9, T10)', scenarios: [] },
 ]
 
-export type CellStatus = Outcome | 'nicht geprüft'
+/** `teilweise`: ein Teil der zugeordneten Szenarien besteht, der Rest ist nicht abbildbar oder nicht gelaufen; die Zusage gilt damit nicht. */
+export type CellStatus = Outcome | 'teilweise' | 'nicht geprüft'
 
 export interface Cell {
   readonly status: CellStatus
-  readonly evidence: ReadonlyArray<{ scenario: string; outcome: Outcome }>
+  /** Jedes zugeordnete Szenario mit seinem Ergebnis; `nicht gelaufen`, wenn der Lauf es nicht enthielt. */
+  readonly evidence: ReadonlyArray<{ scenario: string; outcome: Outcome | 'nicht gelaufen' }>
 }
 
 export interface CandidateRun {
@@ -95,14 +98,23 @@ export interface Matrix {
   readonly ports: ReadonlyArray<{ port: Port; title: string; rows: Row[] }>
 }
 
-/** Eine Zelle aus den Ergebnissen: scheitert eines, scheitert sie; besteht eines (und keines scheitert), besteht sie; sonst nicht abbildbar; ohne Ergebnis nicht geprüft. */
+/**
+ * Eine Zelle aus den Ergebnissen. Eine Zusage gilt nur, wenn jedes zugeordnete
+ * Szenario besteht (Review zu #35: ein bestandener Teil machte eine
+ * zusammengesetzte Zusage grün). Scheitert eines: nicht bestanden. Besteht
+ * ein Teil, der Rest ist nicht abbildbar oder nicht gelaufen: teilweise.
+ * Alles nicht abbildbar: nicht abbildbar. Ohne Szenario: nicht geprüft.
+ */
 export function cell(p: Promise, results: ReadonlyMap<string, Outcome>): Cell {
-  const evidence = [...p.scenarios].sort().flatMap((s) => {
-    const o = results.get(s)
-    return o ? [{ scenario: s, outcome: o }] : []
-  })
+  const evidence = [...p.scenarios].sort().map((s) => ({ scenario: s, outcome: results.get(s) ?? ('nicht gelaufen' as const) }))
   const outcomes = evidence.map((e) => e.outcome)
-  const status: CellStatus = !p.scenarios.length || !outcomes.length ? 'nicht geprüft' : outcomes.includes('nicht bestanden') ? 'nicht bestanden' : outcomes.includes('bestanden') ? 'bestanden' : 'nicht abbildbar'
+  let status: CellStatus
+  if (!p.scenarios.length) status = 'nicht geprüft'
+  else if (outcomes.includes('nicht bestanden')) status = 'nicht bestanden'
+  else if (outcomes.every((o) => o === 'bestanden')) status = 'bestanden'
+  else if (outcomes.includes('bestanden')) status = 'teilweise'
+  else if (outcomes.every((o) => o === 'nicht abbildbar')) status = 'nicht abbildbar'
+  else status = 'nicht geprüft'
   return { status, evidence }
 }
 
@@ -118,16 +130,17 @@ export function buildMatrix(runs: readonly CandidateRun[]): Matrix {
   return { candidates: runs.map((r) => r.id), ports }
 }
 
-const mark: Record<Outcome, string> = { bestanden: '✓', 'nicht bestanden': '✗', 'nicht abbildbar': '–' }
+const mark: Record<Outcome | 'nicht gelaufen', string> = { bestanden: '✓', 'nicht bestanden': '✗', 'nicht abbildbar': '–', 'nicht gelaufen': '?' }
 
 export function cellText(c: Cell): string {
   if (c.status === 'nicht geprüft') return 'nicht geprüft'
-  return c.evidence.map((e) => `${mark[e.outcome]} ${e.scenario}`).join(' ')
+  const marks = c.evidence.map((e) => `${mark[e.outcome]} ${e.scenario}`).join(' ')
+  return c.status === 'teilweise' ? `teilweise: ${marks}` : marks
 }
 
 /** Markdown: eine Tabelle je Port, Kandidaten als Spalten. */
 export function toMarkdown(m: Matrix, at = new Date().toISOString().slice(0, 10)): string {
-  const lines: string[] = ['# Konformitätsmatrix', '', `Stand ${at}. Jede Zelle ist die Summe der gelaufenen Szenarien, die die Zusage prüfen: ✓ bestanden, ✗ nicht bestanden, – nicht abbildbar. „nicht geprüft“ heißt: es gibt noch kein Szenario dafür.`, '']
+  const lines: string[] = ['# Konformitätsmatrix', '', `Stand ${at}. Eine Zusage gilt nur, wenn jedes zugeordnete Szenario besteht: ✓ bestanden, ✗ nicht bestanden, – nicht abbildbar, ? nicht gelaufen. „teilweise“ heißt: ein Teil besteht, der Rest ist nicht abbildbar oder nicht gelaufen. „nicht geprüft“ heißt: es gibt noch kein Szenario dafür.`, '']
   for (const p of m.ports) {
     lines.push(`## ${p.title}`, '', `| Zusage | ${m.candidates.join(' | ')} |`, `|---|${m.candidates.map(() => '---').join('|')}|`)
     for (const row of p.rows) lines.push(`| ${row.promise.id} ${row.promise.title} (${row.promise.ref}) | ${m.candidates.map((c) => cellText(row.cells[c]!)).join(' | ')} |`)

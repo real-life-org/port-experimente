@@ -21,6 +21,7 @@ describe('Kandidat RLTP-Autorität über BeeKEM', () => {
       S4a: 'bestanden', // Bobs Eintrag unter altem Schlüssel bleibt lesbar (content residual), Bob liest nichts Neues
       S4b: 'bestanden', // zwei Entfernungen gleichzeitig: beide gelten, niemand liest mit (KV2, KV6)
       S4c: 'bestanden', // gegenseitige Entfernung: beide raus (Matrix-Entscheidung 2)
+      S4c2: 'bestanden', // beide draußen, keiner liest Carols Eintrag
       S4d: 'bestanden', // Rotation neben Entfernung (KV5, KV6)
       S4e: 'bestanden', // E9: zwei policy.change gleichzeitig → Fork, alle einig
       S4j: 'bestanden', // E9: policy.change neben Entfernung → Fork, Entfernung verfällt; Ende durch policy.change auf beide
