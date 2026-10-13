@@ -137,7 +137,7 @@ abstract class Base implements EnforcingService {
   private targetSeq = 0
   private prevDigest: string | null = null
   private chain: string | null = null
-  /** Gespeicherte Einträge nach Referenz: Quellenpflicht des Dienstes (I1, I12). */
+  /** Gespeicherte Einträge nach Digest ihrer Bytes: was er beglaubigt und nachliefert, ist byte-identisch (Quellenpflicht, I1, I12). */
   private readonly stored = new Map<string, Uint8Array>()
   /** Alle ausgestellten Ziele, in Kettenfolge: wer Zwischenziele verpasst hat, bekommt sie zur Kettenprüfung nachgereicht. */
   protected readonly issued: Target[] = []
@@ -243,9 +243,9 @@ abstract class Base implements EnforcingService {
     this.store(m, msg)
     return 'weiter'
   }
-  /** Was durchgeht, hält der Dienst nach Referenz (versiegelte Einträge), damit er es beglaubigen und nachliefern kann. */
+  /** Was durchgeht, hält der Dienst nach Digest der Bytes (versiegelte Einträge), damit er es beglaubigen und byte-identisch nachliefern kann. */
   private store(m: ServiceWire, msg: Msg) {
-    if (m.t === 'sealed' && typeof (m as { ref?: unknown }).ref === 'string') this.stored.set((m as { ref: string }).ref, msg.body)
+    if (m.t === 'sealed') this.stored.set(hexOf(sha256(msg.body)), msg.body)
   }
   protected drop() {
     this.dropped++

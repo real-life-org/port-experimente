@@ -100,7 +100,7 @@ type Wire =
    * des inneren Rahmens, für den Dienst), `heads` (Autoritätsköpfe des
    * Schreibers), `by` (sein Geräteschlüssel).
    */
-  | { t: 'sealed'; kind: string; c: string; iv: string; tab: string; ref: string; heads: string[]; by: string; keyOp?: string }
+  | { t: 'sealed'; kind: string; c: string; iv: string; tab: string; ref: string; heads: string[]; by: string; keyOp?: string; digest?: string }
   /** Willkommen an genau ein Gerät (`to` = sein Willkommensschlüssel): Gruppe und Aufnahme, an seinen Schlüssel verschlüsselt. */
   | { t: 'welcome'; to: string; eph: string; iv: string; c: string }
   /** An den Dienst: sein beglaubigtes Ziel (Replication §4.1) bzw. gespeicherte Einträge nach Referenz (I1, I12). Unversiegelt: nur IDs. */
@@ -127,9 +127,14 @@ interface KeyState {
   pending: Wire[]
   /** Schlüsselgeneration: zählt hoch, wenn ein Schlüssel dazukommt (BeeKEM-Operation, Tabelle). Ein ungeöffneter Rahmen wird nur erneut versucht, wenn sich seitdem etwas geändert hat; sonst wären die Versuche quadratisch. */
   keyGen: number
-  /** Referenzen der Einträge, die tatsächlich geöffnet und als stimmig angenommen wurden: nur die zählen als „da“ (Review zu #36: ein beschädigter Rahmen mit richtiger Referenz ist nicht nachgeliefert). */
-  opened: Set<string>
-  /** Je Rahmen: Generation beim Eintreffen, Generation des letzten BeeKEM-Versuchs und Zahl der Versuche (höchstens MAX_DECRYPT_TRIES; danach öffnet ihn nur noch eine Tabelle). */
+  /**
+   * Empfangsgrenze (Review zu #36, Runde 3). Drei Aussagen, drei Zustände:
+   * `stored` = die Bytes eines Eintrags liegen hier, identifiziert durch den Digest der Bytes (verifiziert gespeichert,
+   * unabhängig vom Schlüssel); `keys`/`heads` = entschlüsselt; die Autorität urteilt danach. Zielfortschritt kommt
+   * nur aus `stored`; Entschlüsselung und ihr Versuchszähler liegen dahinter und entscheiden nichts darüber.
+   */
+  stored: Set<string>
+  /** Je Rahmen (nach Digest der Bytes): Generation beim Eintreffen, Generation des letzten BeeKEM-Versuchs und Zahl der Versuche (höchstens MAX_DECRYPT_TRIES; danach öffnet ihn nur noch eine Tabelle). Eine andere Kopie derselben Referenz hat ihre eigenen Versuche. */
   tried: Map<string, { arrived: number; gen: number; n: number }>
   /** Umschläge geöffneter Einträge (Köpfe, Autor), bis alle genannten Köpfe im Log sind: der Beleg einer Lücke. Nur geöffnete Einträge belegen; ein Umschlag allein ist unverbürgt. */
   envelopes: Map<string, { heads: string[]; by: string }>
@@ -395,15 +400,16 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
         // Ein BeeKEM-Versuch kostet bei 30 Mitgliedern über 10 ms (Serialisierung und Hashing des Baums),
         // und ein Rahmen aus einer Epoche ohne uns öffnet sich nie: danach nur noch über die Tabelle eines
         // späteren Eintrags (die Kette reicht bis zur Genesis).
+        const id = m.digest ?? m.ref
         if (!key) {
-          const t = s.tried.get(m.ref)
+          const t = s.tried.get(id)
           // Kein Gate auf hasKey: ohne aktuellen Schlüssel öffnet BeeKEM noch Einträge früherer Epochen (eine
           // Entfernung ist unter dem Schlüssel davor versiegelt und kommt nach ihrer Baumoperation an).
           if ((m.keyOp && !s.appliedOps.has(m.keyOp)) || (t && (t.gen === s.keyGen || t.n >= MAX_DECRYPT_TRIES))) {
             still.push(m)
             continue
           }
-          s.tried.set(m.ref, { arrived: t?.arrived ?? s.keyGen, gen: s.keyGen, n: (t?.n ?? 0) + 1 })
+          s.tried.set(id, { arrived: t?.arrived ?? s.keyGen, gen: s.keyGen, n: (t?.n ?? 0) + 1 })
         }
         const ct = unb64(m.c)
         try {
@@ -422,7 +428,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
           continue
         }
         s.keys.set(m.ref, key)
-        s.tried.delete(m.ref)
+        s.tried.delete(id)
         try {
           const table = await openTable(key, unb64(m.iv), unb64(m.tab))
           for (let i = 0; i + 64 <= table.length; i += 64) {
@@ -450,7 +456,6 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
         }
         // Ein geöffneter Eintrag belegt seine Köpfe (Lückenreparatur, I12): der Schreiber hatte den Schlüssel.
         if (m.heads.length) s.envelopes.set(m.ref, { heads: m.heads, by: m.by })
-        s.opened.add(m.ref)
         if (w.t === 'content') out.push(unb64(w.u))
         else inner.push(w)
       }
@@ -476,11 +481,6 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
     }
     repair(s, [...from])
     await flushQueued(s)
-    // Nachgeliefert ist nur, was geöffnet wurde: erst jetzt trägt ein Eintrag seine Referenz aus dem Fehlbestand aus.
-    for (const r of s.target.missing) if (s.opened.has(r)) {
-      s.target.missing.delete(r)
-      s.target.fetched++
-    }
     return out
   }
 
@@ -793,7 +793,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
     return [...s.auth.members().keys()].sort()
   }
 
-  async function handle(s: DeviceState, m: Wire): Promise<{ content: Uint8Array[] }> {
+  async function handle(s: DeviceState, m: Wire, body: Uint8Array): Promise<{ content: Uint8Array[] }> {
     switch (m.t) {
       case 'card':
         if (typeof m.welcomeKey !== 'string') throw new Error('Karte ohne Willkommensschlüssel')
@@ -842,8 +842,9 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
         t.seq = m.seq
         t.digest = digest
         t.chain = m.seq === 1 ? digest : m.chain
-        // Fehlbestand = Referenzen des Ziels, die nicht geöffnet sind; was ungeöffnet oder beschädigt liegt, wird erneut geholt.
-        t.missing = new Set(m.frontier.heads.filter((r) => !s.opened.has(r)))
+        // Fehlbestand = Digests des Ziels, deren Bytes nicht hier liegen. Eine beschädigte Kopie hat einen anderen
+        // Digest und zählt nicht; ob ein gespeicherter Eintrag zu öffnen ist, ist eine andere Frage (dahinter).
+        t.missing = new Set(m.frontier.heads.filter((d) => !s.stored.has(d)))
         if (t.missing.size) send(s, { t: 'fetch', refs: [...t.missing] })
         return { content: [] }
       }
@@ -883,7 +884,13 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
       }
       case 'sealed': {
         if (typeof m.kind !== 'string' || !strings(m.heads) || typeof m.by !== 'string' || typeof m.ref !== 'string' || typeof m.c !== 'string' || (m.keyOp !== undefined && typeof m.keyOp !== 'string')) throw new Error('Eintrag ohne Umschlag')
-        if (!s.tried.has(m.ref)) s.tried.set(m.ref, { arrived: s.keyGen, gen: -1, n: 0 })
+        // Verifiziert gespeichert: die Bytes, identifiziert durch ihren Digest (der Dienst beglaubigt dieselben Digests).
+        const digest = hex(sha256Sync(body))
+        if (s.stored.has(digest)) return { content: [] } // dieselben Bytes schon da (T3)
+        s.stored.add(digest)
+        if (s.target.missing.delete(digest)) s.target.fetched++
+        m.digest = digest
+        s.tried.set(digest, { arrived: s.keyGen, gen: -1, n: 0 })
         s.pending.push(m)
         return { content: await drainAll(s, [m.by]) }
       }
@@ -929,7 +936,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
       const deviceSigner = Signer.generate(device)
       const welcomePriv = x25519.utils.randomSecretKey()
       const card: Card = { person, id: new Uint8Array(peer.id), shareKey: new Uint8Array(peer.shareKey), deviceKey: deviceSigner.pub, welcomeKey: hex(x25519.getPublicKey(welcomePriv)) }
-      const s: DeviceState = { person, peer, auth: new AuthorityLog(), deviceSigner, welcomePriv, cards: new Map([[hex(card.id), card]]), revoked: new Set(), ack: { seq: 0, hash: null, identities: [] }, proposed: null, waitingAuth: [], appliedCgka: new Set(), pendingCgka: [], authFrames: new Map(), envelopes: new Map(), repairs: new Map(), keys: new Map(), heads: [], pending: [], keyGen: 0, opened: new Set(), tried: new Map(), appliedOps: new Set(), outgoing: [], queued: [], joined: false, notes: [], target: { asked: 0, answered: 0, nonce: null, seq: null, digest: null, chain: null, missing: new Set(), fetched: 0 } }
+      const s: DeviceState = { person, peer, auth: new AuthorityLog(), deviceSigner, welcomePriv, cards: new Map([[hex(card.id), card]]), revoked: new Set(), ack: { seq: 0, hash: null, identities: [] }, proposed: null, waitingAuth: [], appliedCgka: new Set(), pendingCgka: [], authFrames: new Map(), envelopes: new Map(), repairs: new Map(), keys: new Map(), heads: [], pending: [], keyGen: 0, stored: new Set(), tried: new Map(), appliedOps: new Set(), outgoing: [], queued: [], joined: false, notes: [], target: { asked: 0, answered: 0, nonce: null, seq: null, digest: null, chain: null, missing: new Set(), fetched: 0 } }
       devices.set(device, s)
       // Die Karte geht über den Begegnungskanal, nicht über den Träger der Gruppe; mit Prüfstand-Dienst über
       // den Dienst, weil der die Gerätebindung aus der Karte lernt (in der Spec aus der Sicht).
@@ -1100,7 +1107,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
         return { content: [] }
       }
       try {
-        return await handle(s, m)
+        return await handle(s, m, msg.body)
       } catch (e) {
         s.notes.push(`verworfen (${m.t}): ${(e as Error).message}`)
         return { content: [] }
@@ -1122,7 +1129,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
       // Passiver Angreifer mit Bobs Zustand: nimmt alle BeeKEM-Operationen auf,
       // öffnet Inhalte wie ein ehrliches Gerät.
       const st = stolen as { state: Uint8Array; keys: Map<string, Uint8Array>; appliedOps: Set<string>; ks?: KeyState }
-      st.ks ??= { peer: BeekemPeer.fromState(st.state), keys: st.keys, heads: [], pending: [], keyGen: 0, opened: new Set(), tried: new Map(), envelopes: new Map(), appliedOps: st.appliedOps, notes: [] }
+      st.ks ??= { peer: BeekemPeer.fromState(st.state), keys: st.keys, heads: [], pending: [], keyGen: 0, stored: new Set(), tried: new Map(), envelopes: new Map(), appliedOps: st.appliedOps, notes: [] }
       const m = JSON.parse(dec.decode(msg.body)) as Wire
       const ops = m.t === 'cgka' ? [m.op] : m.t === 'auth' ? m.cgka : []
       for (const op of ops) {
@@ -1131,7 +1138,10 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
           noteOp(st.ks, unb64(op))
         } catch {}
       }
-      if (m.t === 'sealed') st.ks.pending.push(m)
+      if (m.t === 'sealed') {
+        m.digest = hex(sha256Sync(msg.body))
+        st.ks.pending.push(m)
+      }
       return (await drain(st.ks)).content
     },
   }

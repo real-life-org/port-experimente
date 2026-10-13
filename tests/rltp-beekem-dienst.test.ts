@@ -4,6 +4,7 @@ import { rltpBeekem } from '../src/candidates/rltp-beekem'
 import { BeekemPeer, loadWasm } from '../src/candidates/rltp-beekem/load'
 import { Signer } from '../src/candidates/rltp-beekem/authority'
 import { targetDigest, targetInput, type Target } from '../src/candidates/rltp-beekem/service'
+import { sha256 } from '@noble/hashes/sha2.js'
 import { World } from '../src/lab/world'
 import type { Msg } from '../src/lab/types'
 
@@ -124,8 +125,10 @@ describe('E8: Dienst am Relay', () => {
         const body: Omit<Target, 'sig'> = { t: 'target', v: 'rltp-replication-target/0.26', source: 'dienst', chain: null, frontier: { scope: 'stored', heads: [] }, prev: null, attestationKey: dienst.pub, to: card.deviceKey, ...fields }
         return { ...body, sig: dienst.sign(targetInput(body)) }
       }
-      const deliver = (m: unknown) => c.receive('carol', { id: id++, from: 'dienst', label: 'target', body: enc.encode(JSON.stringify(m)) })
-      return { c, poll, target, deliver }
+      const bytes = (m: unknown) => enc.encode(JSON.stringify(m))
+      const digest = (m: unknown) => Array.from(sha256(bytes(m)), (x) => x.toString(16).padStart(2, '0')).join('')
+      const deliver = (m: unknown) => c.receive('carol', { id: id++, from: 'dienst', label: 'target', body: bytes(m) })
+      return { c, poll, target, deliver, digest }
     }
 
     it('ein altes, gültig signiertes Ziel beantwortet keine neue Anfrage (Wiederholung)', async () => {
@@ -139,36 +142,68 @@ describe('E8: Dienst am Relay', () => {
       expect(c.status('carol')).toContain('ziel=angefragt, keine Antwort (zuletzt seq 1)')
     })
 
-    it('nur ein geöffneter Eintrag mit genau der Referenz des Ziels trägt den Fehlbestand aus', async () => {
-      const { c, poll, target, deliver } = await device()
-      // Ein echter, lesbarer Eintrag (Carols eigener), dessen Referenz das Ziel nennt.
+    it('nur die byte-identische Kopie eines Eintrags des Ziels trägt den Fehlbestand aus; Entschlüsselung entscheidet nichts darüber', async () => {
+      const { c, poll, target, deliver, digest } = await device()
+      // Ein Eintrag, dessen Bytes der Dienst beglaubigt (Digest der Bytes), hier Carols eigener.
       await c.sealContent('carol', new Uint8Array([1, 2, 3]))
       const real = c.takeOutgoing('carol').map((o) => JSON.parse(dec.decode(o.body)) as { t: string; ref?: string }).find((m) => m.t === 'sealed')!
-      await deliver(target({ seq: 1, echo: poll(), frontier: { scope: 'stored', heads: [real.ref!] } }))
+      await deliver(target({ seq: 1, echo: poll(), frontier: { scope: 'stored', heads: [digest(real)] } }))
       expect(c.status('carol')).toContain('ziel=seq 1 (1 fehlen, 0 geholt)')
-      // Fremder Verkehr mit anderer Referenz zählt nicht, auch nicht ein unlesbarer Rahmen mit der richtigen.
+      // Fremder Verkehr zählt nicht, und eine beschädigte Kopie mit derselben Referenz hat andere Bytes: zählt nicht.
       await deliver({ t: 'sealed', kind: 'content', c: 'AAAA', iv: 'AAAAAAAAAAAAAAAA', tab: '', ref: 'other', heads: [], by: 'x' })
-      await deliver({ t: 'sealed', kind: 'content', c: 'AAAA', iv: 'AAAAAAAAAAAAAAAA', tab: '', ref: real.ref, heads: [], by: 'x' })
+      await deliver({ ...real, c: 'AAAA' })
       expect(c.status('carol')).toContain('ziel=seq 1 (1 fehlen, 0 geholt)')
       await deliver(real)
       expect(c.status('carol')).toContain('ziel=seq 1 (0 fehlen, 1 geholt)')
     })
 
-    it('ein beschädigter Rahmen mit der richtigen Referenz gilt nicht als nachgeliefert; der nächste Tick holt erneut', async () => {
-      const { c, poll, target, deliver } = await device()
-      const t1 = target({ seq: 1, echo: poll(), frontier: { scope: 'stored', heads: ['wanted'] } })
+    it('eine beschädigte Kopie gilt nicht als nachgeliefert; der nächste Tick holt erneut, und die richtige Kopie wird trotz der beschädigten geöffnet', async () => {
+      const { c, poll, target, deliver, digest } = await device()
+      await c.sealContent('carol', new Uint8Array([4, 5, 6]))
+      const real = c.takeOutgoing('carol').map((o) => JSON.parse(dec.decode(o.body)) as { t: string; ref?: string; c: string }).find((m) => m.t === 'sealed')!
+      const wanted = digest(real)
+      const t1 = target({ seq: 1, echo: poll(), frontier: { scope: 'stored', heads: [wanted] } })
       await deliver(t1)
       expect(c.status('carol')).toContain('ziel=seq 1 (1 fehlen, 0 geholt)')
-      // Richtige Referenz, aber kein lesbarer Eintrag.
-      await deliver({ t: 'sealed', kind: 'content', c: 'AAAA', iv: 'AAAAAAAAAAAAAAAA', tab: '', ref: 'wanted', heads: [], by: 'x' })
+      await deliver({ ...real, c: 'AAAA' + real.c.slice(4) })
       expect(c.status('carol')).toContain('ziel=seq 1 (1 fehlen, 0 geholt)')
       const { sig: _s, ...body1 } = t1
       const d1 = targetDigest(body1)
       const n2 = poll()
-      await deliver(target({ seq: 2, echo: n2, prev: d1, chain: d1, frontier: { scope: 'stored', heads: ['wanted'] } }))
+      await deliver(target({ seq: 2, echo: n2, prev: d1, chain: d1, frontier: { scope: 'stored', heads: [wanted] } }))
       expect(c.status('carol')).toContain('ziel=seq 2 (1 fehlen, 0 geholt)')
       const fetch = c.takeOutgoing('carol').map((o) => JSON.parse(dec.decode(o.body)) as { t: string; refs?: string[] }).find((m) => m.t === 'fetch')
-      expect(fetch?.refs).toEqual(['wanted'])
+      expect(fetch?.refs).toEqual([wanted])
+      // Die richtige Kopie wird geöffnet, obwohl die beschädigte mit derselben Referenz vorher kam.
+      const { content } = await deliver(real)
+      expect(content.length).toBe(1)
+      expect(c.status('carol')).toContain('ziel=seq 2 (0 fehlen, 1 geholt)')
+    })
+
+    it('durchgängig: vorgehalten, beschädigt geliefert, richtig nachgeliefert, wiederhergestellt', async () => {
+      const c = rltpBeekem({ dienst: 'sichten' })
+      const w = new World(c)
+      for (const p of ['alice', 'bob', 'carol']) await w.device(p, p)
+      await w.flush()
+      await w.createGroup('alice')
+      await w.add('alice', 'bob')
+      await w.add('alice', 'carol')
+      await w.flush()
+      const k = w.carrier()!
+      // Der Träger hält Carol Alices Inhalt und jede Nachlieferung des Dienstes vor und liefert ihr stattdessen eine beschädigte Kopie.
+      k.withhold('carol', (m) => (m.from === 'alice' && m.label === 'content') || m.label === 'fetch-answer')
+      await w.write('alice', 'wichtig')
+      await w.flush()
+      const frame = w.log.find((m) => m.from === 'alice' && m.label === 'content')!
+      const damaged = JSON.parse(new TextDecoder().decode(frame.body)) as { c: string }
+      damaged.c = 'AAAA' + damaged.c.slice(4)
+      await c.receive('carol', { id: 99999, from: 'alice', label: 'content', body: new TextEncoder().encode(JSON.stringify(damaged)) })
+      expect(w.read('carol')).toEqual([])
+      // Zustellung wiederhergestellt: der nächste Tick fragt das Ziel, der Dienst liefert die richtigen Bytes.
+      k.reset()
+      await w.flush()
+      expect(w.read('carol')).toEqual(['wichtig'])
+      expect(c.status('carol')).toMatch(/ziel=seq \d+ \(0 fehlen, [1-9]\d* geholt\)/)
     })
 
     it('ein Ziel mit falschem prev oder chain wird nicht als nächstes Glied angenommen', async () => {

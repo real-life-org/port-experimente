@@ -703,11 +703,29 @@ mit Notiz; der Dienst reicht auf `since` die Zwischenziele nach, damit die
 Kette auch dann prüfbar ist, wenn andere Geräte dazwischen gefragt haben;
 **Frische**: die offene Anfrage beantwortet nur ein Ziel mit ihrem Echo
 (signiert) und an dieses Gerät, ein altes gültiges Ziel ist ein
-Kettenglied, nie eine Antwort. Der Fehlbestand ist eine Referenzmenge;
-nur ein **geöffneter** Eintrag mit genau einer Referenz des Ziels trägt
-sie aus (Runde 2: ein beschädigter Rahmen mit richtiger Referenz ist nicht
-nachgeliefert); beim nächsten Tick wird alles erneut geholt, was das Ziel
-nennt und nicht geöffnet ist. Beide Anfragen gehen unversiegelt (nur IDs) und sind beim
+Kettenglied, nie eine Antwort. Der Fehlbestand ist eine Menge von
+Digests.
+
+**Die Empfangsgrenze (Runde 3, Codex: „‚vorhanden‘ war nacheinander eine
+Zahl, eine Referenz und ein Entschlüsselungserfolg“).** Drei Aussagen,
+drei Zustände, getrennt gehalten:
+
+| Zustand | Aussage | Wo |
+|---|---|---|
+| verifiziert gespeichert | die Bytes dieses Eintrags liegen hier; Identität = Digest der Bytes, dieselbe, die der Dienst beglaubigt | `stored` (Gerät), `stored` nach Digest (Dienst) |
+| entschlüsselt | der Inhalt ist lesbar | `keys`, `heads`, Tabelle |
+| fachlich geprüft | Art stimmt mit dem Umschlag, die Autorität hat geurteilt | Fold, `verworfen`-Notizen |
+
+Der Zielfortschritt kommt **nur** aus dem ersten Zustand: ein Eintrag
+des Ziels ist nachgeliefert, wenn byte-identische Bytes da sind, gleich
+ob sie sich schon öffnen lassen. Eine beschädigte Kopie hat einen anderen
+Digest und zählt nicht; beim nächsten Tick wird alles erneut geholt, was
+das Ziel nennt und nicht gespeichert ist. Die Entschlüsselung und ihr
+Versuchszähler liegen dahinter und sind je Kopie (nach Digest) geführt:
+eine beschädigte Kopie derselben Referenz verbraucht nicht die Versuche
+der richtigen. Dieselben Bytes ein zweites Mal sind ein Duplikat (T3) und
+werden nicht erneut angenommen. Durchgängig geprüft: vorgehalten,
+beschädigt geliefert, richtig nachgeliefert, wiederhergestellt. Beide Anfragen gehen unversiegelt (nur IDs) und sind beim
 Dienst ein Lesen: bewiesener Schlüssel und Mitgliedschaft (I7). Status:
 `ziel=seq N (M fehlen, K geholt)` bzw. `ziel=angefragt, keine Antwort`.
 
