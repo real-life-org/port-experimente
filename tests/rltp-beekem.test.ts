@@ -100,13 +100,12 @@ describe('E9 Schritt 1b: der Baum folgt dem Zustand', () => {
     for (const d of ['alice', 'carol', 'dave', 'x']) expect(w.read(d), d).toContain('nachher')
     for (const d of ['alice', 'carol', 'dave', 'x']) expect(w.members(d), d).toEqual(all)
     for (const d of ['alice', 'carol', 'dave', 'x']) expect(c.status(d), d).toContain('fork=ja')
-    // Bob ist wieder Mitglied, aber sein Blatt wurde durch die (später
-    // verfallene) Entfernung aus dem Baum genommen; die Wiederaufnahme unter
-    // demselben Share-Key gibt ihm keinen Schlüssel zurück. Er braucht eine
-    // frische Karte (Befund 8 in NOTES.md). Festgehalten, nicht gelöst. Seit
-    // E10 heißt das auch: ohne Schlüssel liest Bob das Log nicht weiter.
-    expect(w.read('bob')).toEqual([])
-    expect(c.status('bob')).toContain('ungeöffnet=')
+    // Bob ist wieder Mitglied; sein Blatt wurde durch die (später verfallene)
+    // Entfernung aus dem Baum genommen. Seit der Angleichung nach jeder
+    // Rotation (#33) zieht das nächste schreibende Mitglied sein Blatt nach,
+    // und der Eintrag erreicht ihn (Befund 8 damit aufgelöst).
+    expect(w.read('bob')).toContain('nachher')
+    expect(w.members('bob')).toEqual(all)
   })
 })
 
@@ -344,6 +343,38 @@ describe('E10: Lückenreparatur', () => {
     await w.flush()
     expect(w.read('bob-2')).toEqual(['für-das-zweitgerät'])
     expect(c.status('bob')).toContain('ungeöffnet=1')
+  })
+
+  it('#33 mit unlesbarem Rahmen ohne keyOp: kein neuer Inhalt an Blätter eines verfallenen Zweigs', async () => {
+    const c = rltpBeekem()
+    const w = new World(c)
+    await w.device('alice', 'alice')
+    for (const p of ['bob', 'carol', 'mallory']) await w.device(p, p)
+    await w.flush()
+    await w.createGroup('alice')
+    await w.add('alice', 'bob', 'member')
+    await w.add('alice', 'carol', 'member')
+    await w.add('alice', 'mallory', 'admin')
+    await w.flush()
+    await w.device('x', 'x')
+    await w.device('y', 'y')
+    await w.flush()
+    const junk = { t: 'sealed', kind: 'auth', c: 'AAAA', iv: 'AAAAAAAAAAAAAAAA', tab: '', ref: 'ab'.repeat(32), heads: [], by: 'x' }
+    for (const d of ['alice', 'bob', 'carol']) await c.receive(d, { id: 90001, from: 'mallory', label: 'auth', body: enc.encode(JSON.stringify(junk)) })
+    await w.partition(['alice', 'bob', 'carol'], ['mallory', 'x', 'y'])
+    await w.remove('alice', 'mallory')
+    await w.add('mallory', 'x', 'admin')
+    await w.flush()
+    await w.add('x', 'y', 'member')
+    await w.flush()
+    await w.heal()
+    await w.flush()
+    expect(w.members('alice')).toEqual(['alice', 'bob', 'carol'])
+    expect(c.status('alice')).toContain('ungeöffnet=1')
+    await w.write('alice', 'secret-after-healing')
+    await w.flush()
+    for (const d of ['bob', 'carol']) expect(w.read(d), d).toEqual(['secret-after-healing'])
+    for (const d of ['mallory', 'x', 'y']) expect(w.read(d), d).toEqual([])
   })
 
   it('geht die Anfrage verloren, wiederholt die Replik sie beim nächsten Rahmen der Quelle, höchstens dreimal', async () => {

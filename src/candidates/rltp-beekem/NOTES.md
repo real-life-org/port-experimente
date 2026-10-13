@@ -618,12 +618,34 @@ Prüfstand; E11 ersetzt es durch den Zustellungs-Adapter.
   die später verfällt), stellt den Rahmen zurück (`queued`), bis ein
   Mitglied das Blatt nachzieht (I4) und der nächste Rahmen den Schlüssel
   bringt. Das ist das „Healing = Schreiben wartet“ des Primers.
-- **Befund 8, verschärft:** Ohne Schlüssel liest ein Gerät seit den
-  versiegelten Rahmen auch das Log nicht weiter (`ungeöffnet=N`). Bob nach
-  der verfallenen Entfernung hat weder Schlüssel noch Autorität, bis er
-  eine frische Karte bringt; x bekommt beides erst mit der nächsten
-  Rotation (und über deren Tabelle die Schlüssel der versiegelten
-  Autoritätsrahmen).
+- **Ohne Schlüssel keine Autorität.** Ohne Schlüssel liest ein Gerät seit
+  den versiegelten Rahmen auch das Log nicht weiter (`ungeöffnet=N`), bis
+  die nächste Rotation eines Mitglieds es wieder erreicht (und über deren
+  Tabelle die Schlüssel der versiegelten Autoritätsrahmen).
+- **Angleichung nach jeder Rotation (#33, S4f).** Eine Rotation führt
+  gleichzeitige Baumänderungen zusammen (KV6): erst danach stehen etwa die
+  Blätter aus einem verfallenen Zweig (Mallorys Einladungen von x und y) im
+  Baum. Nach der Heilung hatte niemand einen Schlüssel (Heilung braucht
+  einen), Alices nächster Eintrag rotierte, die Rotation holte x und y in
+  den Baum, und der Eintrag ging an fünf Blätter: x und y lasen neuen
+  Inhalt, obwohl kein Log sie als Mitglieder führte. Jetzt gilt vor jedem
+  Eintrag: Die Empfängermenge ist der Baum nach der Rotation, und die wird
+  geprüft, nicht vorausgesetzt. Erst heilen (immer, auch wenn diese Replik
+  zurückliegt: Vertraulichkeit geht vor Angleichungsruhe, ein zu früh
+  entferntes Blatt zieht ein Mitglied auf dem Stand nach, ein Eintrag an
+  ein Nicht-Mitglied ist nicht rückholbar), fremde Blätter nachziehen nur
+  auf dem Stand, dann `treeSafe`: jedes Blatt im Baum gehört zu einem
+  Mitglied laut Log, sonst wartet der Eintrag (`queued`, Notiz „schreiben
+  wartet“). Nur eine Reparaturanfrage geht dann unversiegelt hinaus, sie
+  trägt keine Geheimnisse, damit die Lückenreparatur nie an der
+  Vertraulichkeitsregel hängt (Review zu #34). Ausnahme bleibt die
+  Entfernung: ihr Eintrag wird unter dem Schlüssel versiegelt, den der
+  Entfernte noch hat (§10.2); sein Blatt ist für diesen einen Eintrag
+  Empfänger, alle anderen Fremden nicht. S4f prüft seitdem die
+  Vertraulichkeit nach der Heilung, nicht nur die Mitgliedschaft; vorher
+  stand dort `keys: —`. Nebeneffekt: Befund 8 löst sich, Bob bekommt nach
+  der verfallenen Entfernung sein Blatt mit der nächsten Rotation nachgezogen
+  und liest den nächsten Eintrag.
 
 - **Kosten (Befund 12).** Jede Autoritätsoperation ist jetzt ein
   BeeKEM-Eintrag, den jede Replik mit `decrypt` öffnet. Keyhive sucht den
@@ -692,11 +714,12 @@ Pseudonym; dazu Größen, Zeiten und die Gerätenamen des Prüfstands.
    nennen, sind der Grund.
 8. **Wiederaufnahme nach verfallener Entfernung.** Verfällt eine
    Entfernung nachträglich (Fork), ist das Blatt des Betroffenen schon aus
-   dem Baum; die Wiederaufnahme unter demselben Share-Key gibt ihm keinen
-   Schlüssel zurück (Bob liest den nächsten Eintrag nicht,
-   `tests/rltp-beekem.test.ts`). Er braucht frisches Blattmaterial, also
-   eine neue Karte; das passt zur Spec (ein Schlüsselzustand nach einer
-   Entfernung wird nie wiederverwendet), ist hier aber nicht gebaut.
+   dem Baum. Aufgelöst mit der Angleichung nach jeder Rotation (#33): das
+   nächste schreibende Mitglied zieht das Blatt nach, der Eintrag erreicht
+   ihn (`tests/rltp-beekem.test.ts`). Für den Guss bleibt die Frage, ob
+   das Blatt unter demselben Share-Key wiederkommen darf oder frisches
+   Material braucht (ein Schlüsselzustand nach einer Entfernung wird nie
+   wiederverwendet); der Prüfstand nimmt dasselbe Blatt.
 6. **Nicht modelliert:** pending exits in der policy currency (5.4, kein
    `member.leave` im Prüfstand); der Transportkosten-Bound der Politik
    (§4.4); `strongest` jenseits von 16 Mitgliedern (symbolische Ordnung
