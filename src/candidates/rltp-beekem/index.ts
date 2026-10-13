@@ -246,19 +246,34 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
       if (!s.peer.hasKey()) {
         const op = (await s.peer.rotate()) as Uint8Array
         send(s, { t: 'cgka', op: b64(op) }, 'seal-rotate')
-        // Eine Rotation führt gleichzeitige Baumänderungen zusammen (KV6): erst danach stehen etwa die
-        // Blätter aus einem verfallenen Zweig im Baum. Vor dem Verschlüsseln also noch einmal angleichen,
-        // sonst ginge der Eintrag an Blätter, die laut Log nicht Mitglied sind (#33, S4f).
-        if (!authInTransit(s)) {
-          await heal(s)
-          await ensureMemberLeaves(s)
-        }
       }
+      // Die Empfängermenge eines Eintrags ist der Baum nach der Rotation; eine Rotation führt gleichzeitige
+      // Baumänderungen zusammen (KV6), erst danach stehen etwa die Blätter aus einem verfallenen Zweig im Baum.
+      // Vor dem Verschlüsseln deshalb immer heilen, auch wenn diese Replik zurückliegt: Vertraulichkeit geht
+      // vor Angleichungsruhe (ein zu früh entferntes Blatt zieht ein Mitglied auf dem Stand nach; ein Eintrag
+      // an ein Nicht-Mitglied ist nicht rückholbar; #33, S4f). Fremde Blätter nachziehen nur auf dem Stand.
+      // Eine Entfernung ist die Ausnahme: sie wird unter dem Schlüssel versiegelt, den der Entfernte noch hat
+      // (Access §10.2), sein Blatt bleibt für diesen einen Eintrag Empfänger; alle anderen Fremden nicht.
+      const exempt = new Set(inner.t === 'auth' && inner.op.kind === 'remove' && inner.op.subject ? cardsOf(s, inner.op.subject).map((c) => hex(c.id)) : [])
+      await heal(s, exempt)
+      if (!authInTransit(s)) await ensureMemberLeaves(s)
     } catch {
       // Kein Schlüssel und keine Rotation möglich (das eigene Blatt fehlt im Baum, etwa nach einer
       // gleichzeitigen Entfernung, die später verfällt): der Rahmen wartet, bis ein Mitglied das Blatt
       // nachzieht (I4) und der nächste Rahmen den Schlüssel bringt.
       s.queued.push({ inner, label, heads })
+      return undefined
+    }
+    // Erst wenn jedes Blatt im Baum zu einem Mitglied laut Log gehört, geht ein Eintrag hinaus (#33): nicht
+    // allein auf hasKey oder einen vorher passenden Baum vertrauen. Sonst wartet der Rahmen; nur eine
+    // Reparaturanfrage geht dann unversiegelt (sie trägt keine Geheimnisse, nur IDs), damit die
+    // Lückenreparatur nie an der Vertraulichkeitsregel hängt.
+    if (!treeSafe(s, inner)) {
+      if (inner.t === 'repair') send(s, inner, label)
+      else {
+        s.queued.push({ inner, label, heads })
+        s.notes.push('schreiben wartet: Blätter im Baum ohne Mitgliedschaft')
+      }
       return undefined
     }
     const plain = enc.encode(JSON.stringify(inner))
@@ -303,6 +318,14 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
     else await sendSealed(s, { t: 'auth', op, group, cgka: [] }, label, [...op.preds])
   }
 
+  /** Gehört jedes Blatt im Baum zu einem Mitglied laut Log? Die Empfängermenge eines Eintrags; bei einer Entfernung darf der Entfernte noch dabei sein. */
+  const treeSafe = (s: DeviceState, inner: Wire) => {
+    const persons = [...s.auth.members()]
+    if (inner.t === 'auth' && inner.op.kind === 'remove' && inner.op.subject) persons.push(inner.op.subject)
+    const allowed = new Set(persons.flatMap((p) => cardsOf(s, p).map((c) => hex(c.id))))
+    return (s.peer.members() as Uint8Array[]).every((id) => allowed.has(hex(id)))
+  }
+
   /** Eine Entfernung wird vor dem Eingriff in den Baum versiegelt (unter dem Schlüssel, den der Entfernte noch hat). */
   const sealBeforeTree = (s: DeviceState, op: AuthOp) => (klartext ? Promise.resolve(undefined) : buildSealed(s, { t: 'auth', op, cgka: [] }, 'auth', [...op.preds]))
 
@@ -336,12 +359,12 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
    * Das tun die Mitglieder, die auf dem Stand sind (I4: jedes Mitglied mit Schlüssel). Die eigenen Geräte
    * zieht sie weiter nach (ensureOwnLeaves): dafür bürgt der Baum selbst, ohne Schlüssel geht es nicht.
    *
-   * Gezielt (Review zu #31, Runde 4): Ein Rahmen zählt nur, wenn seine Schlüsseloperation im Baum ist (oder
-   * er keine nennt), also aus einer Epoche stammt, in der diese Replik dabei ist. Ein Rahmen mit unbekannter
+   * Gezielt (Review zu #31, Runde 4): Ein Rahmen zählt nur, wenn seine Schlüsseloperation im Baum ist,
+   * also aus einer Epoche stammt, in der diese Replik dabei ist. Ein Rahmen mit unbekannter oder fehlender
    * `keyOp` sagt nichts über dieses Log aus und hält nichts auf. Lesen, Schreiben, eigene Geräte und die
    * Lückenreparatur laufen in jedem Fall weiter.
    */
-  const authInTransit = (s: DeviceState) => s.pending.some((m) => m.t === 'sealed' && m.kind === 'auth' && (!m.keyOp || s.appliedOps.has(m.keyOp)))
+  const authInTransit = (s: DeviceState) => s.pending.some((m) => m.t === 'sealed' && m.kind === 'auth' && !!m.keyOp && s.appliedOps.has(m.keyOp))
   /** Versiegelte Einträge öffnen: bekannter Schlüssel, Kette, oder BeeKEM; wiederholen bis Fixpunkt. Inhalte als Bytes, andere innere Rahmen zur Verarbeitung. */
   async function drain(s: KeyState): Promise<{ content: Uint8Array[]; inner: Wire[] }> {
     const out: Uint8Array[] = []
@@ -708,12 +731,12 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
    * Mitgliedschaftsentscheidung (die trifft das Log), sondern das Angleichen
    * des Baums; deshalb kein Politik-Quorum. Doppelte Entfernungen sind No-ops.
    */
-  async function heal(s: DeviceState) {
+  async function heal(s: DeviceState, exempt: Set<string> = new Set()) {
     const members = s.auth.members()
     if (!members.has(s.person) || !s.peer.hasKey()) return
     const allowed = new Set([...members.keys()].flatMap((p) => cardsOf(s, p).map((c) => hex(c.id))))
     for (const idBytes of s.peer.members() as Uint8Array[]) {
-      if (allowed.has(hex(idBytes))) continue
+      if (allowed.has(hex(idBytes)) || exempt.has(hex(idBytes))) continue
       try {
         const op = (await s.peer.remove(idBytes)) as Uint8Array | null
         if (op) send(s, { t: 'cgka', op: b64(op) }, 'heal')

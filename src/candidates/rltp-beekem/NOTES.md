@@ -628,9 +628,20 @@ Prüfstand; E11 ersetzt es durch den Zustellungs-Adapter.
   Baum. Nach der Heilung hatte niemand einen Schlüssel (Heilung braucht
   einen), Alices nächster Eintrag rotierte, die Rotation holte x und y in
   den Baum, und der Eintrag ging an fünf Blätter: x und y lasen neuen
-  Inhalt, obwohl kein Log sie als Mitglieder führte. Jetzt: nach jeder
-  Rotation (vor dem Verschlüsseln, bei der Reparatur-Rotation) noch einmal
-  Heilung und Nachziehen, dann erst der Schlüssel. S4f prüft seitdem die
+  Inhalt, obwohl kein Log sie als Mitglieder führte. Jetzt gilt vor jedem
+  Eintrag: Die Empfängermenge ist der Baum nach der Rotation, und die wird
+  geprüft, nicht vorausgesetzt. Erst heilen (immer, auch wenn diese Replik
+  zurückliegt: Vertraulichkeit geht vor Angleichungsruhe, ein zu früh
+  entferntes Blatt zieht ein Mitglied auf dem Stand nach, ein Eintrag an
+  ein Nicht-Mitglied ist nicht rückholbar), fremde Blätter nachziehen nur
+  auf dem Stand, dann `treeSafe`: jedes Blatt im Baum gehört zu einem
+  Mitglied laut Log, sonst wartet der Eintrag (`queued`, Notiz „schreiben
+  wartet“). Nur eine Reparaturanfrage geht dann unversiegelt hinaus, sie
+  trägt keine Geheimnisse, damit die Lückenreparatur nie an der
+  Vertraulichkeitsregel hängt (Review zu #34). Ausnahme bleibt die
+  Entfernung: ihr Eintrag wird unter dem Schlüssel versiegelt, den der
+  Entfernte noch hat (§10.2); sein Blatt ist für diesen einen Eintrag
+  Empfänger, alle anderen Fremden nicht. S4f prüft seitdem die
   Vertraulichkeit nach der Heilung, nicht nur die Mitgliedschaft; vorher
   stand dort `keys: —`. Nebeneffekt: Befund 8 löst sich, Bob bekommt nach
   der verfallenen Entfernung sein Blatt mit der nächsten Rotation nachgezogen
