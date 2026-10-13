@@ -5,3 +5,6 @@ rust/*/target
 src/candidates/p2panda/pkg
 src/candidates/rltp-beekem/pkg
 .cache
+
+# Berichtsausgabe (REPORT=1 pnpm test report)
+matrix.md

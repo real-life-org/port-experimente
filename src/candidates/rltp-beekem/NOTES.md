@@ -678,6 +678,30 @@ unverändert bestanden. Für den Port: Der Umschlag im Klartext ist das, was
 ein Träger lernt: Art des Rahmens, Köpfe als Hashes, ein Geräteschlüssel als
 Pseudonym; dazu Größen, Zeiten und die Gerätenamen des Prüfstands.
 
+### Konformitätsmatrix und die Dienstvarianten am Träger (13.10.)
+
+Die Matrix (`src/lab/matrix.ts`, Ausgabe `REPORT=1 pnpm test report` und
+die Seite) läuft S1–S10 und T1–T12 für alle Kandidaten. Für die
+Dienstvarianten dieses Kandidaten ist der Katalog T damit zum ersten Mal
+gelaufen; was dabei rot wurde, sind Befunde, nicht Fehler des Prüfstands:
+
+| | Sichten | Log-Replik (Klartextmodus) | Befund |
+|---|---|---|---|
+| T1 Rahmen still verloren | ✓ | ✗ | Im Klartextmodus reisen die BeeKEM-Anhänge im Autoritätsrahmen; geht er verloren, fehlt auch der Schlüssel, der nächste Inhalt lässt sich nicht öffnen und belegt nichts. Die Lückenreparatur holt Autorität, keine Schlüssel (bekannte Grenze, I12 ist Autoritätsreparatur). |
+| T2 Umordnung | ✗ | ✗ | Mit Dienst kommt ein umgeordneter Inhalt vor dem Besitznachweis des Schreibers oder vor der Sicht, die ihn zulässt; der Dienst verwirft ihn endgültig, statt ihn zu halten. Beim blinden Träger trägt die Replik die Reihenfolge, beim Dienst müsste er sie tragen (Access §9.3: Evidenztransport nie gated, Inhalt gated, aber ein Urteil „zu früh“ ist keines von beiden). Offen. |
+| T5 verändert | ✓ | ✗ | Klartextmodus: ein abgeschnittener Autoritätsrahmen wird verworfen, aber Dave und Eve kommen nicht nach, weil im Klartextmodus kein Inhalt sie belegt (s. T1). |
+| T6 ein Eintrag vorgehalten | ✓ | ✗ | wie T1: ohne Schlüssel kein Beleg. |
+| T6b Feed eingefroren | ✗ | ✗ | Klasse Sicht ohne Attestation: wie blind. Die Sicht selbst wäre das beglaubigte Ziel, der Kandidat vergleicht seinen Stand noch nicht damit. Offen: Attestation. |
+| T12 versiegelt | ✗ | ✗ | Mit Prüfstand-Dienst gehen Karten über den Dienst (Gerätebindung aus der Karte); der Log-Dienst liest das Log im Klartext, das ist seine Klasse (§9.3). Der Träger sieht hier, was der Dienst sehen soll. |
+
+Was die Matrix für die anderen Kandidaten zeigt: Ein T-Szenario, dessen
+Fehlerregel beim Träger nie greift (Keyhive nennt alles `event`, p2panda
+und Klartext ihre Operationen anders), steht als „nicht abbildbar“, nicht
+als bestanden; das waren im ersten Lauf stille Treffer. T2, T3, T7 und T12
+gelten für alle, weil sie ohne Rahmenart auskommen: p2panda scheitert an
+der Umordnung (T2), Klartext an Duplikaten (T3) und am Entfernten (T7),
+Keyhive und p2panda bestehen T12 (binäre Rahmen ohne Namen).
+
 ### Wo der Code vom Guss abweichen musste (Befund für 0.57)
 
 1. **Autor einer k-of-n-Operation.** Die Spec disponiert „eine Entfernung

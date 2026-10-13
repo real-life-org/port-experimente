@@ -238,12 +238,15 @@ export async function rltpBeekemPws(options: PwsOptions = {}): Promise<Candidate
       // Ein alter Rahmen kommt als neue Resource noch einmal; der Server kennt keine Identität des Inhalts.
       const s = devices.values().next().value as DeviceState
       const col = collection(s)
+      let n = 0
       for (const m of carriedLog) {
         if (!match(m)) continue
+        n++
         const id = `replay-${m.id}-${++replaySeq}`
         await timed(() => col.put(id, { from: m.from, label: m.label, b: b64(m.body) } as Frame))
         stats.puts++
       }
+      return n
     },
     carried: () => carriedLog.slice(),
     rebind: async () => void (await pws.moveToNewServer()),
