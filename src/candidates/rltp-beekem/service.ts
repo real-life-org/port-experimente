@@ -67,7 +67,7 @@ type ServiceWire =
   | { t: 'card'; person: string; id: string; deviceKey: string }
   | { t: 'auth'; op: AuthOp }
   | { t: 'sealed'; kind: string; ref?: unknown }
-  | { t: 'target-request' }
+  | { t: 'target-request'; nonce?: unknown; since?: unknown }
   | { t: 'fetch'; refs?: unknown }
   | ViewProposal
   | ChallengeAnswer
@@ -89,10 +89,14 @@ export interface Target {
   frontier: { scope: 'stored'; heads: string[] }
   prev: string | null
   attestationKey: string
+  /** Nonce der Anfrage, die dieses Ziel beantwortet: Frische, signiert (Review zu #36). */
+  echo: string
+  /** Geräteschlüssel des Fragenden: Ziele sind adressiert, andere Geräte lassen sie liegen. */
+  to: string
   sig: string
 }
 const hexOf = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('')
-export const targetInput = (t: Omit<Target, 'sig'>) => JSON.stringify([t.v, t.source, t.seq, t.chain, t.frontier.scope, t.frontier.heads, t.prev, t.attestationKey])
+export const targetInput = (t: Omit<Target, 'sig'>) => JSON.stringify([t.v, t.source, t.seq, t.chain, t.frontier.scope, t.frontier.heads, t.prev, t.attestationKey, t.echo, t.to])
 export const targetDigest = (t: Omit<Target, 'sig'>) => hexOf(sha256(enc.encode(targetInput(t))))
 export const verifyTarget = (t: Target) => {
   const { sig, ...rest } = t
@@ -135,19 +139,21 @@ abstract class Base implements EnforcingService {
   private chain: string | null = null
   /** Gespeicherte Einträge nach Referenz: Quellenpflicht des Dienstes (I1, I12). */
   private readonly stored = new Map<string, Uint8Array>()
-  protected targets = 0
+  /** Alle ausgestellten Ziele, in Kettenfolge: wer Zwischenziele verpasst hat, bekommt sie zur Kettenprüfung nachgereicht. */
+  protected readonly issued: Target[] = []
   protected fetched = 0
 
-  /** Ein neues Ziel: Kette seq+1, prev = Digest des vorigen, grow-only über `stored`. */
-  private attest(): Target {
+  /** Ein neues Ziel: Kette seq+1, prev = Digest des vorigen, grow-only über `stored`, adressiert und mit Echo der Anfrage. */
+  private attest(echo: string, to: string): Target {
     const seq = ++this.targetSeq
-    const body: Omit<Target, 'sig'> = { t: 'target', v: 'rltp-replication-target/0.26', source: 'dienst', seq, chain: this.chain, frontier: { scope: 'stored', heads: [...this.stored.keys()].sort() }, prev: this.prevDigest, attestationKey: this.attestation.pub }
+    const body: Omit<Target, 'sig'> = { t: 'target', v: 'rltp-replication-target/0.26', source: 'dienst', seq, chain: this.chain, frontier: { scope: 'stored', heads: [...this.stored.keys()].sort() }, prev: this.prevDigest, attestationKey: this.attestation.pub, echo, to }
     const sig = this.attestation.sign(targetInput(body))
     const digest = targetDigest(body)
     if (seq === 1) this.chain = digest
     this.prevDigest = digest
-    this.targets++
-    return { ...body, sig }
+    const t = { ...body, sig }
+    this.issued.push(t)
+    return t
   }
 
   protected abstract allows(deviceKey: string | undefined): boolean
@@ -200,7 +206,11 @@ abstract class Base implements EnforcingService {
       const key = this.keyOf.get(msg.from)
       if (!key || !this.authenticated.has(msg.from) || !this.allows(key)) return this.drop()
       if (m.t === 'target-request') {
-        this.outgoing.push({ label: 'target', body: enc.encode(JSON.stringify(this.attest())) })
+        const { nonce, since } = m as { nonce?: unknown; since?: unknown }
+        if (typeof nonce !== 'string' || !Number.isInteger(since)) return this.drop()
+        // Erst die Zwischenziele seit dem letzten, das der Fragende kennt (Kettenprüfung), dann das frische.
+        for (const t of this.issued) if (t.seq > (since as number)) this.outgoing.push({ label: 'target', body: enc.encode(JSON.stringify(t)) })
+        this.outgoing.push({ label: 'target', body: enc.encode(JSON.stringify(this.attest(nonce, key))) })
       } else {
         const refs = (m as { refs?: unknown }).refs
         if (!Array.isArray(refs) || !refs.every((r) => typeof r === 'string')) return this.drop()
@@ -324,7 +334,7 @@ export class ViewService extends Base {
   }
 
   status() {
-    return `Sicht seq=${this.accepted.seq}, ${this.accepted.identities.size} Identitäten, m=${this.accepted.m} (${this.mRule}), offene Vorschläge=${this.proposals.size}, abgelehnte Sichten/Signaturen=${this.rejectedViews}, abgelehnte Antworten=${this.rejectedAnswers}, abgelehnte Karten=${this.rejectedCards}, verworfen=${this.dropped}, Ziele=${this.targets}, nachgeliefert=${this.fetched}`
+    return `Sicht seq=${this.accepted.seq}, ${this.accepted.identities.size} Identitäten, m=${this.accepted.m} (${this.mRule}), offene Vorschläge=${this.proposals.size}, abgelehnte Sichten/Signaturen=${this.rejectedViews}, abgelehnte Antworten=${this.rejectedAnswers}, abgelehnte Karten=${this.rejectedCards}, verworfen=${this.dropped}, Ziele=${this.issued.length}, nachgeliefert=${this.fetched}`
   }
 }
 

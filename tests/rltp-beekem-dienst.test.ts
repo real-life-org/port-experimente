@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { runAll } from '../src/lab/scenarios'
 import { rltpBeekem } from '../src/candidates/rltp-beekem'
 import { BeekemPeer, loadWasm } from '../src/candidates/rltp-beekem/load'
+import { Signer } from '../src/candidates/rltp-beekem/authority'
+import { targetDigest, targetInput, type Target } from '../src/candidates/rltp-beekem/service'
 import { World } from '../src/lab/world'
 import type { Msg } from '../src/lab/types'
 
@@ -98,5 +100,70 @@ describe('E8: Dienst am Relay', () => {
     expect(c.status('alice')).toContain('behauptet auth, enthält content')
     expect(w.read('alice').length).toBe(before)
     void dec
+  })
+
+  // Review zu #36: Frische, referenzgenauer Fehlbestand, Kettenprüfung, je als Gegenprobe mit gefälschten Zielen.
+  describe('beglaubigtes Ziel: Frische, Fehlbestand, Kette', () => {
+    const enc = new TextEncoder()
+    const dec = new TextDecoder()
+    async function device() {
+      await loadWasm()
+      const c = rltpBeekem({ dienst: 'sichten' })
+      await c.addDevice('carol', 'carol')
+      const card = JSON.parse(dec.decode(c.takeOutgoing('carol')[0]!.body)) as { deviceKey: string }
+      await c.createGroup('carol')
+      c.takeOutgoing('carol')
+      const dienst = Signer.generate('dienst')
+      let id = 1
+      const poll = () => {
+        c.poll!('carol')
+        const req = c.takeOutgoing('carol').map((o) => JSON.parse(dec.decode(o.body)) as { t: string; nonce?: string }).find((m) => m.t === 'target-request')!
+        return req.nonce!
+      }
+      const target = (fields: Partial<Omit<Target, 'sig'>> & { seq: number; echo: string }): Target => {
+        const body: Omit<Target, 'sig'> = { t: 'target', v: 'rltp-replication-target/0.26', source: 'dienst', chain: null, frontier: { scope: 'stored', heads: [] }, prev: null, attestationKey: dienst.pub, to: card.deviceKey, ...fields }
+        return { ...body, sig: dienst.sign(targetInput(body)) }
+      }
+      const deliver = (m: unknown) => c.receive('carol', { id: id++, from: 'dienst', label: 'target', body: enc.encode(JSON.stringify(m)) })
+      return { c, poll, target, deliver }
+    }
+
+    it('ein altes, gültig signiertes Ziel beantwortet keine neue Anfrage (Wiederholung)', async () => {
+      const { c, poll, target, deliver } = await device()
+      const t1 = target({ seq: 1, echo: poll() })
+      await deliver(t1)
+      expect(c.status('carol')).toContain('ziel=seq 1 (0 fehlen, 0 geholt)')
+      poll()
+      expect(c.status('carol')).toContain('ziel=angefragt, keine Antwort (zuletzt seq 1)')
+      await deliver(t1)
+      expect(c.status('carol')).toContain('ziel=angefragt, keine Antwort (zuletzt seq 1)')
+    })
+
+    it('nur ein Eintrag mit genau der Referenz des Ziels trägt den Fehlbestand aus', async () => {
+      const { c, poll, target, deliver } = await device()
+      await deliver(target({ seq: 1, echo: poll(), frontier: { scope: 'stored', heads: ['wanted'] } }))
+      expect(c.status('carol')).toContain('ziel=seq 1 (1 fehlen, 0 geholt)')
+      const sealed = (ref: string) => ({ t: 'sealed', kind: 'content', c: 'AAAA', iv: 'AAAAAAAAAAAAAAAA', tab: '', ref, heads: [], by: 'x' })
+      await deliver(sealed('other'))
+      expect(c.status('carol')).toContain('ziel=seq 1 (1 fehlen, 0 geholt)')
+      await deliver(sealed('wanted'))
+      expect(c.status('carol')).toContain('ziel=seq 1 (0 fehlen, 1 geholt)')
+    })
+
+    it('ein Ziel mit falschem prev oder chain wird nicht als nächstes Glied angenommen', async () => {
+      const { c, poll, target, deliver } = await device()
+      const t1 = target({ seq: 1, echo: poll() })
+      await deliver(t1)
+      const { sig: _s, ...body1 } = t1
+      const d1 = targetDigest(body1)
+      const n2 = poll()
+      await deliver(target({ seq: 2, echo: n2, prev: 'wrong-prev', chain: 'wrong-chain' }))
+      expect(c.status('carol')).toContain('ziel=angefragt, keine Antwort (zuletzt seq 1)')
+      expect(c.status('carol')).toContain('prev oder chain passen nicht')
+      await deliver(target({ seq: 3, echo: n2, prev: d1, chain: d1 }))
+      expect(c.status('carol')).toContain('Kette unterbrochen')
+      await deliver(target({ seq: 2, echo: n2, prev: d1, chain: d1 }))
+      expect(c.status('carol')).toContain('ziel=seq 2 (0 fehlen, 0 geholt)')
+    })
   })
 })

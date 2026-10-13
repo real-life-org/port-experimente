@@ -694,11 +694,19 @@ Dienst die durchgelassenen Einträge nach Referenz und liefert sie auf
 
 Auf Geräteseite ein **Sync-Tick** (`Candidate.poll`, vom Prüfstand zu
 Beginn jeder Zustellrunde gerufen, die App kommt in den Vordergrund): mit
-Dienst fragt das Gerät `target-request`; das Ziel wird gegen den beim
-ersten Mal gesehenen Schlüssel geprüft (TOFU wie §7.3), nur vorwärts in
-der Kette angenommen; was es nennt und hier fehlt, holt das Gerät per
-`fetch`. Beide Anfragen gehen unversiegelt (nur IDs) und sind beim Dienst
-ein Lesen: bewiesener Schlüssel und Mitgliedschaft (I7). Status:
+Dienst fragt das Gerät `target-request` mit einer Nonce und `since` (das
+letzte Ziel, das es kennt). Drei getrennte Prüfungen am Ziel (Review zu
+#36, drei Gegenproben): **Signatur** unter dem beim ersten Mal gesehenen
+Schlüssel (TOFU wie §7.3); **Kette**: seq genau +1, `prev` = Digest des
+angenommenen Vorgängers, `chain` = Kettenidentität, sonst liegt das Ziel
+mit Notiz; der Dienst reicht auf `since` die Zwischenziele nach, damit die
+Kette auch dann prüfbar ist, wenn andere Geräte dazwischen gefragt haben;
+**Frische**: die offene Anfrage beantwortet nur ein Ziel mit ihrem Echo
+(signiert) und an dieses Gerät, ein altes gültiges Ziel ist ein
+Kettenglied, nie eine Antwort. Der Fehlbestand ist eine Referenzmenge;
+nur ein Eintrag mit genau einer Referenz des Ziels trägt sie aus, fremder
+Verkehr nie. Beide Anfragen gehen unversiegelt (nur IDs) und sind beim
+Dienst ein Lesen: bewiesener Schlüssel und Mitgliedschaft (I7). Status:
 `ziel=seq N (M fehlen, K geholt)` bzw. `ziel=angefragt, keine Antwort`.
 
 Ergebnis: T6 besteht mit Sicht jetzt über das Ziel (ein Eintrag
