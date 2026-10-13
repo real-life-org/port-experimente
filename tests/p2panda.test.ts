@@ -16,6 +16,7 @@ describe('Kandidat p2panda (WebAssembly)', () => {
       S4a: 'bestanden', // Bobs gleichzeitiger Eintrag bleibt sichtbar (Strong Removal betrifft Gruppenoperationen)
       S4b: 'nicht bestanden', // ein Entfernter liest nach gleichzeitigen Entfernungen mit (Befund)
       S4c: 'bestanden', // gegenseitige Entfernung: beide raus
+      S4c2: 'nicht bestanden', // beide raus, aber Bob liest Carols neuen Eintrag noch (Befund, wie S4b)
       S4d: 'nicht abbildbar', // keine Rotation ohne Mitgliedschaftsänderung (SpaceUpdate nicht umgesetzt)
       S4e: 'nicht abbildbar', // keine Gruppenregeln
       S4j: 'nicht abbildbar',

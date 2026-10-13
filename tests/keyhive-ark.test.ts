@@ -17,6 +17,7 @@ describe('Kandidat Keyhive über ARK und Subduction', () => {
       S4a: 'bestanden', // Server verwirft den Blob des gleichzeitig Entfernten
       S4b: 'bestanden', // Admin-Gruppe als Miteigentümerin; sonst „keyhive rejected“
       S4c: 'nicht bestanden', // Gründerin nicht entfernbar; Nicht-Admins sehen Gruppenänderung nicht
+      S4c2: 'nicht bestanden', // wie S4c
       S4d: 'bestanden',
       S4e: 'nicht abbildbar',
       S4j: 'nicht abbildbar',

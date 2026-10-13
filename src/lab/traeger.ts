@@ -30,6 +30,25 @@ async function base(w: World) {
 
 const isAuthFrom = (from: string, label = 'auth') => (m: Msg) => m.from === from && m.label === label
 
+/**
+ * Zählt, wie oft eine Fehlerregel greift. Greift sie nie, hat der Träger
+ * keinen Rahmen dieser Art gesehen (der Kandidat nennt seine Rahmen anders),
+ * und das Szenario ist für ihn nicht abbildbar statt still bestanden.
+ */
+function counted<T extends (m: Msg) => boolean>(pred: T): { pred: (m: Msg) => boolean; hits: () => number } {
+  let n = 0
+  return {
+    pred: (m) => {
+      const h = pred(m)
+      if (h) n++
+      return h
+    },
+    hits: () => n,
+  }
+}
+const untouched = (what: string): ScenarioOutcome => ({ outcome: 'nicht abbildbar', authority: `der Träger hat keinen Rahmen dieser Art gesehen (${what}); der Kandidat nennt seine Rahmen anders`, keys: '—' })
+type ScenarioOutcome = { outcome: Outcome; authority: string; keys: string }
+
 export const carrierScenarios: CarrierScenario[] = [
   {
     id: 'T1',
@@ -43,13 +62,15 @@ export const carrierScenarios: CarrierScenario[] = [
       await w.device('dave', 'dave')
       await w.flush()
       let dropped = false
-      c.drop((m) => {
+      const rule = counted((m) => {
         if (!dropped && isAuthFrom('alice')(m)) return (dropped = true)
         return false
       })
+      c.drop(rule.pred)
       await w.add('alice', 'dave')
       await w.flush()
       c.reset()
+      if (!rule.hits()) return untouched('Autoritätsrahmen von alice')
       await w.write('alice', 'danach')
       await w.flush()
       const ok = agree(w, ['alice', 'bob', 'carol', 'dave']) && same(w.members('bob'), ['alice', 'bob', 'carol', 'dave']) && w.read('dave').includes('danach')
@@ -117,8 +138,9 @@ export const carrierScenarios: CarrierScenario[] = [
       await w.flush()
       const c = w.carrier()!
       // Alices Autoritätsrahmen von damals kommen noch einmal, die Entfernung darunter (versiegelt: der Träger kann sie nicht gezielt auswählen).
-      await c.replay((m) => m.from === 'alice' && m.label === 'auth')
+      const replayed = await c.replay((m) => m.from === 'alice' && m.label === 'auth')
       await w.flush()
+      if (!replayed) return untouched('Autoritätsrahmen von alice')
       await w.write('carol', 'noch-da')
       await w.flush()
       const ok = agree(w, ['alice', 'bob', 'carol']) && same(w.members('bob'), ['alice', 'bob', 'carol']) && w.read('alice').includes('noch-da')
@@ -141,11 +163,14 @@ export const carrierScenarios: CarrierScenario[] = [
       await w.device('eve', 'eve')
       await w.flush()
       let hit = 0
-      c.tamper(isAuthFrom('alice'), (body) => {
+      const rule = counted(isAuthFrom('alice'))
+      c.tamper(rule.pred, (body) => {
         hit++
         if (hit === 1) {
-          const f = JSON.parse(dec.decode(body)) as { c: string }
-          return enc.encode(JSON.stringify({ ...f, c: (f.c[0] === 'A' ? 'B' : 'A') + f.c.slice(1) }))
+          const f = JSON.parse(dec.decode(body)) as { c?: string }
+          // Versiegelt: ein Byte im Chiffretext kippt. Unversiegelt (Klartextmodus): der Rahmen wird abgeschnitten.
+          if (typeof f.c === 'string') return enc.encode(JSON.stringify({ ...f, c: (f.c[0] === 'A' ? 'B' : 'A') + f.c.slice(1) }))
+          return body.slice(0, Math.max(1, body.length - 7))
         }
         if (hit === 2) return enc.encode('{"t":"sealed","kind":"auth","c":')
         return body
@@ -157,6 +182,7 @@ export const carrierScenarios: CarrierScenario[] = [
       await w.write('alice', 'x')
       await w.flush()
       c.reset()
+      if (!rule.hits()) return untouched('Autoritätsrahmen von alice')
       // Der Träger konnte nur zerstören: Bob bleibt, nichts wurde umgedeutet. Was zerstört wurde, holt die
       // Lückenreparatur über den Beleg von Alices Inhalt zurück: Dave und Eve kommen doch an.
       const bobStays = ['alice', 'bob', 'carol'].every((d) => w.members(d).includes('bob'))
@@ -176,11 +202,13 @@ export const carrierScenarios: CarrierScenario[] = [
       const c = w.carrier()!
       await w.device('dave', 'dave')
       await w.flush()
-      c.withhold('carol', isAuthFrom('alice'))
+      const rule = counted(isAuthFrom('alice'))
+      c.withhold('carol', rule.pred)
       await w.add('alice', 'dave')
       await w.flush()
       await w.write('dave', 'von-dave')
       await w.flush()
+      if (!rule.hits()) return untouched('Autoritätsrahmen von alice')
       // Carol müsste merken, dass sie zurückliegt. Erkennbar hier nur daran, dass sie Daves Eintrag nicht lesen kann.
       const carolBehind = !w.members('carol').includes('dave')
       const carolReads = w.read('carol').includes('von-dave')

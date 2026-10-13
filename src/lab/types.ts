@@ -59,8 +59,8 @@ export interface CarrierFaults {
   duplicate(on: boolean): void
   /** Rahmen vor der Zustellung verändern (Rückgabe = neue Bytes). */
   tamper(match: (m: Msg) => boolean, mutate: (body: Uint8Array) => Uint8Array): void
-  /** Einen schon zugestellten Rahmen allen noch einmal zustellen. */
-  replay(match: (m: Msg) => boolean): Promise<void>
+  /** Einen schon zugestellten Rahmen allen noch einmal zustellen; liefert, wie viele Rahmen getroffen wurden. */
+  replay(match: (m: Msg) => boolean): Promise<number>
   /** Alles, was der Träger je getragen hat, als Bytes (für T12: was ein Träger liest). */
   carried(): Msg[]
   /** Trägerwechsel mitten im Leben (T8, I15): die Gruppe zieht auf einen neuen Träger um; nur, wenn der Träger das kann. */

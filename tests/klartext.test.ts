@@ -17,6 +17,7 @@ describe('Prüfstand mit Klartext-Kandidat', () => {
       S4a: 'nicht bestanden', // Bob liest nach Entfernung weiter
       S4b: 'nicht bestanden', // Entfernte lesen weiter
       S4c: 'bestanden', // deterministisch, wenn auch ohne Rechteprüfung
+      S4c2: 'nicht bestanden', // beide draußen, aber beide lesen weiter (kein Schlüssel)
       S4d: 'nicht bestanden', // Carol liest weiter
       S4e: 'nicht bestanden', // Ankunftsreihenfolge entscheidet → uneinig
       S4j: 'nicht bestanden',

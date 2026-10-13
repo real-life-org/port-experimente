@@ -17,6 +17,7 @@ describe('Kandidat WoT Gen 2', () => {
       S4a: 'bestanden', // Relay sperrt Bobs veraltete Generation
       S4b: 'nicht bestanden', // befördeter Admin: adapter-yjs 0.3.0 sendet kein admin-add (Sync 005 verlangt es)
       S4c: 'bestanden', // formal: Bob kann aus demselben Grund nicht durchsetzen, nichts ist gleichzeitig
+      S4c2: 'nicht bestanden', // Bob kann Alice nicht durchsetzen; Alice bleibt und liest Carols Eintrag
       S4d: 'nicht abbildbar', // keine Rotation ohne Mitgliedschaftsänderung
       S4e: 'nicht abbildbar', // keine Gruppenregeln
       S4j: 'nicht abbildbar',

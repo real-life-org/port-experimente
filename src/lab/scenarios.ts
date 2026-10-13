@@ -90,9 +90,11 @@ export const scenarios: Scenario[] = [
       await w.flush()
       const want = ['offline-bob', 'online-alice']
       const ok = ['alice', 'bob', 'carol'].every((d) => same(w.read(d), want))
+      // Konvergenz heißt beides: alle lesen beide Einträge, und alle sehen dieselbe Mitgliedschaft (Review zu #35).
+      const m = membersAgree(w, ['alice', 'bob', 'carol'])
       return {
-        outcome: verdict(ok),
-        authority: membersAgree(w, ['alice', 'bob', 'carol']).text,
+        outcome: verdict(ok && m.agree),
+        authority: m.text,
         keys: ok ? 'alle lesen beide Einträge' : ['alice', 'bob', 'carol'].map((d) => `${d}:${fmt(w.read(d))}`).join(' '),
       }
     },
@@ -167,6 +169,32 @@ export const scenarios: Scenario[] = [
         outcome: verdict(m.agree),
         authority: [`${m.text}`, ...others, `Zustand ${w.candidate.status('carol')}`].join('; '),
         keys: '—',
+      }
+    },
+  },
+  {
+    id: 'S4c2',
+    title: 'Gegenseitige Entfernung: beide sind draußen, keiner liest Neues',
+    needs: ['roles'],
+    async run(w) {
+      // Das Soll der Spec (Access §3.6, Entscheid 05.10.): gleichzeitige gegenseitige
+      // Entfernung lässt beide draußen. S4c verlangt nur Einigkeit; hier gilt das Soll,
+      // und die Vertraulichkeit danach: ein Eintrag der Verbliebenen erreicht keinen der beiden.
+      await base(w, [], 'admin')
+      await w.partition(['alice'], ['bob'])
+      await w.remove('alice', 'bob')
+      await w.remove('bob', 'alice')
+      await w.flush()
+      await w.heal()
+      await w.flush()
+      await w.write('carol', 'allein')
+      await w.flush()
+      const bothOut = same(w.members('carol'), ['carol'])
+      const readers = ['alice', 'bob'].filter((d) => w.read(d).includes('allein'))
+      return {
+        outcome: verdict(bothOut && readers.length === 0),
+        authority: `Carol sieht ${fmt(w.members('carol'))}; alice sieht ${fmt(w.members('alice'))}, bob sieht ${fmt(w.members('bob'))}; Zustand ${w.candidate.status('carol')}`,
+        keys: readers.length ? `LECK: ${readers.join(',')} lesen Carols Eintrag` : 'keiner der beiden liest Carols Eintrag',
       }
     },
   },

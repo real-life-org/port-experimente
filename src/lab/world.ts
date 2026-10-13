@@ -49,7 +49,13 @@ export class World {
       duplicate: (on) => void (w.duplicateAll = on),
       tamper: (match, mutate) => void w.tamperRules.push({ match, mutate }),
       async replay(match) {
-        for (const m of w.log) if (match(m)) for (const seen of w.delivered.values()) seen.delete(m.id)
+        let n = 0
+        for (const m of w.log) {
+          if (!match(m)) continue
+          n++
+          for (const seen of w.delivered.values()) seen.delete(m.id)
+        }
+        return n
       },
       carried: () => w.log.slice(),
       reset() {
