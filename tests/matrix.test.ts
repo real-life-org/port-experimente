@@ -41,7 +41,36 @@ describe('Konformitätsmatrix', () => {
       { scenario: 'S5c', outcome: 'nicht bestanden' },
     ])
     expect(row('schlüssel', 'K7').cells.a!.evidence[0]).toEqual({ scenario: 'S5', outcome: 'nicht gelaufen' })
+    // Nicht gelaufene Belege bleiben sichtbar, auch wenn die Zelle „nicht geprüft“ ist.
+    expect(toMarkdown(m)).toContain('? S5 – S5b ✗ S5c')
   })
+
+  it('A10 (Konvergenz) fällt, wenn die Mitgliedschaft uneinig ist, auch wenn alle Inhalte lesen (Review zu #35)', async () => {
+    const bobAlone = () => {
+      const c = klartext()
+      return { ...c, members: (d: string) => (d === 'bob' ? ['bob'] : c.members(d)) }
+    }
+    const s3 = scenarios.find((s) => s.id === 'S3')!
+    const r = await runScenario(bobAlone, s3)
+    expect(r.outcome).toBe('nicht bestanden')
+    expect(r.authority).toContain('uneinig')
+    const a10 = buildMatrix([{ id: 'x', scenarios: [r], carrier: [] }]).ports.find((p) => p.port === 'autorität')!.rows.find((x) => x.promise.id === 'A10')!
+    expect(a10.cells.x!.status).toBe('nicht bestanden')
+  }, 60_000)
+
+  it('A6 behauptet nur, was S4e prüft: Einigkeit; den Fork prüft S4j über A7', async () => {
+    const noPolicy = () => {
+      const c = klartext()
+      return { ...c, changePolicy: async () => {}, status: () => 'fork=nein' }
+    }
+    const s4e = scenarios.find((s) => s.id === 'S4e')!
+    expect((await runScenario(noPolicy, s4e)).outcome).toBe('bestanden')
+    const a6 = promises.find((p) => p.id === 'A6')!
+    expect(a6.title).not.toMatch(/Fork,/)
+    expect(a6.title).toContain('einig')
+    const a7 = promises.find((p) => p.id === 'A7')!
+    expect(a7.scenarios).toEqual(['S4j'])
+  }, 60_000)
 
   it('A4 (beide draußen) fällt, wenn Entfernen nichts tut: das Szenario prüft das Soll, nicht nur Einigkeit (Review zu #35)', async () => {
     const noRemoval = () => {

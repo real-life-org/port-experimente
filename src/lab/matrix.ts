@@ -34,7 +34,7 @@ export const promises: Promise[] = [
   { id: 'A4', port: 'autorität', title: 'Gegenseitige Entfernung: beide sind draußen, keiner liest Neues', ref: 'Access §3.6; Entscheid 05.10.', scenarios: ['S4c2'] },
   { id: 'A4a', port: 'autorität', title: 'Gegenseitige Entfernung: alle Verbleibenden sind sich einig (kein festes Soll, was ein Kandidat daraus macht)', ref: 'Access §3.6', scenarios: ['S4c'] },
   { id: 'A5', port: 'autorität', title: 'Entfernung neben Rotation eines anderen Mitglieds', ref: 'Access §3.6', scenarios: ['S4d'] },
-  { id: 'A6', port: 'autorität', title: 'Zwei gleichzeitige Regeländerungen: Fork, alle einig', ref: 'Access §3.6 Klassenregel 3', scenarios: ['S4e'] },
+  { id: 'A6', port: 'autorität', title: 'Zwei gleichzeitige Regeländerungen: alle Repliken einig über Zustand und Mitgliedschaft (ob ein Fork entsteht, prüft erst S4j über A7)', ref: 'Access §3.6 Klassenregel 3', scenarios: ['S4e'] },
   { id: 'A7', port: 'autorität', title: 'Regeländerung neben Durchsetzung: Fork, Durchsetzung verfällt, Ende durch Regeländerung auf beide Zweige', ref: 'Access §3.6, 3565–3568', scenarios: ['S4j'] },
   { id: 'A8', port: 'autorität', title: 'Entfernte lädt gleichzeitig ein: die Kette verfällt, niemand aus ihr liest Neues', ref: 'Access RLTP-ACC-3400, 3475', scenarios: ['S4f'] },
   { id: 'A9', port: 'autorität', title: 'Ersteller ohne Sonderrolle: die Gruppe bleibt ohne ihn handlungsfähig', ref: 'Access §3 (RLTP-ACC-3060)', scenarios: ['S8'] },
@@ -133,14 +133,14 @@ export function buildMatrix(runs: readonly CandidateRun[]): Matrix {
 const mark: Record<Outcome | 'nicht gelaufen', string> = { bestanden: '✓', 'nicht bestanden': '✗', 'nicht abbildbar': '–', 'nicht gelaufen': '?' }
 
 export function cellText(c: Cell): string {
-  if (c.status === 'nicht geprüft') return 'nicht geprüft'
+  if (!c.evidence.length) return 'nicht geprüft'
   const marks = c.evidence.map((e) => `${mark[e.outcome]} ${e.scenario}`).join(' ')
-  return c.status === 'teilweise' ? `teilweise: ${marks}` : marks
+  return c.status === 'teilweise' ? `teilweise: ${marks}` : c.status === 'nicht geprüft' ? `nicht gelaufen: ${marks}` : marks
 }
 
 /** Markdown: eine Tabelle je Port, Kandidaten als Spalten. */
 export function toMarkdown(m: Matrix, at = new Date().toISOString().slice(0, 10)): string {
-  const lines: string[] = ['# Konformitätsmatrix', '', `Stand ${at}. Eine Zusage gilt nur, wenn jedes zugeordnete Szenario besteht: ✓ bestanden, ✗ nicht bestanden, – nicht abbildbar, ? nicht gelaufen. „teilweise“ heißt: ein Teil besteht, der Rest ist nicht abbildbar oder nicht gelaufen. „nicht geprüft“ heißt: es gibt noch kein Szenario dafür.`, '']
+  const lines: string[] = ['# Konformitätsmatrix', '', `Stand ${at}. Eine Zusage gilt nur, wenn jedes zugeordnete Szenario besteht: ✓ bestanden, ✗ nicht bestanden, – nicht abbildbar, ? nicht gelaufen. „teilweise“ heißt: ein Teil besteht, der Rest ist nicht abbildbar oder nicht gelaufen. „nicht geprüft“ heißt: es gibt noch kein Szenario dafür; „nicht gelaufen“: es gibt eines, der Lauf enthielt es nicht.`, '']
   for (const p of m.ports) {
     lines.push(`## ${p.title}`, '', `| Zusage | ${m.candidates.join(' | ')} |`, `|---|${m.candidates.map(() => '---').join('|')}|`)
     for (const row of p.rows) lines.push(`| ${row.promise.id} ${row.promise.title} (${row.promise.ref}) | ${m.candidates.map((c) => cellText(row.cells[c]!)).join(' | ')} |`)

@@ -44,7 +44,7 @@ function loadLine(name: string, load: LoadResult) {
 function renderMatrix(m: Matrix) {
   const sec = el('section')
   sec.append(el('h2', 'Konformitätsmatrix'))
-  sec.append(el('div', 'Eine Zusage gilt nur, wenn jedes zugeordnete Szenario besteht: ✓ bestanden, ✗ nicht bestanden, – nicht abbildbar, ? nicht gelaufen. „teilweise“: ein Teil besteht, der Rest nicht abbildbar oder nicht gelaufen. „nicht geprüft“: noch kein Szenario. Kandidaten nur für Node fehlen hier.', 'load'))
+  sec.append(el('div', 'Eine Zusage gilt nur, wenn jedes zugeordnete Szenario besteht: ✓ bestanden, ✗ nicht bestanden, – nicht abbildbar, ? nicht gelaufen. „teilweise“: ein Teil besteht, der Rest nicht abbildbar oder nicht gelaufen. „nicht geprüft“: noch kein Szenario; „nicht gelaufen“: Szenario vorhanden, im Lauf nicht enthalten. Kandidaten nur für Node fehlen hier.', 'load'))
   for (const p of m.ports) {
     sec.append(el('h3', p.title))
     const wrap = el('div', undefined, 'scroll')
