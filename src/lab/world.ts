@@ -213,6 +213,8 @@ export class World {
   /** Stellt so lange zu, bis niemand mehr etwas zu senden oder zu empfangen hat. */
   async flush(maxRounds = 50): Promise<void> {
     if (this.own) return this.own.settle()
+    // Sync-Tick: jedes Gerät darf seinen Dienst nach dem beglaubigten Ziel fragen (D5).
+    for (const d of this.docs.keys()) await this.candidate.poll?.(d)
     for (let round = 0; round < maxRounds; round++) {
       let moved = false
       for (const d of this.docs.keys()) {

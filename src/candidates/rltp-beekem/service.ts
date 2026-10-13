@@ -1,6 +1,7 @@
 import type { Device, EnforcingService, Msg } from '../../lab/types'
 import { AuthorityLog, Signer, type AuthOp } from './authority'
 import { ed25519 } from '@noble/curves/ed25519.js'
+import { sha256 } from '@noble/hashes/sha2.js'
 
 // E8/E9: Zwei durchsetzende, schlüsselblinde Dienste am Relay des Prüfstands.
 //
@@ -65,10 +66,38 @@ export type MRule = 'parent' | 'new'
 type ServiceWire =
   | { t: 'card'; person: string; id: string; deviceKey: string }
   | { t: 'auth'; op: AuthOp }
-  | { t: 'sealed'; kind: string }
+  | { t: 'sealed'; kind: string; ref?: unknown }
+  | { t: 'target-request' }
+  | { t: 'fetch'; refs?: unknown }
   | ViewProposal
   | ChallengeAnswer
   | { t: string }
+
+/**
+ * Beglaubigtes Konvergenzziel eines Dienstes (Replication §4.1, Form 0.26, hier
+ * ohne genesisDigest/session/registrationCore). Ein schlüsselblinder Dienst
+ * beglaubigt `stored`, nie Zulässigkeit. `heads` sind die Referenzen aller
+ * gespeicherten Einträge (der Prüfstand-Dienst sieht die Kette der Einträge
+ * nicht, also keine echten Köpfe; Vereinfachung, grow-only wie verlangt).
+ */
+export interface Target {
+  t: 'target'
+  v: 'rltp-replication-target/0.26'
+  source: string
+  seq: number
+  chain: string | null
+  frontier: { scope: 'stored'; heads: string[] }
+  prev: string | null
+  attestationKey: string
+  sig: string
+}
+const hexOf = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('')
+export const targetInput = (t: Omit<Target, 'sig'>) => JSON.stringify([t.v, t.source, t.seq, t.chain, t.frontier.scope, t.frontier.heads, t.prev, t.attestationKey])
+export const targetDigest = (t: Omit<Target, 'sig'>) => hexOf(sha256(enc.encode(targetInput(t))))
+export const verifyTarget = (t: Target) => {
+  const { sig, ...rest } = t
+  return verify(sig, targetInput(rest), t.attestationKey)
+}
 
 /** Inhalt einer Sicht ohne Signaturen, als stabiler Schlüssel und Signaturinput (7110). */
 export const viewHash = (v: { seq: number; prev: string | null; identities: string[]; m: number }) =>
@@ -99,6 +128,27 @@ abstract class Base implements EnforcingService {
   protected readonly outgoing: Array<{ label: string; body: Uint8Array }> = []
   protected dropped = 0
   protected rejectedAnswers = 0
+  /** Attestationsschlüssel des Dienstes (Replication §4.1: stabil über Sitzungen, damit Equivocation beweisbar ist). */
+  private readonly attestation = Signer.generate('dienst')
+  private targetSeq = 0
+  private prevDigest: string | null = null
+  private chain: string | null = null
+  /** Gespeicherte Einträge nach Referenz: Quellenpflicht des Dienstes (I1, I12). */
+  private readonly stored = new Map<string, Uint8Array>()
+  protected targets = 0
+  protected fetched = 0
+
+  /** Ein neues Ziel: Kette seq+1, prev = Digest des vorigen, grow-only über `stored`. */
+  private attest(): Target {
+    const seq = ++this.targetSeq
+    const body: Omit<Target, 'sig'> = { t: 'target', v: 'rltp-replication-target/0.26', source: 'dienst', seq, chain: this.chain, frontier: { scope: 'stored', heads: [...this.stored.keys()].sort() }, prev: this.prevDigest, attestationKey: this.attestation.pub }
+    const sig = this.attestation.sign(targetInput(body))
+    const digest = targetDigest(body)
+    if (seq === 1) this.chain = digest
+    this.prevDigest = digest
+    this.targets++
+    return { ...body, sig }
+  }
 
   protected abstract allows(deviceKey: string | undefined): boolean
   protected abstract ingest(from: Device, m: ServiceWire): 'weiter' | 'verwerfen' | 'behalten' | undefined
@@ -145,6 +195,24 @@ abstract class Base implements EnforcingService {
       this.authenticated.add(msg.from)
       return 'behalten'
     }
+    // Ziel und Nachlieferung: nur für bewiesene, bediente Geräte (ein Lesen, I7).
+    if (m.t === 'target-request' || m.t === 'fetch') {
+      const key = this.keyOf.get(msg.from)
+      if (!key || !this.authenticated.has(msg.from) || !this.allows(key)) return this.drop()
+      if (m.t === 'target-request') {
+        this.outgoing.push({ label: 'target', body: enc.encode(JSON.stringify(this.attest())) })
+      } else {
+        const refs = (m as { refs?: unknown }).refs
+        if (!Array.isArray(refs) || !refs.every((r) => typeof r === 'string')) return this.drop()
+        for (const r of refs as string[]) {
+          const body = this.stored.get(r)
+          if (!body) continue
+          this.outgoing.push({ label: 'fetch-answer', body })
+          this.fetched++
+        }
+      }
+      return 'behalten'
+    }
     const special = this.ingest(msg.from, m)
     if (special) return special === 'verwerfen' ? this.drop() : special
     // Autoritätsoperationen sind Evidenz für die Konfliktmatrix (gleichzeitige
@@ -154,11 +222,20 @@ abstract class Base implements EnforcingService {
     // Ausnahmeweg, bewusst eng (#32): Autoritätsrahmen passieren ohne Mitgliedschaftsgate, weil sie Evidenz für die
     // Konfliktmatrix sind, aber nur von Geräten, die ihren Schlüssel einmal bewiesen haben. Der äußere `kind` ist
     // unverbürgt; was er behauptet, prüft der Empfänger gegen den Inhalt und verwirft Abweichungen.
-    if (m.t === 'auth' || (m.t === 'sealed' && (m as { kind?: unknown }).kind === 'auth')) return this.authenticated.has(msg.from) ? 'weiter' : this.drop()
+    if (m.t === 'auth' || (m.t === 'sealed' && (m as { kind?: unknown }).kind === 'auth')) {
+      if (!this.authenticated.has(msg.from)) return this.drop()
+      this.store(m, msg)
+      return 'weiter'
+    }
     // Schreiben verlangt bewiesenen Besitz des Geräteschlüssels und Mitgliedschaft.
     const key = this.keyOf.get(msg.from)
     if (!key || !this.authenticated.has(msg.from) || !this.allows(key)) return this.drop()
+    this.store(m, msg)
     return 'weiter'
+  }
+  /** Was durchgeht, hält der Dienst nach Referenz (versiegelte Einträge), damit er es beglaubigen und nachliefern kann. */
+  private store(m: ServiceWire, msg: Msg) {
+    if (m.t === 'sealed' && typeof (m as { ref?: unknown }).ref === 'string') this.stored.set((m as { ref: string }).ref, msg.body)
   }
   protected drop() {
     this.dropped++
@@ -247,7 +324,7 @@ export class ViewService extends Base {
   }
 
   status() {
-    return `Sicht seq=${this.accepted.seq}, ${this.accepted.identities.size} Identitäten, m=${this.accepted.m} (${this.mRule}), offene Vorschläge=${this.proposals.size}, abgelehnte Sichten/Signaturen=${this.rejectedViews}, abgelehnte Antworten=${this.rejectedAnswers}, abgelehnte Karten=${this.rejectedCards}, verworfen=${this.dropped}`
+    return `Sicht seq=${this.accepted.seq}, ${this.accepted.identities.size} Identitäten, m=${this.accepted.m} (${this.mRule}), offene Vorschläge=${this.proposals.size}, abgelehnte Sichten/Signaturen=${this.rejectedViews}, abgelehnte Antworten=${this.rejectedAnswers}, abgelehnte Karten=${this.rejectedCards}, verworfen=${this.dropped}, Ziele=${this.targets}, nachgeliefert=${this.fetched}`
   }
 }
 

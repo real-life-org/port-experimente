@@ -1,7 +1,7 @@
 import type { Candidate, Capability, Device, EnforcingService, Msg, Person } from '../../lab/types'
 import { AuthorityLog, Signer, promoteInPolicy, wellFormed, type AuthOp, type Policy } from './authority'
 import { BeekemPeer, loadWasm } from './load'
-import { LogReplicaService, ViewService, signView, viewHash, type Challenge, type ChallengeAnswer, type MRule, type ViewAck, type ViewProposal } from './service'
+import { LogReplicaService, ViewService, signView, verifyTarget, viewHash, type Challenge, type ChallengeAnswer, type MRule, type Target, type ViewAck, type ViewProposal } from './service'
 import { x25519 } from '@noble/curves/ed25519.js'
 import { hkdf } from '@noble/hashes/hkdf.js'
 import { sha256 as sha256Sync } from '@noble/hashes/sha2.js'
@@ -103,6 +103,10 @@ type Wire =
   | { t: 'sealed'; kind: string; c: string; iv: string; tab: string; ref: string; heads: string[]; by: string; keyOp?: string }
   /** Willkommen an genau ein Gerät (`to` = sein Willkommensschlüssel): Gruppe und Aufnahme, an seinen Schlüssel verschlüsselt. */
   | { t: 'welcome'; to: string; eph: string; iv: string; c: string }
+  /** An den Dienst: sein beglaubigtes Ziel (Replication §4.1) bzw. gespeicherte Einträge nach Referenz (I1, I12). Unversiegelt: nur IDs. */
+  | { t: 'target-request' }
+  | { t: 'fetch'; refs: string[] }
+  | Target
   /**
    * Reparaturanfrage (Replication I12): adressiert an die Geräte `to`, mit
    * den fehlenden Vorgängern `missing`, dem Beleg `evidence` (die Einträge,
@@ -167,6 +171,8 @@ interface DeviceState extends KeyState {
   /** Reparaturläufe nach fehlender ID (I12): abfragbar zwischen den Läufen, nie still. `attempts` zählt die Anfragen je Lauf. */
   repairs: Map<string, { evidence: Set<string>; to: Set<string>; outcome: 'awaiting-source' | 'repaired'; attempts: number }>
   outgoing: Array<{ label: string; body: Uint8Array; direct?: boolean }>
+  /** Beglaubigtes Ziel des Dienstes (D5): angefragt beim Sync-Tick; `missing` = Einträge des Ziels, die hier fehlen; `fetched` = seitdem nachgeholte. */
+  target: { asked: number; answered: number; seq: number | null; missing: number; fetched: number; key?: string }
   /** Rahmen, die noch versiegelt hinaus müssen: aus synchronen Pfaden (repair()) oder weil das Gerät gerade keinen Schlüssel hat (Schreiben wartet, ein Mitglied heilt). */
   queued: Array<{ inner: Wire; label: string; heads: string[] }>
   joined: boolean
@@ -791,7 +797,25 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
       case 'challenge-answer':
         return { content: [] } // Antworten anderer gehen an den Dienst
       case 'view':
-        return { content: [] } // Vorschläge anderer gehen an den Dienst
+      case 'target-request':
+      case 'fetch':
+        return { content: [] } // Vorschläge und Anfragen anderer gehen an den Dienst
+      case 'target': {
+        // Beglaubigtes Ziel des Dienstes (D5): Signatur unter dem beim ersten Ziel gesehenen Schlüssel (TOFU, wie §7.3),
+        // Kette nur vorwärts. Was das Ziel nennt und hier fehlt, holt das Gerät beim Dienst (I12 gegen den Dienst als Quelle).
+        if (!strings(m.frontier?.heads) || typeof m.sig !== 'string' || typeof m.attestationKey !== 'string' || !Number.isInteger(m.seq)) throw new Error('Ziel missgebildet')
+        if (s.target.key && s.target.key !== m.attestationKey) throw new Error('Ziel unter fremdem Schlüssel')
+        if (!verifyTarget(m)) throw new Error('Ziel: Signatur ungültig')
+        s.target.answered = s.target.asked
+        if (s.target.seq !== null && m.seq <= s.target.seq) return { content: [] }
+        s.target.key ??= m.attestationKey
+        s.target.seq = m.seq
+        const have = new Set([...s.keys.keys(), ...s.pending.flatMap((p) => (p.t === 'sealed' ? [p.ref] : []))])
+        const missing = m.frontier.heads.filter((r) => !have.has(r))
+        s.target.missing = missing.length
+        if (missing.length) send(s, { t: 'fetch', refs: missing })
+        return { content: [] }
+      }
       case 'ack':
         s.ack = { seq: m.seq, hash: m.hash, identities: m.identities }
         s.proposed = null
@@ -829,6 +853,10 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
       case 'sealed': {
         if (typeof m.kind !== 'string' || !strings(m.heads) || typeof m.by !== 'string' || typeof m.ref !== 'string' || typeof m.c !== 'string' || (m.keyOp !== undefined && typeof m.keyOp !== 'string')) throw new Error('Eintrag ohne Umschlag')
         if (!s.tried.has(m.ref)) s.tried.set(m.ref, { arrived: s.keyGen, gen: -1, n: 0 })
+        if (s.target.missing > 0 && !s.keys.has(m.ref) && !s.pending.some((p) => p.t === 'sealed' && p.ref === m.ref)) {
+          s.target.missing--
+          s.target.fetched++
+        }
         s.pending.push(m)
         return { content: await drainAll(s, [m.by]) }
       }
@@ -874,7 +902,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
       const deviceSigner = Signer.generate(device)
       const welcomePriv = x25519.utils.randomSecretKey()
       const card: Card = { person, id: new Uint8Array(peer.id), shareKey: new Uint8Array(peer.shareKey), deviceKey: deviceSigner.pub, welcomeKey: hex(x25519.getPublicKey(welcomePriv)) }
-      const s: DeviceState = { person, peer, auth: new AuthorityLog(), deviceSigner, welcomePriv, cards: new Map([[hex(card.id), card]]), revoked: new Set(), ack: { seq: 0, hash: null, identities: [] }, proposed: null, waitingAuth: [], appliedCgka: new Set(), pendingCgka: [], authFrames: new Map(), envelopes: new Map(), repairs: new Map(), keys: new Map(), heads: [], pending: [], keyGen: 0, tried: new Map(), appliedOps: new Set(), outgoing: [], queued: [], joined: false, notes: [] }
+      const s: DeviceState = { person, peer, auth: new AuthorityLog(), deviceSigner, welcomePriv, cards: new Map([[hex(card.id), card]]), revoked: new Set(), ack: { seq: 0, hash: null, identities: [] }, proposed: null, waitingAuth: [], appliedCgka: new Set(), pendingCgka: [], authFrames: new Map(), envelopes: new Map(), repairs: new Map(), keys: new Map(), heads: [], pending: [], keyGen: 0, tried: new Map(), appliedOps: new Set(), outgoing: [], queued: [], joined: false, notes: [], target: { asked: 0, answered: 0, seq: null, missing: 0, fetched: 0 } }
       devices.set(device, s)
       // Die Karte geht über den Begegnungskanal, nicht über den Träger der Gruppe; mit Prüfstand-Dienst über
       // den Dienst, weil der die Gerätebindung aus der Karte lernt (in der Spec aus der Sicht).
@@ -1010,6 +1038,14 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
       }
     },
     takeOutgoing: (d) => dev(d).outgoing.splice(0),
+    poll(d) {
+      // Sync-Tick: mit Dienst nach dem beglaubigten Ziel fragen (D5). Ohne Dienst gibt es kein Ziel: Klasse blind.
+      if (!service) return
+      const s = dev(d)
+      if (!s.joined) return
+      s.target.asked++
+      send(s, { t: 'target-request' })
+    },
     async rerunRepair(d) {
       const s = dev(d)
       const to = new Set<string>()
@@ -1047,7 +1083,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
     members: (d) => personMembers(dev(d)),
     status: (d) => {
       const s = dev(d)
-      return [`baum=${(s.peer.members() as Uint8Array[]).length}`, `schlüssel=${s.peer.hasKey() ? 'ja' : 'nein'}`, `fork=${s.auth.forked() ? 'ja' : 'nein'}`, `regeln=v${s.auth.policyVersion()}`, ...(s.pendingCgka.length ? [`wartende-cgka=${s.pendingCgka.length}`] : []), ...(s.waitingAuth.length ? [`wartende-auth=${s.waitingAuth.length}`] : []), ...(s.pending.length ? [`ungeöffnet=${s.pending.length}`] : []), ...(s.repairs.size ? [`lücke=${[...s.repairs.values()].filter((r) => r.outcome === 'awaiting-source').length} (${[...s.repairs.values()].some((r) => r.outcome === 'awaiting-source') ? 'awaiting-source' : `repariert ${[...s.repairs.values()].filter((r) => r.outcome === 'repaired').length}`})`, `anfragen=${[...s.repairs.values()].reduce((n, r) => n + r.attempts, 0)}`] : []), ...s.notes.slice(0, 3), ...notes.slice(0, 2)].join('; ')
+      return [`baum=${(s.peer.members() as Uint8Array[]).length}`, `schlüssel=${s.peer.hasKey() ? 'ja' : 'nein'}`, `fork=${s.auth.forked() ? 'ja' : 'nein'}`, `regeln=v${s.auth.policyVersion()}`, ...(s.pendingCgka.length ? [`wartende-cgka=${s.pendingCgka.length}`] : []), ...(s.waitingAuth.length ? [`wartende-auth=${s.waitingAuth.length}`] : []), ...(s.pending.length ? [`ungeöffnet=${s.pending.length}`] : []), ...(service && s.target.asked ? [s.target.answered < s.target.asked ? `ziel=angefragt, keine Antwort${s.target.seq === null ? '' : ` (zuletzt seq ${s.target.seq})`}` : `ziel=seq ${s.target.seq} (${s.target.missing} fehlen, ${s.target.fetched} geholt)`] : []), ...(s.repairs.size ? [`lücke=${[...s.repairs.values()].filter((r) => r.outcome === 'awaiting-source').length} (${[...s.repairs.values()].some((r) => r.outcome === 'awaiting-source') ? 'awaiting-source' : `repariert ${[...s.repairs.values()].filter((r) => r.outcome === 'repaired').length}`})`, `anfragen=${[...s.repairs.values()].reduce((n, r) => n + r.attempts, 0)}`] : []), ...s.notes.slice(0, 3), ...notes.slice(0, 2)].join('; ')
     },
 
     async steal(d) {

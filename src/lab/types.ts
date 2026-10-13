@@ -109,6 +109,12 @@ export interface Candidate {
   dispose?(): Promise<void>
   /** Startet erschöpfte Reparaturläufe des Geräts neu (Replication I12: Reparatur ist re-runnable); ruft der Adapter, etwa nach Netzheilung. */
   rerunRepair?(device: Device): void | Promise<void>
+  /**
+   * Synchronisationstick (die App kommt in den Vordergrund): das Gerät fragt
+   * seinen Dienst nach dem beglaubigten Ziel (Replication §4.1, I5, Tür D5).
+   * Der Prüfstand ruft ihn zu Beginn jeder Zustellrunde für jedes Gerät.
+   */
+  poll?(device: Device): void | Promise<void>
 
   /** Legt ein Gerät an. Gehört die Person schon zur Gruppe, soll das Gerät nach Sync mitlesen (S5). */
   addDevice(person: Person, device: Device): Promise<void>

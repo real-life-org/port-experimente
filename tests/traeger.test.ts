@@ -29,4 +29,13 @@ describe('Träger-Prüfstand: rltp-beekem über das Prüfstand-Relay', () => {
     expect(t7.outcome, t7.authority).toBe('bestanden')
     expect(t7.authority).toContain('wird verweigert')
   }, 300_000)
+
+  it('Klasse Sicht mit beglaubigtem Ziel (D5): Vorhalten eines Eintrags und ein eingefrorener Feed werden bemerkt', async () => {
+    const results = await runCarrier(() => rltpBeekem({ dienst: 'sichten' }))
+    const byId = Object.fromEntries(results.map((r) => [r.scenario, r]))
+    expect(byId.T6!.outcome, byId.T6!.authority).toBe('bestanden')
+    expect(byId.T6!.authority).toMatch(/geholt|fehlen/)
+    expect(byId.T6b!.outcome, byId.T6b!.authority).toBe('bestanden')
+    expect(byId.T6b!.authority).toContain('ziel=angefragt, keine Antwort')
+  }, 300_000)
 })
