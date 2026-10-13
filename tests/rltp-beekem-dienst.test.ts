@@ -139,15 +139,36 @@ describe('E8: Dienst am Relay', () => {
       expect(c.status('carol')).toContain('ziel=angefragt, keine Antwort (zuletzt seq 1)')
     })
 
-    it('nur ein Eintrag mit genau der Referenz des Ziels trägt den Fehlbestand aus', async () => {
+    it('nur ein geöffneter Eintrag mit genau der Referenz des Ziels trägt den Fehlbestand aus', async () => {
       const { c, poll, target, deliver } = await device()
-      await deliver(target({ seq: 1, echo: poll(), frontier: { scope: 'stored', heads: ['wanted'] } }))
+      // Ein echter, lesbarer Eintrag (Carols eigener), dessen Referenz das Ziel nennt.
+      await c.sealContent('carol', new Uint8Array([1, 2, 3]))
+      const real = c.takeOutgoing('carol').map((o) => JSON.parse(dec.decode(o.body)) as { t: string; ref?: string }).find((m) => m.t === 'sealed')!
+      await deliver(target({ seq: 1, echo: poll(), frontier: { scope: 'stored', heads: [real.ref!] } }))
       expect(c.status('carol')).toContain('ziel=seq 1 (1 fehlen, 0 geholt)')
-      const sealed = (ref: string) => ({ t: 'sealed', kind: 'content', c: 'AAAA', iv: 'AAAAAAAAAAAAAAAA', tab: '', ref, heads: [], by: 'x' })
-      await deliver(sealed('other'))
+      // Fremder Verkehr mit anderer Referenz zählt nicht, auch nicht ein unlesbarer Rahmen mit der richtigen.
+      await deliver({ t: 'sealed', kind: 'content', c: 'AAAA', iv: 'AAAAAAAAAAAAAAAA', tab: '', ref: 'other', heads: [], by: 'x' })
+      await deliver({ t: 'sealed', kind: 'content', c: 'AAAA', iv: 'AAAAAAAAAAAAAAAA', tab: '', ref: real.ref, heads: [], by: 'x' })
       expect(c.status('carol')).toContain('ziel=seq 1 (1 fehlen, 0 geholt)')
-      await deliver(sealed('wanted'))
+      await deliver(real)
       expect(c.status('carol')).toContain('ziel=seq 1 (0 fehlen, 1 geholt)')
+    })
+
+    it('ein beschädigter Rahmen mit der richtigen Referenz gilt nicht als nachgeliefert; der nächste Tick holt erneut', async () => {
+      const { c, poll, target, deliver } = await device()
+      const t1 = target({ seq: 1, echo: poll(), frontier: { scope: 'stored', heads: ['wanted'] } })
+      await deliver(t1)
+      expect(c.status('carol')).toContain('ziel=seq 1 (1 fehlen, 0 geholt)')
+      // Richtige Referenz, aber kein lesbarer Eintrag.
+      await deliver({ t: 'sealed', kind: 'content', c: 'AAAA', iv: 'AAAAAAAAAAAAAAAA', tab: '', ref: 'wanted', heads: [], by: 'x' })
+      expect(c.status('carol')).toContain('ziel=seq 1 (1 fehlen, 0 geholt)')
+      const { sig: _s, ...body1 } = t1
+      const d1 = targetDigest(body1)
+      const n2 = poll()
+      await deliver(target({ seq: 2, echo: n2, prev: d1, chain: d1, frontier: { scope: 'stored', heads: ['wanted'] } }))
+      expect(c.status('carol')).toContain('ziel=seq 2 (1 fehlen, 0 geholt)')
+      const fetch = c.takeOutgoing('carol').map((o) => JSON.parse(dec.decode(o.body)) as { t: string; refs?: string[] }).find((m) => m.t === 'fetch')
+      expect(fetch?.refs).toEqual(['wanted'])
     })
 
     it('ein Ziel mit falschem prev oder chain wird nicht als nächstes Glied angenommen', async () => {

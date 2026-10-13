@@ -704,8 +704,10 @@ Kette auch dann prüfbar ist, wenn andere Geräte dazwischen gefragt haben;
 **Frische**: die offene Anfrage beantwortet nur ein Ziel mit ihrem Echo
 (signiert) und an dieses Gerät, ein altes gültiges Ziel ist ein
 Kettenglied, nie eine Antwort. Der Fehlbestand ist eine Referenzmenge;
-nur ein Eintrag mit genau einer Referenz des Ziels trägt sie aus, fremder
-Verkehr nie. Beide Anfragen gehen unversiegelt (nur IDs) und sind beim
+nur ein **geöffneter** Eintrag mit genau einer Referenz des Ziels trägt
+sie aus (Runde 2: ein beschädigter Rahmen mit richtiger Referenz ist nicht
+nachgeliefert); beim nächsten Tick wird alles erneut geholt, was das Ziel
+nennt und nicht geöffnet ist. Beide Anfragen gehen unversiegelt (nur IDs) und sind beim
 Dienst ein Lesen: bewiesener Schlüssel und Mitgliedschaft (I7). Status:
 `ziel=seq N (M fehlen, K geholt)` bzw. `ziel=angefragt, keine Antwort`.
 
