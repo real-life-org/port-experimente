@@ -3,6 +3,9 @@ import { runAll } from '../src/lab/scenarios'
 import { rltpBeekem } from '../src/candidates/rltp-beekem'
 import { World } from '../src/lab/world'
 
+const enc = new TextEncoder()
+const dec = new TextDecoder()
+
 // E6: Autoritätslog nach der Konfliktmatrix entscheidet die Mitgliedschaft,
 // BeeKEM 0.4.0 (rust/beekem-wasm) liefert die Schlüssel, Inhalt Yjs.
 // Erwartungen halten das Verhalten fest; Begründungen in
@@ -25,7 +28,7 @@ describe('Kandidat RLTP-Autorität über BeeKEM', () => {
       S5: 'bestanden', // E7: ein Blatt je Gerät, Person bleibt Subjekt im Log
       S5b: 'bestanden', // E7: eigenes Gerät entfernen = neues Geheimnis ohne dessen Blatt (KV1), Person bleibt
       S5c: 'bestanden', // E7: Entfernen der Person entfernt alle ihre Blätter
-      S6: 'nicht bestanden', // Historie erst über die Kette des nächsten Eintrags (wie Keyhive b)
+      S6: 'bestanden', // E10: die Vorgänger-Tabellen der versiegelten Autoritätsrahmen geben dem Neuling die Historie schon mit der Aufnahme // Historie erst über die Kette des nächsten Eintrags (wie Keyhive b)
       S6b: 'bestanden',
       S7: 'bestanden', // PCS: passiver Dieb liest nach der Rotation nichts mehr (KV5)
       S8: 'bestanden', // Gründerin ohne Sonderrolle
@@ -87,16 +90,23 @@ describe('E9 Schritt 1b: der Baum folgt dem Zustand', () => {
     await w.heal()
     await w.flush()
     const all = ['alice', 'bob', 'carol', 'dave', 'x']
-    for (const d of all) expect(w.members(d), d).toEqual(all)
-    for (const d of all) expect(c.status(d), d).toContain('fork=ja')
+    for (const d of ['alice', 'carol', 'dave']) expect(w.members(d), d).toEqual(all)
+    for (const d of ['alice', 'carol', 'dave']) expect(c.status(d), d).toContain('fork=ja')
+    // x hat sein Blatt aus Bobs Zweig und bis zur nächsten Rotation keinen Schlüssel; seit den versiegelten
+    // Rahmen (E10) liest x bis dahin auch das Log nicht weiter. Daves Eintrag rotiert, und mit ihm kommen
+    // (über die Vorgänger-Tabelle) die Schlüssel der versiegelten Autoritätsrahmen.
     await w.write('dave', 'nachher')
     await w.flush()
     for (const d of ['alice', 'carol', 'dave', 'x']) expect(w.read(d), d).toContain('nachher')
+    for (const d of ['alice', 'carol', 'dave', 'x']) expect(w.members(d), d).toEqual(all)
+    for (const d of ['alice', 'carol', 'dave', 'x']) expect(c.status(d), d).toContain('fork=ja')
     // Bob ist wieder Mitglied, aber sein Blatt wurde durch die (später
     // verfallene) Entfernung aus dem Baum genommen; die Wiederaufnahme unter
     // demselben Share-Key gibt ihm keinen Schlüssel zurück. Er braucht eine
-    // frische Karte (Befund 8 in NOTES.md). Festgehalten, nicht gelöst.
+    // frische Karte (Befund 8 in NOTES.md). Festgehalten, nicht gelöst. Seit
+    // E10 heißt das auch: ohne Schlüssel liest Bob das Log nicht weiter.
     expect(w.read('bob')).toEqual([])
+    expect(c.status('bob')).toContain('ungeöffnet=')
   })
 })
 
@@ -206,7 +216,7 @@ describe('E10: Lückenreparatur', () => {
     await w.flush()
     expect(c.status('bob')).toContain('lücke=1 (awaiting-source)')
     expect(c.status('carol')).toContain('lücke=1 (awaiting-source)')
-    expect(w.read('bob')).toEqual([])
+    // Lesen kann Bob schon: die Schlüssel kamen mit den BeeKEM-Operationen, nur die Autorität fehlt (I4: Baum folgt dem Zustand, nachträglich).
     // Nur die adressierte Quelle antwortet: Bob und Carol halten die Aufnahme nicht.
     k.reset()
     await w.flush()
@@ -236,6 +246,104 @@ describe('E10: Lückenreparatur', () => {
     expect(w.read('bob')).toEqual(['nach-der-regel'])
     expect(c.status('bob')).toContain('regeln=v2')
     expect(c.status('bob')).toContain('lücke=0 (repariert 1)')
+  })
+
+  it('ein beschädigter Autoritätsrahmen sperrt die Reparatur nicht; der nächste intakte Beleg holt die Operation (Review zu #31)', async () => {
+    const c = rltpBeekem()
+    const w = new World(c)
+    for (const p of ['alice', 'bob']) await w.device(p, p)
+    await w.flush()
+    await w.createGroup('alice')
+    await w.add('alice', 'bob')
+    await w.flush()
+    const k = w.carrier()!
+    let hit = false
+    k.tamper((m) => !hit && m.from === 'alice' && m.label === 'policy' && (hit = true), (body) => {
+      const f = JSON.parse(dec.decode(body)) as { c: string }
+      return enc.encode(JSON.stringify({ ...f, c: 'AAAA' + f.c.slice(4) }))
+    })
+    await c.changePolicy('alice', 'remove:any-member')
+    await w.flush()
+    k.reset()
+    await c.changePolicy('alice', 'add:any-member')
+    await w.write('alice', 'nachher')
+    await w.flush()
+    expect(w.read('bob')).toEqual(['nachher'])
+    expect(c.status('bob')).toContain('verworfen: Eintrag')
+    expect(c.status('bob')).toContain('regeln=v3')
+    expect(c.status('bob')).toContain('lücke=0 (repariert')
+    expect(c.status('bob')).not.toContain('ungeöffnet=')
+  })
+
+  it('ein beschädigter Umschlag (unbekannte keyOp und ref) sperrt die Reparatur nicht (Review zu #31, Runde 2)', async () => {
+    const c = rltpBeekem()
+    const w = new World(c)
+    for (const p of ['alice', 'bob']) await w.device(p, p)
+    await w.flush()
+    await w.createGroup('alice')
+    await w.add('alice', 'bob')
+    await w.flush()
+    const k = w.carrier()!
+    let hit = false
+    k.tamper((m) => !hit && m.from === 'alice' && m.label === 'policy' && (hit = true), (body) => {
+      const f = JSON.parse(dec.decode(body)) as { c: string; keyOp?: string; ref: string }
+      return enc.encode(JSON.stringify({ ...f, c: 'AAAA' + f.c.slice(4), keyOp: 'ff'.repeat(32), ref: 'ee'.repeat(32) }))
+    })
+    await c.changePolicy('alice', 'remove:any-member')
+    await w.flush()
+    k.reset()
+    expect(c.status('bob')).toContain('regeln=v1')
+    await c.changePolicy('alice', 'add:any-member')
+    await w.write('alice', 'nachher')
+    await w.flush()
+    expect(w.read('bob')).toEqual(['nachher'])
+    expect(c.status('bob')).toContain('regeln=v3')
+    expect(c.status('bob')).toContain('lücke=0 (repariert')
+  })
+
+  it('ein beschädigter Chiffretext mit gültiger keyOp sperrt die Reparatur nicht (Review zu #31, Runde 3)', async () => {
+    const c = rltpBeekem()
+    const w = new World(c)
+    for (const p of ['alice', 'bob']) await w.device(p, p)
+    await w.flush()
+    await w.createGroup('alice')
+    await w.add('alice', 'bob')
+    await w.flush()
+    const k = w.carrier()!
+    let hit = false
+    k.tamper((m) => !hit && m.from === 'alice' && m.label === 'policy' && (hit = true), (body) => {
+      const f = JSON.parse(dec.decode(body)) as { c: string; ref: string }
+      return enc.encode(JSON.stringify({ ...f, c: 'AAAA' + f.c.slice(4), ref: 'ee'.repeat(32) }))
+    })
+    await c.changePolicy('alice', 'remove:any-member')
+    await w.flush()
+    k.reset()
+    expect(c.status('bob')).toContain('regeln=v1')
+    await c.changePolicy('alice', 'add:any-member')
+    await w.write('alice', 'nachher')
+    await w.flush()
+    expect(w.read('bob')).toEqual(['nachher'])
+    expect(c.status('bob')).toContain('regeln=v3')
+    expect(c.status('bob')).toContain('lücke=0 (repariert')
+  })
+
+  it('ein unlesbarer Rahmen sperrt die Aufnahme eines Zweitgeräts nicht (Review zu #31, Runde 4)', async () => {
+    const c = rltpBeekem()
+    const w = new World(c)
+    for (const p of ['alice', 'bob']) await w.device(p, p)
+    await w.flush()
+    await w.createGroup('alice')
+    await w.add('alice', 'bob')
+    await w.flush()
+    // Beiden kommt ein unlesbarer Autoritätsrahmen zu: fremder Chiffretext, fremde ref, unbekannte keyOp.
+    const junk = { t: 'sealed', kind: 'auth', c: 'AAAA', iv: 'AAAAAAAAAAAAAAAA', tab: '', ref: 'ab'.repeat(32), heads: [], by: 'x', keyOp: 'cd'.repeat(32) }
+    for (const d of ['alice', 'bob']) await c.receive(d, { id: 90000, from: 'mallory', label: 'auth', body: enc.encode(JSON.stringify(junk)) })
+    await w.device('bob', 'bob-2')
+    await w.flush()
+    await w.write('alice', 'für-das-zweitgerät')
+    await w.flush()
+    expect(w.read('bob-2')).toEqual(['für-das-zweitgerät'])
+    expect(c.status('bob')).toContain('ungeöffnet=1')
   })
 
   it('geht die Anfrage verloren, wiederholt die Replik sie beim nächsten Rahmen der Quelle, höchstens dreimal', async () => {
@@ -268,7 +376,7 @@ describe('E10: Lückenreparatur', () => {
     expect(c.status('bob')).toContain('lücke=1 (awaiting-source)')
     expect(c.status('bob')).toContain('regeln=v1')
     // Reparatur ist re-runnable (I12, #30): der Adapter startet den Lauf neu, etwa nach Netzheilung.
-    c.rerunRepair!('bob')
+    await c.rerunRepair!('bob')
     await w.flush()
     expect(c.status('bob')).toContain('regeln=v2')
     expect(c.status('bob')).toContain('lücke=0 (repariert 1)')

@@ -206,8 +206,9 @@ export const scenarios: Scenario[] = [
       await w.flush()
       await w.heal()
       await w.flush()
-      const states = ['alice', 'bob', 'carol'].map((d) => w.candidate.status(d))
-      const agree = states.every((s) => s === states[0])
+      // Verglichen wird der Zustand (Baum, Schlüssel, Fork, Regeln), nicht die Notizen dahinter (Reparaturen, Verworfenes).
+      const states = ['alice', 'bob', 'carol'].map((d) => w.candidate.status(d).split('; ').slice(0, 4).join('; '))
+      const agree = states.every((s) => s === states[0]) && membersAgree(w, ['alice', 'bob', 'carol']).agree
       return {
         outcome: verdict(agree),
         authority: agree ? `alle: ${states[0]}` : `uneinig: ${states.join(' | ')}`,

@@ -52,13 +52,20 @@ Notiz war falsch. Der Server sieht die Rahmen im Klartext, Base64 ist keine
 Verschlüsselung. Aus `visible()` nach Gründung, zwei Aufnahmen und einem
 Eintrag, am HTTP-Payload geprüft:
 
-| Rahmen | im Klartext beim Server |
-|---|---|
-| `card` | Personenname, BeeKEM-ID, Share-Key, Geräteschlüssel |
-| `auth`, `policy` | die ganze Autoritätsoperation: Art, Subjekt, Signierer, Politik, Schlüsselbindung, Vorgänger; dazu die BeeKEM-Anhänge |
-| `cgka` | BeeKEM-Operationen (signiert, Pfadgeheimnisse verschlüsselt) |
-| `content` | `c`, `iv`, `tab`, `ref`: versiegelt; seit E10 dazu der Umschlag `heads` (Hashes der Autoritätsköpfe) und `by` (Geräteschlüssel des Schreibers) |
-| `repair` | Reparaturanfrage (E10, I12): fehlende und belegende IDs, Köpfe, Adressaten |
+| Rahmen | im Klartext beim Server (Stand #24) | seit E10, versiegelte Rahmen |
+|---|---|---|
+| `card` | Personenname, BeeKEM-ID, Share-Key, Geräteschlüssel | geht nicht mehr über den Server (Begegnungskanal) |
+| `auth`, `policy` | die ganze Autoritätsoperation: Art, Subjekt, Signierer, Politik, Schlüsselbindung, Vorgänger; dazu die BeeKEM-Anhänge | `sealed`: Chiffretext, Umschlag `kind`, `heads` (Hashes), `by` (Geräteschlüssel) |
+| `cgka` | BeeKEM-Operationen (signiert, Pfadgeheimnisse verschlüsselt) | unverändert; die Anhänge einer Operation gehen ihr als eigene Rahmen voraus |
+| `content` | `c`, `iv`, `tab`, `ref`: versiegelt; Umschlag `heads`, `by` | wie `auth` |
+| `repair` | Reparaturanfrage (E10, I12): fehlende und belegende IDs, Köpfe, Adressaten | `sealed` |
+| `welcome` | — | an ein Gerät verschlüsselt (`to` = sein Willkommensschlüssel) |
+
+`visible()` nach Gründung, zwei Aufnahmen und einem Eintrag: keine Person,
+keine Karte; jeder versiegelte Rahmen (`auth`, `policy`, `content`,
+`repair`) nur `by, c, heads, iv, keyOp, kind, ref, t, tab`, das Willkommen
+`c, eph, iv, t, to`, BeeKEM-Operationen `op, t`. Der Absatz darunter
+beschreibt den Stand vor den versiegelten Rahmen.
 
 Personen `alice`, `bob`, `carol` sind damit für den Server lesbar, ebenso
 Mitgliedschaft, Regeln und wer wen aufgenommen hat. Nicht lesbar: Inhalte
@@ -146,7 +153,8 @@ Eine Lücke (T1) war hier besonders still: Der Put kam beim Server nie an,
 und niemand hat es bemerkt. Zweiter Durchgang mit Lückenreparatur im
 Kandidaten: T1 und T6 bestanden (Bob fordert bei Alice nach, Alice legt den
 Rahmen als neue Resource ab; der Feed trägt ihn dann wie jeden anderen),
-T6b (Feed eingefroren) und T12 weiter nicht; T7 bestanden (der Server
+T6b (Feed eingefroren) weiter nicht; T12 seit den versiegelten Rahmen
+bestanden (der Server hält nur Chiffretext mit Umschlag); T7 bestanden (der Server
 bedient das entfernte Gerät weiter, es öffnet nichts), T8 bestanden
 (`rebind` = Umzug per Export/Import mitten im Leben, danach Aufnahme und
 Schreiben auf dem neuen Server), T11 nicht abbildbar (eine Gruppe je

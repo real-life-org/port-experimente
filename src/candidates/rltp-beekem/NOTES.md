@@ -460,14 +460,14 @@ Server). Beide Träger zeigen dasselbe Bild:
 | T1 Rahmen still verloren | DV2, I12 | ~~nicht bestanden~~ bestanden | ~~nicht bestanden~~ bestanden | Erster Durchgang: **keine Lückenreparatur**, eine verlorene Autoritätsoperation blieb verloren. Seit dem zweiten Durchgang nennt jeder Inhalt die Autoritätsköpfe seines Schreibers, und die Replik fordert fehlende Vorgänger beim Autor nach (unten, „Lückenreparatur“). Reparatur ist eine Pflicht der Replik, nicht des Trägers. |
 | T2 umordnen | I2 | bestanden | bestanden | Beim Bau kam heraus: lose BeeKEM-Operationen, die vor ihren Vorgängern ankamen, wurden verworfen statt gepuffert. Jetzt `pendingCgka`, bei jeder Reparatur erneut versucht. |
 | T3 doppelt | DV3 | bestanden | bestanden | idempotent über id und Inhalt |
-| T4 alte Entfernung erneut | I8 | bestanden | bestanden | `bekannt`, kein Zustandswechsel |
-| T5 verändert / Müll | D1 | bestanden | bestanden | Digest der Hülle, Form vor Inhalt; Müll wird notiert, nie geworfen (neu: `receive` wirft nicht mehr) |
+| T4 alte Entfernung erneut | I8 | bestanden | bestanden | `bekannt`, kein Zustandswechsel. Seit den versiegelten Rahmen spielt der Träger alle alten Autoritätsrahmen von Alice erneut ein; die Entfernung kann er nicht mehr auswählen. |
+| T5 verändert / Müll | D1 | bestanden | bestanden | Digest der Hülle, Form vor Inhalt; Müll wird notiert, nie geworfen (neu: `receive` wirft nicht mehr). Seit den versiegelten Rahmen kann der Träger nichts Gezieltes mehr schreiben (eine Aufnahme zur Entfernung umdeuten); er kann nur zerstören. Und Zerstörtes holt die Lückenreparatur zurück: Alices nächster Inhalt belegt die fehlenden Operationen, Alice sendet sie erneut, Dave und Eve kommen doch an. Ein beschädigter Eintrag mit bekanntem Schlüssel wird verworfen und notiert; einer ohne Schlüssel bleibt `ungeöffnet`, hält aber nichts mehr auf (Review zu #31). |
 | T6 einem Gerät ein Eintrag vorgehalten | D5, I5 | ~~nicht bestanden~~ bestanden | ~~nicht bestanden~~ bestanden | Erster Durchgang: nicht bemerkbar. Mit den Köpfen im Umschlag bemerkt Carol die Lücke, sobald irgendjemand auf dem vorgehaltenen Eintrag aufbaut (hier Daves Inhalt), und holt ihn bei dem, der aufgebaut hat. Der Träger kann einen einzelnen Eintrag also nicht dauerhaft vorhalten, ohne alles danach ebenfalls vorzuhalten. |
 | T6b Gerät eingefroren (alles vorgehalten) | D5, I5 | nicht bestanden | nicht bestanden | **Blind ist nicht bemerkbar.** Carol sieht einen stehenden Feed und kann ihn nicht von Stille unterscheiden; es gibt kein beglaubigtes Ziel, gegen das sie ihren Stand prüfen könnte. Das ist die Tür, die ein Dienst der Klasse Sicht/Log mit Attestation schließt (Replication §4.1), und die Frage 3 an PWS. |
 | T7 entferntes Gerät fragt weiter | §9.3, KV1 | bestanden | bestanden | Klasse blind bedient Carol weiter, sie öffnet nichts (KV1); mit Dienst der Klasse Sicht wird sie verweigert (zweiter Lauf mit `dienst: 'sichten'`). Die Tür unterscheidet Klassen, nicht Träger. |
 | T8 Trägerwechsel mitten im Leben | I15 | nicht abbildbar | bestanden | Relay: kein Wechsel. PWS: Export/Import, danach Aufnahme und Schreiben auf dem neuen Server, der Neue liest die ganze Historie. Beim Bau: Aufnahme gibt den Schlüssel erst mit der nächsten Rotation (BeeKEM), das Szenario muss zwischen Aufnahme und Schreiben zustellen. |
 | T11 zwei Gruppen auf einem Träger | DV4/DV6 | nicht abbildbar | nicht abbildbar | Grenze des Harness: ein Kandidat trägt eine Gruppe. Was ein Träger je Gruppe liest (Namen, Gerätenummern), zeigt T12. |
-| T12 versiegelter Eintrag | I6 | nicht bestanden | nicht bestanden | Rahmen im Klartext (#24); Inhalt versiegelt |
+| T12 versiegelter Eintrag | I6 | ~~nicht bestanden~~ bestanden | ~~nicht bestanden~~ bestanden | Erster Durchgang: Rahmen im Klartext (#24), nur Inhalt versiegelt. Dritter Durchgang: alles über den Träger ist ein versiegelter Eintrag, Karten gehen über die Begegnung (unten, „Versiegelte Rahmen“). |
 
 Nicht gelaufen: T9/T10 (Zustellungs-Adapter, E11). T6b, T7, T8 und T11
 kamen im zweiten Durchgang dazu; der Trägerwechsel läuft über den
@@ -527,6 +527,134 @@ dabei zusätzlich sieht: Köpfe (Hashes) und Geräteschlüssel je Inhalt, siehe
 `pws/NOTES.md`, Prüfpunkt 3. Für den Port: Der Umschlag macht aus
 „Zurückhalten“ (T6) ein „alles Zurückhalten“ (T6b); erst die beglaubigte
 Sicht schließt auch das.
+
+### Versiegelte Rahmen (T12), dritter Durchgang
+
+Weg 1 (Anton 12.10.): T12 jetzt, mit einem minimalen Willkommen im
+Prüfstand; E11 ersetzt es durch den Zustellungs-Adapter.
+
+- **Alles über den Träger ist ein Eintrag.** Autoritätsoperationen,
+  Widerrufe, Reparaturanfragen und Inhalte gehen als `sealed`: der innere
+  Rahmen unter dem Eintragsschlüssel (BeeKEM `encrypt`, wie bisher nur der
+  Inhalt), dazu die Vorgänger-Tabelle. Im Klartext bleibt nur der Umschlag:
+  `kind` (Art des inneren Rahmens, für den Dienst), `heads`, `by`. Die
+  Referenz eines Eintrags ist ein Hash über Zufall und Klartext, damit
+  gleichlautende Rahmen (eine erneut gesendete Operation, zwei gleiche
+  Anfragen) verschiedene Schlüssel bekommen.
+- **Drei Dinge bleiben außen.** BeeKEM-Operationen (selbst Chiffretext an
+  die Blätter; sie gehen ihrer Autoritätsoperation als eigene Rahmen
+  voraus, weil der Neuling sie ohne Eintragsschlüssel in den Baum nehmen
+  muss). Das Willkommen an ein neues Gerät: die Gruppe und die Aufnahme,
+  mit X25519 gegen den Willkommensschlüssel der Karte, HKDF, AES-GCM; nur
+  dieses Gerät kann es öffnen. Und die Karten: sie gehen über den
+  Begegnungskanal (`direct` im Harness, Zustellung ohne Träger, ohne Dienst,
+  ohne Fehlerinjektion), wie in der Spec Karten aus der Begegnung kommen.
+  Mit Prüfstand-Dienst gehen Karten weiter über den Dienst, weil der die
+  Gerätebindung aus der Karte lernt (in der Spec aus der Sicht). Der Dienst
+  der Klasse Log liest das Autoritätslog (§9.3): dafür gibt es den
+  Klartextmodus (`klartext`), nur für ihn.
+- **Neulinge lesen die Historie mit der Aufnahme.** Die Vorgänger-Tabellen
+  der versiegelten Autoritätsrahmen reichen die Schlüsselkette bis zur
+  Genesis weiter: S6 (Historie ohne neuen Eintrag) besteht jetzt, nicht erst
+  über die Kette des nächsten Inhalts.
+- **Eine Entfernung wird unter dem Schlüssel vor der Entfernung
+  versiegelt**, aber erst nach den BeeKEM-Anhängen gesendet: Der Entfernte
+  muss sie noch öffnen können (Access §10.2, Zustellung der Entfernung), die
+  anderen öffnen sie mit dem alten Schlüssel, den BeeKEM behält. Ohne diese
+  Reihenfolge erfuhr Carol in S4j nie von ihrer Entfernung und der Fork fand
+  nicht statt.
+- **Zwei getrennte Steuerungen (Review zu #31, drei Runden).** Die erste
+  Fassung hängte Baumangleichung und Lückenreparatur an dieselbe Bedingung
+  „keine ungeöffneten Autoritätsrahmen“; das war ein Zirkel: warten auf
+  Vollständigkeit und zugleich den Weg dorthin sperren, und jeder beschädigte
+  Rahmen sperrte dauerhaft. Jetzt:
+  - *Lückenreparatur ohne Sperre.* Belege kommen nur aus geöffneten
+    Einträgen (der Schreiber hatte den Schlüssel) und aus wartenden
+    Operationen. Ungeöffnete Rahmen belegen nichts, ihr Umschlag ist
+    unverbürgt; sie halten auch nichts auf. Ein beschädigter Rahmen, gleich
+    wo beschädigt, ist damit für die Reparatur unsichtbar; was er enthielt,
+    holt der nächste intakte Beleg. Nebeneffekt: die Anfragen sind weniger
+    geworden (T2 vorher 7 Anfragen und drei dreifache Antworten, jetzt 2).
+  - *Baumangleichung mit Zurückhaltung.* Ein ungeöffneter Autoritätsrahmen
+    heißt: diese Replik weiß, dass ihr Log hinter dem Umlauf liegt. Ob er noch
+    aufgeht, nie aufgeht (Epoche ohne uns, bis die Tabelle eines späteren
+    Eintrags ihn bringt) oder beschädigt ist, kann sie nicht unterscheiden.
+    In allen drei Fällen fasst sie fremde Blätter nicht an, weder entfernen
+    (Heilung) noch nachziehen, sonst nähme sie das Blatt eines eben
+    Aufgenommenen heraus oder das eines eben Entfernten wieder hinein (so sah
+    der erste Lauf aus: Dutzende `heal`/`heal-add`, und in T2 brachte Dave
+    Carol zurück in den Baum). Das tun die Mitglieder auf dem Stand (I4:
+    jedes Mitglied mit Schlüssel). Gezielt, nicht pauschal (Runde 4): Es
+    zählen nur Rahmen, deren Schlüsseloperation im Baum ist, also aus einer
+    Epoche, in der diese Replik dabei ist; ein Rahmen mit unbekannter
+    `keyOp` sagt nichts über ihr Log aus und hält nichts auf. Die eigenen
+    Geräte zieht sie immer nach, dafür bürgt der Baum (ohne Schlüssel geht
+    es nicht): ein unlesbarer Rahmen sperrt kein Zweitgerät. Lesen,
+    Schreiben, Reparatur laufen in jedem Fall weiter. Eine Schlüsseloperation
+    allein löst keine Angleichung aus; angeglichen wird nach
+    Autoritätsoperationen und vor dem Schreiben.
+  - *Folge für T2:* Bobs Entfernung von Carol ist gleichzeitig mit Daves
+    Aufnahme und unter einem Schlüssel ohne Dave versiegelt. Dave liest sie
+    erst mit dem nächsten Eintrag eines Mitglieds, das sie gelesen hat
+    (Kette, wie Keyhive b); T2 schreibt deshalb am Ende noch einmal.
+- **Der Umschlag ist unverbürgt (#32).** `kind` im Klartext steuert nur
+  die Ausnahme des Dienstes (Autoritätsrahmen passieren ohne
+  Mitgliedschaftsgate, weil sie Evidenz für die Konfliktmatrix sind, aber
+  nur von Geräten mit bewiesenem Schlüssel). Was der Umschlag behauptet, muss
+  der Inhalt einlösen: Stimmt die innere Art nicht mit `kind` überein, wird
+  der Eintrag verworfen und notiert. Sonst könnte ein entferntes Gerät mit
+  aufbewahrtem Zustand frischen Inhalt als `auth` deklarieren und am Dienst
+  vorbei zustellen (Regression im Dienst-Test).
+- **Beschädigte Einträge halten nichts auf.** Die Regel „keine Angleichung
+  und keine Lückenprüfung bei ungeöffneten Autoritätsrahmen“ gilt nur für
+  Rahmen, deren Schlüssel noch kommen kann (Schlüsseloperation nicht im Baum
+  oder Versuche nicht erschöpft). Ein Eintrag, der mit bekanntem Schlüssel
+  nicht aufgeht, ist beschädigt und fliegt raus; einer mit erschöpften
+  Versuchen bleibt liegen, zählt aber nicht. Was sie enthielten, holt die
+  Reparatur über die Belege späterer Einträge (Review zu #31: vorher sperrte
+  ein zerstörter Rahmen jede Reparatur dauerhaft).
+- **Schreiben wartet.** Wer gerade keinen Schlüssel hat und nicht rotieren
+  kann (das eigene Blatt fehlt, etwa nach einer gleichzeitigen Entfernung,
+  die später verfällt), stellt den Rahmen zurück (`queued`), bis ein
+  Mitglied das Blatt nachzieht (I4) und der nächste Rahmen den Schlüssel
+  bringt. Das ist das „Healing = Schreiben wartet“ des Primers.
+- **Befund 8, verschärft:** Ohne Schlüssel liest ein Gerät seit den
+  versiegelten Rahmen auch das Log nicht weiter (`ungeöffnet=N`). Bob nach
+  der verfallenen Entfernung hat weder Schlüssel noch Autorität, bis er
+  eine frische Karte bringt; x bekommt beides erst mit der nächsten
+  Rotation (und über deren Tabelle die Schlüssel der versiegelten
+  Autoritätsrahmen).
+
+- **Kosten (Befund 12).** Jede Autoritätsoperation ist jetzt ein
+  BeeKEM-Eintrag, den jede Replik mit `decrypt` öffnet. Keyhive sucht den
+  Schlüssel über den Hash der PCS-Epoche und spielt für eine Epoche, die
+  nicht die aktuelle ist, die Baumgeschichte nach (Profil: blake3 und
+  Serialisierung des Baums); je Aufruf mehrere bis zehn Millisekunden bei
+  30 Mitgliedern, wachsend mit der Geschichte. In S9 (50 Operationen je
+  Zustellrunde, ständiges Entfernen und Wiederaufnehmen) trifft das jede
+  Replik mit Rückstand. Gegenmaßnahmen im Kandidaten: `keyOp` im Umschlag
+  (Digest der letzten Schlüsseloperation des Schreibers, das keyOpDigest
+  der Spec): kein BeeKEM-Versuch, bevor die Operation im Baum ist; eine
+  Schlüsselgeneration je Replik: kein zweiter Versuch ohne neuen Schlüssel;
+  höchstens drei BeeKEM-Versuche je Eintrag, danach nur die Tabelle eines
+  späteren Eintrags (kein Gate auf „hat Schlüssel“: ohne aktuellen Schlüssel
+  öffnet BeeKEM noch frühere Epochen, und genau so kommt eine Entfernung
+  an); Kodierung über `Buffer` (die zeichenweisen base64-Helfer waren 40 %
+  der Zeit). Ergebnis: S9 30 × 100 **201 ms/Op**, 30 × 500 **823 ms/Op**
+  (superlinear, Geschichte), vorher 17,8; S9b 0,29 ms je Gerät und
+  Zustellung (vorher 0,50, Buffer). Was bleibt, liegt im
+  Wrapper (`rust/beekem-wasm`: historische Schlüssel nicht gecacht) und im
+  Muster „ein Eintrag je Operation“; eine Kettung von Einträgen derselben
+  Epoche unter einem abgeleiteten Schlüssel würde S9 nicht helfen (jede
+  Operation wechselt die Epoche). Für den Vergleich der Kandidaten ist das
+  die Zahl, die gilt: versiegelt, nicht Klartext.
+
+Prüfung: T12 auf Relay und PWS (`carried()` bzw. der Server-Speicher: keine
+Namen, kein Inhalt, nur Chiffretext mit Umschlag; PWS `visible()`: keine
+Personen, kein `card`); S1–S10, E9, Lückenreparatur, Dienstvarianten alle
+unverändert bestanden. Für den Port: Der Umschlag im Klartext ist das, was
+ein Träger lernt: Art des Rahmens, Köpfe als Hashes, ein Geräteschlüssel als
+Pseudonym; dazu Größen, Zeiten und die Gerätenamen des Prüfstands.
 
 ### Wo der Code vom Guss abweichen musste (Befund für 0.57)
 

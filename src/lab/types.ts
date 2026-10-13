@@ -108,7 +108,7 @@ export interface Candidate {
   /** Räumt Timer und Verbindungen auf. */
   dispose?(): Promise<void>
   /** Startet erschöpfte Reparaturläufe des Geräts neu (Replication I12: Reparatur ist re-runnable); ruft der Adapter, etwa nach Netzheilung. */
-  rerunRepair?(device: Device): void
+  rerunRepair?(device: Device): void | Promise<void>
 
   /** Legt ein Gerät an. Gehört die Person schon zur Gruppe, soll das Gerät nach Sync mitlesen (S5). */
   addDevice(person: Person, device: Device): Promise<void>
@@ -123,7 +123,12 @@ export interface Candidate {
   /** Verschlüsselt ein lokales Inhalts-Update und legt es in den Ausgang. */
   sealContent(device: Device, update: Uint8Array): Promise<void>
   /** Entnimmt alle ausgehenden Nachrichten eines Geräts. */
-  takeOutgoing(device: Device): Array<{ label: string; body: Uint8Array }>
+  /**
+   * Rahmen des Geräts. `direct` markiert Rahmen des Begegnungskanals (Karten):
+   * sie gehen nicht über den Träger der Gruppe, sondern direkt an die
+   * anderen Geräte (Encounter), ohne Dienst, ohne Fehlerinjektion.
+   */
+  takeOutgoing(device: Device): Array<{ label: string; body: Uint8Array; direct?: boolean }>
   receive(device: Device, msg: Msg): Promise<Received>
 
   /** Mitglieder (Personen), wie dieses Gerät sie sieht; sortiert. */
