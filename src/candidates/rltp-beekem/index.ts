@@ -372,12 +372,13 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
   const sealBeforeTree = (s: DeviceState, op: AuthOp) => (klartext ? Promise.resolve(undefined) : buildSealed(s, { t: 'auth', op, cgka: [] }, 'auth', [...op.preds]))
 
   /** Willkommen an ein Gerät: die Gruppe (und die Aufnahme), an seinen Willkommensschlüssel verschlüsselt. */
-  async function sendWelcome(s: DeviceState, card: Card, op?: AuthOp, keyWelcome?: Uint8Array) {
+  async function sendWelcome(s: DeviceState, card: Card, op?: AuthOp, keyWelcome?: { welcome: Uint8Array; commit: string }) {
     if (!groupId) return
-    // MLS: das Willkommen des Schlüssel-Ports reist im selben Rahmen (`key`), dazu der Digest des Commits, der den
-    // Neuen aufgenommen hat (`commit`): er kommt für ihn nicht mehr anwendbar über die Leitung, gilt aber als sein
-    // Schlüsselstand (keyOp der nächsten Rahmen; Öffnungs-Gate der anderen). BeeKEM braucht beides nicht.
-    const plain = enc.encode(JSON.stringify({ group: hex(groupId), op, key: keyWelcome ? b64(keyWelcome) : undefined, commit: keyWelcome ? s.lastKeyOp : undefined }))
+    // MLS: das Willkommen des Schlüssel-Ports reist im selben Rahmen (`key`), dazu der Digest genau des Commits, der
+    // dieses Gerät aufgenommen hat (`commit`; je Karte ein eigener, nicht der letzte): er kommt für das Gerät nicht
+    // mehr anwendbar über die Leitung, gilt aber als sein Schlüsselstand (keyOp der nächsten Rahmen, Öffnungs-Gate
+    // der anderen). BeeKEM braucht beides nicht.
+    const plain = enc.encode(JSON.stringify({ group: hex(groupId), op, key: keyWelcome ? b64(keyWelcome.welcome) : undefined, commit: keyWelcome?.commit }))
     const { eph, iv, ct } = await sealTo(unhex(card.welcomeKey), plain)
     send(s, { t: 'welcome', to: card.welcomeKey, eph: hex(eph), iv: b64(iv), c: b64(ct) })
   }
@@ -726,10 +727,17 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
    */
   /**
    * Bei einem linearen Schlüssel-Port (MLS) heilt nicht jedes Mitglied, sondern das eine mit der kleinsten
-   * Personenkennung unter denen, die laut Log Mitglied sind und einen Schlüssel haben: gleichzeitige Commits
-   * verlören sonst den Tiebreak gegeneinander (KV6 über Heilung, wie bei linear/0.1).
+   * Personenkennung unter denen, die laut Log Mitglied sind **und ein Blatt im Baum haben**: gleichzeitige Commits
+   * verlören sonst den Tiebreak gegeneinander (KV6 über Heilung, wie bei linear/0.1). Wer kein Blatt hat, kann
+   * nicht heilen, auch nicht sich selbst (CodeRabbit zu #39: Alice, laut Log wieder Mitglied, nachdem der Fork
+   * ihre Entfernung verwarf, stand ohne Blatt da, und niemand sonst zog sie nach).
    */
-  const healer = (s: DeviceState) => !port.linear || s.person === [...s.auth.members()].sort()[0]
+  const healer = (s: DeviceState) => {
+    if (!port.linear) return true
+    const inTree = new Set((s.peer.members() as Uint8Array[]).map(hex))
+    const withLeaf = [...s.auth.members()].filter((p) => cardsOf(s, p).some((c) => inTree.has(hex(c.id))))
+    return withLeaf.sort()[0] === s.person
+  }
 
   async function ensureMemberLeaves(s: DeviceState) {
     if (!s.auth.members().has(s.person) || !healer(s)) return
@@ -762,7 +770,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
         try {
           const r = await s.peer.add(c.id, c.shareKey)
           if (r.op) send(s, { t: 'cgka', op: b64(r.op) }, 'heal-add')
-          await sendWelcome(s, c, undefined, r.welcome)
+          await sendWelcome(s, c, undefined, r.welcome && r.op ? { welcome: r.welcome, commit: hex(sha256Sync(r.op)) } : undefined)
         } catch (e) {
           s.notes.push(`Blatt nachziehen: ${(e as Error).message}`)
         }
@@ -803,7 +811,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
       try {
         const r = await s.peer.add(c.id, c.shareKey)
         if (r.op) send(s, { t: 'cgka', op: b64(r.op) }, 'device-add')
-        await sendWelcome(s, c, undefined, r.welcome)
+        await sendWelcome(s, c, undefined, r.welcome && r.op ? { welcome: r.welcome, commit: hex(sha256Sync(r.op)) } : undefined)
       } catch (e) {
         s.notes.push(`eigenes Gerät: ${(e as Error).message}`)
       }
@@ -1055,13 +1063,13 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
       const op = s.auth.make({ kind: 'add', subject: p, key: signerOf(p).pub }, [signerOf(s.person)])
       s.auth.add(op)
       const cgka: string[] = []
-      const keyWelcomes = new Map<string, Uint8Array>()
+      const keyWelcomes = new Map<string, { welcome: Uint8Array; commit: string }>()
       if (s.auth.isValid(op.id)) {
         // Alle bekannten Geräte der Person; spätere Geräte nimmt die Person selbst auf.
         for (const card of known) {
           const r = await s.peer.add(card.id, card.shareKey)
           if (r.op) cgka.push(b64(r.op))
-          if (r.welcome) keyWelcomes.set(card.deviceKey, r.welcome)
+          if (r.welcome && r.op) keyWelcomes.set(card.deviceKey, { welcome: r.welcome, commit: hex(sha256Sync(r.op)) })
         }
       }
       s.appliedCgka.add(op.id)

@@ -447,12 +447,14 @@ impl Peer {
                     self.mark_applied(h);
                     return Err(Error::LostTiebreak);
                 }
+                // Auch hier probeweise mit vollem Rückweg: take_snapshot kann die älteste Momentaufnahme verdrängen,
+                // und ein gescheitertes process_message darf im Speicher nichts hinterlassen (CodeRabbit zu #39).
+                let checkpoint = self.checkpoint()?;
                 self.take_snapshot()?;
                 if let Err(e) = self.apply_commit(proto) {
                     // Anderer Zweig auf der aktuellen Epoche: anwendbar erst, wenn sein Vorgänger den Tiebreak gegen
                     // unseren gewinnt (Rückfall, dann passt er). Bis dahin wartet er beim Aufrufer.
-                    self.snapshots.pop();
-                    self.group = MlsGroup::load(self.provider.storage(), &self.group()?.group_id().clone()).map_err(mls)?;
+                    self.restore_checkpoint(checkpoint)?;
                     return Err(Error::Epoch(format!("Epoche {incoming_epoch}, anderer Zweig, Vorgänger offen: {e}")));
                 }
                 self.mark_applied(h);

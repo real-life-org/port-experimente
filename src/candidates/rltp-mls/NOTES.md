@@ -38,9 +38,12 @@ Kandidaten (alles in `index.ts` unter `port.linear`):
    (fehlende Blätter nachziehen, fremde entfernen); gleichzeitige Heilungen
    verschmelzen. Bei MLS verlören sie den Tiebreak gegeneinander. Deshalb
    heilt nur das Mitglied mit der kleinsten Personenkennung unter den
-   Mitgliedern laut Log; jede Person zieht ihre eigenen weiteren Geräte
-   selbst nach (sonst kollidierten Heiler und Person). Das ist KV6 über
-   Heilung, wie bei linear/0.1 vorgesehen.
+   Mitgliedern laut Log, **die ein Blatt im Baum haben**; jede Person zieht
+   ihre eigenen weiteren Geräte selbst nach (sonst kollidierten Heiler und
+   Person). Das ist KV6 über Heilung, wie bei linear/0.1 vorgesehen. Das
+   „mit Blatt“ ist nötig (Review zu #39): verwirft ein Fork die Entfernung
+   der kleinsten Person, steht sie laut Log wieder drin, aber ohne Blatt;
+   wäre sie der Heiler, zöge niemand sie nach.
 2. **Angleichen nach jedem Commit.** Ein fremder Commit kann den Baum vom
    Log wegbewegen (verlorener Tiebreak); bei BeeKEM genügt Angleichen nach
    Autoritätsoperationen und vor dem Schreiben, bei MLS läuft `reconcile`
@@ -48,7 +51,8 @@ Kandidaten (alles in `index.ts` unter `port.linear`):
 3. **Willkommen.** MLS kennt keinen Beitritt ohne Willkommen; es reist im
    `welcome`-Rahmen des Kandidaten (Feld `key`), an den Willkommensschlüssel
    der Karte verschlüsselt, zusammen mit Gruppe und Aufnahme. Dazu der
-   Digest des Commits, der den Neuen aufgenommen hat (Feld `commit`): für
+   Digest genau des Commits, der dieses Gerät aufgenommen hat (Feld
+   `commit`, je Karte ein eigener, nicht der letzte der Aufnahme): für
    MLS ist dieser Commit nach dem Willkommen nicht mehr verarbeitbar
    (`stale`), für den Kandidaten ist er der Schlüsselstand des Neuen
    (`keyOp` seiner nächsten Rahmen, Öffnungs-Gate bei den anderen).
@@ -106,6 +110,11 @@ er stand):
   rät. Und ein entferntes Gerät verwarf den Commit seiner Wiederaufnahme
   als `stale` (Gruppe inaktiv, gleiche Epoche): S4j, Carol sah das
   Fork-Ende nicht.
+- Review zu PR #39 (CodeRabbit): der Fehlerpfad auf der aktuellen Epoche
+  nahm nur die neue Momentaufnahme zurück, nicht die dabei verdrängte
+  älteste, und ließ im Speicher stehen, was `process_message` vor dem
+  Fehler schrieb. Jetzt derselbe Checkpoint-Rückweg wie bei verlassenen
+  Epochen.
 - Review zu PR #39 (Codex): ein Commit von einem anderen Zweig galt als
   endgültig verfallen, sobald er auf der aktuellen Epoche nicht anwendbar
   war. Gegenprobe: Kind des Gewinnerzweigs vor seinem Vorgänger zugestellt

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { runAll, runScenario, scenarios } from '../src/lab/scenarios'
 import { runCarrier } from '../src/lab/traeger'
 import { rltpBeekem } from '../src/candidates/rltp-beekem'
+import { World } from '../src/lab/world'
 
 // E13: dieselbe Autorität, dieselben Rahmen wie rltp-beekem, darunter MLS
 // (OpenMLS 0.9.1 über rust/mls-wasm) statt BeeKEM. Erwartungen pinnen das
@@ -54,6 +55,30 @@ describe('Kandidat RLTP-Autorität über MLS', () => {
       T12: 'bestanden',
     })
   }, 300_000)
+
+  it('Review #39: der Heiler ist das kleinste Mitglied mit Blatt, nicht das kleinste laut Log', async () => {
+    // Alice gründet; Bob entfernt sie neben einer Regeländerung, der Fork verwirft die Entfernung: Alice ist laut
+    // Log wieder Mitglied, hat aber kein Blatt. Wäre sie als kleinste Person der Heiler, zöge niemand sie nach.
+    const c = rltpBeekem({ keyPort: 'mls' })
+    const w = new World(c)
+    for (const p of ['alice', 'bob', 'carol']) await w.device(p, p)
+    await w.flush()
+    await w.createGroup('alice')
+    await w.add('alice', 'bob', 'admin')
+    await w.add('alice', 'carol', 'admin')
+    await w.flush()
+    await w.partition(['alice', 'carol'], ['bob'])
+    await c.changePolicy('carol', 'remove:threshold:2')
+    await w.remove('bob', 'alice')
+    await w.flush()
+    await w.heal()
+    await w.flush()
+    expect(w.members('bob'), c.status('bob')).toEqual(['alice', 'bob', 'carol'])
+    await w.write('alice', 'wieder-da')
+    await w.flush()
+    for (const d of ['alice', 'bob', 'carol']) expect(w.read(d), `${d}: ${c.status(d)}`).toContain('wieder-da')
+    expect(c.status('alice')).toContain('schlüssel=ja')
+  }, 120_000)
 
   it('mit Dienst der Klasse Sicht: S10 und das beglaubigte Ziel wie bei BeeKEM', async () => {
     const sichten = () => rltpBeekem({ keyPort: 'mls', dienst: 'sichten' })
