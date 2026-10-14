@@ -194,6 +194,8 @@ interface DeviceState extends KeyState {
    */
   sealed: Array<{ inner: Wire; label: string; heads: string[]; epoch: number }>
   stranded: Array<{ inner: Wire; label: string; heads: string[] }>
+  /** Generation beim letzten Durchlauf von retryPendingCgka. */
+  retriedAt: number
   joined: boolean
   notes: string[]
 }
@@ -578,8 +580,14 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
     }
   }
 
-  /** Wartende BeeKEM-Operationen nachziehen, bis nichts mehr durchgeht. */
+  /**
+   * Wartende Schlüsseloperationen nachziehen, bis nichts mehr durchgeht. Nur, wenn sich seit dem letzten Versuch
+   * etwas geändert hat (Generation): ein Commit von einem anderen Zweig wartet, bis sein Vorgänger den Tiebreak
+   * entscheidet, und jeder Versuch kostet beim linearen Port eine probeweise Anwendung.
+   */
   function retryPendingCgka(s: DeviceState) {
+    if (s.retriedAt === s.keyGen) return
+    s.retriedAt = s.keyGen
     let progress = true
     while (progress && s.pendingCgka.length) {
       progress = false
@@ -1019,7 +1027,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
       const deviceSigner = Signer.generate(device)
       const welcomePriv = x25519.utils.randomSecretKey()
       const card: Card = { person, id: peer.id, shareKey: peer.shareKey, deviceKey: deviceSigner.pub, welcomeKey: hex(x25519.getPublicKey(welcomePriv)) }
-      const s: DeviceState = { person, peer, auth: new AuthorityLog(), deviceSigner, welcomePriv, cards: new Map([[hex(card.id), card]]), revoked: new Set(), ack: { seq: 0, hash: null, identities: [] }, proposed: null, waitingAuth: [], appliedCgka: new Set(), pendingCgka: [], authFrames: new Map(), envelopes: new Map(), repairs: new Map(), keys: new Map(), heads: [], pending: [], keyGen: 0, stored: new Set(), tried: new Map(), appliedOps: new Set(), outgoing: [], queued: [], sealed: [], stranded: [], joined: false, notes: [], target: { asked: 0, answered: 0, nonce: null, seq: null, digest: null, chain: null, missing: new Set(), fetched: 0 } }
+      const s: DeviceState = { person, peer, auth: new AuthorityLog(), deviceSigner, welcomePriv, cards: new Map([[hex(card.id), card]]), revoked: new Set(), ack: { seq: 0, hash: null, identities: [] }, proposed: null, waitingAuth: [], appliedCgka: new Set(), pendingCgka: [], authFrames: new Map(), envelopes: new Map(), repairs: new Map(), keys: new Map(), heads: [], pending: [], keyGen: 0, stored: new Set(), tried: new Map(), appliedOps: new Set(), outgoing: [], queued: [], sealed: [], stranded: [], retriedAt: -1, joined: false, notes: [], target: { asked: 0, answered: 0, nonce: null, seq: null, digest: null, chain: null, missing: new Set(), fetched: 0 } }
       devices.set(device, s)
       // Die Karte geht über den Begegnungskanal, nicht über den Träger der Gruppe; mit Prüfstand-Dienst über
       // den Dienst, weil der die Gerätebindung aus der Karte lernt (in der Spec aus der Sicht).

@@ -144,9 +144,12 @@ fn rueckfall_ueber_mehrere_epochen() {
     let b_lost = matches!(b_gets_a1, Err(Error::LostTiebreak));
     assert!(a_lost ^ b_lost, "genau einer verliert: a={a_lost} b={b_lost}");
     if a_lost {
-        // Alice fällt auf Epoche 1 zurück und nimmt b1: beide auf 2, gleicher Baum; a2 ist für Bob nie anwendbar.
+        // Alice fällt auf Epoche 1 zurück und nimmt b1: beide auf 2, gleicher Baum; a2 (anderer Zweig) ändert bei
+        // Bob nichts: es wartet auf einen Vorgänger, der nie gewinnt, oder verliert den Tiebreak.
         assert_eq!(alice.epoch(), 2);
-        assert!(matches!(bob.receive(&a2), Err(Error::Stale(_))));
+        let r = bob.receive(&a2);
+        assert!(matches!(r, Err(Error::Stale(_)) | Err(Error::Epoch(_))), "{r:?}");
+        assert_eq!(bob.epoch(), 2);
     } else {
         // Bob nimmt a1, dann a2.
         assert!(matches!(bob.receive(&a2), Ok(())));
@@ -176,10 +179,13 @@ fn commit_vom_anderen_zweig_ist_kein_geschwister() {
     let b_lost = matches!(bob.receive(&a1), Err(Error::LostTiebreak));
     assert!(a_lost ^ b_lost);
     let (winner, loser, w2, l2) = if a_lost { (&mut bob, &mut alice, &b2, &a2) } else { (&mut alice, &mut bob, &a2, &b2) };
-    // Der Gewinner steht auf 3 (eigener zweiter Commit). Der Commit 2→3 des Verlierers (anderer Zweig) ändert nichts.
+    // Der Gewinner steht auf 3 (eigener zweiter Commit). Der Commit 2→3 des Verlierers (anderer Zweig) ändert nichts:
+    // er verliert den Tiebreak gegen den zweiten Commit des Gewinners (`Stale`) oder wartet auf einen Vorgänger, der
+    // nie gewinnen wird (`Epoch`; der Peer kann ihn nicht seinem Vorgänger zuordnen, er verfällt mit der Momentaufnahme).
     assert_eq!(winner.epoch(), 3);
     let members_before = winner.members();
-    assert!(matches!(winner.receive(l2), Err(Error::Stale(_))), "{:?}", winner.receive(l2));
+    let r = winner.receive(l2);
+    assert!(matches!(r, Err(Error::Stale(_)) | Err(Error::Epoch(_))), "{r:?}");
     assert_eq!(winner.epoch(), 3);
     assert_eq!(winner.members(), members_before);
     // Der Verlierer (auf 2, Zweig des Gewinners) nimmt dessen zweiten Commit; der eigene zweite ist für ihn Echo oder veraltet.
@@ -189,6 +195,62 @@ fn commit_vom_anderen_zweig_ist_kein_geschwister() {
     assert!(matches!(loser.receive(l2), Err(Error::Own) | Err(Error::Stale(_))));
     let s = winner.encrypt(b"r", b"beide-auf-drei").unwrap();
     assert_eq!(loser.decrypt(&s.ciphertext).unwrap().0, b"beide-auf-drei");
+}
+
+/// Vertrag Punkt 2, Umordnung: das Kind des gewinnenden Zweigs kommt vor seinem Vorgänger. Es ist dann noch nicht
+/// anwendbar (`Epoch`, der Aufrufer puffert), nach dem verlorenen Tiebreak passt es (Review zu #39).
+#[test]
+fn kind_vor_gewinnendem_vorgaenger_wartet_und_passt_dann() {
+    use mls_wasm::peer::Error;
+    let gid = b"gruppe-6".to_vec();
+    let mut alice = Peer::new().unwrap();
+    let mut bob = Peer::new().unwrap();
+    let mut carol = Peer::new().unwrap();
+    alice.create(&gid).unwrap();
+    let (_, wb) = alice.add(bob.share_key()).unwrap();
+    bob.receive(&wb).unwrap();
+    let (cc, wc) = alice.add(carol.share_key()).unwrap();
+    bob.receive(&cc).unwrap();
+    carol.receive(&wc).unwrap();
+    // Alice und Bob rotieren gleichzeitig (2→3). Carol entscheidet, wer gewinnt.
+    let a1 = alice.rotate().unwrap();
+    let b1 = bob.rotate().unwrap();
+    carol.receive(&a1).unwrap();
+    let a_wins = !matches!(carol.receive(&b1), Err(Error::LostTiebreak));
+    let (winner, loser, w1) = if a_wins { (&mut alice, &mut bob, &a1) } else { (&mut bob, &mut alice, &b1) };
+    let child = winner.rotate().unwrap(); // 3→4 auf dem Gewinnerzweig
+    // Der Verlierer bekommt erst das Kind: noch nicht anwendbar, nicht endgültig.
+    let r = loser.receive(&child);
+    assert!(matches!(r, Err(Error::Epoch(_))), "{r:?}");
+    assert_eq!(loser.epoch(), 3);
+    // Dann den Vorgänger: Tiebreak verloren, Rückfall auf den Gewinnerzweig.
+    assert!(matches!(loser.receive(w1), Err(Error::LostTiebreak)));
+    // Jetzt passt das Kind.
+    loser.receive(&child).unwrap();
+    assert_eq!(loser.epoch(), 4);
+    assert_eq!(loser.members(), winner.members());
+    let s = winner.encrypt(b"r", b"nach-umordnung").unwrap();
+    assert_eq!(loser.decrypt(&s.ciphertext).unwrap().0, b"nach-umordnung");
+    // Derselbe Fall eine Epoche tiefer: der Verlierer hat vor dem Kind noch selbst commitet (3→4 auf seinem Zweig).
+    let mut dave = Peer::new().unwrap();
+    let mut erin = Peer::new().unwrap();
+    let gid2 = b"gruppe-6b".to_vec();
+    dave.create(&gid2).unwrap();
+    let (_, we) = dave.add(erin.share_key()).unwrap();
+    erin.receive(&we).unwrap();
+    let d1 = dave.rotate().unwrap();
+    let e1 = erin.rotate().unwrap();
+    let d_wins = mls_wasm::peer::digest_of(&d1) < mls_wasm::peer::digest_of(&e1);
+    let (winner, loser, w1) = if d_wins { (&mut dave, &mut erin, &d1) } else { (&mut erin, &mut dave, &e1) };
+    let child = winner.rotate().unwrap(); // 2→3 Gewinnerzweig
+    let _own2 = loser.rotate().unwrap(); // 2→3 Verliererzweig
+    assert_eq!(loser.epoch(), 3);
+    let r = loser.receive(&child); // Epoche 2 < 3, Momentaufnahme da, anderer Zweig: warten
+    assert!(matches!(r, Err(Error::Epoch(_))), "{r:?}");
+    assert!(matches!(loser.receive(w1), Err(Error::LostTiebreak)));
+    loser.receive(&child).unwrap();
+    assert_eq!(loser.epoch(), 3);
+    assert_eq!(loser.members(), winner.members());
 }
 
 /// Vertrag Punkt 4: ein Willkommen auf einen verfallenen Zweig wird durch ein neueres ersetzt; ein gleich altes

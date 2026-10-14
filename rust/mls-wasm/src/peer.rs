@@ -15,10 +15,14 @@
 //!    Momentaufnahme geprüft: hat er den kleineren Hash als der dort
 //!    angewandte, fällt die Replik auf diese Epoche zurück, nimmt ihn und
 //!    meldet `LostTiebreak`; sonst ist er `Stale`. Dieselbe Epochennummer
-//!    heißt nicht derselbe Vorgänger: lässt sich der Commit auf der
-//!    Momentaufnahme nicht anwenden, stammt er von einem anderen Zweig und ist
-//!    `Stale` (Rücknahme). Tiefer zurück als die Momentaufnahmen reichen:
-//!    `Stale` (Befund, nicht mehr auflösbar).
+//!    heißt nicht derselbe Vorgänger: lässt sich der Commit auf dem Zustand
+//!    dieser Epoche nicht anwenden, stammt er von einem anderen Zweig. Ob der
+//!    gewinnt, entscheidet erst sein Vorgänger (der noch kommen kann): der
+//!    Commit ist dann `Epoch` (noch nicht anwendbar, der Aufrufer puffert und
+//!    versucht es nach jeder Änderung wieder), nicht `Stale`. Endgültig
+//!    verfallen (`Stale`) ist nur, was tiefer zurückliegt, als die
+//!    Momentaufnahmen reichen, oder was den Tiebreak auf seiner Epoche
+//!    nachweislich verloren hat.
 //! 3. Was nach einem Rückfall fehlt (Blätter, Entfernungen), stellt die
 //!    Heilung des Kandidaten aus dem Log wieder her; Rahmen, die unter einer
 //!    verfallenen Epoche versiegelt wurden, versiegelt ihr Autor neu.
@@ -141,6 +145,14 @@ pub struct Peer {
 
 fn digest(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
+}
+
+/// Hash eines Commit-Rahmens, wie ihn der Tiebreak vergleicht (für Tests).
+pub fn digest_of(op_bytes: &[u8]) -> [u8; 32] {
+    match bincode::deserialize::<Op>(op_bytes) {
+        Ok(Op::Commit { bytes }) => digest(&bytes),
+        _ => [0xff; 32],
+    }
 }
 
 impl Peer {
@@ -397,46 +409,51 @@ impl Peer {
                 let proto: ProtocolMessage = msg.try_into_protocol_message().map_err(mls)?;
                 let incoming_epoch = proto.epoch().as_u64();
                 let g = self.group()?;
-                // Entfernt (Gruppe inaktiv): Commits warten wie ohne Gruppe, bis ein Willkommen wieder aufnimmt; der
-                // Aufrufer puffert. (Der Commit, der uns aufgenommen hat, ist für MLS nicht mehr verarbeitbar; der
-                // Kandidat kennt ihn über das Willkommen, hier ist er `Stale`.)
-                if !g.is_active() {
+                let current = g.epoch().as_u64();
+                // Entfernt (Gruppe inaktiv): Commits ab der aktuellen Epoche warten wie ohne Gruppe, bis ein Willkommen
+                // wieder aufnimmt; der Aufrufer puffert. (Der Commit, der uns aufgenommen hat, ist für MLS nicht mehr
+                // verarbeitbar; der Kandidat kennt ihn über das Willkommen, hier ist er `Stale`.) Commits auf eine
+                // verlassene Epoche nehmen weiter am Tiebreak teil: die Entfernung kann auf dem Verliererzweig stehen.
+                if incoming_epoch >= current && !g.is_active() {
                     return Err(Error::NoGroup);
                 }
-                let current = g.epoch().as_u64();
                 if incoming_epoch > current {
                     return Err(Error::Epoch(format!("Epoche {incoming_epoch}, hier {current}")));
                 }
                 if incoming_epoch < current {
-                    // Commit auf eine verlassene Epoche: Geschwister des dort angewandten (Vertrag Punkt 2).
+                    // Commit auf eine verlassene Epoche (Vertrag Punkt 2). Erst die Frage, ob er überhaupt auf dem
+                    // Zustand dieser Epoche aufsetzt (dieselbe Nummer heißt nicht derselbe Vorgänger), dann der Hash:
+                    // nur unter echten Geschwistern entscheidet der kleinere.
                     let Some(s) = self.snapshots.iter().find(|s| s.parent_epoch == incoming_epoch) else {
                         return Err(Error::Stale(format!("Epoche {incoming_epoch}, hier {current}, keine Momentaufnahme")));
                     };
-                    if h == s.applied_hash {
+                    let applied = s.applied_hash;
+                    if h == applied {
                         return Err(Error::Own);
                     }
-                    if h >= s.applied_hash {
-                        return Err(Error::Stale(format!("Geschwister verliert den Tiebreak auf Epoche {incoming_epoch}")));
-                    }
-                    // Dieselbe Epochennummer heißt noch nicht derselbe Vorgänger: ein Commit von einem anderen Zweig
-                    // (auf einem Zustand, den diese Replik schon verworfen hat) lässt sich auf der Momentaufnahme
-                    // nicht anwenden. Deshalb probeweise, mit Rücknahme.
                     let checkpoint = self.checkpoint()?;
                     self.restore_snapshot(incoming_epoch)?;
                     self.take_snapshot()?;
                     if let Err(e) = self.apply_commit(proto) {
+                        // Anderer Zweig: anwendbar erst, wenn sein Vorgänger den Tiebreak gegen unseren gewinnt. Bis
+                        // dahin wartet er beim Aufrufer; er verfällt, wenn seine Epoche aus den Momentaufnahmen fällt.
                         self.restore_checkpoint(checkpoint)?;
-                        return Err(Error::Stale(format!("Epoche {incoming_epoch}, anderer Zweig: {e}")));
+                        return Err(Error::Epoch(format!("Epoche {incoming_epoch}, anderer Zweig, Vorgänger offen: {e}")));
+                    }
+                    if h >= applied {
+                        self.restore_checkpoint(checkpoint)?;
+                        return Err(Error::Stale(format!("Geschwister verliert den Tiebreak auf Epoche {incoming_epoch}")));
                     }
                     self.mark_applied(h);
                     return Err(Error::LostTiebreak);
                 }
                 self.take_snapshot()?;
                 if let Err(e) = self.apply_commit(proto) {
-                    // Auf der aktuellen Epoche kann ein Commit nicht „noch nicht“ passen (je Epoche genau einer):
-                    // er stammt von einem anderen Zweig und ist hier nie anwendbar.
+                    // Anderer Zweig auf der aktuellen Epoche: anwendbar erst, wenn sein Vorgänger den Tiebreak gegen
+                    // unseren gewinnt (Rückfall, dann passt er). Bis dahin wartet er beim Aufrufer.
                     self.snapshots.pop();
-                    return Err(Error::Stale(format!("Epoche {incoming_epoch}, anderer Zweig: {e}")));
+                    self.group = MlsGroup::load(self.provider.storage(), &self.group()?.group_id().clone()).map_err(mls)?;
+                    return Err(Error::Epoch(format!("Epoche {incoming_epoch}, anderer Zweig, Vorgänger offen: {e}")));
                 }
                 self.mark_applied(h);
                 Ok(())

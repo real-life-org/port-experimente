@@ -64,8 +64,14 @@ Kandidaten (alles in `index.ts` unter `port.linear`):
 2. Jede Replik hält Momentaufnahmen der letzten 8 verlassenen Epochen. Ein
    Commit auf eine verlassene Epoche wird gegen deren Momentaufnahme
    geprüft: kleinerer Hash als der dort angewandte → Rückfall auf diese
-   Epoche, Commit nehmen, `lost`; sonst `stale`. Tiefer als die
-   Momentaufnahmen reichen → `stale` (nicht mehr auflösbar, Befund).
+   Epoche, Commit nehmen, `lost`; größerer Hash → `stale`. Dieselbe
+   Epochennummer heißt nicht derselbe Vorgänger: lässt sich der Commit auf
+   dem Zustand seiner Epoche nicht anwenden, stammt er von einem anderen
+   Zweig, und ob der gewinnt, entscheidet erst sein Vorgänger, der noch
+   kommen kann (Umordnung). Er wartet dann beim Kandidaten (`pendingCgka`,
+   erneuter Versuch nach jeder Änderung) und verfällt erst, wenn seine
+   Epoche aus den Momentaufnahmen fällt. Tiefer als die Momentaufnahmen
+   reichen → `stale` (nicht mehr auflösbar, Befund).
 3. Was nach einem Rückfall fehlt, stellt die Heilung aus dem Log wieder
    her. Rahmen, die unter einer verfallenen Epoche versiegelt wurden,
    sind für alle anderen unlesbar; ihr Autor versiegelt sie nach der
@@ -100,6 +106,11 @@ er stand):
   rät. Und ein entferntes Gerät verwarf den Commit seiner Wiederaufnahme
   als `stale` (Gruppe inaktiv, gleiche Epoche): S4j, Carol sah das
   Fork-Ende nicht.
+- Review zu PR #39 (Codex): ein Commit von einem anderen Zweig galt als
+  endgültig verfallen, sobald er auf der aktuellen Epoche nicht anwendbar
+  war. Gegenprobe: Kind des Gewinnerzweigs vor seinem Vorgänger zugestellt
+  → verworfen, obwohl es nach dem verlorenen Tiebreak passt. Jetzt wartet
+  er (Punkt 2); nativer Test `kind_vor_gewinnendem_vorgaenger…`.
 - Kandidatenseitig: `noteOp` war nicht idempotent. Eine Reparaturantwort
   sendet alte Schlüsseloperationen noch einmal; der Empfänger verbuchte
   sie erneut und trug fortan diese alte Operation als `keyOp` seiner
