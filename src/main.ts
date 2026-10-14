@@ -55,7 +55,7 @@ function renderMatrix(m: Matrix) {
     for (const row of p.rows) {
       const tr = el('tr')
       const z = el('td')
-      z.append(el('span', row.promise.id + ' ', 'mono'), el('span', row.promise.title), el('div', row.promise.ref, 'env'))
+      z.append(el('span', row.promise.id + ' ', 'mono'), el('span', row.promise.title), el('div', row.promise.ref + (row.promise.gap ? ` · Lücke: ${row.promise.gap}` : ''), 'env'))
       tr.append(z)
       for (const c of m.candidates) {
         const cellEl = el('td')

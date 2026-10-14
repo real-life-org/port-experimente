@@ -24,6 +24,8 @@ export interface Promise {
   readonly ref: string
   /** Szenarien (S aus scenarios.ts, T aus traeger.ts), die sie prüfen. Leer = nicht geprüft. */
   readonly scenarios: readonly string[]
+  /** Bei leeren Szenarien: warum es noch keines gibt (Harness-Grenze, offene Spec-Frage, noch nicht gebaut). */
+  readonly gap?: string
 }
 
 export const promises: Promise[] = [
@@ -53,24 +55,24 @@ export const promises: Promise[] = [
   // ── Replikations-Port ───────────────────────────────────────────────────
   { id: 'I1', port: 'replikation', title: 'Catch-up: ein spät erscheinendes Gerät konvergiert aus dem Log', ref: 'Replication §5.1', scenarios: ['S6', 'S6b'] },
   { id: 'I2', port: 'replikation', title: 'Kausale Anwendung: der Träger darf umordnen', ref: 'Replication §5.2', scenarios: ['T2'] },
-  { id: 'I3', port: 'replikation', title: 'Lauf und Ergebnis gehören zusammen', ref: 'Replication §5.3', scenarios: [] },
-  { id: 'I4', port: 'replikation', title: 'Commit vor Weitergabe, Verdrängung der Replik', ref: 'Replication §5.4', scenarios: [] },
+  { id: 'I3', port: 'replikation', title: 'Lauf und Ergebnis gehören zusammen', ref: 'Replication §5.3', scenarios: [], gap: 'noch kein Szenario, das Läufe zählt und jedem genau ein Ergebnis zuordnet; T1 zeigt nur den Endzustand' },
+  { id: 'I4', port: 'replikation', title: 'Commit vor Weitergabe, Verdrängung der Replik', ref: 'Replication §5.4', scenarios: [], gap: 'der Prüfstand hat keinen dauerhaften Speicher, Commit ist nicht beobachtbar' },
   { id: 'I5', port: 'replikation', title: 'Konvergenz gegen ein beglaubigtes Ziel: Zurückhalten wird bemerkt', ref: 'Replication §5.5, Tür D5', scenarios: ['T6', 'T6b'] },
   { id: 'I6', port: 'replikation', title: 'Schlüsselblind: der Träger liest nur Chiffretext mit Umschlag', ref: 'Replication §5.6; Access-Envelope', scenarios: ['T12'] },
-  { id: 'I7', port: 'replikation', title: 'Autorisierung nur gegen die vorgelegte Sicht', ref: 'Replication §5.7', scenarios: [] },
+  { id: 'I7', port: 'replikation', title: 'Autorisierung nur gegen die vorgelegte Sicht', ref: 'Replication §5.7', scenarios: [], gap: 'T7 prüft nur, dass der Entfernte nichts liest; ein Szenario müsste die Sicht wechseln und das Urteil des Dienstes dagegen prüfen' },
   { id: 'I8', port: 'replikation', title: 'Zustand, nicht Kante: Duplikate und alte Rahmen ändern nichts', ref: 'Replication §5.8; Delivery 6.3', scenarios: ['T3', 'T4'] },
-  { id: 'I9', port: 'replikation', title: 'Dauerhaftigkeit je Transaktion', ref: 'Replication §5.9', scenarios: [] },
-  { id: 'I10', port: 'replikation', title: 'Lokale Wahrheit repliziert nie', ref: 'Replication §5.10', scenarios: [] },
-  { id: 'I11', port: 'replikation', title: 'Wiederholungsautorität liegt im dauerhaften Log', ref: 'Replication §5.11', scenarios: [] },
+  { id: 'I9', port: 'replikation', title: 'Dauerhaftigkeit je Transaktion', ref: 'Replication §5.9', scenarios: [], gap: 'kein dauerhafter Speicher im Prüfstand (Harness-Grenze)' },
+  { id: 'I10', port: 'replikation', title: 'Lokale Wahrheit repliziert nie', ref: 'Replication §5.10', scenarios: [], gap: 'noch kein Szenario, das die getragenen Rahmen auf lokale Urteile (Notizen, Verdikte) prüft; T12 prüft nur Namen und Inhalt' },
+  { id: 'I11', port: 'replikation', title: 'Wiederholungsautorität liegt im dauerhaften Log', ref: 'Replication §5.11', scenarios: [], gap: 'kein dauerhafter Speicher im Prüfstand; der Ausgang (PWS: awaiting-transport) ist nur ein Hinweis' },
   { id: 'I12', port: 'replikation', title: 'Lückenreparatur, adressiert und endend', ref: 'Replication §5.12; Delivery DV2', scenarios: ['T1'] },
-  { id: 'I13', port: 'replikation', title: 'Kostenobergrenze je Seite', ref: 'Replication §5.13', scenarios: [] },
-  { id: 'I14', port: 'replikation', title: 'Aufnahme an jedem Eingang', ref: 'Replication §5.14', scenarios: [] },
+  { id: 'I13', port: 'replikation', title: 'Kostenobergrenze je Seite', ref: 'Replication §5.13', scenarios: [], gap: 'S9/S9b messen Zeit je Operation, nicht Transaktionen und Rundreisen je Seite' },
+  { id: 'I14', port: 'replikation', title: 'Aufnahme an jedem Eingang', ref: 'Replication §5.14', scenarios: [], gap: 'der Prüfstand hat einen Eingang je Gerät (receive); mehrere Eingänge sind nicht modelliert' },
   { id: 'I15', port: 'replikation', title: 'Neubindung nach Verlust: Trägerwechsel mitten im Leben', ref: 'Replication §5.15', scenarios: ['T8'] },
-  { id: 'I16', port: 'replikation', title: 'Nebenläufige Durchsetzung forkt, sonst nichts', ref: 'Replication §5.16', scenarios: [] },
+  { id: 'I16', port: 'replikation', title: 'Nebenläufige Durchsetzung forkt, sonst nichts', ref: 'Replication §5.16', scenarios: [], gap: 'I16 ist auf Access 0.53 gepinnt und widerspricht der Konfliktmatrix 0.56 (Durchsetzung ∥ Durchsetzung forkt nicht, S4b/S4c); erst der Abgleich, dann ein Szenario' },
   { id: 'D1', port: 'replikation', title: 'Signierter DAG, Form vor Inhalt: der Träger kann nur zerstören, nie umdeuten', ref: 'Replication Tür D1', scenarios: ['T5'] },
   { id: 'R1', port: 'replikation', title: 'Dienstklassen: blind bedient den Entfernten weiter (er öffnet nichts), Sicht/Log verweigern', ref: 'Access §9.3', scenarios: ['T7'] },
   { id: 'DV4', port: 'replikation', title: 'Pseudonym je Gruppe: der Träger verbindet Gruppen nicht über Identitäten', ref: 'Delivery-Hypothesen DV4/DV6', scenarios: ['T11'] },
-  { id: 'DV2', port: 'replikation', title: 'Zustellung: Quittungsverlust und unerreichbarer Träger enden nie still', ref: 'Delivery 6.1, 6.3 (E11: T9, T10)', scenarios: [] },
+  { id: 'DV2', port: 'replikation', title: 'Zustellung: Quittungsverlust und unerreichbarer Träger enden nie still', ref: 'Delivery 6.1, 6.3 (E11: T9, T10)', scenarios: [], gap: 'braucht einen Zustellungs-Adapter (E11, nach IIW)' },
 ]
 
 /** `teilweise`: ein Teil der zugeordneten Szenarien besteht, der Rest ist nicht abbildbar oder nicht gelaufen; die Zusage gilt damit nicht. */
@@ -143,7 +145,7 @@ export function toMarkdown(m: Matrix, at = new Date().toISOString().slice(0, 10)
   const lines: string[] = ['# Konformitätsmatrix', '', `Stand ${at}. Eine Zusage gilt nur, wenn jedes zugeordnete Szenario besteht: ✓ bestanden, ✗ nicht bestanden, – nicht abbildbar, ? nicht gelaufen. „teilweise“ heißt: ein Teil besteht, der Rest ist nicht abbildbar oder nicht gelaufen. „nicht geprüft“ heißt: es gibt noch kein Szenario dafür; „nicht gelaufen“: es gibt eines, der Lauf enthielt es nicht.`, '']
   for (const p of m.ports) {
     lines.push(`## ${p.title}`, '', `| Zusage | ${m.candidates.join(' | ')} |`, `|---|${m.candidates.map(() => '---').join('|')}|`)
-    for (const row of p.rows) lines.push(`| ${row.promise.id} ${row.promise.title} (${row.promise.ref}) | ${m.candidates.map((c) => cellText(row.cells[c]!)).join(' | ')} |`)
+    for (const row of p.rows) lines.push(`| ${row.promise.id} ${row.promise.title} (${row.promise.ref})${row.promise.gap ? ` — Lücke: ${row.promise.gap}` : ''} | ${m.candidates.map((c) => cellText(row.cells[c]!)).join(' | ')} |`)
     lines.push('')
   }
   return lines.join('\n')
