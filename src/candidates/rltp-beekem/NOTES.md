@@ -737,6 +737,21 @@ T6b rot, dort gibt es kein Ziel; PWS ebenso, bis der Feed beglaubigt ist
 Antwort“ ein Ergebnis wird; Rotation des Attestationsschlüssels;
 Equivocation-Beweis aus zwei Ketten.
 
+### KV3 am Kandidaten: Schlüsseloperation ohne Logeintrag (S11, 14.10.)
+
+KV3 („das Log bindet die Epoche an das Geheimnis“) hatte in der Matrix
+kein Szenario. S11 prüft die Zusage von der Angriffsseite: Mallory
+erbeutet ihren eigenen Zustand, wird entfernt und nimmt mit dem alten
+Zustand ein neues Blatt für sich in den Baum (`forgeKeyOp`, Fähigkeit
+`forge-key-op`: eine BeeKEM-Aufnahme, die kein Logeintrag deckt). Die
+Rahmen erreichen alle Mitglieder wie über den Träger. Positivkontrolle
+davor: solange sie Mitglied ist, ist dasselbe Blatt ihr gutes Recht (K7)
+und liest. Nach der Entfernung liest es nichts: der Baum folgt dem Log,
+die Angleichung vor jedem Eintrag (`treeSafe`) nimmt das ungedeckte Blatt
+heraus, bevor ein Schlüssel es erreicht. Bestanden in allen Varianten;
+für die anderen Kandidaten nicht abbildbar (keine Fälschung aus
+erbeutetem Zustand modelliert).
+
 ### Konformitätsmatrix und die Dienstvarianten am Träger (13.10.)
 
 Die Matrix (`src/lab/matrix.ts`, Ausgabe `REPORT=1 pnpm test report` und

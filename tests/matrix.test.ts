@@ -33,7 +33,7 @@ describe('Konformitätsmatrix', () => {
     expect(row('schlüssel', 'K7').cells.d!.status).toBe('teilweise')
     expect(row('replikation', 'I12').cells.a!.status).toBe('bestanden')
     expect(row('replikation', 'I12').cells.b!.status).toBe('nicht geprüft')
-    expect(row('schlüssel', 'KV3').cells.a!.status).toBe('nicht geprüft')
+    expect(row('replikation', 'I9').cells.a!.status).toBe('nicht geprüft')
     // Jede Zelle nennt alle Belege, auch nicht gelaufene.
     expect(row('schlüssel', 'KV1').cells.a!.evidence).toEqual([
       { scenario: 'S2', outcome: 'bestanden' },

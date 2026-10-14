@@ -30,6 +30,7 @@ const gemeinsam = {
   S6b: 'bestanden',
   S7: 'bestanden',
   S8: 'bestanden',
+  S11: 'bestanden',
   S10a: 'bestanden', // Relay verwirft den gleichzeitigen Eintrag des Entfernten: kein Residual
   S10b: 'bestanden', // Sicht veraltet, bis die Entfernung das Relay erreicht; danach verworfen
 }

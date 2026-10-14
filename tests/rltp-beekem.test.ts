@@ -33,6 +33,7 @@ describe('Kandidat RLTP-Autorität über BeeKEM', () => {
       S6b: 'bestanden',
       S7: 'bestanden', // PCS: passiver Dieb liest nach der Rotation nichts mehr (KV5)
       S8: 'bestanden', // Gründerin ohne Sonderrolle
+      S11: 'bestanden', // KV3: ein gefälschtes Blatt eines Entfernten wird geheilt, bevor ein Eintrag es erreicht
       S10a: 'nicht abbildbar',
       S10b: 'nicht abbildbar',
       S10c: 'nicht abbildbar',

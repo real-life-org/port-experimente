@@ -29,6 +29,7 @@ describe('Prüfstand mit Klartext-Kandidat', () => {
       S6b: 'bestanden',
       S7: 'nicht bestanden', // Angreifer liest alles
       S8: 'nicht bestanden', // Dave liest weiter
+      S11: 'nicht abbildbar',
       S10a: 'nicht abbildbar',
       S10b: 'nicht abbildbar',
       S10c: 'nicht abbildbar',

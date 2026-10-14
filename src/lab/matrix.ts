@@ -45,7 +45,7 @@ export const promises: Promise[] = [
   // ── Schlüssel-Port ──────────────────────────────────────────────────────
   { id: 'KV1', port: 'schlüssel', title: 'Frisches Geheimnis je Durchsetzung: der Entfernte (oder das entfernte Gerät) liest Neues nicht', ref: 'Port-Synthese KV1; Access §9', scenarios: ['S2', 'S5b', 'S5c'] },
   { id: 'KV2', port: 'schlüssel', title: 'Genau die Verbleibenden: auch bei gleichzeitigen Durchsetzungen liest niemand Entfernter mit', ref: 'Port-Synthese KV2', scenarios: ['S4b', 'S4c2', 'S4f'] },
-  { id: 'KV3', port: 'schlüssel', title: 'Bindung im Log: das Log bindet die Epoche an das Geheimnis (keyOpDigest)', ref: 'Port-Synthese KV3; Access registration/0.27 keyOpDigest', scenarios: [] },
+  { id: 'KV3', port: 'schlüssel', title: 'Bindung im Log: eine Baumänderung, die kein Logeintrag deckt, eröffnet keinen Zugang', ref: 'Port-Synthese KV3; Access registration/0.27 keyOpDigest', scenarios: ['S11'] },
   { id: 'KV4', port: 'schlüssel', title: 'Historie über die Replik: ein Neuling liest Früheres mit dem aktuellen Geheimnis und der Kette', ref: 'Port-Synthese KV4', scenarios: ['S6', 'S6b'] },
   { id: 'KV5', port: 'schlüssel', title: 'Rotation auf Verlangen: nach erbeutetem Zustand liest der Dieb nach der Rotation nicht weiter (PCS)', ref: 'Port-Synthese KV5', scenarios: ['S7', 'S4d'] },
   { id: 'KV6', port: 'schlüssel', title: 'Zusammenführung paralleler Geheimnisse: gleichzeitige Baumänderungen laufen zusammen, ohne dass jemand mitliest', ref: 'Port-Synthese KV6', scenarios: ['S4b', 'S4d', 'S3'] },

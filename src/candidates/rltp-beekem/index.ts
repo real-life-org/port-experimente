@@ -926,7 +926,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
 
   return {
     id: options.dienst ? `rltp-beekem-${options.dienst}${options.mRule === 'new' ? '-m-neu' : ''}` : 'rltp-beekem',
-    capabilities: new Set<Capability>(['roles', 'policy', 'rotate', 'steal', 'multi-device', 'device-remove', ...(service ? (['service'] as Capability[]) : [])]),
+    capabilities: new Set<Capability>(['roles', 'policy', 'rotate', 'steal', 'forge-key-op', 'multi-device', 'device-remove', ...(service ? (['service'] as Capability[]) : [])]),
     service,
 
     async addDevice(person, device) {
@@ -1127,22 +1127,39 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
     },
     async attackerOpen(stolen, msg: Msg) {
       // Passiver Angreifer mit Bobs Zustand: nimmt alle BeeKEM-Operationen auf,
-      // öffnet Inhalte wie ein ehrliches Gerät.
-      const st = stolen as { state: Uint8Array; keys: Map<string, Uint8Array>; appliedOps: Set<string>; ks?: KeyState }
+      // öffnet Inhalte wie ein ehrliches Gerät; mit einem gefälschten Blatt (S11) auch über dieses.
+      const st = stolen as { state: Uint8Array; keys: Map<string, Uint8Array>; appliedOps: Set<string>; ks?: KeyState; forged?: KeyState }
       st.ks ??= { peer: BeekemPeer.fromState(st.state), keys: st.keys, heads: [], pending: [], keyGen: 0, stored: new Set(), tried: new Map(), envelopes: new Map(), appliedOps: st.appliedOps, notes: [] }
       const m = JSON.parse(dec.decode(msg.body)) as Wire
       const ops = m.t === 'cgka' ? [m.op] : m.t === 'auth' ? m.cgka : []
-      for (const op of ops) {
-        try {
-          st.ks.peer.receive(unb64(op))
-          noteOp(st.ks, unb64(op))
-        } catch {}
+      const out: Uint8Array[] = []
+      for (const ks of [st.ks, ...(st.forged ? [st.forged] : [])]) {
+        for (const op of ops) {
+          try {
+            ks.peer.receive(unb64(op))
+            noteOp(ks, unb64(op))
+          } catch {}
+        }
+        if (m.t === 'sealed') ks.pending.push({ ...m, digest: hex(sha256Sync(msg.body)) })
+        out.push(...(await drain(ks)).content)
       }
-      if (m.t === 'sealed') {
-        m.digest = hex(sha256Sync(msg.body))
-        st.ks.pending.push(m)
-      }
-      return (await drain(st.ks)).content
+      return out
+    },
+    async forgeKeyOp(stolen) {
+      // Aktiver Angreifer (S11, KV3): aus dem erbeuteten Zustand ein neues Blatt für sich in den Baum nehmen,
+      // ohne dass ein Logeintrag es deckt. Das neue Blatt ist sein Lesegerät.
+      await loadWasm()
+      const st = stolen as { state: Uint8Array; keys: Map<string, Uint8Array>; appliedOps: Set<string>; ks?: KeyState; forged?: KeyState }
+      st.ks ??= { peer: BeekemPeer.fromState(st.state), keys: st.keys, heads: [], pending: [], keyGen: 0, stored: new Set(), tried: new Map(), envelopes: new Map(), appliedOps: st.appliedOps, notes: [] }
+      const leaf = new BeekemPeer()
+      if (groupId) leaf.join(groupId)
+      st.forged = { peer: leaf, keys: new Map(), heads: [], pending: [], keyGen: 0, stored: new Set(), tried: new Map(), envelopes: new Map(), appliedOps: new Set(), notes: [] }
+      const op = (await st.ks.peer.add(new Uint8Array(leaf.id), new Uint8Array(leaf.shareKey))) as Uint8Array | null
+      if (!op) return []
+      try {
+        leaf.receive(op)
+      } catch {}
+      return [{ label: 'cgka', body: enc.encode(JSON.stringify({ t: 'cgka', op: b64(op) } satisfies Wire)) }]
     },
   }
 }

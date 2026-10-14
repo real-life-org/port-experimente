@@ -476,6 +476,56 @@ export const scenarios: Scenario[] = [
     },
   },
   {
+    id: 'S11',
+    title: 'Schlüsseloperation ohne Logeintrag: ein entferntes Gerät nimmt ein neues Blatt in den Baum',
+    needs: ['steal', 'forge-key-op', 'roles'],
+    async run(w) {
+      // KV3: Das Log bindet die Epoche an das Geheimnis. Eine Baumänderung, die kein Logeintrag deckt,
+      // darf keinen Zugang eröffnen: Mallorys gefälschtes Blatt liest keinen neuen Eintrag.
+      await base(w, [['mallory', 'member']], 'admin')
+      const stolen = await w.candidate.steal('mallory')
+      const attackerDoc = new Y.Doc()
+      let id = 900000
+      let fed = w.log.length
+      // Der Angreifer sieht allen Verkehr und seine eigenen Rahmen.
+      const feed = async (frames: Array<{ label: string; body: Uint8Array }>) => {
+        for (const f of frames) for (const u of await w.candidate.attackerOpen(stolen, { id: id++, from: 'mallory', label: f.label, body: f.body })) Y.applyUpdate(attackerDoc, u)
+        for (const m of w.log.slice(fed)) for (const u of await w.candidate.attackerOpen(stolen, m)) Y.applyUpdate(attackerDoc, u)
+        fed = w.log.length
+      }
+      const inject = async (frames: Array<{ label: string; body: Uint8Array }>) => {
+        for (const f of frames) for (const d of ['alice', 'bob', 'carol']) await w.candidate.receive(d, { id: id++, from: 'mallory', label: f.label, body: f.body })
+      }
+      // Positivkontrolle: solange Mallory Mitglied ist, ist ein neues Blatt für sich ihr gutes Recht (K7), und es liest.
+      const forged1 = await w.candidate.forgeKeyOp!(stolen)
+      if (!forged1.length) return { outcome: 'nicht abbildbar', authority: 'der Angreifer konnte keine Schlüsseloperation erzeugen', keys: '—' }
+      await inject(forged1)
+      await w.flush()
+      await w.write('alice', 'kontrolle')
+      await w.flush()
+      await feed(forged1)
+      const control = attackerDoc.getArray<string>('eintraege').toArray().includes('kontrolle')
+      // Entfernt: dieselbe Operation deckt kein Logeintrag mehr; sie darf keinen Zugang eröffnen.
+      await w.remove('alice', 'mallory')
+      await w.flush()
+      await feed([])
+      const forged2 = await w.candidate.forgeKeyOp!(stolen)
+      await inject(forged2)
+      await w.flush()
+      await w.write('alice', 'nachher')
+      await w.flush()
+      await feed(forged2)
+      const leaked = attackerDoc.getArray<string>('eintraege').toArray().includes('nachher')
+      const honest = ['alice', 'bob', 'carol'].every((d) => w.read(d).includes('nachher'))
+      const m = membersAgree(w, ['alice', 'bob', 'carol'])
+      return {
+        outcome: verdict(control && !leaked && honest && m.agree && !w.members('alice').includes('mallory')),
+        authority: `${m.text}; Zustand alice: ${w.candidate.status('alice')}`,
+        keys: `Kontrolle (als Mitglied liest das neue Blatt): ${control ? 'ja' : 'NEIN (Angreifer-Modell wirkungslos)'}; nach der Entfernung liest das gefälschte Blatt Neues: ${leaked ? 'JA (KV3 verletzt)' : 'nein'}; Mitglieder lesen: ${honest ? 'ja' : 'nein'}`,
+      }
+    },
+  },
+  {
     id: 'S8',
     title: 'Ersteller fällt weg, Gruppe bleibt handlungsfähig',
     needs: ['roles'],

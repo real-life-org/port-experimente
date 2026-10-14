@@ -28,6 +28,7 @@ describe('Kandidat Keyhive (Yjs über @keyhive/keyhive)', () => {
       S6b: 'bestanden', // über die Vorgänger-Kette (wie ARK, hier für Yjs)
       S7: 'bestanden', // PCS: nach forcePcsUpdate öffnet der Angreifer nichts
       S8: 'bestanden', // Admin entfernt ohne die Gründerin
+      S11: 'nicht abbildbar', // kein forge-key-op im Keyhive-Kandidaten
       S10a: 'nicht abbildbar',
       S10b: 'nicht abbildbar',
       S10c: 'nicht abbildbar',
