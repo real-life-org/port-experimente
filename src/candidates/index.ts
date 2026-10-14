@@ -37,6 +37,22 @@ export const candidates: CandidateEntry[] = [
   { id: 'keyhive', title: 'Keyhive 0.3.0-alpha.1 (WebAssembly, Inhalt Yjs, ohne Server)', make: keyhive, loadRuns: 3, transport: 'prüfstand-relay' },
   { id: 'rltp-beekem', title: 'RLTP-Autorität über BeeKEM 0.4.0 (E6+E7: Matrix entscheidet, BeeKEM liefert Schlüssel, ein Blatt je Gerät, Inhalt Yjs)', make: rltpBeekem, loadRuns: 3, transport: 'prüfstand-relay' },
   { id: 'rltp-beekem-sichten', title: 'RLTP über BeeKEM mit Dienst nach Autorisierungssichten (E8, Access §7.3: Dienst kennt nur Sichten mit Quorum; S9 nur 30 × 100, bei 500 Operationen nicht in vertretbarer Zeit)', make: () => rltpBeekem({ dienst: 'sichten' }), loadRuns: 3, loadSize: { members: 30, operations: 100 }, transport: 'prüfstand-relay-durchsetzend' },
+  {
+    id: 'rltp-mls',
+    title: 'RLTP-Autorität über MLS (E13: OpenMLS 0.9.1, RFC 9420; dieselbe Autorität und dieselben Rahmen wie rltp-beekem, MLS liefert die Schlüssel, ein Blatt je Gerät, Willkommen im welcome-Rahmen; S9 nur 30 × 100, lineare Epochen machen jede Aufnahme zu einem Commit über die ganze Gruppe)',
+    make: () => rltpBeekem({ keyPort: 'mls' }),
+    loadRuns: 3,
+    loadSize: { members: 30, operations: 100 },
+    transport: 'prüfstand-relay',
+  },
+  {
+    id: 'rltp-mls-sichten',
+    title: 'RLTP über MLS mit Dienst nach Autorisierungssichten (E13 + E8; S9 nur 30 × 100)',
+    make: () => rltpBeekem({ keyPort: 'mls', dienst: 'sichten' }),
+    loadRuns: 3,
+    loadSize: { members: 30, operations: 100 },
+    transport: 'prüfstand-relay-durchsetzend',
+  },
   { id: 'rltp-beekem-logreplik', title: 'RLTP über BeeKEM mit Dienst als Log-Replik (E8 Kontrolle, wie Gen 2: Dienst wertet den Log selbst aus)', make: () => rltpBeekem({ dienst: 'logreplik' }), loadRuns: 3, transport: 'prüfstand-relay-durchsetzend' },
   // Nur Metadaten: Der Code (Automerge-Wasm, Node-Prozesse) bleibt aus dem
   // Browser-Build heraus; die Tests laden ihn über node-only.ts.

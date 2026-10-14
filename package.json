@@ -12,7 +12,7 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "wasm": "sh scripts/build-wasm.sh",
-    "test:rust": "cargo +1.96 test --manifest-path rust/p2panda-wasm/Cargo.toml --test peer && cargo +1.96 test --manifest-path rust/beekem-wasm/Cargo.toml",
+    "test:rust": "cargo +1.96 test --manifest-path rust/p2panda-wasm/Cargo.toml --test peer && cargo +1.96 test --manifest-path rust/beekem-wasm/Cargo.toml && cargo +1.96 test --manifest-path rust/mls-wasm/Cargo.toml --test peer",
     "server:fetch": "sh scripts/fetch-subduction.sh"
   },
   "dependencies": {
