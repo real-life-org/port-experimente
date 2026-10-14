@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { runAll } from '../src/lab/scenarios'
+import { runAll, runScenario, scenarios } from '../src/lab/scenarios'
 import { rltpBeekem } from '../src/candidates/rltp-beekem'
 import { World } from '../src/lab/world'
 
@@ -33,11 +33,27 @@ describe('Kandidat RLTP-Autorität über BeeKEM', () => {
       S6b: 'bestanden',
       S7: 'bestanden', // PCS: passiver Dieb liest nach der Rotation nichts mehr (KV5)
       S8: 'bestanden', // Gründerin ohne Sonderrolle
+      S11: 'bestanden', // KV3: ein gefälschtes Blatt eines Entfernten wird geheilt, bevor ein Eintrag es erreicht
       S10a: 'nicht abbildbar',
       S10b: 'nicht abbildbar',
       S10c: 'nicht abbildbar',
     })
   }, 120_000)
+})
+
+// Review zu PR #37 (KV3): die Positivkontrolle von S11 muss am gefälschten Blatt hängen, nicht am Altzustand.
+describe('S11: die Kontrolle beweist das gefälschte Blatt', () => {
+  it('eine wirkungslose Fälschung besteht S11 nicht', async () => {
+    const s11 = scenarios.find((s) => s.id === 'S11')!
+    const noop = () => {
+      const c = rltpBeekem()
+      c.forgeKeyOp = async () => ({ frames: [{ label: 'cgka', body: enc.encode(JSON.stringify({ t: 'cgka', op: '' })) }], works: false })
+      return c
+    }
+    const r = await runScenario(noop, s11)
+    expect(r.outcome, r.authority).toBe('nicht bestanden')
+    expect(r.authority).toContain('wirkungslos')
+  }, 60_000)
 })
 
 // Regressionen aus dem Review zu PR #16 (E9).

@@ -476,6 +476,72 @@ export const scenarios: Scenario[] = [
     },
   },
   {
+    id: 'S11',
+    title: 'Schlüsseloperation ohne Logeintrag: ein entferntes Gerät nimmt ein neues Blatt in den Baum',
+    needs: ['steal', 'forge-key-op', 'roles'],
+    async run(w) {
+      // KV3: Das Log bindet die Epoche an das Geheimnis. Eine Baumänderung, die kein Logeintrag deckt,
+      // darf keinen Zugang eröffnen: Mallorys gefälschtes Blatt liest keinen neuen Eintrag.
+      await base(w, [['mallory', 'member']], 'admin')
+      const stolen = await w.candidate.steal('mallory')
+      const attackerDoc = new Y.Doc()
+      let id = 900000
+      let fed = w.log.length
+      // Der Angreifer sieht allen Verkehr und seine eigenen Rahmen. Gelesen wird nur über das gefälschte Blatt:
+      // der erbeutete Altzustand liest als Mitglied ohnehin (das ist S7), er darf die Kontrolle nicht tragen.
+      const feed = async (frames: Array<{ label: string; body: Uint8Array }>) => {
+        for (const f of frames) for (const u of await w.candidate.attackerOpen(stolen, { id: id++, from: 'mallory', label: f.label, body: f.body }, 'forged')) Y.applyUpdate(attackerDoc, u)
+        for (const m of w.log.slice(fed)) for (const u of await w.candidate.attackerOpen(stolen, m, 'forged')) Y.applyUpdate(attackerDoc, u)
+        fed = w.log.length
+      }
+      const inject = async (frames: Array<{ label: string; body: Uint8Array }>) => {
+        for (const f of frames) for (const d of ['alice', 'bob', 'carol']) await w.candidate.receive(d, { id: id++, from: 'mallory', label: f.label, body: f.body })
+      }
+      const tree = (d: string) => Number(/baum=(\d+)/.exec(w.candidate.status(d))?.[1] ?? NaN)
+      // Positivkontrolle, bevor der Angriff irgendetwas beweisen soll: Das gefälschte Blatt wirkt (es öffnet, was
+      // der erbeutete Zustand unter dem neuen Geheimnis versiegelt), und die Mitglieder nehmen die Operation in
+      // ihren Baum (ein Blatt mehr), solange Mallory Mitglied ist. Ob ein Blatt ohne Karte als Mitglied Neues
+      // liest, ist eine Frage des Kandidaten (K7), nicht des Angriffs; es wird berichtet, nicht gewertet.
+      const before = tree('alice')
+      const forged1 = await w.candidate.forgeKeyOp!(stolen)
+      if (!forged1.frames.length) return { outcome: 'nicht abbildbar', authority: 'der Angreifer konnte keine Schlüsseloperation erzeugen', keys: '—' }
+      await inject(forged1.frames)
+      await w.flush()
+      const accepted = tree('alice') === before + 1
+      const control = forged1.works && accepted
+      await w.write('alice', 'kontrolle')
+      await w.flush()
+      await feed(forged1.frames)
+      const readsAsMember = attackerDoc.getArray<string>('eintraege').toArray().includes('kontrolle')
+      const controlText = `Kontrolle: Blatt wirkt ${forged1.works ? 'ja' : 'NEIN'}, Mitglieder nehmen es in den Baum ${accepted ? 'ja' : 'NEIN'}; als Mitglied liest es Neues: ${readsAsMember ? 'ja' : 'nein'}`
+      if (!control) {
+        return { outcome: 'nicht bestanden', authority: 'Angreifer-Modell wirkungslos', keys: controlText }
+      }
+      // Entfernt: dieselbe Operation deckt kein Logeintrag mehr; sie darf keinen Zugang eröffnen. Das zweite Blatt
+      // kennt nur den Verkehr ab jetzt; mehr braucht es nicht, geprüft wird allein der Eintrag danach.
+      await w.remove('alice', 'mallory')
+      await w.flush()
+      await feed([])
+      const forged2 = await w.candidate.forgeKeyOp!(stolen)
+      // Nach der Entfernung hat der Altzustand kein aktuelles Geheimnis mehr; ob das Blatt wirkt, ist hier die
+      // Frage des Szenarios selbst, nicht Voraussetzung. Verlangt wird nur, dass die Operation zustande kommt.
+      if (!forged2.frames.length) return { outcome: 'nicht abbildbar', authority: 'der Angreifer konnte nach der Entfernung keine Schlüsseloperation erzeugen', keys: controlText }
+      await inject(forged2.frames)
+      await w.flush()
+      await w.write('alice', 'nachher')
+      await w.flush()
+      await feed(forged2.frames)
+      const leaked = attackerDoc.getArray<string>('eintraege').toArray().includes('nachher')
+      const honest = ['alice', 'bob', 'carol'].every((d) => w.read(d).includes('nachher'))
+      const m = membersAgree(w, ['alice', 'bob', 'carol'])
+      return {
+        outcome: verdict(!leaked && honest && m.agree && !w.members('alice').includes('mallory')),
+        authority: `${m.text}; Zustand alice: ${w.candidate.status('alice')}`,
+        keys: `${controlText}; nach der Entfernung liest das gefälschte Blatt Neues: ${leaked ? 'JA (KV3 verletzt)' : 'nein'}; Mitglieder lesen: ${honest ? 'ja' : 'nein'}`,
+      }
+    },
+  },
+  {
     id: 'S8',
     title: 'Ersteller fällt weg, Gruppe bleibt handlungsfähig',
     needs: ['roles'],

@@ -28,6 +28,7 @@ describe('Kandidat p2panda (WebAssembly)', () => {
       S6b: 'bestanden',
       S7: 'nicht abbildbar',
       S8: 'bestanden', // Admin entfernt ohne Gründerin
+      S11: 'nicht abbildbar',
       S10a: 'nicht abbildbar',
       S10b: 'nicht abbildbar',
       S10c: 'nicht abbildbar',

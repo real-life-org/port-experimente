@@ -33,6 +33,7 @@ d('E12: RLTP über BeeKEM auf Portable Web Spaces', () => {
       S6b: 'bestanden',
       S7: 'nicht abbildbar',
       S8: 'bestanden',
+      S11: 'nicht abbildbar', // kein Diebstahlmodell am Server
       S10a: 'nicht abbildbar', // der Server ist blind: kein durchsetzender Dienst
       S10b: 'nicht abbildbar',
       S10c: 'nicht abbildbar',

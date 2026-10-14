@@ -187,6 +187,18 @@ impl Peer {
         Ok(out)
     }
 
+    /// Alle Operationen des Baums in kausaler Reihenfolge, als Bytes für `receive` (S11: ein erbeuteter Zustand
+    /// trägt seine ganze Historie, ein neues Blatt des Angreifers braucht sie wie jedes neue Gerät).
+    pub fn history(&self) -> Result<Vec<Vec<u8>>, Error> {
+        let mut out = Vec::new();
+        for epoch in self.cgka.as_ref().ok_or(Error::NoGroup)?.ops()? {
+            for op in epoch {
+                out.push(bincode::serialize(&*op)?);
+            }
+        }
+        Ok(out)
+    }
+
     pub fn members(&self) -> Vec<MemberId> {
         self.cgka.as_ref().map(|c| c.member_ids().collect()).unwrap_or_default()
     }

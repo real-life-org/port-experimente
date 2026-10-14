@@ -147,6 +147,11 @@ impl BeekemPeer {
     }
 
     /// IDs der Blätter im Baum (32 Bytes je Mitglied).
+    /// Alle Operationen des Baums in kausaler Reihenfolge (Bytes für `receive`).
+    pub fn history(&self) -> Result<Array, JsValue> {
+        Ok(self.inner.borrow().history().map_err(|e| JsValue::from_str(&e.to_string()))?.iter().map(|o| u8a(o.as_slice())).collect())
+    }
+
     pub fn members(&self) -> Array {
         self.inner.borrow().members().iter().map(|m| u8a(m.as_slice())).collect()
     }

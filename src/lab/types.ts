@@ -20,6 +20,7 @@ export type Capability =
   | 'multi-device' // weiteres Gerät einer bestehenden Person (S5)
   | 'device-remove' // einzelnes Gerät einer Person entfernen, die Person bleibt (S5b)
   | 'steal' // Zustand eines Geräts für den PCS-Test entwenden (S7)
+  | 'forge-key-op' // aus erbeutetem Zustand eine Schlüsseloperation ohne Logeintrag erzeugen (S11, KV3)
   | 'service' // durchsetzender, schlüsselblinder Dienst am Relay (S10, E8)
 
 /** Eine Nachricht auf der Leitung. Der Prüfstand sieht nur Bytes. */
@@ -148,8 +149,20 @@ export interface Candidate {
    * S7: Ein passiver Angreifer mit dem erbeuteten Gerätezustand sieht allen
    * Verkehr (Nachrichten in Log-Reihenfolge). Liefert die Inhalts-Updates, die
    * er mit dieser Nachricht neu öffnen kann (auch zurückgehaltene ältere).
+   * `via: 'forged'` (S11): nur, was das gefälschte Blatt aus `forgeKeyOp`
+   * öffnet, ohne Rückfall auf den erbeuteten Altzustand; ohne Blatt nichts.
    */
-  attackerOpen(stolen: unknown, msg: Msg): Uint8Array[] | Promise<Uint8Array[]>
+  attackerOpen(stolen: unknown, msg: Msg, via?: 'stolen' | 'forged'): Uint8Array[] | Promise<Uint8Array[]>
+  /**
+   * S11 (KV3): Ein aktiver Angreifer mit erbeutetem Zustand erzeugt eine
+   * Schlüsseloperation, die kein Logeintrag deckt (hier: ein neues Blatt für
+   * sich), als Rahmen für die Leitung. `works`: der Kandidat hat selbst
+   * geprüft, dass das Blatt wirkt (es öffnet, was der erbeutete Zustand unter
+   * dem Geheimnis nach der Operation versiegelt); sonst ist der Angriff
+   * wirkungslos und das Szenario nicht bestanden. Lesen danach über
+   * `attackerOpen(stolen, msg, 'forged')`.
+   */
+  forgeKeyOp?(stolen: unknown): Promise<{ frames: Array<{ label: string; body: Uint8Array }>; works: boolean }>
 }
 
 /** Baut einen Kandidaten; darf asynchron sein (Node-only-Kandidaten werden erst beim Aufruf geladen). */
