@@ -1125,15 +1125,17 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
       const s = dev(d)
       return { state: new Uint8Array(s.peer.exportState()), keys: new Map([...s.keys].map(([k, v]) => [k, v.slice()] as const)), appliedOps: new Set(s.appliedOps) }
     },
-    async attackerOpen(stolen, msg: Msg) {
-      // Passiver Angreifer mit Bobs Zustand: nimmt alle BeeKEM-Operationen auf,
-      // öffnet Inhalte wie ein ehrliches Gerät; mit einem gefälschten Blatt (S11) auch über dieses.
+    async attackerOpen(stolen, msg: Msg, via = 'stolen') {
+      // Passiver Angreifer mit Bobs Zustand: nimmt alle BeeKEM-Operationen auf, öffnet Inhalte wie ein ehrliches
+      // Gerät. Ein gefälschtes Blatt (S11) nimmt denselben Verkehr auf; gelesen wird aber nur über das eine, nach
+      // dem gefragt ist: `via: 'forged'` liefert ausschließlich, was das Blatt öffnet, nie den Altzustand (Review zu
+      // #37: sonst bewiese die Positivkontrolle nichts über das Blatt).
       const st = stolen as { state: Uint8Array; keys: Map<string, Uint8Array>; appliedOps: Set<string>; ks?: KeyState; forged?: KeyState }
       st.ks ??= { peer: BeekemPeer.fromState(st.state), keys: st.keys, heads: [], pending: [], keyGen: 0, stored: new Set(), tried: new Map(), envelopes: new Map(), appliedOps: st.appliedOps, notes: [] }
       const m = JSON.parse(dec.decode(msg.body)) as Wire
       const ops = m.t === 'cgka' ? [m.op] : m.t === 'auth' ? m.cgka : []
       const out: Uint8Array[] = []
-      for (const ks of [st.ks, ...(st.forged ? [st.forged] : [])]) {
+      for (const [name, ks] of [['stolen', st.ks] as const, ...(st.forged ? [['forged', st.forged] as const] : [])]) {
         for (const op of ops) {
           try {
             ks.peer.receive(unb64(op))
@@ -1141,7 +1143,8 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
           } catch {}
         }
         if (m.t === 'sealed') ks.pending.push({ ...m, digest: hex(sha256Sync(msg.body)) })
-        out.push(...(await drain(ks)).content)
+        const content = (await drain(ks)).content
+        if (name === via) out.push(...content)
       }
       return out
     },
@@ -1155,11 +1158,25 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
       if (groupId) leaf.join(groupId)
       st.forged = { peer: leaf, keys: new Map(), heads: [], pending: [], keyGen: 0, stored: new Set(), tried: new Map(), envelopes: new Map(), appliedOps: new Set(), notes: [] }
       const op = (await st.ks.peer.add(new Uint8Array(leaf.id), new Uint8Array(leaf.shareKey))) as Uint8Array | null
-      if (!op) return []
+      if (!op) return { frames: [], works: false }
+      noteOp(st.ks, op)
+      // Nachweis, dass das Blatt wirkt: es öffnet, was der erbeutete Zustand unter dem Geheimnis nach der
+      // Aufnahme versiegelt (sonst bewiese das Szenario nichts über den Angriff, Review zu #37).
+      let works = false
       try {
+        // Das Blatt braucht die Historie des Baums wie jedes neue Gerät; der erbeutete Zustand trägt sie.
+        for (const h of st.ks.peer.history() as Uint8Array[]) {
+          leaf.receive(h)
+          noteOp(st.forged, h)
+        }
         leaf.receive(op)
+        noteOp(st.forged, op)
+        const probe = enc.encode('probe')
+        const r = (await st.ks.peer.encrypt(crypto.getRandomValues(new Uint8Array(32)), [], probe)) as { ciphertext: Uint8Array; updateOp: Uint8Array | null }
+        if (r.updateOp) leaf.receive(r.updateOp)
+        works = dec.decode((leaf.decrypt(r.ciphertext) as { plaintext: Uint8Array }).plaintext) === 'probe'
       } catch {}
-      return [{ label: 'cgka', body: enc.encode(JSON.stringify({ t: 'cgka', op: b64(op) } satisfies Wire)) }]
+      return { frames: [{ label: 'cgka', body: enc.encode(JSON.stringify({ t: 'cgka', op: b64(op) } satisfies Wire)) }], works }
     },
   }
 }

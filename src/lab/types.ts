@@ -149,15 +149,20 @@ export interface Candidate {
    * S7: Ein passiver Angreifer mit dem erbeuteten Gerätezustand sieht allen
    * Verkehr (Nachrichten in Log-Reihenfolge). Liefert die Inhalts-Updates, die
    * er mit dieser Nachricht neu öffnen kann (auch zurückgehaltene ältere).
+   * `via: 'forged'` (S11): nur, was das gefälschte Blatt aus `forgeKeyOp`
+   * öffnet, ohne Rückfall auf den erbeuteten Altzustand; ohne Blatt nichts.
    */
-  attackerOpen(stolen: unknown, msg: Msg): Uint8Array[] | Promise<Uint8Array[]>
+  attackerOpen(stolen: unknown, msg: Msg, via?: 'stolen' | 'forged'): Uint8Array[] | Promise<Uint8Array[]>
   /**
    * S11 (KV3): Ein aktiver Angreifer mit erbeutetem Zustand erzeugt eine
    * Schlüsseloperation, die kein Logeintrag deckt (hier: ein neues Blatt für
-   * sich), als Rahmen für die Leitung. Lesen danach über `attackerOpen` mit
-   * demselben `stolen`.
+   * sich), als Rahmen für die Leitung. `works`: der Kandidat hat selbst
+   * geprüft, dass das Blatt wirkt (es öffnet, was der erbeutete Zustand unter
+   * dem Geheimnis nach der Operation versiegelt); sonst ist der Angriff
+   * wirkungslos und das Szenario nicht bestanden. Lesen danach über
+   * `attackerOpen(stolen, msg, 'forged')`.
    */
-  forgeKeyOp?(stolen: unknown): Promise<Array<{ label: string; body: Uint8Array }>>
+  forgeKeyOp?(stolen: unknown): Promise<{ frames: Array<{ label: string; body: Uint8Array }>; works: boolean }>
 }
 
 /** Baut einen Kandidaten; darf asynchron sein (Node-only-Kandidaten werden erst beim Aufruf geladen). */

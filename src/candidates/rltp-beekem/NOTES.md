@@ -739,6 +739,13 @@ Equivocation-Beweis aus zwei Ketten.
 
 ### KV3 am Kandidaten: Schlüsseloperation ohne Logeintrag (S11, 14.10.)
 
+Review zu PR #37 (Codex): die Positivkontrolle las über den erbeuteten
+Altzustand mit, nicht über das Blatt; eine Fälschung, die gar kein Blatt
+erzeugt, bestand S11 trotzdem. Jetzt liest `attackerOpen` mit `via:
+'forged'` ausschließlich über das Blatt; ohne wirksames Blatt ist S11
+„nicht bestanden“ (Angreifer-Modell wirkungslos), ohne Fälschung nach
+der Entfernung „nicht abbildbar“. Regression: `tests/rltp-beekem.test.ts`.
+
 KV3 („das Log bindet die Epoche an das Geheimnis“) hatte in der Matrix
 kein Szenario. S11 prüft die Zusage von der Angriffsseite: Mallory
 erbeutet ihren eigenen Zustand, wird entfernt und nimmt mit dem alten
