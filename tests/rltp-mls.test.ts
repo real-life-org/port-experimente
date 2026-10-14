@@ -35,6 +35,7 @@ describe('Kandidat RLTP-Autorität über MLS', () => {
       S10a: 'nicht abbildbar',
       S10b: 'nicht abbildbar',
       S10c: 'nicht abbildbar',
+      S11: 'nicht abbildbar', // forge-key-op bislang nur am BeeKEM-Port
     })
   }, 300_000)
 

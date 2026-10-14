@@ -34,6 +34,8 @@ export interface KeyPeer {
   members(): Uint8Array[]
   hasKey(): boolean
   exportState(): Uint8Array
+  /** BeeKEM: alle Operationen des Baums in kausaler Reihenfolge (ein neues Blatt braucht sie). MLS: keine (Beitritt über das Willkommen). */
+  history?(): Uint8Array[]
 }
 
 export interface KeyPort {
@@ -92,6 +94,9 @@ class BeekemAdapter implements KeyPeer {
   }
   exportState() {
     return new Uint8Array(this.p.exportState())
+  }
+  history() {
+    return Array.from(this.p.history()) as Uint8Array[]
   }
 }
 

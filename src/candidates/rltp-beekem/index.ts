@@ -1025,7 +1025,8 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
 
   return {
     id: options.dienst ? `rltp-beekem-${options.dienst}${options.mRule === 'new' ? '-m-neu' : ''}` : 'rltp-beekem',
-    capabilities: new Set<Capability>(['roles', 'policy', 'rotate', 'steal', 'forge-key-op', 'multi-device', 'device-remove', ...(service ? (['service'] as Capability[]) : [])]),
+    // forge-key-op (S11) läuft bislang nur über den BeeKEM-Port (Blatt mit Baumhistorie); für MLS „nicht abbildbar“.
+    capabilities: new Set<Capability>(['roles', 'policy', 'rotate', 'steal', ...(port.linear ? [] : (['forge-key-op'] as Capability[])), 'multi-device', 'device-remove', ...(service ? (['service'] as Capability[]) : [])]),
     service,
 
     async addDevice(person, device) {
@@ -1252,30 +1253,30 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
     async forgeKeyOp(stolen) {
       // Aktiver Angreifer (S11, KV3): aus dem erbeuteten Zustand ein neues Blatt für sich in den Baum nehmen,
       // ohne dass ein Logeintrag es deckt. Das neue Blatt ist sein Lesegerät.
-      await loadWasm()
+      await port.load()
       const st = stolen as { state: Uint8Array; keys: Map<string, Uint8Array>; appliedOps: Set<string>; ks?: KeyState; forged?: KeyState }
-      st.ks ??= { peer: BeekemPeer.fromState(st.state), keys: st.keys, heads: [], pending: [], keyGen: 0, stored: new Set(), tried: new Map(), envelopes: new Map(), appliedOps: st.appliedOps, notes: [] }
-      const leaf = new BeekemPeer()
+      const ks = (st.ks ??= { peer: port.fromState(st.state), keys: st.keys, heads: [], pending: [], keyGen: 0, stored: new Set(), tried: new Map(), envelopes: new Map(), appliedOps: st.appliedOps, notes: [] })
+      const leaf = port.peer()
       if (groupId) leaf.join(groupId)
       st.forged = { peer: leaf, keys: new Map(), heads: [], pending: [], keyGen: 0, stored: new Set(), tried: new Map(), envelopes: new Map(), appliedOps: new Set(), notes: [] }
-      const op = (await st.ks.peer.add(new Uint8Array(leaf.id), new Uint8Array(leaf.shareKey))) as Uint8Array | null
+      const op = (await ks.peer.add(leaf.id, leaf.shareKey)).op
       if (!op) return { frames: [], works: false }
-      noteOp(st.ks, op)
+      noteOp(ks, op)
       // Nachweis, dass das Blatt wirkt: es öffnet, was der erbeutete Zustand unter dem Geheimnis nach der
       // Aufnahme versiegelt (sonst bewiese das Szenario nichts über den Angriff, Review zu #37).
       let works = false
       try {
         // Das Blatt braucht die Historie des Baums wie jedes neue Gerät; der erbeutete Zustand trägt sie.
-        for (const h of st.ks.peer.history() as Uint8Array[]) {
+        for (const h of ks.peer.history?.() ?? []) {
           leaf.receive(h)
           noteOp(st.forged, h)
         }
         leaf.receive(op)
         noteOp(st.forged, op)
         const probe = enc.encode('probe')
-        const r = (await st.ks.peer.encrypt(crypto.getRandomValues(new Uint8Array(32)), [], probe)) as { ciphertext: Uint8Array; updateOp: Uint8Array | null }
+        const r = await ks.peer.encrypt(crypto.getRandomValues(new Uint8Array(32)), [], probe)
         if (r.updateOp) leaf.receive(r.updateOp)
-        works = dec.decode((leaf.decrypt(r.ciphertext) as { plaintext: Uint8Array }).plaintext) === 'probe'
+        works = dec.decode(leaf.decrypt(r.ciphertext).plaintext) === 'probe'
       } catch {}
       return { frames: [{ label: 'cgka', body: enc.encode(JSON.stringify({ t: 'cgka', op: b64(op) } satisfies Wire)) }], works }
     },

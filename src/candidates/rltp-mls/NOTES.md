@@ -27,6 +27,7 @@ Flackern); Erwartungen in `tests/rltp-mls.test.ts`.
 | T1–T7, T12 | bestanden | wie BeeKEM |
 | T6b | nicht bestanden (blind) / bestanden (Sicht) | wie BeeKEM (D5) |
 | T8, T11 | nicht abbildbar | wie BeeKEM |
+| S11 | nicht abbildbar | `forge-key-op` läuft bislang nur am BeeKEM-Port; KV3 für MLS offen |
 
 ## Was anders ist als bei BeeKEM
 
