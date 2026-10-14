@@ -19,8 +19,9 @@ Port ab. Plan und Begründung: `rltp/design/port-experimente-2026-10.md`.
 - `src/candidates/<id>/`: ein Kandidat je Verzeichnis, mit `NOTES.md`
   (Port-Notizen). `rltp-beekem` ist das Experiment zum Port-Schnitt: ein
   Autoritätslog nach der Konfliktmatrix (`authority.ts`) entscheidet die
-  Mitgliedschaft, BeeKEM liefert die Schlüssel.
-- `rust/`: WebAssembly-Hüllen (`p2panda-wasm`, `beekem-wasm`), gebaut von
+  Mitgliedschaft, der Schlüssel-Port (`keyport.ts`) liefert die Schlüssel:
+  BeeKEM oder MLS (`rltp-mls`, derselbe Kandidatencode).
+- `rust/`: WebAssembly-Hüllen (`p2panda-wasm`, `beekem-wasm`, `mls-wasm`), gebaut von
   `scripts/build-wasm.sh`; die Bindings landen unter `src/candidates/*/pkg/`. Kandidaten mit `nodeOnly` (Keyhive über ARK braucht einen
   lokalen Subduction-Server) laufen nur in Node und in der CI; die
   Browser-Seite nennt den Grund.

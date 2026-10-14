@@ -11,3 +11,4 @@ build() { # <crate-dir> <wasm-name> <pkg-dir>
 }
 build p2panda-wasm p2panda_wasm src/candidates/p2panda/pkg
 build beekem-wasm beekem_wasm src/candidates/rltp-beekem/pkg
+build mls-wasm mls_wasm src/candidates/rltp-mls/pkg

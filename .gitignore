@@ -4,6 +4,7 @@ dist
 rust/*/target
 src/candidates/p2panda/pkg
 src/candidates/rltp-beekem/pkg
+src/candidates/rltp-mls/pkg
 .cache
 
 # Berichtsausgabe (REPORT=1 pnpm test report)

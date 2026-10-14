@@ -28,6 +28,7 @@ jobs:
           workspaces: |
             rust/p2panda-wasm
             rust/beekem-wasm
+            rust/mls-wasm
       - uses: taiki-e/install-action@v2
         with:
           tool: wasm-bindgen@0.2.129
@@ -38,6 +39,7 @@ jobs:
         run: |
           cargo +1.96 test --manifest-path rust/p2panda-wasm/Cargo.toml --test peer
           cargo +1.96 test --manifest-path rust/beekem-wasm/Cargo.toml
+          cargo +1.96 test --manifest-path rust/mls-wasm/Cargo.toml --test peer
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:

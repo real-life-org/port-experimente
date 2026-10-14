@@ -1,6 +1,6 @@
 import type { Candidate, Capability, Device, EnforcingService, Msg, Person } from '../../lab/types'
 import { AuthorityLog, Signer, promoteInPolicy, wellFormed, type AuthOp, type Policy } from './authority'
-import { BeekemPeer, loadWasm } from './load'
+import { beekemPort, mlsPort, type KeyPeer, type KeyPort } from './keyport'
 import { LogReplicaService, ViewService, signView, targetDigest, verifyTarget, viewHash, type Challenge, type ChallengeAnswer, type MRule, type Target, type ViewAck, type ViewProposal } from './service'
 import { x25519 } from '@noble/curves/ed25519.js'
 import { hkdf } from '@noble/hashes/hkdf.js'
@@ -120,7 +120,7 @@ type Wire =
   | ChallengeAnswer
 
 interface KeyState {
-  peer: BeekemPeer
+  peer: KeyPeer
   /** Anwendungsschlüssel je Eintrag (hex der Referenz), aus BeeKEM oder aus der Kette. */
   keys: Map<string, Uint8Array>
   heads: Uint8Array[]
@@ -187,9 +187,21 @@ interface DeviceState extends KeyState {
   target: { asked: number; answered: number; nonce: string | null; seq: number | null; digest: string | null; chain: string | null; missing: Set<string>; fetched: number; key?: string }
   /** Rahmen, die noch versiegelt hinaus müssen: aus synchronen Pfaden (repair()) oder weil das Gerät gerade keinen Schlüssel hat (Schreiben wartet, ein Mitglied heilt). */
   queued: Array<{ inner: Wire; label: string; heads: string[] }>
+  /**
+   * Linearer Port: eigene versiegelte Rahmen der letzten Epochen (so weit der Port zurückfallen kann). Verfällt
+   * eine Epoche (Tiebreak verloren, oder die eigene Gruppe stand auf einem verfallenen Zweig), sind die darunter
+   * versiegelten Rahmen für alle anderen unlesbar: sie wandern nach `stranded` und gehen neu versiegelt hinaus.
+   */
+  sealed: Array<{ inner: Wire; label: string; heads: string[]; epoch: number }>
+  stranded: Array<{ inner: Wire; label: string; heads: string[] }>
+  /** Generation beim letzten Durchlauf von retryPendingCgka. */
+  retriedAt: number
   joined: boolean
   notes: string[]
 }
+
+/** Wie viele Epochen der lineare Port zurückfallen kann (rust/mls-wasm SNAPSHOT_DEPTH). */
+const SNAPSHOT_DEPTH = 8
 
 export type DienstVariante = 'sichten' | 'logreplik'
 
@@ -205,8 +217,9 @@ const adminPolicy = (admins: Person[]): Policy => ({
  * unversiegelt (Inhalte sind immer versiegelt). Nötig für den Dienst der
  * Klasse Log, der das Autoritätslog liest (Access §9.3); sonst aus.
  */
-export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; klartext?: boolean } = {}): Candidate {
+export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; klartext?: boolean; keyPort?: 'beekem' | 'mls' } = {}): Candidate {
   const klartext = options.klartext ?? options.dienst === 'logreplik'
+  const port: KeyPort = options.keyPort === 'mls' ? mlsPort : beekemPort
   const devices = new Map<Device, DeviceState>()
   // Ein Signierschlüssel je Person, über ihre Geräte geteilt (wie heute der Seed).
   const persons = new Map<Person, Signer>()
@@ -233,9 +246,15 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
     if (msg.t === 'cgka') noteOp(s, unb64(msg.op))
     s.outgoing.push({ label, body: enc.encode(JSON.stringify(msg)), direct })
   }
-  /** Eine BeeKEM-Operation ist im Baum (eigene oder empfangene): Digest merken, Generation erhöhen. */
+  /**
+   * Eine Schlüsseloperation ist im Baum (eigene oder empfangene): Digest merken, Generation erhöhen. Idempotent:
+   * eine schon verbuchte Operation (Echo, Wiederholung am Träger, Reparaturantwort) ändert weder die Generation
+   * noch `lastKeyOp`; sonst trüge der nächste Rahmen eine alte Operation als Schlüsselstand, und ein Neuling, der
+   * sie nie angewandt hat, versuchte ihn nie zu öffnen.
+   */
   const noteOp = (s: KeyState, op: Uint8Array) => {
     const d = hex(sha256Sync(op))
+    if (s.appliedOps.has(d)) return
     s.appliedOps.add(d)
     s.lastKeyOp = d
     s.keyGen++
@@ -316,6 +335,11 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
     s.keys.set(hex(ref), r.appKey)
     s.heads = [ref]
     const frame: Wire = { t: 'sealed', kind: inner.t, c: b64(r.ciphertext), iv: b64(iv), tab: b64(ct), ref: hex(ref), heads, by: s.deviceSigner.pub, keyOp: s.lastKeyOp }
+    if (port.linear) {
+      const epoch = s.peer.epoch()
+      s.sealed = s.sealed.filter((f) => f.epoch + SNAPSHOT_DEPTH > epoch)
+      s.sealed.push({ inner, label, heads, epoch })
+    }
     return { label, body: enc.encode(JSON.stringify(frame)) }
   }
 
@@ -348,9 +372,13 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
   const sealBeforeTree = (s: DeviceState, op: AuthOp) => (klartext ? Promise.resolve(undefined) : buildSealed(s, { t: 'auth', op, cgka: [] }, 'auth', [...op.preds]))
 
   /** Willkommen an ein Gerät: die Gruppe (und die Aufnahme), an seinen Willkommensschlüssel verschlüsselt. */
-  async function sendWelcome(s: DeviceState, card: Card, op?: AuthOp) {
+  async function sendWelcome(s: DeviceState, card: Card, op?: AuthOp, keyWelcome?: { welcome: Uint8Array; commit: string }) {
     if (!groupId) return
-    const plain = enc.encode(JSON.stringify({ group: hex(groupId), op }))
+    // MLS: das Willkommen des Schlüssel-Ports reist im selben Rahmen (`key`), dazu der Digest genau des Commits, der
+    // dieses Gerät aufgenommen hat (`commit`; je Karte ein eigener, nicht der letzte): er kommt für das Gerät nicht
+    // mehr anwendbar über die Leitung, gilt aber als sein Schlüsselstand (keyOp der nächsten Rahmen, Öffnungs-Gate
+    // der anderen). BeeKEM braucht beides nicht.
+    const plain = enc.encode(JSON.stringify({ group: hex(groupId), op, key: keyWelcome ? b64(keyWelcome.welcome) : undefined, commit: keyWelcome?.commit }))
     const { eph, iv, ct } = await sealTo(unhex(card.welcomeKey), plain)
     send(s, { t: 'welcome', to: card.welcomeKey, eph: hex(eph), iv: b64(iv), c: b64(ct) })
   }
@@ -414,7 +442,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
         const ct = unb64(m.c)
         try {
           if (key) {
-            plain = BeekemPeer.decryptWithKey(ct, key)
+            plain = s.peer.decryptWithKey(ct, key)
           } else {
             const r = s.peer.decrypt(ct) as { plaintext: Uint8Array; appKey: Uint8Array }
             plain = r.plaintext
@@ -526,18 +554,48 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
       await ensureMemberLeaves(s)
     }
     await ensureOwnLeaves(s)
+    if (s.stranded.length) await resealStranded(s)
   }
 
-  /** Wartende BeeKEM-Operationen nachziehen, bis nichts mehr durchgeht. */
+  /**
+   * Ergebnis einer eingespielten Schlüsseloperation verbuchen. `lost`: der Port ist auf die Epoche vor dem
+   * verlorenen Commit zurückgefallen; alles, was seither versiegelt wurde, ist für die anderen unlesbar und geht
+   * nach der Angleichung neu versiegelt hinaus (resealStranded). `stale`: nie mehr anwendbar, nicht verbuchen.
+   */
+  function noteKeyResult(s: DeviceState, r: 'ok' | 'own' | 'lost' | 'stale' | 'reset', op: Uint8Array) {
+    if (r === 'lost') {
+      const parent = s.peer.epoch() - 1
+      const lost = s.sealed.filter((f) => f.epoch > parent)
+      s.sealed = s.sealed.filter((f) => f.epoch <= parent)
+      s.stranded.push(...lost)
+      s.notes.push(`Tiebreak verloren: eigener Commit zurückgerollt${lost.length ? `, ${lost.length} Rahmen neu versiegelt` : ''}`)
+    }
+    if (r !== 'stale') noteOp(s, op)
+  }
+
+  /** Gestrandete Rahmen (verfallene Epoche) unter dem jetzigen Schlüssel noch einmal hinaus. */
+  async function resealStranded(s: DeviceState) {
+    for (const f of s.stranded.splice(0)) {
+      if (f.inner.t === 'repair' && f.inner.missing.every((id) => s.auth.has(id))) continue
+      await sendSealed(s, f.inner, f.label, f.heads)
+    }
+  }
+
+  /**
+   * Wartende Schlüsseloperationen nachziehen, bis nichts mehr durchgeht. Nur, wenn sich seit dem letzten Versuch
+   * etwas geändert hat (Generation): ein Commit von einem anderen Zweig wartet, bis sein Vorgänger den Tiebreak
+   * entscheidet, und jeder Versuch kostet beim linearen Port eine probeweise Anwendung.
+   */
   function retryPendingCgka(s: DeviceState) {
+    if (s.retriedAt === s.keyGen) return
+    s.retriedAt = s.keyGen
     let progress = true
     while (progress && s.pendingCgka.length) {
       progress = false
       const rest: string[] = []
       for (const c of s.pendingCgka) {
         try {
-          s.peer.receive(unb64(c))
-          noteOp(s, unb64(c))
+          noteKeyResult(s, s.peer.receive(unb64(c)), unb64(c))
           progress = true
         } catch {
           rest.push(c)
@@ -667,12 +725,29 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
    * passten), nimmt jedes Gerät mit Schlüssel es auf. Gleichzeitige
    * Aufnahmen desselben Blatts führt BeeKEM zusammen (KV6).
    */
-  async function ensureMemberLeaves(s: DeviceState) {
-    if (!s.auth.members().has(s.person)) return
+  /**
+   * Bei einem linearen Schlüssel-Port (MLS) heilt nicht jedes Mitglied, sondern das eine mit der kleinsten
+   * Personenkennung unter denen, die laut Log Mitglied sind **und ein Blatt im Baum haben**: gleichzeitige Commits
+   * verlören sonst den Tiebreak gegeneinander (KV6 über Heilung, wie bei linear/0.1). Wer kein Blatt hat, kann
+   * nicht heilen, auch nicht sich selbst (CodeRabbit zu #39: Alice, laut Log wieder Mitglied, nachdem der Fork
+   * ihre Entfernung verwarf, stand ohne Blatt da, und niemand sonst zog sie nach).
+   */
+  const healer = (s: DeviceState) => {
+    if (!port.linear) return true
     const inTree = new Set((s.peer.members() as Uint8Array[]).map(hex))
-    const me = hex(new Uint8Array(s.peer.id))
+    const withLeaf = [...s.auth.members()].filter((p) => cardsOf(s, p).some((c) => inTree.has(hex(c.id))))
+    return withLeaf.sort()[0] === s.person
+  }
+
+  async function ensureMemberLeaves(s: DeviceState) {
+    if (!s.auth.members().has(s.person) || !healer(s)) return
+    const inTree = new Set((s.peer.members() as Uint8Array[]).map(hex))
+    const me = hex(s.peer.id)
     if (!inTree.has(me)) return
-    const missing = [...s.auth.members()].flatMap((p) => cardsOf(s, p).filter((c) => !inTree.has(hex(c.id))))
+    // Bei einem linearen Port zieht jede Person ihre eigenen weiteren Geräte selbst nach (ensureOwnLeaves); der Heiler
+    // nimmt nur Personen auf, von denen gar kein Blatt im Baum steht, sonst kollidierten zwei Commits.
+    const hasLeaf = (p: Person) => cardsOf(s, p).some((c) => inTree.has(hex(c.id)))
+    const missing = [...s.auth.members()].filter((p) => !(port.linear && p !== s.person && hasLeaf(p))).flatMap((p) => cardsOf(s, p).filter((c) => !inTree.has(hex(c.id))))
     if (!missing.length) return
     // Ohne gemeinsamen Schlüssel (nach gleichzeitigen Strukturänderungen zeigt
     // BeeKEM bis zur nächsten eigenen Operation den alten Stand) erst
@@ -693,9 +768,9 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
       for (const c of cardsOf(s, p)) {
         if (inTree.has(hex(c.id))) continue
         try {
-          const op = (await s.peer.add(c.id, c.shareKey)) as Uint8Array | null
-          if (op) send(s, { t: 'cgka', op: b64(op) }, 'heal-add')
-          await sendWelcome(s, c)
+          const r = await s.peer.add(c.id, c.shareKey)
+          if (r.op) send(s, { t: 'cgka', op: b64(r.op) }, 'heal-add')
+          await sendWelcome(s, c, undefined, r.welcome && r.op ? { welcome: r.welcome, commit: hex(sha256Sync(r.op)) } : undefined)
         } catch (e) {
           s.notes.push(`Blatt nachziehen: ${(e as Error).message}`)
         }
@@ -729,14 +804,14 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
   async function ensureOwnLeaves(s: DeviceState) {
     if (!s.auth.members().has(s.person)) return
     const inTree = new Set((s.peer.members() as Uint8Array[]).map(hex))
-    const me = hex(new Uint8Array(s.peer.id))
+    const me = hex(s.peer.id)
     if (!inTree.has(me)) return
     for (const c of cardsOf(s, s.person)) {
       if (inTree.has(hex(c.id)) || hex(c.id) === me) continue
       try {
-        const op = (await s.peer.add(c.id, c.shareKey)) as Uint8Array | null
-        if (op) send(s, { t: 'cgka', op: b64(op) }, 'device-add')
-        await sendWelcome(s, c)
+        const r = await s.peer.add(c.id, c.shareKey)
+        if (r.op) send(s, { t: 'cgka', op: b64(r.op) }, 'device-add')
+        await sendWelcome(s, c, undefined, r.welcome && r.op ? { welcome: r.welcome, commit: hex(sha256Sync(r.op)) } : undefined)
       } catch (e) {
         s.notes.push(`eigenes Gerät: ${(e as Error).message}`)
       }
@@ -752,7 +827,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
    */
   async function heal(s: DeviceState, exempt: Set<string> = new Set()) {
     const members = s.auth.members()
-    if (!members.has(s.person) || !s.peer.hasKey()) return
+    if (!members.has(s.person) || !s.peer.hasKey() || !healer(s)) return
     const allowed = new Set([...members.keys()].flatMap((p) => cardsOf(s, p).map((c) => hex(c.id))))
     for (const idBytes of s.peer.members() as Uint8Array[]) {
       if (allowed.has(hex(idBytes)) || exempt.has(hex(idBytes))) continue
@@ -860,21 +935,45 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
       case 'cgka':
         ensureJoined(s)
         try {
-          s.peer.receive(unb64(m.op))
-          noteOp(s, unb64(m.op))
+          noteKeyResult(s, s.peer.receive(unb64(m.op)), unb64(m.op))
         } catch {
           // Vorgänger fehlen (Umordnung am Träger) oder schon bekannt: aufheben, reconcile() versucht es wieder.
           s.pendingCgka.push(m.op)
         }
         // Eine Schlüsseloperation ändert das Log nicht: nur Wartendes nachziehen; angeglichen wird nach Autoritätsoperationen und vor dem Schreiben.
         retryPendingCgka(s)
+        // Linearer Port: ein Commit kann den Baum vom Log wegbewegen (verlorener Tiebreak, fremder Commit); der Heiler
+        // gleicht dann an, sonst wartete ein Schreiben am treeSafe-Gate, bis zufällig eine Autoritätsoperation kommt.
+        if (port.linear) await reconcile(s)
         return { content: await drainAll(s) }
       case 'welcome': {
         if (m.to !== hex(x25519.getPublicKey(s.welcomePriv))) return { content: [] } // an ein anderes Gerät
         if (typeof m.eph !== 'string' || typeof m.iv !== 'string' || typeof m.c !== 'string') throw new Error('Willkommen missgebildet')
-        const w = JSON.parse(dec.decode(await openFrom(s.welcomePriv, unhex(m.eph), unb64(m.iv), unb64(m.c)))) as { group?: string; op?: AuthOp }
+        const w = JSON.parse(dec.decode(await openFrom(s.welcomePriv, unhex(m.eph), unb64(m.iv), unb64(m.c)))) as { group?: string; op?: AuthOp; key?: string; commit?: string }
         if (typeof w.group !== 'string') throw new Error('Willkommen ohne Gruppe')
         if (!groupId) groupId = unhex(w.group)
+        if (typeof w.key === 'string' && s.peer.welcome) {
+          // MLS: erst mit dem Willkommen gibt es die Gruppe. Ein zweites Willkommen nimmt wieder auf (Gruppe
+          // inaktiv nach Entfernung) oder ersetzt eine Gruppe auf einem verfallenen Zweig (`reset`): dann ist
+          // alles seit dem Beitritt Versiegelte für die anderen unlesbar und geht neu hinaus.
+          try {
+            const r = s.peer.welcome(unb64(w.key))
+            if (r === 'reset') {
+              const lost = s.sealed.splice(0)
+              s.stranded.push(...lost)
+              s.notes.push(`Willkommen ersetzt verfallenen Zweig${lost.length ? `, ${lost.length} Rahmen neu versiegelt` : ''}`)
+            } else if (r === 'ok') s.sealed = []
+            if (r !== 'own') {
+              s.keyGen++
+              if (typeof w.commit === 'string') {
+                s.appliedOps.add(w.commit)
+                s.lastKeyOp = w.commit
+              }
+            }
+          } catch (e) {
+            s.notes.push(`Willkommen: ${(e as Error).message ?? String(e)}`)
+          }
+        }
         ensureJoined(s)
         await reconcile(s)
         // Erst öffnen, was schon da liegt (die Aufnahme kam meist versiegelt voraus), dann die Aufnahme aus dem Willkommen.
@@ -926,17 +1025,18 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
 
   return {
     id: options.dienst ? `rltp-beekem-${options.dienst}${options.mRule === 'new' ? '-m-neu' : ''}` : 'rltp-beekem',
-    capabilities: new Set<Capability>(['roles', 'policy', 'rotate', 'steal', 'forge-key-op', 'multi-device', 'device-remove', ...(service ? (['service'] as Capability[]) : [])]),
+    // forge-key-op (S11) läuft bislang nur über den BeeKEM-Port (Blatt mit Baumhistorie); für MLS „nicht abbildbar“.
+    capabilities: new Set<Capability>(['roles', 'policy', 'rotate', 'steal', ...(port.linear ? [] : (['forge-key-op'] as Capability[])), 'multi-device', 'device-remove', ...(service ? (['service'] as Capability[]) : [])]),
     service,
 
     async addDevice(person, device) {
-      await loadWasm()
+      await port.load()
       signerOf(person)
-      const peer = new BeekemPeer()
+      const peer = port.peer()
       const deviceSigner = Signer.generate(device)
       const welcomePriv = x25519.utils.randomSecretKey()
-      const card: Card = { person, id: new Uint8Array(peer.id), shareKey: new Uint8Array(peer.shareKey), deviceKey: deviceSigner.pub, welcomeKey: hex(x25519.getPublicKey(welcomePriv)) }
-      const s: DeviceState = { person, peer, auth: new AuthorityLog(), deviceSigner, welcomePriv, cards: new Map([[hex(card.id), card]]), revoked: new Set(), ack: { seq: 0, hash: null, identities: [] }, proposed: null, waitingAuth: [], appliedCgka: new Set(), pendingCgka: [], authFrames: new Map(), envelopes: new Map(), repairs: new Map(), keys: new Map(), heads: [], pending: [], keyGen: 0, stored: new Set(), tried: new Map(), appliedOps: new Set(), outgoing: [], queued: [], joined: false, notes: [], target: { asked: 0, answered: 0, nonce: null, seq: null, digest: null, chain: null, missing: new Set(), fetched: 0 } }
+      const card: Card = { person, id: peer.id, shareKey: peer.shareKey, deviceKey: deviceSigner.pub, welcomeKey: hex(x25519.getPublicKey(welcomePriv)) }
+      const s: DeviceState = { person, peer, auth: new AuthorityLog(), deviceSigner, welcomePriv, cards: new Map([[hex(card.id), card]]), revoked: new Set(), ack: { seq: 0, hash: null, identities: [] }, proposed: null, waitingAuth: [], appliedCgka: new Set(), pendingCgka: [], authFrames: new Map(), envelopes: new Map(), repairs: new Map(), keys: new Map(), heads: [], pending: [], keyGen: 0, stored: new Set(), tried: new Map(), appliedOps: new Set(), outgoing: [], queued: [], sealed: [], stranded: [], retriedAt: -1, joined: false, notes: [], target: { asked: 0, answered: 0, nonce: null, seq: null, digest: null, chain: null, missing: new Set(), fetched: 0 } }
       devices.set(device, s)
       // Die Karte geht über den Begegnungskanal, nicht über den Träger der Gruppe; mit Prüfstand-Dienst über
       // den Dienst, weil der die Gerätebindung aus der Karte lernt (in der Spec aus der Sicht).
@@ -964,17 +1064,19 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
       const op = s.auth.make({ kind: 'add', subject: p, key: signerOf(p).pub }, [signerOf(s.person)])
       s.auth.add(op)
       const cgka: string[] = []
+      const keyWelcomes = new Map<string, { welcome: Uint8Array; commit: string }>()
       if (s.auth.isValid(op.id)) {
         // Alle bekannten Geräte der Person; spätere Geräte nimmt die Person selbst auf.
         for (const card of known) {
-          const c = (await s.peer.add(card.id, card.shareKey)) as Uint8Array | null
-          if (c) cgka.push(b64(c))
+          const r = await s.peer.add(card.id, card.shareKey)
+          if (r.op) cgka.push(b64(r.op))
+          if (r.welcome && r.op) keyWelcomes.set(card.deviceKey, { welcome: r.welcome, commit: hex(sha256Sync(r.op)) })
         }
       }
       s.appliedCgka.add(op.id)
       await sendAuth(s, op, cgka)
       // Willkommen an jedes bekannte Gerät der Person: Gruppe und Aufnahme, nur für dieses Gerät lesbar.
-      if (s.auth.isValid(op.id)) for (const card of known) await sendWelcome(s, card, op)
+      if (s.auth.isValid(op.id)) for (const card of known) await sendWelcome(s, card, op, keyWelcomes.get(card.deviceKey))
       // „Admin“ ist kein Rollen-Flag, sondern ein Eintrag in den actors der
       // Politik. Die Beförderung gilt nur, solange diese Aufnahme gilt (#18):
       // sonst bliebe eine verwaiste Beförderung liegen und würde bei einer
@@ -1020,7 +1122,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
     async removeDevice(by, device) {
       const s = dev(by)
       const target = dev(device)
-      const id = new Uint8Array(target.peer.id)
+      const id = target.peer.id
       const admin = s.auth.may(s.person, 'member.remove')
       if (target.person !== s.person && !admin) throw new Error(`${by} darf ${device} nicht entfernen`)
       s.revoked.add(hex(id))
@@ -1126,12 +1228,12 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
       return { state: new Uint8Array(s.peer.exportState()), keys: new Map([...s.keys].map(([k, v]) => [k, v.slice()] as const)), appliedOps: new Set(s.appliedOps) }
     },
     async attackerOpen(stolen, msg: Msg, via = 'stolen') {
-      // Passiver Angreifer mit Bobs Zustand: nimmt alle BeeKEM-Operationen auf, öffnet Inhalte wie ein ehrliches
+      // Passiver Angreifer mit Bobs Zustand: nimmt alle Schlüsseloperationen auf, öffnet Inhalte wie ein ehrliches
       // Gerät. Ein gefälschtes Blatt (S11) nimmt denselben Verkehr auf; gelesen wird aber nur über das eine, nach
       // dem gefragt ist: `via: 'forged'` liefert ausschließlich, was das Blatt öffnet, nie den Altzustand (Review zu
       // #37: sonst bewiese die Positivkontrolle nichts über das Blatt).
       const st = stolen as { state: Uint8Array; keys: Map<string, Uint8Array>; appliedOps: Set<string>; ks?: KeyState; forged?: KeyState }
-      st.ks ??= { peer: BeekemPeer.fromState(st.state), keys: st.keys, heads: [], pending: [], keyGen: 0, stored: new Set(), tried: new Map(), envelopes: new Map(), appliedOps: st.appliedOps, notes: [] }
+      st.ks ??= { peer: port.fromState(st.state), keys: st.keys, heads: [], pending: [], keyGen: 0, stored: new Set(), tried: new Map(), envelopes: new Map(), appliedOps: st.appliedOps, notes: [] }
       const m = JSON.parse(dec.decode(msg.body)) as Wire
       const ops = m.t === 'cgka' ? [m.op] : m.t === 'auth' ? m.cgka : []
       const out: Uint8Array[] = []
@@ -1151,30 +1253,30 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
     async forgeKeyOp(stolen) {
       // Aktiver Angreifer (S11, KV3): aus dem erbeuteten Zustand ein neues Blatt für sich in den Baum nehmen,
       // ohne dass ein Logeintrag es deckt. Das neue Blatt ist sein Lesegerät.
-      await loadWasm()
+      await port.load()
       const st = stolen as { state: Uint8Array; keys: Map<string, Uint8Array>; appliedOps: Set<string>; ks?: KeyState; forged?: KeyState }
-      st.ks ??= { peer: BeekemPeer.fromState(st.state), keys: st.keys, heads: [], pending: [], keyGen: 0, stored: new Set(), tried: new Map(), envelopes: new Map(), appliedOps: st.appliedOps, notes: [] }
-      const leaf = new BeekemPeer()
+      const ks = (st.ks ??= { peer: port.fromState(st.state), keys: st.keys, heads: [], pending: [], keyGen: 0, stored: new Set(), tried: new Map(), envelopes: new Map(), appliedOps: st.appliedOps, notes: [] })
+      const leaf = port.peer()
       if (groupId) leaf.join(groupId)
       st.forged = { peer: leaf, keys: new Map(), heads: [], pending: [], keyGen: 0, stored: new Set(), tried: new Map(), envelopes: new Map(), appliedOps: new Set(), notes: [] }
-      const op = (await st.ks.peer.add(new Uint8Array(leaf.id), new Uint8Array(leaf.shareKey))) as Uint8Array | null
+      const op = (await ks.peer.add(leaf.id, leaf.shareKey)).op
       if (!op) return { frames: [], works: false }
-      noteOp(st.ks, op)
+      noteOp(ks, op)
       // Nachweis, dass das Blatt wirkt: es öffnet, was der erbeutete Zustand unter dem Geheimnis nach der
       // Aufnahme versiegelt (sonst bewiese das Szenario nichts über den Angriff, Review zu #37).
       let works = false
       try {
         // Das Blatt braucht die Historie des Baums wie jedes neue Gerät; der erbeutete Zustand trägt sie.
-        for (const h of st.ks.peer.history() as Uint8Array[]) {
+        for (const h of ks.peer.history?.() ?? []) {
           leaf.receive(h)
           noteOp(st.forged, h)
         }
         leaf.receive(op)
         noteOp(st.forged, op)
         const probe = enc.encode('probe')
-        const r = (await st.ks.peer.encrypt(crypto.getRandomValues(new Uint8Array(32)), [], probe)) as { ciphertext: Uint8Array; updateOp: Uint8Array | null }
+        const r = await ks.peer.encrypt(crypto.getRandomValues(new Uint8Array(32)), [], probe)
         if (r.updateOp) leaf.receive(r.updateOp)
-        works = dec.decode((leaf.decrypt(r.ciphertext) as { plaintext: Uint8Array }).plaintext) === 'probe'
+        works = dec.decode(leaf.decrypt(r.ciphertext).plaintext) === 'probe'
       } catch {}
       return { frames: [{ label: 'cgka', body: enc.encode(JSON.stringify({ t: 'cgka', op: b64(op) } satisfies Wire)) }], works }
     },

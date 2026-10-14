@@ -1,0 +1,31 @@
+[package]
+name = "mls-wasm"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Prüfstand-Hülle: MLS (RFC 9420, OpenMLS) als reiner Schlüssel-Adapter unter dem Autoritätslog; Commits werden aus Logeinträgen abgeleitet"
+license = "MIT OR Apache-2.0"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+openmls = { version = "0.9", features = ["js"] }
+openmls_rust_crypto = "0.6"
+openmls_basic_credential = "0.6"
+openmls_traits = "0.6"
+tls_codec = "0.5"
+serde = { version = "1", features = ["derive"] }
+bincode = "1.3"
+hex = "0.4"
+thiserror = "2"
+sha2 = "0.10"
+aes-gcm = "0.10"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
+wasm-bindgen = "=0.2.129"
+js-sys = "0.3"
+console_error_panic_hook = "0.1"
+
+[workspace]
