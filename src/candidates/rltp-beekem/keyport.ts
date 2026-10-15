@@ -25,7 +25,11 @@ export interface KeyPeer {
   remove(memberId: Uint8Array): Promise<Uint8Array | null>
   rotate(): Promise<Uint8Array>
   /** Wirft, wenn die Operation noch nicht passt (Vorgänger fehlen). `lost`: Tiebreak verloren, der fremde Commit gilt, eigener Zustand zurückgefallen. `stale`: nie mehr anwendbar. `reset`: s. `welcome`. */
-  receive(bytes: Uint8Array): 'ok' | 'own' | 'lost' | 'stale' | 'reset'
+  receive(bytes: Uint8Array): 'ok' | 'own' | 'lost' | 'stale' | 'reset' | 'proposal'
+  /** MLS: das eigene Blatt als Vorschlag erneuern, den ein anderer committet (Räume mit einem Committer). */
+  proposeUpdate?(): Uint8Array
+  /** MLS: vorliegende Vorschläge committen; null, wenn keiner vorliegt. */
+  commitPending?(): Uint8Array | null
   /** Lineare Ports: die aktuelle Epoche; sonst 0. */
   epoch(): number
   encrypt(ref: Uint8Array, preds: Uint8Array[], plaintext: Uint8Array): Promise<{ ciphertext: Uint8Array; updateOp: Uint8Array | null; appKey: Uint8Array }>
@@ -132,7 +136,14 @@ class MlsAdapter implements KeyPeer {
     return this.p.rotate()
   }
   receive(bytes: Uint8Array) {
-    return this.p.receive(bytes) as 'ok' | 'own' | 'lost' | 'stale' | 'reset'
+    return this.p.receive(bytes) as 'ok' | 'own' | 'lost' | 'stale' | 'reset' | 'proposal'
+  }
+  proposeUpdate() {
+    return new Uint8Array(this.p.proposeUpdate())
+  }
+  commitPending() {
+    const op = this.p.commitPending() as Uint8Array | null
+    return op ? new Uint8Array(op) : null
   }
   async encrypt(ref: Uint8Array, preds: Uint8Array[], plaintext: Uint8Array) {
     return this.p.encrypt(ref, preds, plaintext) as { ciphertext: Uint8Array; updateOp: Uint8Array | null; appKey: Uint8Array }

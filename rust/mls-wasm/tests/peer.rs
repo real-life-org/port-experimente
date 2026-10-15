@@ -122,6 +122,66 @@ fn gleichzeitige_commits_niedrigster_hash_gewinnt() {
     assert_eq!(bob.decrypt(&s.ciphertext).unwrap().0, b"zu-zweit");
 }
 
+/// E14a: echte MLS-Anwendungsnachrichten (PrivateMessage) zwischen zwei Peers, über rohe MLSMessage-Bytes, wie sie
+/// eine fremde Implementierung sähe.
+#[test]
+fn anwendungsnachricht_zu_zweit_ueber_rohbytes() {
+    let gid = b"zu-zweit".to_vec();
+    let mut alice = Peer::new().unwrap();
+    let mut bob = Peer::new().unwrap();
+    alice.create(&gid).unwrap();
+    let (commit, welcome) = alice.add(bob.share_key()).unwrap();
+    let (kind, raw_welcome) = Peer::unwrap_op(&welcome).unwrap();
+    assert_eq!(kind, "welcome");
+    assert_eq!(Peer::unwrap_op(&commit).unwrap().0, "commit");
+    bob.receive(&Peer::wrap_welcome(raw_welcome).unwrap()).unwrap();
+    let m = alice.send_message(b"hallo bob").unwrap();
+    assert_eq!(bob.open_message(&m).unwrap(), b"hallo bob");
+    let r = bob.send_message(b"hallo alice").unwrap();
+    assert_eq!(alice.open_message(&r).unwrap(), b"hallo alice");
+    // Ein Commit als Rohbytes hin und zurück verpackt bleibt derselbe Commit.
+    let rot = bob.rotate().unwrap();
+    let (_, raw) = Peer::unwrap_op(&rot).unwrap();
+    alice.receive(&Peer::wrap_commit(raw).unwrap()).unwrap();
+    let m2 = alice.send_message(b"nach-rotation").unwrap();
+    assert_eq!(bob.open_message(&m2).unwrap(), b"nach-rotation");
+}
+
+/// E14b owner: ein Mitglied erneuert sein Blatt als Vorschlag, der Gründer committet; der Dieb des alten Blatts liest
+/// danach nichts mehr (PCS ohne eigenen Commit des Mitglieds).
+#[test]
+fn rotation_als_vorschlag_durch_den_gruender_committet() {
+    use mls_wasm::peer::Error;
+    let gid = b"owner-raum".to_vec();
+    let mut alice = Peer::new().unwrap();
+    let mut bob = Peer::new().unwrap();
+    let mut carol = Peer::new().unwrap();
+    alice.create(&gid).unwrap();
+    let (_, wb) = alice.add(bob.share_key()).unwrap();
+    bob.receive(&wb).unwrap();
+    let (cc, wc) = alice.add(carol.share_key()).unwrap();
+    bob.receive(&cc).unwrap();
+    carol.receive(&wc).unwrap();
+    let mut thief = Peer::from_state(&bob.export_state().unwrap()).unwrap();
+    // Bob schlägt vor; das ist kein Commit, seine Epoche bleibt.
+    let p = bob.propose_update().unwrap();
+    assert_eq!(bob.epoch(), 2);
+    assert!(matches!(alice.receive(&p), Err(Error::Proposed)));
+    assert!(matches!(carol.receive(&p), Err(Error::Proposed)));
+    // Der Dieb ist eine Kopie von Bobs Blatt: OpenMLS verarbeitet keine Nachricht vom eigenen Blatt; er bleibt zurück.
+    let _ = thief.receive(&p);
+    let c = alice.commit_pending().unwrap().expect("Commit über den Vorschlag");
+    assert!(alice.commit_pending().unwrap().is_none(), "nach dem Commit liegt nichts mehr vor");
+    assert_eq!(alice.epoch(), 3);
+    bob.receive(&c).unwrap();
+    assert_eq!(bob.epoch(), 3);
+    // Der Dieb hat Bobs altes Blatt: Bobs neues Blattgeheimnis kennt er nicht, Neues liest er nicht.
+    let _ = thief.receive(&c);
+    let s = alice.encrypt(b"r", b"nach-vorschlag").unwrap();
+    assert_eq!(bob.decrypt(&s.ciphertext).unwrap().0, b"nach-vorschlag");
+    assert!(thief.decrypt(&s.ciphertext).is_err(), "Dieb liest nach der Rotation nichts");
+}
+
 /// Vertrag Punkt 2: ein Rückfall reicht über mehrere eigene Commits zurück, bis zum Verzweigungspunkt.
 #[test]
 fn rueckfall_ueber_mehrere_epochen() {

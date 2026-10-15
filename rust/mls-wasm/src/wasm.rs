@@ -69,6 +69,21 @@ impl MlsPeer {
         })
     }
 
+    /// Rotation als Vorschlag (Update Proposal), den ein anderer committet.
+    #[wasm_bindgen(js_name = proposeUpdate)]
+    pub fn propose_update(&self) -> Result<Uint8Array, JsValue> {
+        Ok(Uint8Array::from(self.inner.borrow_mut().propose_update().map_err(js)?.as_slice()))
+    }
+
+    /// Vorliegende Vorschläge committen; null, wenn keiner vorliegt.
+    #[wasm_bindgen(js_name = commitPending)]
+    pub fn commit_pending(&self) -> Result<JsValue, JsValue> {
+        Ok(match self.inner.borrow_mut().commit_pending().map_err(js)? {
+            Some(op) => Uint8Array::from(op.as_slice()).into(),
+            None => JsValue::NULL,
+        })
+    }
+
     pub fn rotate(&self) -> Result<Uint8Array, JsValue> {
         Ok(Uint8Array::from(self.inner.borrow_mut().rotate().map_err(js)?.as_slice()))
     }
@@ -83,6 +98,7 @@ impl MlsPeer {
             Err(Error::LostTiebreak) => Ok("lost".into()),
             Err(Error::Stale(_)) => Ok("stale".into()),
             Err(Error::Reset) => Ok("reset".into()),
+            Err(Error::Proposed) => Ok("proposal".into()),
             Err(e) => Err(js(e)),
         }
     }

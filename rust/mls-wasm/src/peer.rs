@@ -63,6 +63,8 @@ pub enum Error {
     LostTiebreak,
     #[error("Willkommen auf eine höhere Epoche: eigene Gruppe ersetzt")]
     Reset,
+    #[error("Vorschlag aufgenommen, wartet auf einen Commit")]
+    Proposed,
     #[error("MLS: {0}")]
     Mls(String),
     #[error("Entschlüsselung")]
@@ -80,6 +82,8 @@ fn mls<E: std::fmt::Display>(e: E) -> Error {
 enum Op {
     Commit { bytes: Vec<u8> },
     Welcome { bytes: Vec<u8> },
+    /// Ein Vorschlag (RFC 9420 Proposal), den ein anderer committet: für Räume, in denen nur einer committet (E14b owner).
+    Proposal { bytes: Vec<u8> },
 }
 
 /// Versiegelter Eintrag: Epoche, Referenz, Nonce, Chiffretext (AES-256-GCM unter dem Eintragsschlüssel).
@@ -353,6 +357,29 @@ impl Peer {
         Ok(Some(Self::encode(&Op::Commit { bytes: commit })?))
     }
 
+    /// Rotation als Vorschlag (RFC 9420 Update Proposal): das eigene Blatt erneuern, ohne selbst zu committen. Ein
+    /// anderes Mitglied (der Gründer im Owner-Modus) nimmt den Vorschlag mit `commit_pending` in einen Commit.
+    pub fn propose_update(&mut self) -> Result<Vec<u8>, Error> {
+        let (provider, signer) = (&self.provider, &self.signer);
+        let (msg, _) = self.group.as_mut().ok_or(Error::NoGroup)?.propose_self_update(provider, signer, LeafNodeParameters::default()).map_err(mls)?;
+        let bytes = msg.tls_serialize_detached().map_err(|e| Error::Codec(e.to_string()))?;
+        self.own.insert(digest(&bytes));
+        Self::encode(&Op::Proposal { bytes })
+    }
+
+    /// Alle vorliegenden Vorschläge committen; None, wenn keiner vorliegt.
+    pub fn commit_pending(&mut self) -> Result<Option<Vec<u8>>, Error> {
+        if self.group()?.pending_proposals().next().is_none() {
+            return Ok(None);
+        }
+        self.take_snapshot()?;
+        let (provider, signer) = (&self.provider, &self.signer);
+        let (commit, _, _) = self.group.as_mut().ok_or(Error::NoGroup)?.commit_to_pending_proposals(provider, signer).map_err(mls)?;
+        let commit = commit.tls_serialize_detached().map_err(|e| Error::Codec(e.to_string()))?;
+        self.finish_own_commit(&commit)?;
+        Ok(Some(Self::encode(&Op::Commit { bytes: commit })?))
+    }
+
     /// Rotation auf Verlangen (KV5): eigener Update-Commit.
     pub fn rotate(&mut self) -> Result<Vec<u8>, Error> {
         self.take_snapshot()?;
@@ -400,6 +427,28 @@ impl Peer {
                 Welcomed::Joined => Ok(()),
                 Welcomed::Reset => Err(Error::Reset),
             },
+            Op::Proposal { bytes } => {
+                let h = digest(&bytes);
+                if self.own.contains(&h) {
+                    return Err(Error::Own);
+                }
+                let msg = MlsMessageIn::tls_deserialize_exact(&bytes).map_err(|e| Error::Codec(e.to_string()))?;
+                let proto: ProtocolMessage = msg.try_into_protocol_message().map_err(mls)?;
+                let g = self.group()?;
+                if !g.is_active() || proto.epoch().as_u64() != g.epoch().as_u64() {
+                    return Err(Error::Epoch(format!("Vorschlag für Epoche {}, hier {}", proto.epoch().as_u64(), g.epoch().as_u64())));
+                }
+                let provider = &self.provider;
+                let group = self.group.as_mut().ok_or(Error::NoGroup)?;
+                let processed = group.process_message(provider, proto).map_err(mls)?;
+                match processed.into_content() {
+                    ProcessedMessageContent::ProposalMessage(p) => {
+                        group.store_pending_proposal(provider.storage(), *p).map_err(mls)?;
+                        Err(Error::Proposed)
+                    }
+                    _ => Err(Error::Mls("kein Vorschlag".into())),
+                }
+            }
             Op::Commit { bytes } => {
                 let h = digest(&bytes);
                 if self.own.contains(&h) {
@@ -477,6 +526,48 @@ impl Peer {
                 Ok(())
             }
             _ => Err(Error::Mls("kein Commit".into())),
+        }
+    }
+
+    /// Rohe MLS-Bytes (MLSMessage, TLS-serialisiert) aus einem Leitungsrahmen des Prüfstands: für Testvektoren
+    /// mit anderen Implementierungen (E14a). Liefert die Art („commit“ oder „welcome“) und die Bytes.
+    pub fn unwrap_op(bytes: &[u8]) -> Result<(&'static str, Vec<u8>), Error> {
+        match bincode::deserialize::<Op>(bytes).map_err(|e| Error::Codec(e.to_string()))? {
+            Op::Commit { bytes } => Ok(("commit", bytes)),
+            Op::Welcome { bytes } => Ok(("welcome", bytes)),
+            Op::Proposal { bytes } => Ok(("proposal", bytes)),
+        }
+    }
+
+    /// Rohe MLS-Commit-Bytes (etwa von einer fremden Implementierung) als Leitungsrahmen für `receive`.
+    pub fn wrap_commit(raw: Vec<u8>) -> Result<Vec<u8>, Error> {
+        Self::encode(&Op::Commit { bytes: raw })
+    }
+
+    /// Rohe Welcome-Bytes als Leitungsrahmen für `receive`.
+    pub fn wrap_welcome(raw: Vec<u8>) -> Result<Vec<u8>, Error> {
+        Self::encode(&Op::Welcome { bytes: raw })
+    }
+
+    /// Eine MLS-Anwendungsnachricht (PrivateMessage, RFC 9420) erzeugen: rohe MLSMessage-Bytes. Der Prüfstand
+    /// versiegelt Einträge nicht so (Exporter-Schlüssel, s. `encrypt`); das hier ist für den Draht zu anderen
+    /// Implementierungen (E14a, Consensual: jede Zeile eine PrivateMessage).
+    pub fn send_message(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, Error> {
+        let (provider, signer) = (&self.provider, &self.signer);
+        let msg = self.group.as_mut().ok_or(Error::NoGroup)?.create_message(provider, signer, plaintext).map_err(mls)?;
+        msg.tls_serialize_detached().map_err(|e| Error::Codec(e.to_string()))
+    }
+
+    /// Eine MLS-Anwendungsnachricht öffnen (rohe MLSMessage-Bytes).
+    pub fn open_message(&mut self, raw: &[u8]) -> Result<Vec<u8>, Error> {
+        let msg = MlsMessageIn::tls_deserialize_exact(raw).map_err(|e| Error::Codec(e.to_string()))?;
+        let proto: ProtocolMessage = msg.try_into_protocol_message().map_err(mls)?;
+        let provider = &self.provider;
+        let group = self.group.as_mut().ok_or(Error::NoGroup)?;
+        let processed = group.process_message(provider, proto).map_err(mls)?;
+        match processed.into_content() {
+            ProcessedMessageContent::ApplicationMessage(m) => Ok(m.into_bytes()),
+            _ => Err(Error::Mls("keine Anwendungsnachricht".into())),
         }
     }
 
