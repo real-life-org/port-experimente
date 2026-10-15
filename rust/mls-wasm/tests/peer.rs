@@ -122,6 +122,31 @@ fn gleichzeitige_commits_niedrigster_hash_gewinnt() {
     assert_eq!(bob.decrypt(&s.ciphertext).unwrap().0, b"zu-zweit");
 }
 
+/// E14a: echte MLS-Anwendungsnachrichten (PrivateMessage) zwischen zwei Peers, über rohe MLSMessage-Bytes, wie sie
+/// eine fremde Implementierung sähe.
+#[test]
+fn anwendungsnachricht_zu_zweit_ueber_rohbytes() {
+    let gid = b"zu-zweit".to_vec();
+    let mut alice = Peer::new().unwrap();
+    let mut bob = Peer::new().unwrap();
+    alice.create(&gid).unwrap();
+    let (commit, welcome) = alice.add(bob.share_key()).unwrap();
+    let (kind, raw_welcome) = Peer::unwrap_op(&welcome).unwrap();
+    assert_eq!(kind, "welcome");
+    assert_eq!(Peer::unwrap_op(&commit).unwrap().0, "commit");
+    bob.receive(&Peer::wrap_welcome(raw_welcome).unwrap()).unwrap();
+    let m = alice.send_message(b"hallo bob").unwrap();
+    assert_eq!(bob.open_message(&m).unwrap(), b"hallo bob");
+    let r = bob.send_message(b"hallo alice").unwrap();
+    assert_eq!(alice.open_message(&r).unwrap(), b"hallo alice");
+    // Ein Commit als Rohbytes hin und zurück verpackt bleibt derselbe Commit.
+    let rot = bob.rotate().unwrap();
+    let (_, raw) = Peer::unwrap_op(&rot).unwrap();
+    alice.receive(&Peer::wrap_commit(raw).unwrap()).unwrap();
+    let m2 = alice.send_message(b"nach-rotation").unwrap();
+    assert_eq!(bob.open_message(&m2).unwrap(), b"nach-rotation");
+}
+
 /// Vertrag Punkt 2: ein Rückfall reicht über mehrere eigene Commits zurück, bis zum Verzweigungspunkt.
 #[test]
 fn rueckfall_ueber_mehrere_epochen() {

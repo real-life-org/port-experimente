@@ -40,6 +40,7 @@ jobs:
           cargo +1.96 test --manifest-path rust/p2panda-wasm/Cargo.toml --test peer
           cargo +1.96 test --manifest-path rust/beekem-wasm/Cargo.toml
           cargo +1.96 test --manifest-path rust/mls-wasm/Cargo.toml --test peer
+          cargo +1.96 build --manifest-path rust/mls-wasm/Cargo.toml --example vectors
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:

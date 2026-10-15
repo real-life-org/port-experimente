@@ -4,6 +4,7 @@ import { gen2 } from './gen2'
 import { p2panda } from './p2panda'
 import { keyhive } from './keyhive'
 import { rltpBeekem } from './rltp-beekem'
+import { consensualMls } from './consensual-mls'
 
 export type TransportClass = 'prüfstand-relay' | 'prüfstand-relay-durchsetzend' | 'eigener-server'
 
@@ -52,6 +53,22 @@ export const candidates: CandidateEntry[] = [
     loadRuns: 3,
     loadSize: { members: 30, operations: 100 },
     transport: 'prüfstand-relay-durchsetzend',
+  },
+  {
+    id: 'consensual-mls-any-staged',
+    title: 'Consensuals Raummodell nachgebaut (E14b): MLS ohne Autoritätslog, jedes Mitglied committet, kleinster Hash gewinnt, Verlierer stellt neu ein; S9 nur 30 × 100',
+    make: () => consensualMls({ committer: 'any-staged' }),
+    loadRuns: 3,
+    loadSize: { members: 30, operations: 100 },
+    transport: 'prüfstand-relay',
+  },
+  {
+    id: 'consensual-mls-owner',
+    title: 'Raummodell mit Gründer als einzigem Committer (E14b, wie OpenVTC Rooms): Mitglieder schlagen vor; S9 nur 30 × 100',
+    make: () => consensualMls({ committer: 'owner' }),
+    loadRuns: 3,
+    loadSize: { members: 30, operations: 100 },
+    transport: 'prüfstand-relay',
   },
   { id: 'rltp-beekem-logreplik', title: 'RLTP über BeeKEM mit Dienst als Log-Replik (E8 Kontrolle, wie Gen 2: Dienst wertet den Log selbst aus)', make: () => rltpBeekem({ dienst: 'logreplik' }), loadRuns: 3, transport: 'prüfstand-relay-durchsetzend' },
   // Nur Metadaten: Der Code (Automerge-Wasm, Node-Prozesse) bleibt aus dem

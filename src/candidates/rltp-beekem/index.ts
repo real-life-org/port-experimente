@@ -66,7 +66,7 @@ async function sealTable(key: Uint8Array, table: Uint8Array) {
  * Willkommensschlüssel der Karte), HKDF-SHA256, AES-GCM. Die minimale
  * Zustellung des Prüfstands; E11 ersetzt sie durch den Zustellungs-Adapter.
  */
-async function sealTo(pub: Uint8Array, plain: Uint8Array) {
+export async function sealTo(pub: Uint8Array, plain: Uint8Array) {
   const ephPriv = x25519.utils.randomSecretKey()
   const eph = x25519.getPublicKey(ephPriv)
   const shared = x25519.getSharedSecret(ephPriv, pub)
@@ -74,7 +74,7 @@ async function sealTo(pub: Uint8Array, plain: Uint8Array) {
   const { iv, ct } = await sealTable(key, plain)
   return { eph, iv, ct }
 }
-async function openFrom(priv: Uint8Array, eph: Uint8Array, iv: Uint8Array, ct: Uint8Array) {
+export async function openFrom(priv: Uint8Array, eph: Uint8Array, iv: Uint8Array, ct: Uint8Array) {
   const pub = x25519.getPublicKey(priv)
   const shared = x25519.getSharedSecret(priv, eph)
   const key = hkdf(sha256Sync, shared, new Uint8Array([...eph, ...pub]), enc.encode('rltp-welcome'), 32)

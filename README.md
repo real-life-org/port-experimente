@@ -21,6 +21,10 @@ Port ab. Plan und Begründung: `rltp/design/port-experimente-2026-10.md`.
   Autoritätslog nach der Konfliktmatrix (`authority.ts`) entscheidet die
   Mitgliedschaft, der Schlüssel-Port (`keyport.ts`) liefert die Schlüssel:
   BeeKEM oder MLS (`rltp-mls`, derselbe Kandidatencode).
+- `src/candidates/consensual-mls/`: Consensuals Raummodell nachgebaut (E14b):
+  MLS ohne Autoritätslog, `any-staged` oder `owner` als Committer.
+- `rust/mls-wasm/examples/vectors.rs`: Testvektoren für MLS zu zweit mit
+  anderen Implementierungen (E14a), `cargo run --example vectors`.
 - `rust/`: WebAssembly-Hüllen (`p2panda-wasm`, `beekem-wasm`, `mls-wasm`), gebaut von
   `scripts/build-wasm.sh`; die Bindings landen unter `src/candidates/*/pkg/`. Kandidaten mit `nodeOnly` (Keyhive über ARK braucht einen
   lokalen Subduction-Server) laufen nur in Node und in der CI; die

@@ -480,6 +480,47 @@ impl Peer {
         }
     }
 
+    /// Rohe MLS-Bytes (MLSMessage, TLS-serialisiert) aus einem Leitungsrahmen des Prüfstands: für Testvektoren
+    /// mit anderen Implementierungen (E14a). Liefert die Art („commit“ oder „welcome“) und die Bytes.
+    pub fn unwrap_op(bytes: &[u8]) -> Result<(&'static str, Vec<u8>), Error> {
+        match bincode::deserialize::<Op>(bytes).map_err(|e| Error::Codec(e.to_string()))? {
+            Op::Commit { bytes } => Ok(("commit", bytes)),
+            Op::Welcome { bytes } => Ok(("welcome", bytes)),
+        }
+    }
+
+    /// Rohe MLS-Commit-Bytes (etwa von einer fremden Implementierung) als Leitungsrahmen für `receive`.
+    pub fn wrap_commit(raw: Vec<u8>) -> Result<Vec<u8>, Error> {
+        Self::encode(&Op::Commit { bytes: raw })
+    }
+
+    /// Rohe Welcome-Bytes als Leitungsrahmen für `receive`.
+    pub fn wrap_welcome(raw: Vec<u8>) -> Result<Vec<u8>, Error> {
+        Self::encode(&Op::Welcome { bytes: raw })
+    }
+
+    /// Eine MLS-Anwendungsnachricht (PrivateMessage, RFC 9420) erzeugen: rohe MLSMessage-Bytes. Der Prüfstand
+    /// versiegelt Einträge nicht so (Exporter-Schlüssel, s. `encrypt`); das hier ist für den Draht zu anderen
+    /// Implementierungen (E14a, Consensual: jede Zeile eine PrivateMessage).
+    pub fn send_message(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, Error> {
+        let (provider, signer) = (&self.provider, &self.signer);
+        let msg = self.group.as_mut().ok_or(Error::NoGroup)?.create_message(provider, signer, plaintext).map_err(mls)?;
+        msg.tls_serialize_detached().map_err(|e| Error::Codec(e.to_string()))
+    }
+
+    /// Eine MLS-Anwendungsnachricht öffnen (rohe MLSMessage-Bytes).
+    pub fn open_message(&mut self, raw: &[u8]) -> Result<Vec<u8>, Error> {
+        let msg = MlsMessageIn::tls_deserialize_exact(raw).map_err(|e| Error::Codec(e.to_string()))?;
+        let proto: ProtocolMessage = msg.try_into_protocol_message().map_err(mls)?;
+        let provider = &self.provider;
+        let group = self.group.as_mut().ok_or(Error::NoGroup)?;
+        let processed = group.process_message(provider, proto).map_err(mls)?;
+        match processed.into_content() {
+            ProcessedMessageContent::ApplicationMessage(m) => Ok(m.into_bytes()),
+            _ => Err(Error::Mls("keine Anwendungsnachricht".into())),
+        }
+    }
+
     pub fn members(&self) -> Vec<Vec<u8>> {
         match self.group.as_ref() {
             Some(g) if g.is_active() => g.members().map(|m| m.credential.serialized_content().to_vec()).collect(),
