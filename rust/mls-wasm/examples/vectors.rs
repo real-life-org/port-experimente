@@ -70,7 +70,11 @@ fn main() {
                 Err(Error::Own) => "own".into(),
                 Err(Error::LostTiebreak) => "lost".into(),
                 Err(Error::Stale(s)) => format!("stale: {s}"),
-                Err(e) => format!("fehler: {e}"),
+                Err(e) => {
+                    // Nicht anwendbar: Zustand unverändert lassen, mit Fehlerstatus beenden (CodeRabbit zu #40).
+                    eprintln!("fehler: {e}");
+                    std::process::exit(2);
+                }
             };
             save(&state, &p);
             println!("{r} epoch={}", p.epoch());

@@ -14,8 +14,11 @@ Abschnitte 2, 4.1, 5). Zwei Committer-Modi, wie ihre Raumpolitik sie kennt:
   hier der Rückfall des E13-Vertrags auf.
 - **`owner`** (`consensual-mls-owner`): nur der Gründer committet; Mitglieder
   schicken Vorschläge (`propose`), der Gründer setzt sie um, nie gegen sich
-  selbst. Das ist das Modell der OpenVTC Rooms und der Registry
-  (`rooms/*`: Owner als einziger Committer).
+  selbst. Auch die Rotation eines Mitglieds (S7, KV5) ist kein eigener
+  Commit, sondern ein MLS-Update-Vorschlag (RFC 9420), den der Gründer
+  committet (`proposeUpdate`/`commitPending` am Port; Review zu #40). Das ist
+  das Modell der OpenVTC Rooms und der Registry (`rooms/*`: Owner als
+  einziger Committer).
 
 Was dieses Modell **nicht** hat, absichtlich: Politik (kein `policy`), Rollen
 als Regel (`roles` ist nur deklariert, damit die Szenarien laufen; Consensual

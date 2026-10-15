@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { runAll } from '../src/lab/scenarios'
 import { runCarrier } from '../src/lab/traeger'
 import { consensualMls } from '../src/candidates/consensual-mls'
+import { World } from '../src/lab/world'
 
 // E14b: Consensuals Raummodell (MLS ohne Autoritätslog) gegen dieselben Szenarien wie rltp-mls. Die Pins halten
 // Befunde fest, nicht Erfolge; wo der kleinste Hash entscheidet, sind beide Ausgänge zulässig und werden benannt.
@@ -64,6 +65,29 @@ describe('Raummodell any-staged (jedes Mitglied committet)', () => {
 })
 
 describe('Raummodell owner (nur der Gründer committet)', () => {
+  it('Review #40: ein Mitglied committet auch bei der Rotation nicht selbst, es schlägt vor', async () => {
+    const c = consensualMls({ committer: 'owner' })
+    const w = new World(c)
+    for (const p of ['alice', 'bob']) await w.device(p, p)
+    await w.flush()
+    await w.createGroup('alice')
+    await w.add('alice', 'bob', 'member')
+    await w.flush()
+    const before = c.status('bob')
+    await c.rotate('bob')
+    const frames = c.takeOutgoing('bob')
+    expect(frames.map((f) => f.label)).toEqual(['proposal'])
+    expect(c.status('bob'), 'ein Vorschlag ist kein Commit').toBe(before)
+    // Zustellen: der Gründer committet den Vorschlag, beide stehen eine Epoche weiter.
+    for (const f of frames) for (const d of ['alice', 'bob']) await c.receive(d, { id: 9000, from: 'bob', label: f.label, body: f.body })
+    const commits = c.takeOutgoing('alice')
+    expect(commits.map((f) => f.label)).toEqual(['auth'])
+    expect(c.takeOutgoing('bob')).toEqual([])
+    for (const f of commits) for (const d of ['alice', 'bob']) await c.receive(d, { id: 9001, from: 'alice', label: f.label, body: f.body })
+    expect(c.status('alice')).toContain('epoche=2')
+    expect(c.status('bob')).toContain('epoche=2')
+  }, 60_000)
+
   it('S-Szenarien', async () => {
     const results = await runAll(() => consensualMls({ committer: 'owner' }))
     const byId = Object.fromEntries(results.map((r) => [r.scenario, r.outcome]))

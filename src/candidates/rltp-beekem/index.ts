@@ -562,7 +562,8 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
    * verlorenen Commit zurückgefallen; alles, was seither versiegelt wurde, ist für die anderen unlesbar und geht
    * nach der Angleichung neu versiegelt hinaus (resealStranded). `stale`: nie mehr anwendbar, nicht verbuchen.
    */
-  function noteKeyResult(s: DeviceState, r: 'ok' | 'own' | 'lost' | 'stale' | 'reset', op: Uint8Array) {
+  function noteKeyResult(s: DeviceState, r: 'ok' | 'own' | 'lost' | 'stale' | 'reset' | 'proposal', op: Uint8Array) {
+    if (r === 'proposal') return // kein Baumstand: dieser Kandidat arbeitet ohne Vorschläge (Räume mit einem Committer: E14b)
     if (r === 'lost') {
       const parent = s.peer.epoch() - 1
       const lost = s.sealed.filter((f) => f.epoch > parent)

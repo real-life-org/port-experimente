@@ -224,8 +224,14 @@ export function consensualMls(options: { committer?: Committer } = {}): Candidat
     async rotate(by) {
       const s = dev(by)
       if (!isMember(s)) return
-      const op = await s.peer.rotate()
-      send(s, { t: 'commit', op: hex(op) }, 'auth')
+      if (commits(s)) {
+        const op = await s.peer.rotate()
+        send(s, { t: 'commit', op: hex(op) }, 'auth')
+        return
+      }
+      // Owner-Modus: ein Mitglied erneuert sein Blatt als Update-Vorschlag (RFC 9420), der Gründer committet ihn.
+      // Nur so bleibt PCS für das Mitglied erreichbar, ohne dass es selbst committet (Review zu #40).
+      send(s, { t: 'commit', op: hex(s.peer.proposeUpdate!()) }, 'proposal')
     },
     async changePolicy() {
       throw new Error('keine Gruppenregeln')
@@ -261,17 +267,25 @@ export function consensualMls(options: { committer?: Committer } = {}): Candidat
           if (card.person === s.person && isMember(s) && m.id !== me(s)) await intend(d, { kind: 'add', person: s.person })
           return { content: await settle(s) }
         }
-        case 'commit':
+        case 'commit': {
+          let r: string | undefined
           try {
-            noteResult(s, s.peer.receive(unhex(m.op)))
+            r = s.peer.receive(unhex(m.op))
+            noteResult(s, r)
           } catch {
             s.pendingOps.push(m.op)
           }
+          // Owner-Modus: ein Vorschlag liegt vor, der Gründer committet ihn.
+          if (r === 'proposal' && commits(s)) {
+            const op = s.peer.commitPending!()
+            if (op) send(s, { t: 'commit', op: hex(op) }, 'auth')
+          }
           return { content: await settle(s) }
+        }
         case 'welcome': {
           if (m.to !== hex(x25519.getPublicKey(s.welcomePriv))) return { content: [] }
-          const w = JSON.parse(dec.decode(await openFrom(s.welcomePriv, unhex(m.eph), unhex(m.iv), unhex(m.c)))) as { key: string }
           try {
+            const w = JSON.parse(dec.decode(await openFrom(s.welcomePriv, unhex(m.eph), unhex(m.iv), unhex(m.c)))) as { key: string }
             const r = s.peer.welcome!(unhex(w.key))
             if (r !== 'own') s.gen++
             if (r === 'reset') {
