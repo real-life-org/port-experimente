@@ -51,6 +51,15 @@ importers:
       '@interop/was-client':
         specifier: ^0.96.0
         version: 0.96.0(@interop/jsonld-signatures@11.8.7)
+      '@openvtc/vti-didcomm-js':
+        specifier: 0.12.0
+        version: 0.12.0
+      '@openvtc/vti-tsp-js':
+        specifier: 0.3.0
+        version: 0.3.0
+      '@real-life/trust-protocol':
+        specifier: 0.3.2
+        version: 0.3.2
       '@types/node':
         specifier: '22'
         version: 22.20.5
@@ -533,8 +542,19 @@ packages:
     resolution: {integrity: sha512-X5XaVWZIBCT7HHZGm5I7ZQXDwLG+bGXuSrMQAW+7Zvl87h1kmc1ZB1VSRJcpUfoUrGQp4Fkoxm5kZ+Ms+aW+eA==}
     engines: {node: '>= 20.19.0'}
 
+  '@openvtc/vti-didcomm-js@0.12.0':
+    resolution: {integrity: sha512-4/k/32YRhx7XSmwOgezP9RO0QZ0Qq/FPYnUWf6a8SdAlyRITRkhPXBg1LZG9gTelupEdQKBMixY+knSAd8NoBQ==}
+    engines: {node: '>=20.0.0'}
+
+  '@openvtc/vti-tsp-js@0.3.0':
+    resolution: {integrity: sha512-VXdCGei74IL5v4CZptM1u3LcrezzssmWvtuvreGEtqDGdbQWVBj7AskPoS+NJbZcOAxeltPfhW7RChFrzXWbWg==}
+
   '@pinojs/redact@0.4.0':
     resolution: {integrity: sha512-k2ENnmBugE/rzQfEcdWHcCY+/FM3VLzH9cYEsbdsoqrvzAKRhUZeRNhAZvB8OitQJ1TBed3yqWtdjzS6wJKBwg==}
+
+  '@real-life/trust-protocol@0.3.2':
+    resolution: {integrity: sha512-o9VLt+6pOu10O36sNe8VWDi6dmOyAGPtLcP4sAm99z7WVjr3I4qu5hpBVpUzpprTjabDNrtMCi1R5h3NRtJehg==}
+    engines: {node: '>=20'}
 
   '@rollup/rollup-android-arm-eabi@4.64.0':
     resolution: {integrity: sha512-FLLpX941CD/7aBvX3GqLGBM9OvY5PGXTryPJkG5r5/OuBpZpV5k45Uo3RxAvqd35tsyc3hH1bhtz921IKzoIzg==}
@@ -765,6 +785,9 @@ packages:
   ajv@8.20.0:
     resolution: {integrity: sha512-Thbli+OlOj+iMPYFBVBfJ3OmCAnaSyNn4M1vz9T6Gka5Jt9ba/HIR56joy65tY6kx/FCF5VXNB819Y7/GUrBGA==}
 
+  argparse@2.0.1:
+    resolution: {integrity: sha512-8+9WqebbFzpX9OR+Wa6O29asIogeRMzcGtAINdpMHHyAg10f05aSFVBbcEqGf/PXw1EjAZ+q2/bEBg3DvurK3Q==}
+
   assertion-error@2.0.1:
     resolution: {integrity: sha512-Izi8RQcffqCeNVgFigKli1ssklIbpHnCYc6AknXGYoB6grJqyeby7jv12JUQgmTAnIDnbck1uxksT4dzN3PWBA==}
     engines: {node: '>=12'}
@@ -871,6 +894,10 @@ packages:
   convert-source-map@2.0.0:
     resolution: {integrity: sha512-Kvp459HrV2FEJ1CAsi1Ku+MY3kasH19TFykTz2xWmMeq6bk2NU3XXvfJ+Q61m0xktWwt+1HSYf3JZsTms3aRJg==}
 
+  cookie@1.1.1:
+    resolution: {integrity: sha512-ei8Aos7ja0weRpFzJnEA9UHJ/7XQmqglbRwnf2ATjcB9Wq874VKH9kfjjirM6UhU2/E5fFYadylyhFldcqSidQ==}
+    engines: {node: '>=18'}
+
   cookie@2.0.1:
     resolution: {integrity: sha512-yuToqVvRrj6pfDXREyQAAv8SkAEk/8GS3jQRTiUMm66TVtBYmqQeoEjL2Lmq8Rpo6271vH76InTChTitEAm65w==}
     engines: {node: '>=22'}
@@ -907,6 +934,10 @@ packages:
 
   did-context@3.1.1:
     resolution: {integrity: sha512-iFpszgSxc7d1kNBJWC+PAzNTpe5LPalzsIunTMIpbG3O37Q7Zi7u4iIaedaM7UhziBhT+Agr9DyvAiXSUyfepQ==}
+
+  didwebvh-ts@2.8.0:
+    resolution: {integrity: sha512-JAIK/Udr7xbGoYTDRjbm34nD8iddREIQffRL+vsrCaREyVtZDuy8SdFs5lXoop9zwEjXwh64ZFRSOYm6ZCZcAw==}
+    hasBin: true
 
   ed25519-signature-2020-context@1.1.0:
     resolution: {integrity: sha512-dBGSmoUIK6h2vadDctrDnhhTO01PR2hJk0mRNEfrRDPCjaIwrfy4J+eziEQ9Q1m8By4f/CSRgKM1h53ydKfdNg==}
@@ -1057,6 +1088,13 @@ packages:
   joycon@3.1.1:
     resolution: {integrity: sha512-34wB/Y7MW7bzjKRjUKTa46I2Z7eV62Rkhva+KkopW7Qvv/OSWBqvkSY7vusOPrNuZcUG3tApvdVgNB8POj3SPw==}
     engines: {node: '>=10'}
+
+  js-yaml@4.3.2:
+    resolution: {integrity: sha512-SFNOvSJ+Dgf/9An904Yx+CgSlIPCkIpao4qo51lpee25TIRejdH3rhR4EZMGoNx3/TP3O+wzWuiTFl4sqbltzA==}
+    hasBin: true
+
+  json-canonicalize@2.0.0:
+    resolution: {integrity: sha512-yyrnK/mEm6Na3ChbJUWueXdapueW0p380RUyTW87XGb1ww8l8hU0pRrGC3vSWHe9CxrbPHX2fGUOZpNiHR0IIg==}
 
   json-canonicalize@3.0.0:
     resolution: {integrity: sha512-PW21BtLiKRV7gJcT8jf2X4UNN2AF4c1TYEVug1wAWRQSGBJj7fL+v4NgOkIo54SCBPFDyqzMcOJNhjwywCIBuw==}
@@ -2086,7 +2124,20 @@ snapshots:
 
   '@noble/hashes@2.4.0': {}
 
+  '@openvtc/vti-didcomm-js@0.12.0':
+    dependencies:
+      '@noble/curves': 2.4.0
+      didwebvh-ts: 2.8.0
+
+  '@openvtc/vti-tsp-js@0.3.0':
+    dependencies:
+      '@noble/ciphers': 2.4.0
+      '@noble/curves': 2.4.0
+      '@noble/hashes': 2.4.0
+
   '@pinojs/redact@0.4.0': {}
+
+  '@real-life/trust-protocol@0.3.2': {}
 
   '@rollup/rollup-android-arm-eabi@4.64.0':
     optional: true
@@ -2284,6 +2335,8 @@ snapshots:
       json-schema-traverse: 1.0.0
       require-from-string: 2.0.2
 
+  argparse@2.0.1: {}
+
   assertion-error@2.0.1: {}
 
   atomic-sleep@1.0.0: {}
@@ -2374,6 +2427,8 @@ snapshots:
 
   convert-source-map@2.0.0: {}
 
+  cookie@1.1.1: {}
+
   cookie@2.0.1: {}
 
   credentials-context@2.0.0: {}
@@ -2394,6 +2449,14 @@ snapshots:
     optional: true
 
   did-context@3.1.1: {}
+
+  didwebvh-ts@2.8.0:
+    dependencies:
+      '@noble/hashes': 2.4.0
+      cookie: 1.1.1
+      glob: 13.0.6
+      js-yaml: 4.3.2
+      json-canonicalize: 2.0.0
 
   ed25519-signature-2020-context@1.1.0: {}
 
@@ -2576,6 +2639,12 @@ snapshots:
   isomorphic.js@0.2.5: {}
 
   joycon@3.1.1: {}
+
+  js-yaml@4.3.2:
+    dependencies:
+      argparse: 2.0.1
+
+  json-canonicalize@2.0.0: {}
 
   json-canonicalize@3.0.0: {}
 
