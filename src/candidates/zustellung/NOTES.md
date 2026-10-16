@@ -1,99 +1,97 @@
-# Port-Notizen: Zustellung (E11, 16.10.2026)
+# Port notes: delivery (E11, 16 October 2026)
 
-Der Zustellungs-Prüfstand (`src/lab/zustellung.ts`) prüft Paar-Verkehr:
-ein versiegeltes Dokument von Alice an Bob über einen Träger, der speichert
-und weiterleitet. Der Kandidat ist der **Draht**: wie der versiegelte
-Umschlag adressiert und gerahmt wird. Der **Zusteller** (Sender-Trias nach
-Delivery §6.1, mindestens einmal nach §6.3, Bericht vor der Trias) und der
-**Empfänger** (Dispositionen nach §6.2 über `receive` der lib, Quittung
-`delivery-ack/0.1` signiert und byte-identisch aufbewahrt) sind für alle
-Drähte derselbe Code. Keine Uhr: Horizonte sind Runden
-(`HORIZON`: Bericht nach 1, Wiederholung nach 3, Aufgeben nach 12).
+The delivery bench (`src/lab/zustellung.ts`) tests pair traffic: a sealed
+document from Alice to Bob over a carrier that stores and forwards. The
+candidate is the **wire**: how the sealed envelope is addressed and framed.
+The **dispatcher** (sender trias per Delivery §6.1, at-least-once per §6.3,
+a report before the trias) and the **receiver** (dispositions per §6.2 via
+`receive` from the lib, receipt `delivery-ack/0.1` signed and kept
+byte-identical) are the same code for every wire. No clock: horizons are
+rounds (`HORIZON`: report after 1, retry after 3, give up after 12).
 
-Drähte:
+Wires:
 
-| Draht | Rahmen | Adresse | Absender für den Träger |
+| Wire | Frame | Address | Sender as the carrier sees it |
 |---|---|---|---|
-| `lab` | der lib-Umschlag (`seal`, AES-256-GCM an den rkid) unverändert | rkid des Empfängers | keiner (Einlieferung ohne Absender, §5a.4) |
-| `tsp` | TSP Rev 3 direkt (vti-tsp-js 0.3.0): HPKE, Außensignatur | VID des Empfängers (did:key je Beziehung und Seite) | VID des Senders im Klartext-Umschlag |
-| `didcomm-authcrypt` | DIDComm v2 JWE, ECDH-1PU+A256KW (vti-didcomm-js 0.12.0) | kid des Empfängers (did:key je Beziehung und Seite) | `skid` im geschützten Header |
-| `didcomm-anoncrypt` | DIDComm v2 JWE, ECDH-ES+A256KW | kid des Empfängers | keiner |
+| `lab` | the lib envelope (`seal`, AES-256-GCM to the rkid), unchanged | the recipient's rkid | none (submission is principal-free, §5a.4) |
+| `tsp` | TSP Rev 3 direct (vti-tsp-js 0.3.0): HPKE, outer signature | the recipient's VID (did:key per relationship and side) | the sender's VID in the cleartext envelope |
+| `didcomm-authcrypt` | DIDComm v2 JWE, ECDH-1PU+A256KW (vti-didcomm-js 0.12.0) | the recipient's kid (did:key per relationship and side) | `skid` in the protected header |
+| `didcomm-anoncrypt` | DIDComm v2 JWE, ECDH-ES+A256KW | the recipient's kid | none |
 
-Die Identitäten je Beziehung und Seite leiten sich aus einer Saat ab, wie in
-`trust-protocol/binding/vti-wire.mjs`; die lib selbst (0.3.2) exportiert
-ihren Mediator-Adapter nicht, deshalb ist der Zusteller hier neu geschrieben,
-auf die Zusagen hin, die der Port verlangt, nicht auf die Form von 0.79.
+The identities per relationship and side derive from a seed, as in
+`trust-protocol/binding/vti-wire.mjs`; the lib itself (0.3.2) does not
+export its mediator adapter, so the dispatcher is written afresh here,
+against the promises the port requires, not against the form of 0.79.
 
-## Ergebnisse (16.10., alle Drähte gleich, wo nicht anders vermerkt)
+## Results (16 October, all wires equal unless noted)
 
-| | Ergebnis | Befund |
+| | Result | Finding |
 |---|---|---|
-| T9 Quittung verloren | bestanden | Sender wiederholt dieselben Bytes nach `ackWait`; Empfänger `duplicate-known`, Wirkung einmal, Quittung byte-identisch erneut; `delivered`, nicht `late` |
-| T10 Gerät offline, Träger unerreichbar | bestanden | Bericht nach einer Runde: `awaiting-transport(offline)`, dann `(transport-unreachable)`; Empfänger offline ist für den Sender `accepted` (der Träger hat es); danach `delivered` |
-| Z1 Was der Träger lernt | bestanden | kein Inhalt, kein Anker, kein Name. lab: rkid, 668 B. TSP: Sender- und Empfänger-VID, 996 B. DIDComm authcrypt: `skid` und kid, 2562 B; anoncrypt: nur kid, 2209 B |
-| Z2 Trägerwechsel | bestanden | Wartendes (`awaiting-transport`) geht auf dem neuen Träger hinaus; die Beziehung (rkid, Anker) bleibt; der Draht braucht keine Neuverhandlung |
-| Z3 Mehrgerät | bestanden | zwei Geräte unter einer Adresse: der Träger hält den Rahmen, bis jedes registrierte Gerät ihn bestätigt hat; beide quittieren, der Sender nimmt die erste |
-| Z4 Fremder Absender (an Bobs unveränderten Empfängerschlüssel, nur der Absender ist fremd) | bestanden | lab und anoncrypt: der Rahmen öffnet sich, das Dokument fällt am Beweis (`failed(proof-invalid)`); TSP: Außensignatur gegen Alices Schlüssel schlägt fehl; authcrypt: ECDH-1PU mit Alices Schlüssel schlägt fehl. Beides am Draht (Issue #42) |
-| Z5 Falscher Empfängerschlüssel (Carols Beziehung zu Bob, an Bobs Alice-Adresse geliefert) | bestanden | TSP, authcrypt, anoncrypt: eigene Adresse und eigener Schlüssel je Beziehung, der Rahmen öffnet sich nicht (`no recipients[] entry for kid`, Signatur). lab: die Adresse ist hier der rkid der Partei, nicht der Beziehung (Vereinfachung des Prüfstands), der Umschlag öffnet sich, der Beweis fällt |
+| T9 receipt lost | passed | the sender repeats the same bytes after `ackWait`; the receiver answers `duplicate-known`, effect once, receipt re-sent byte-identical; `delivered`, not `late` |
+| T10 device offline, carrier unreachable | passed | report after one round: `awaiting-transport(offline)`, then `(transport-unreachable)`; a receiver offline is `accepted` for the sender (the carrier has it); then `delivered` |
+| Z1 what the carrier learns | passed | no content, no anchor, no name. lab: rkid, 668 B. TSP: sender and receiver VID, 996 B. DIDComm authcrypt: `skid` and kid, 2562 B; anoncrypt: kid only, 2209 B |
+| Z2 carrier switch | passed | what is waiting (`awaiting-transport`) goes out on the new carrier; the relationship (rkid, anchor) stays; the wire needs no renegotiation |
+| Z3 multiple devices | passed | two devices under one address: the carrier holds the frame until every registered device has confirmed; both acknowledge, the sender takes the first |
+| Z4 foreign sender (to Bob's unchanged recipient key, only the sender is foreign) | passed | lab and anoncrypt: the frame opens, the document fails on its proof (`failed(proof-invalid)`); TSP: the outer signature against Alice's key fails; authcrypt: ECDH-1PU with Alice's key fails. Both at the wire (issue #42) |
+| Z5 wrong recipient key (Carol's relationship with Bob, delivered to Bob's Alice address) | passed | TSP, authcrypt, anoncrypt: own address and own key per relationship, the frame does not open (`no recipients[] entry for kid`, signature). lab: the address here is the party's rkid, not the relationship's (a bench simplification), the envelope opens, the proof fails |
 
-## Was das Experiment belegt
+## What the experiment shows
 
-1. **Die Trias ist Sache des Zustellers, nicht des Trägers (Frage 2).**
-   Kein Draht spricht `accepted`, `delivered` oder `awaiting-transport`;
-   alle vier liefern dieselbe Zeile, weil der Zusteller sie spricht: aus
-   „Träger hat es genommen“ (accepted), aus der verifizierten Quittung
-   (delivered), aus dem eigenen Zustand (Bericht). Ein Träger ohne
-   speichernden Dritten (direkt, Iroh) änderte daran nichts, nur `accepted`
-   fiele mit `delivered` zusammen.
-2. **Inbox je Beziehung ist Form, nicht Zusage (Frage 1).** Die Adresse ist
-   je Beziehung (rkid, VID, kid), aber der Träger braucht keine Inbox je
-   Beziehung: er braucht „Rahmen an eine Adresse halten, bis jedes
-   registrierte Gerät bestätigt“. Mehrgerät (Z3) ist eine Eigenschaft der
-   Registrierung, nicht der Adresse.
-3. **Was der Träger lernt, entscheidet der Draht (Frage 3).** Der
-   lib-Umschlag und anoncrypt zeigen nur den Empfänger; TSP und authcrypt
-   zeigen auch den Absender, und zwar als Beziehungs-Identität, nicht als
-   Anker. Das ist DV4/DV6 am Draht gemessen: verknüpfbar ist je Beziehung
-   genau eine Identität, über Beziehungen hinweg keine. Der Preis des
-   Absenders im Rahmen: Z4.
-4. **Absenderprüfung: am Draht oder am Dokument (Frage neu).** TSP und
-   authcrypt weisen einen fremden Absender ab, bevor das Dokument gesehen
-   wird (Z4: Außensignatur, ECDH-1PU, beide an den Absenderschlüssel
-   gebunden, den Bobs Endpunkt als Alices kennt); lab und anoncrypt erst
-   am Beweis des Dokuments, weil ihr Rahmen keinen Absender trägt. Beides
-   hält, aber nur die zweite Stufe ist bei uns Pflicht (§5a.4: Einlieferung
-   ohne Absender; der Beweis unter dem Anker ist die Absenderprüfung). Ein
-   Port darf die Drahtprüfung nicht voraussetzen, und anoncrypt darf keine
-   behaupten (Issue #42).
-7. **Adresse je Beziehung (Z5).** TSP und DIDComm leiten hier je Beziehung
-   eine eigene Identität ab; ein Rahmen an Bobs Carol-Schlüssel öffnet sich
-   an Bobs Alice-Endpunkt nicht. Der lab-Draht nimmt den rkid der Partei
-   als Adresse, also dieselbe für alle Beziehungen: eine Vereinfachung des
-   Prüfstands, nicht die Form der lib (Delivery §5a.2: rkid je Beziehung).
-8. **Trias bleibt, Aufgabegrenze gilt (Issue #43).** Nach `accepted` nimmt
-   eine Störung (Gerät offline, Träger unerreichbar) den Zustand nicht
-   zurück; `awaiting-transport` gibt es nur vor der Trias (§6.1). Die
-   Verfügbarkeit steht getrennt (`transport`). Zwei Fristen: vor der
-   Annahme gibt es kein Aufgeben, nur den ehrlichen Bericht je Runde (die
-   Einlieferung liegt noch beim Adapter); ab der Annahme zählt die
-   erklärte Aufgabegrenze, auch bei späterer Störung. Eine Quittung nach
-   `failed` heißt `delivered(late)`. Drei Regressionen.
-5. **Trägerwechsel ohne Beziehungsverlust (Frage 4)** ist beim Zusteller
-   billig, weil nichts an der Beziehung am Träger hängt: Registrierung neu,
-   Wartendes neu einliefern.
-6. **Größe.** Der Umschlag der lib ist 668 B für ein Dokument von rund 300 B;
-   TSP legt 50 % drauf, DIDComm das Dreifache (JSON-JWE, base64url). Alle
-   weit unter MT-2240 (16 KB).
+1. **The trias belongs to the dispatcher, not to the carrier (question 2).**
+   No wire speaks `accepted`, `delivered` or `awaiting-transport`; all four
+   produce the same row because the dispatcher speaks them: from "the
+   carrier took it" (accepted), from the verified receipt (delivered), from
+   its own state (report). A carrier without a storing third party (direct,
+   Iroh) would change nothing about this, only `accepted` would coincide
+   with `delivered`.
+2. **An inbox per relationship is form, not a promise (question 1).** The
+   address is per relationship (rkid, VID, kid), but the carrier needs no
+   inbox per relationship: it needs "hold frames for an address until every
+   registered device has confirmed". Multiple devices (Z3) are a property
+   of registration, not of the address.
+3. **What the carrier learns is decided by the wire (question 3).** The lib
+   envelope and anoncrypt show only the recipient; TSP and authcrypt also
+   show the sender, as a relationship identity, not as an anchor. That is
+   DV4/DV6 measured at the wire: exactly one identity is linkable per
+   relationship, none across relationships. The price of a sender in the
+   frame: Z4.
+4. **Sender verification: at the wire or at the document (new question).**
+   TSP and authcrypt reject a foreign sender before the document is seen
+   (Z4: outer signature, ECDH-1PU, both bound to the sender key Bob's
+   endpoint knows as Alice's); lab and anoncrypt only at the document's
+   proof, because their frame carries no sender. Both hold, but only the
+   second stage is mandatory for us (§5a.4: submission without a sender;
+   the proof under the anchor is the sender check). A port must not assume
+   the wire check, and anoncrypt must not claim one (issue #42).
+5. **Carrier switch without losing the relationship (question 4)** is cheap
+   at the dispatcher, because nothing about the relationship lives at the
+   carrier: register anew, resubmit what is waiting.
+6. **Size.** The lib envelope is 668 B for a document of about 300 B; TSP
+   adds 50 %, DIDComm triples it (JSON JWE, base64url). All far below
+   MT-2240 (16 KB).
+7. **Address per relationship (Z5).** TSP and DIDComm derive an own identity
+   per relationship here; a frame to Bob's Carol key does not open at Bob's
+   Alice endpoint. The lab wire takes the party's rkid as the address, the
+   same for all relationships: a bench simplification, not the lib's form
+   (Delivery §5a.2: rkid per relationship).
+8. **The trias stays, the give-up bound applies (issue #43).** After
+   `accepted`, an outage (device offline, carrier unreachable) does not
+   revert the state; `awaiting-transport` exists only before the trias
+   (§6.1). Availability is kept separately (`transport`). Two deadlines:
+   before acceptance there is no giving up, only the honest report each
+   round (the submission still lies with the adapter); from acceptance on,
+   the declared give-up bound counts, also under a later outage. A receipt
+   after `failed` means `delivered(late)`. Three regressions.
 
-## Nicht geprüft, bewusst
+## Deliberately not tested
 
-- Ein echter Mediator oder Intermediär (VTI-Mediator, DIDComm-Mediator mit
-  Pickup): der Träger hier ist das Modell „speichern und weiterleiten mit
-  Registrierung“, dasselbe für alle Drähte. Die Live-Probe in
-  `trust-protocol/binding` hat den VTI-Mediator am 04.09. bestanden; was ein
-  Mediator zusätzlich lernt (Verbindungs-DID, Zeiten), steht in
+- A real mediator or intermediary (VTI mediator, DIDComm mediator with
+  pickup): the carrier here is the model "store and forward with
+  registration", the same for every wire. The live probe in
+  `trust-protocol/binding` passed against the VTI mediator on 4 September;
+  what a mediator additionally learns (connection DID, timings) is in
   `spec/adapter-vti-mediator.md` §9.
-- TSP geroutet (Intermediär im Pfad, `packRouted`) und DIDComm `forward`:
-  erst, wenn ein Intermediär im Prüfstand sitzt.
-- Aufgeben und späte Quittung sind als Regression gepinnt (Zusteller),
-  nicht als Draht-Szenario.
+- Routed TSP (an intermediary on the path, `packRouted`) and DIDComm
+  `forward`: only once an intermediary sits in the bench.
+- Giving up and the late receipt are pinned as regressions (dispatcher),
+  not as wire scenarios.

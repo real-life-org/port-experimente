@@ -1,211 +1,201 @@
-# Port-Notizen: RLTP-Autorität über MLS (E13)
+# Port notes: RLTP authority over MLS (E13)
 
-Stand 14.10.2026. Dritte Variante des Schlüssel-Ports: dieselbe Autorität,
-dieselben Rahmen und derselbe Kandidatencode wie `rltp-beekem`
-(`rltpBeekem({ keyPort: 'mls' })`), darunter MLS (RFC 9420) über OpenMLS
-0.9.1 in `rust/mls-wasm` statt BeeKEM. Die Schnittstelle, die beide
-erfüllen, steht in `../rltp-beekem/keyport.ts` (`KeyPeer`, `KeyPort`).
+As of 14 October 2026. Third variant of the key port: the same authority,
+the same frames and the same candidate code as `rltp-beekem`
+(`rltpBeekem({ keyPort: 'mls' })`), with MLS (RFC 9420) via OpenMLS 0.9.1
+in `rust/mls-wasm` underneath instead of BeeKEM. The interface both fulfil
+is in `../rltp-beekem/keyport.ts` (`KeyPeer`, `KeyPort`).
 
-MLS liegt **unter** dem Autoritätslog: Commits werden aus Logeinträgen
-abgeleitet (Aufnahme, Entfernung, Rotation, Heilung), nie umgekehrt
-(Access §9.1). Mitgliedschaft entscheidet die Matrix; MLS liefert je Epoche
-ein Exporter-Geheimnis, daraus den Eintragsschlüssel je Referenz
-(SHA-256 über Label, Exporter, Referenz). Die Vorgänger-Tabelle der
-versiegelten Rahmen und die Lückenreparatur sind unverändert.
+MLS sits **below** the authority log: commits are derived from log entries
+(admission, removal, rotation, healing), never the other way round (Access
+§9.1). Membership is decided by the matrix; MLS yields an exporter secret
+per epoch, from which the entry key per reference is derived (SHA-256 over
+label, exporter, reference). The predecessor table of the sealed frames and
+the gap repair are unchanged.
 
-## Ergebnisse
+## Results
 
-Alle S- und T-Szenarien wie bei `rltp-beekem` (vier Läufe in Folge, kein
-Flackern); Erwartungen in `tests/rltp-mls.test.ts`.
+All S and T scenarios as for `rltp-beekem` (four runs in a row, no
+flicker); expectations in `tests/rltp-mls.test.ts`.
 
-| | Ergebnis | Grund |
+| | Result | Reason |
 |---|---|---|
-| S1–S8, S4a–S4j, S5–S5c, S6, S6b | bestanden | wie BeeKEM |
-| S4b, S4d, S4j | bestanden | gleichzeitige Commits: Tiebreak (unten), Heilung holt nach |
-| S7 | bestanden | PCS nur über die ausdrückliche Rotation; MLS rotiert beim Schreiben nicht (BeeKEM: `updateOp` je Eintrag) |
-| S10a–c | nicht abbildbar (blind) / wie BeeKEM mit `rltp-mls-sichten` (S10c nur mit m nach der neuen Sicht) | Dienstvarianten sind vom Schlüssel-Port unabhängig |
-| T1–T7, T12 | bestanden | wie BeeKEM |
-| T6b | nicht bestanden (blind) / bestanden (Sicht) | wie BeeKEM (D5) |
-| T8, T11 | nicht abbildbar | wie BeeKEM |
-| S11 | bestanden | KV3: das gefälschte Blatt bekommt nie Zugang; Befund unten („Fälschung als Geschwister“) |
+| S1–S8, S4a–S4j, S5–S5c, S6, S6b | passed | as BeeKEM |
+| S4b, S4d, S4j | passed | simultaneous commits: tiebreak (below), healing catches up |
+| S7 | passed | PCS only via the explicit rotation; MLS does not rotate on write (BeeKEM: `updateOp` per entry) |
+| S10a–c | not applicable (blind) / as BeeKEM with `rltp-mls-sichten` (S10c only with m following the new view) | service variants are independent of the key port |
+| T1–T7, T12 | passed | as BeeKEM |
+| T6b | failed (blind) / passed (view) | as BeeKEM (D5) |
+| T8, T11 | not applicable | as BeeKEM |
+| S11 | passed | KV3: the forged leaf never gains access; finding below ("forgery as a sibling") |
 
-## Was anders ist als bei BeeKEM
+## What differs from BeeKEM
 
-**Linear.** MLS kennt je Epoche genau einen Commit. BeeKEM führt
-gleichzeitige Operationen zusammen; MLS muss wählen. Folgen für den
-Kandidaten (alles in `index.ts` unter `port.linear`):
+**Linear.** MLS knows exactly one commit per epoch. BeeKEM merges
+simultaneous operations; MLS has to choose. Consequences for the candidate
+(all in `index.ts` under `port.linear`):
 
-1. **Ein Heiler je Gruppe.** Bei BeeKEM heilt jedes Mitglied mit Schlüssel
-   (fehlende Blätter nachziehen, fremde entfernen); gleichzeitige Heilungen
-   verschmelzen. Bei MLS verlören sie den Tiebreak gegeneinander. Deshalb
-   heilt nur das Mitglied mit der kleinsten Personenkennung unter den
-   Mitgliedern laut Log, **die ein Blatt im Baum haben**; jede Person zieht
-   ihre eigenen weiteren Geräte selbst nach (sonst kollidierten Heiler und
-   Person). Das ist KV6 über Heilung, wie bei linear/0.1 vorgesehen. Das
-   „mit Blatt“ ist nötig (Review zu #39): verwirft ein Fork die Entfernung
-   der kleinsten Person, steht sie laut Log wieder drin, aber ohne Blatt;
-   wäre sie der Heiler, zöge niemand sie nach.
-2. **Angleichen nach jedem Commit.** Ein fremder Commit kann den Baum vom
-   Log wegbewegen (verlorener Tiebreak); bei BeeKEM genügt Angleichen nach
-   Autoritätsoperationen und vor dem Schreiben, bei MLS läuft `reconcile`
-   auch nach jedem `cgka`-Rahmen.
-3. **Willkommen.** MLS kennt keinen Beitritt ohne Willkommen; es reist im
-   `welcome`-Rahmen des Kandidaten (Feld `key`), an den Willkommensschlüssel
-   der Karte verschlüsselt, zusammen mit Gruppe und Aufnahme. Dazu der
-   Digest genau des Commits, der dieses Gerät aufgenommen hat (Feld
-   `commit`, je Karte ein eigener, nicht der letzte der Aufnahme): für
-   MLS ist dieser Commit nach dem Willkommen nicht mehr verarbeitbar
-   (`stale`), für den Kandidaten ist er der Schlüsselstand des Neuen
-   (`keyOp` seiner nächsten Rahmen, Öffnungs-Gate bei den anderen).
-   Ein entferntes Gerät (Gruppe inaktiv) puffert Commits wie eines ohne
-   Gruppe, bis ein Willkommen es wieder aufnimmt.
-4. **Keine Rotation beim Schreiben.** PCS (KV5) nur über `rotate`.
+1. **One healer per group.** With BeeKEM every member with a key heals
+   (adds missing leaves, removes foreign ones); simultaneous healings
+   merge. With MLS they would lose the tiebreak against each other. So only
+   the member with the smallest person id among the members per the log
+   **that have a leaf in the tree** heals; every person adds their own
+   further devices themselves (otherwise healer and person would collide).
+   That is KV6 via healing, as linear/0.1 intends. The "with a leaf" is
+   necessary (review of #39): if a fork discards the removal of the
+   smallest person, she is back in the log but without a leaf; were she the
+   healer, nobody would re-add her.
+2. **Reconcile after every commit.** A foreign commit can move the tree
+   away from the log (lost tiebreak); with BeeKEM reconciling after
+   authority operations and before writing suffices, with MLS `reconcile`
+   also runs after every `cgka` frame.
+3. **Welcome.** MLS knows no join without a welcome; it travels in the
+   candidate's `welcome` frame (field `key`), encrypted to the card's
+   welcome key, together with group and admission. Plus the digest of
+   exactly the commit that admitted this device (field `commit`, one per
+   card, not the last one of the admission): for MLS that commit is no
+   longer processable after the welcome (`stale`), for the candidate it is
+   the newcomer's key state (`keyOp` of its next frames, the opening gate
+   for the others). A removed device (group inactive) buffers commits like
+   a device without a group until a welcome re-admits it.
+4. **No rotation on write.** PCS (KV5) only via `rotate`.
 
-**Vertrag zur Epochenwahl** (`rust/mls-wasm/src/peer.rs`, Kopf der Datei):
+**Epoch choice contract** (`rust/mls-wasm/src/peer.rs`, head of the file):
 
-1. Commits bilden einen Baum über Epochen; je Epoche gilt der mit dem
-   kleinsten Hash, für alle Repliken gleich, unabhängig von der
-   Reihenfolge; nur über Schlüssel, nie über Mitgliedschaft.
-2. Jede Replik hält Momentaufnahmen der letzten 8 verlassenen Epochen. Ein
-   Commit auf eine verlassene Epoche wird gegen deren Momentaufnahme
-   geprüft: kleinerer Hash als der dort angewandte → Rückfall auf diese
-   Epoche, Commit nehmen, `lost`; größerer Hash → `stale`. Dieselbe
-   Epochennummer heißt nicht derselbe Vorgänger: lässt sich der Commit auf
-   dem Zustand seiner Epoche nicht anwenden, stammt er von einem anderen
-   Zweig, und ob der gewinnt, entscheidet erst sein Vorgänger, der noch
-   kommen kann (Umordnung). Er wartet dann beim Kandidaten (`pendingCgka`,
-   erneuter Versuch nach jeder Änderung) und verfällt erst, wenn seine
-   Epoche aus den Momentaufnahmen fällt. Tiefer als die Momentaufnahmen
-   reichen → `stale` (nicht mehr auflösbar, Befund).
-3. Was nach einem Rückfall fehlt, stellt die Heilung aus dem Log wieder
-   her. Rahmen, die unter einer verfallenen Epoche versiegelt wurden,
-   sind für alle anderen unlesbar; ihr Autor versiegelt sie nach der
-   Angleichung neu (`sealed`/`stranded` in `index.ts`).
-4. Ein Willkommen auf eine höhere Epoche als die eigene ersetzt die eigene
-   Gruppe (`reset`: sie stand auf einem verfallenen Zweig); alles seit dem
-   Beitritt Versiegelte geht neu hinaus. Ein Willkommen auf eine inaktive
-   Gruppe (nach Entfernung) nimmt wieder auf; ein gleich altes oder älteres
-   ändert nichts.
+1. Commits form a tree over epochs; per epoch the one with the smallest
+   hash holds, the same for all replicas, independent of order; only over
+   keys, never over membership.
+2. Every replica keeps snapshots of the last 8 abandoned epochs. A commit
+   onto an abandoned epoch is checked against its snapshot: smaller hash
+   than the one applied there → roll back to that epoch, take the commit,
+   `lost`; larger hash → `stale`. The same epoch number does not mean the
+   same parent: if the commit cannot be applied on the state of its epoch,
+   it comes from another branch, and whether that branch wins is decided
+   only by its parent, which may still arrive (reordering). It then waits
+   at the candidate (`pendingCgka`, retried after every change) and lapses
+   only when its epoch falls out of the snapshots. Deeper than the
+   snapshots reach → `stale` (no longer resolvable, a finding).
+3. What is missing after a rollback is restored by healing from the log.
+   Frames sealed under a lapsed epoch are unreadable for everyone else;
+   their author re-seals them after reconciling (`sealed`/`stranded` in
+   `index.ts`).
+4. A welcome onto a higher epoch than one's own replaces one's own group
+   (`reset`: it stood on a lapsed branch); everything sealed since the join
+   goes out again. A welcome onto an inactive group (after removal)
+   re-admits; one of equal or older epoch changes nothing.
 
-Befunde hinter dem Vertrag (T2 flackerte in einem von vier Läufen, bevor
-er stand):
+Findings behind the contract (T2 flickered in one of four runs before it
+stood):
 
-- Alice nimmt Dave auf, Bob entfernt gleichzeitig Carol. Verliert Alices
-  Commit, sind ihre Aufnahme (versiegelt unter der verfallenen Epoche) und
-  Daves Willkommen tot: Bob sieht Dave nie, Dave hängt auf einem Zweig, den
-  niemand sonst kennt (Punkt 3 und 4).
-- Dieselbe Epochennummer heißt nicht derselbe Vorgänger. Alices Heilung
-  nach dem Rückfall (Epoche 3→4 auf dem gültigen Zweig) und ihr früherer
-  Commit auf dem verfallenen Zweig (auch 3→4) sind keine Geschwister; wer
-  sie nur über die Nummer vergleicht, fällt auf den falschen Zweig und
-  kommt nicht wieder heraus (Bob: Baum ohne Dave, Commit wartet ewig).
-  Deshalb die probeweise Anwendung mit Rücknahme (Punkt 2).
-- Mit nur einer Momentaufnahme (eine Epoche zurück) wäre eine Replik, die
-  vor dem Geschwister-Commit schon zwei eigene Commits gemacht hat,
-  dauerhaft abgespalten.
-- Der Commit, der den Neuen aufgenommen hat, lässt sich über die
-  Epochennummer nicht erkennen: nach einem `reset` hielt Dave einen
-  Commit vom verfallenen Zweig (gleiche Nummer) für den seinen, trug ihn
-  als `keyOp`, und Bob öffnete Daves Einträge nie. Deshalb trägt das
-  Willkommen den Digest des Commits (Punkt 3 oben), statt dass der Peer
-  rät. Und ein entferntes Gerät verwarf den Commit seiner Wiederaufnahme
-  als `stale` (Gruppe inaktiv, gleiche Epoche): S4j, Carol sah das
-  Fork-Ende nicht.
-- Review zu PR #39 (CodeRabbit): der Fehlerpfad auf der aktuellen Epoche
-  nahm nur die neue Momentaufnahme zurück, nicht die dabei verdrängte
-  älteste, und ließ im Speicher stehen, was `process_message` vor dem
-  Fehler schrieb. Jetzt derselbe Checkpoint-Rückweg wie bei verlassenen
-  Epochen.
-- Review zu PR #39 (Codex): ein Commit von einem anderen Zweig galt als
-  endgültig verfallen, sobald er auf der aktuellen Epoche nicht anwendbar
-  war. Gegenprobe: Kind des Gewinnerzweigs vor seinem Vorgänger zugestellt
-  → verworfen, obwohl es nach dem verlorenen Tiebreak passt. Jetzt wartet
-  er (Punkt 2); nativer Test `kind_vor_gewinnendem_vorgaenger…`.
-- Kandidatenseitig: `noteOp` war nicht idempotent. Eine Reparaturantwort
-  sendet alte Schlüsseloperationen noch einmal; der Empfänger verbuchte
-  sie erneut und trug fortan diese alte Operation als `keyOp` seiner
-  Rahmen. Ein Neuling, der sie nie angewandt hat (bei MLS sind Commits vor
-  dem Beitritt `stale`), versuchte diese Rahmen nie zu öffnen (T2: Dave
-  liest Bobs Eintrag nicht; S4j: Carol sieht das Fork-Ende nicht). Bei
-  BeeKEM blieb das verdeckt, weil dort jeder Rahmen mit einer eigenen
-  Operation kommt und der Baum alte Operationen aufnimmt.
+- Alice admits Dave, Bob removes Carol at the same time. If Alice's commit
+  loses, her admission (sealed under the lapsed epoch) and Dave's welcome
+  are dead: Bob never sees Dave, Dave hangs on a branch nobody else knows
+  (points 3 and 4).
+- The same epoch number does not mean the same parent. Alice's healing
+  after the rollback (epoch 3→4 on the valid branch) and her earlier commit
+  on the lapsed branch (also 3→4) are not siblings; whoever compares them
+  by number alone falls onto the wrong branch and never gets out (Bob:
+  tree without Dave, a commit waits forever). Hence the trial application
+  with rollback (point 2).
+- With only one snapshot (one epoch back) a replica that had already made
+  two own commits before the sibling commit would be permanently split
+  off.
+- The commit that admitted the newcomer cannot be recognized by epoch
+  number: after a `reset` Dave took a commit from the lapsed branch (same
+  number) for his own, carried it as `keyOp`, and Bob never opened Dave's
+  entries. Hence the welcome carries the commit digest (point 3 above)
+  instead of the peer guessing. And a removed device discarded the commit
+  of its re-admission as `stale` (group inactive, same epoch): S4j, Carol
+  did not see the end of the fork.
+- Review of PR #39 (CodeRabbit): the failure path on the current epoch
+  only popped the new snapshot, not the oldest one evicted by it, and left
+  in storage what `process_message` wrote before the failure. Now the same
+  checkpoint rollback as for abandoned epochs.
+- Review of PR #39 (Codex): a commit from another branch counted as
+  finally lapsed as soon as it was not applicable on the current epoch.
+  Counter-check: the child of the winning branch delivered before its
+  parent → discarded, although it fits after the lost tiebreak. Now it
+  waits (point 2); native test `kind_vor_gewinnendem_vorgaenger…`.
+- On the candidate side: `noteOp` was not idempotent. A repair answer sends
+  old key operations again; the receiver booked them again and from then on
+  carried that old operation as the `keyOp` of its frames. A newcomer that
+  never applied it (with MLS, commits before the join are `stale`) never
+  tried to open those frames (T2: Dave does not read Bob's entry; S4j:
+  Carol does not see the end of the fork). With BeeKEM this stayed hidden,
+  because there every frame comes with an operation of its own and the tree
+  absorbs old operations.
 
-## Befunde
+## Findings
 
-- **KV3, Fälschung als Geschwister (S11, 16.10.).** Der Zustand der
-  Entfernten wird unmittelbar vor der Entfernung erbeutet, auf derselben
-  Epoche, auf der Alice sie entfernt (S11 prüft den gemeinsamen
-  Vorgänger; Issue #45). Die Fälschung ist damit ein Geschwister des
-  Entfernungs-Commits. Je nach Hash gewinnt sie den Tiebreak: dann fallen
-  die Mitglieder auf die alte Epoche zurück, nehmen die Fälschung,
-  versiegeln ihre gestrandeten Rahmen neu, und der Heiler entfernt beide
-  Blätter der Entfernten wieder (S11 meldet „Fälschung gewann“, Epoche
-  geht weiter). Verliert sie, ist sie veraltet. Beide Zweige sind
-  gezielt belegt: nativ (`faelschung_als_geschwister…`, Schleife bis
-  beide Zweige gesehen) und am Kandidaten (Test wiederholt S11, bis beide
-  Zweige vorkamen). Zugang bekommt das Blatt in keinem Zweig
-  (Angleichen vor jedem Eintrag, `treeSafe`). Der
-  Hebel, der bleibt: ein Entfernter kann mit grindbaren Hashes Rückfälle
-  und Neu-Versiegeln erzwingen, so lange seine Epoche in den
-  Momentaufnahmen liegt (8). Bei BeeKEM gibt es den Hebel nicht (die
-  Aufnahme wird nebenläufig zusammengeführt und geheilt, ohne Rückfall).
-  Ein Blatt ohne Karte liest auch als Mitglied nichts (K7 über Karten),
-  bei beiden Ports; MLS heilt es sofort nach dem Commit, BeeKEM erst vor
-  dem nächsten Eintrag (deshalb misst S11 „Baum +1 oder Epoche weiter“).
-- **Alter Zustand, tiefer Rückfall (S11 beim Bau, 16.10.).** Fälscht ein
-  Angreifer von einem Zustand, der mehrere Epochen zurückliegt, prüfen
-  die Mitglieder den Commit gegen die Momentaufnahme dieser Epoche (bis 8
-  zurück) und fallen bei kleinerem Hash dorthin zurück, mit Neu-Versiegeln
-  und Heilung über alle Epochen dazwischen (gesehen: drei Epochen). Kein
-  Zugang, aber ein wiederholbarer Hebel, solange die Epoche in den
-  Momentaufnahmen liegt. Für den Port: Momentaufnahmen sollten Commits
-  von Blättern, die das Log inzwischen entfernt hat, gar nicht erst zum
-  Tiebreak zulassen (Prüfregel „Committer ist Mitglied der Retained Set
-  der Epoche“, mls-abgleich §6 (i)). Nicht gebaut; als Befund notiert.
-- **Der Commit eines Klons sperrt das Original (S11, 16.10.).** Spielt ein
-  erbeuteter Zustand (dasselbe Blatt) einen Commit ein, kann das echte
-  Gerät ihn nicht verarbeiten: OpenMLS nimmt keine Nachricht vom eigenen
-  Blatt an. Das Gerät bleibt mit `wartende-cgka` auf seiner Epoche stehen
-  und liest nichts Neues mehr, obwohl sein Blatt im Baum steht; der
-  Heiler sieht keinen Grund, es neu aufzunehmen. Bei BeeKEM werden die
-  Operationen zusammengeführt. Für den Port: ein Gerät, das hinter einem
-  Commit seines eigenen Blatts steht, muss sich neu willkommen heißen
-  lassen (Erkennung: eigener Blattindex, nicht eigene Operation). Nicht
-  gebaut; als Befund notiert.
-- **KeyPackage-Wiederverwendung.** MLS sieht ein KeyPackage als einmalig
-  vor; die Karte des Prüfstands trägt eines als Share-Key, und eine
-  Wiederaufnahme (S4j, T4) nutzt dieselbe Karte. Der Peer legt das
-  verbrauchte Bündel nach dem Beitritt wieder in den Speicher
-  (`restore_key_package`). In der Praxis braucht eine Wiederaufnahme eine
-  frische Karte oder einen KeyPackage-Vorrat beim Dienst.
-- **Willkommen-Größe gegen RLTP-MT-2240 (16 KB).** Gemessen mit
-  Ratchet-Tree-Extension (der Neue braucht keinen Dienst, der den Baum
-  hält): 839 B bei 1 Mitglied, 2,7 KB bei 10, 6,5 KB bei 30, etwa 190 B je
-  weiterem Mitglied; die 16 KB wären bei rund 80 Mitgliedern erreicht.
-  Commits: 735 B bis 3,3 KB (30 Mitglieder). Versiegelter Eintrag von
-  100 B Klartext: 184 B. Peer-Zustand bei 30 Mitgliedern: 47 KB.
-- **Wasm-Größe.** `mls_wasm_bg.wasm` 2,6 MB gegen 0,97 MB bei BeeKEM.
-- **Mehrere Commits vor dem Geschwister.** Der Tiebreak setzt voraus, dass
-  die verlorene Epoche noch als Momentaufnahme vorliegt (8 zurück). Eine
-  Replik, die länger offline Commits sammelt, bleibt abgespalten, bis sie
-  wieder willkommen geheißen wird (`reset`). Im Prüfstand nicht
-  aufgetreten.
-- **S9-Last.** 30 Mitglieder × 100 Operationen: etwa 290 ms je Operation
-  (BeeKEM-Kandidat etwa ein Zehntel); jede Aufnahme ist ein Commit über die
-  ganze Gruppe, und jeder Commit wird einmal als Momentaufnahme kopiert.
-  Deshalb `loadSize` 30 × 100.
+- **KV3, forgery as a sibling (S11, 16 October).** The removed member's
+  state is captured immediately before the removal, on the same epoch on
+  which Alice removes her (S11 checks the common parent; issue #45). The
+  forgery is thereby a sibling of the removal commit. Depending on the
+  hash it wins the tiebreak: then the members roll back to the old epoch,
+  take the forgery, re-seal their stranded frames, and the healer removes
+  both leaves of the removed member again (S11 reports "forgery won",
+  epoch advances). If it loses, it is stale. Both branches are covered
+  deliberately: natively (`faelschung_als_geschwister…`, a loop until both
+  branches were seen) and at the candidate (the test repeats S11 until
+  both branches occurred). The leaf gains access in neither branch
+  (reconciling before every entry, `treeSafe`). The lever that remains: a
+  removed member can force rollbacks and re-sealing with grindable hashes
+  as long as its epoch lies within the snapshots (8). BeeKEM has no such
+  lever (the admission is merged concurrently and healed, without a
+  rollback). A leaf without a card reads nothing even as a member (K7 runs
+  over cards), with both ports; MLS heals it immediately after the commit,
+  BeeKEM only before the next entry (which is why S11 measures "tree +1 or
+  epoch advanced").
+- **Old state, deep rollback (found while building S11, 16 October).** If
+  an attacker forges from a state several epochs back, the members check
+  the commit against the snapshot of that epoch (up to 8 back) and roll
+  back there on a smaller hash, with re-sealing and healing across all
+  epochs in between (seen: three epochs). No access, but a repeatable lever
+  as long as the epoch lies within the snapshots. For the port: snapshots
+  should not admit commits from leaves the log has since removed to the
+  tiebreak at all (check rule "the committer is a member of the epoch's
+  retained set", mls-abgleich §6 (i)). Not built; noted as a finding.
+- **A clone's commit locks out the original (S11, 16 October).** If a
+  captured state (the same leaf) submits a commit, the real device cannot
+  process it: OpenMLS accepts no message from its own leaf. The device
+  stays on its epoch with `wartende-cgka` and reads nothing new, although
+  its leaf is in the tree; the healer sees no reason to re-admit it. With
+  BeeKEM the operations are merged. For the port: a device that stands
+  behind a commit of its own leaf must get itself welcomed afresh
+  (detection: own leaf index, not own operation). Not built; noted as a
+  finding.
+- **KeyPackage reuse.** MLS intends a KeyPackage to be single-use; the
+  bench's card carries one as the share key, and a re-admission (S4j, T4)
+  uses the same card. The peer puts the consumed bundle back into storage
+  after the join (`restore_key_package`). In practice a re-admission needs
+  a fresh card or a KeyPackage stock at the service.
+- **Welcome size against RLTP-MT-2240 (16 KB).** Measured with the ratchet
+  tree extension (the newcomer needs no service that holds the tree): 839 B
+  at 1 member, 2.7 KB at 10, 6.5 KB at 30, about 190 B per further member;
+  the 16 KB would be reached at around 80 members. Commits: 735 B to 3.3 KB
+  (30 members). Sealed entry of 100 B plaintext: 184 B. Peer state at 30
+  members: 47 KB.
+- **Wasm size.** `mls_wasm_bg.wasm` 2.6 MB against 0.97 MB for BeeKEM.
+- **Several commits before the sibling.** The tiebreak presupposes that the
+  lost epoch is still held as a snapshot (8 back). A replica that collects
+  commits offline for longer stays split off until it is welcomed again
+  (`reset`). Did not occur in the bench.
+- **S9 load.** 30 members × 100 operations: about 290 ms per operation (the
+  BeeKEM candidate about a tenth); every admission is a commit over the
+  whole group, and every commit is copied once as a snapshot. Hence
+  `loadSize` 30 × 100.
 
-## Aufbau
+## Layout
 
-- `rust/mls-wasm/src/peer.rs`: `Peer` (OpenMLS-Gruppe, Exporter je Epoche,
-  Momentaufnahmen, eigene Commit-Digests), `rust/mls-wasm/src/wasm.rs`:
-  `MlsPeer`-Bindings mit derselben Oberfläche wie `beekem-wasm`
-  (synchron, Fehler als `Error`).
-- `rust/mls-wasm/tests/peer.rs`: Lebenszyklus mit Diebstahl und Rotation;
-  gleichzeitige Commits mit Unbeteiligten; Rückfall über mehrere Epochen;
-  Commit vom anderen Zweig ist kein Geschwister; Willkommen ersetzt
-  verfallenen Zweig.
-- `src/candidates/rltp-mls/load.ts`: lädt `pkg/` (gitignored, gebaut von
+- `rust/mls-wasm/src/peer.rs`: `Peer` (OpenMLS group, exporter per epoch,
+  snapshots, own commit digests), `rust/mls-wasm/src/wasm.rs`: `MlsPeer`
+  bindings with the same surface as `beekem-wasm` (synchronous, errors as
+  `Error`).
+- `rust/mls-wasm/tests/peer.rs`: lifecycle with theft and rotation;
+  simultaneous commits with bystanders; rollback across several epochs; a
+  commit from another branch is not a sibling; a welcome replaces a lapsed
+  branch; forgery as a sibling, both branches.
+- `src/candidates/rltp-mls/load.ts`: loads `pkg/` (gitignored, built by
   `scripts/build-wasm.sh`).
-- Registriert als `rltp-mls` und `rltp-mls-sichten` in
+- Registered as `rltp-mls` and `rltp-mls-sichten` in
   `src/candidates/index.ts`.

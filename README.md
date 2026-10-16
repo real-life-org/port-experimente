@@ -1,53 +1,97 @@
-# Port-Experimente
+# Port experiments
 
-Prüfstand für Gruppen-Autorität und Schlüsselvereinbarung. Dieselben
-Szenarien laufen gegen mehrere Kandidaten: WoT Gen 2, p2panda, Keyhive
-und DaWN. Aus dem, was jeder Kandidat von der App braucht, leiten wir den
-Port ab. Plan und Begründung: `rltp/design/port-experimente-2026-10.md`.
+A test bench for group authority, key agreement, replication and delivery.
+The same scenarios run against several candidate stacks; from what each
+candidate needs from the app we derive the ports of the Real Life Trust
+Protocol. The findings per candidate live here in
+`src/candidates/*/NOTES.md`; the plan and its reasoning in the private
+workshop repository (`rltp/design/port-experimente-2026-10.md`).
 
-## Aufbau
+## Results
 
-- `src/lab/types.ts`: Treiber-Schnittstelle des Prüfstands. Das ist
-  **nicht** der gesuchte Port, sondern nur so viel, wie die Szenarien
-  brauchen.
-- `src/lab/world.ts`: simulierte Welt mit einem Y.Doc je Gerät und einem
-  Store-and-Forward-Netz mit Partitionen. Jede Nachricht erreicht jedes
-  Gerät, auch entfernte Mitglieder.
-- `src/lab/scenarios.ts`: Szenarien S1 bis S10, Ergebnisse getrennt nach
-  Autorität und Schlüsseln.
-- `src/lab/load.ts`: S9-Last (30 Mitglieder, 500 Autoritätsoperationen).
-- `src/candidates/<id>/`: ein Kandidat je Verzeichnis, mit `NOTES.md`
-  (Port-Notizen). `rltp-beekem` ist das Experiment zum Port-Schnitt: ein
-  Autoritätslog nach der Konfliktmatrix (`authority.ts`) entscheidet die
-  Mitgliedschaft, der Schlüssel-Port (`keyport.ts`) liefert die Schlüssel:
-  BeeKEM oder MLS (`rltp-mls`, derselbe Kandidatencode).
-- `src/candidates/consensual-mls/`: Consensuals Raummodell nachgebaut (E14b):
-  MLS ohne Autoritätslog, `any-staged` oder `owner` als Committer.
-- `src/lab/zustellung.ts` + `src/candidates/zustellung/`: Zustellungs-
-  Prüfstand (E11): Paar-Verkehr über die Drähte Prüfstand-Umschlag, TSP und
-  DIDComm; Szenarien T9, T10, Z1–Z4.
-- `rust/mls-wasm/examples/vectors.rs`: Testvektoren für MLS zu zweit mit
-  anderen Implementierungen (E14a), `cargo run --example vectors`.
-- `rust/`: WebAssembly-Hüllen (`p2panda-wasm`, `beekem-wasm`, `mls-wasm`), gebaut von
-  `scripts/build-wasm.sh`; die Bindings landen unter `src/candidates/*/pkg/`. Kandidaten mit `nodeOnly` (Keyhive über ARK braucht einen
-  lokalen Subduction-Server) laufen nur in Node und in der CI; die
-  Browser-Seite nennt den Grund.
-- Jeder Kandidat hat eine **Transportklasse**: `prüfstand-relay` (das
-  simulierte Netz, ein blindes Store-and-Forward-Relay, setzt nichts
-  durch) oder `eigener-server` (Gen 2, Keyhive über ARK). Autorität und
-  Schlüssel sind über die Klassen hinweg vergleichbar, Laufzeiten nur
-  innerhalb einer Klasse: Beim eigenen Server steckt in S9 fast nur Warten.
+- **The four findings**, for readers outside the project:
+  https://claude.ai/artifact/R8tvExLN2E4wARL8WELo9a. One authority log over
+  two key protocols yields the same promise row; without history there is
+  no CRDT; delivery semantics live in the adapter, not in the wire;
+  Portable Web Spaces carries a group as blind storage.
+- **The conformance matrix**, interactive: 40 promises per port, 13
+  candidates, every cell with its scenarios and the recorded result:
+  https://claude.ai/artifact/Ph4c9RDUN3gbPYVybisbsB. Snapshot of the run of
+  16 October 2026. The same matrix as Markdown comes from
+  `REPORT=1 pnpm vitest run report` (file `matrix.md`); the browser page
+  renders it at the end of a run.
+- **How to read it.** A promise is kept only if every scenario mapped to it
+  passes. "Not applicable" means the candidate has no capability for the
+  scenario, or the carrier fault never touched a frame of that kind. That
+  is a gap in coverage, never a pass.
+- The bench itself speaks German: scenario titles, status lines and the
+  recorded results are German strings in the code. The notes and this
+  README are English.
 
-## Befehle
+## Candidates
+
+| Id | What | Transport class |
+|---|---|---|
+| `gen2` | WoT generation 2 (`@web_of_trust/core` 0.6.0, Yjs, own relay in process) | own server |
+| `p2panda` | p2panda-spaces 0.7.1 (WebAssembly) | bench relay |
+| `keyhive` | Keyhive 0.3.0-alpha.1 (WebAssembly, content in Yjs) | bench relay |
+| `keyhive-ark` | Keyhive over ARK 0.6.0-alpha.1 (Automerge, Subduction server) | own server, Node only |
+| `rltp-beekem` | authority log by the conflict matrix, keys from BeeKEM 0.4.0 | bench relay |
+| `rltp-beekem-sichten`, `-logreplik` | the same with an enforcing service at the relay (class view or class log) | bench relay, enforcing |
+| `rltp-beekem-pws` | the same on Portable Web Spaces (was-teaching-server 0.42) as blind storage | own server, Node only |
+| `rltp-mls`, `rltp-mls-sichten` | the same candidate code, keys from MLS (OpenMLS 0.9.1) | bench relay |
+| `consensual-mls-any-staged`, `-owner` | MLS without an authority log, the commit decides membership (room model) | bench relay |
+| `klartext` | null candidate without encryption; shows that the bench detects faults | bench relay |
+
+Run times are comparable only within a transport class: with an own server,
+S9 is almost all waiting.
+
+## Scenarios
+
+- **S1 to S11** (`src/lab/scenarios.ts`): membership under conflict, devices
+  per person, history, stolen state, a service at the relay.
+- **T1 to T12** (`src/lab/traeger.ts`): the carrier as adversary (drop,
+  reorder, duplicate, tamper, withhold, freeze, carrier switch, what the
+  carrier reads).
+- **T9, T10, Z1 to Z5** (`src/lab/zustellung.ts`): pair delivery over the
+  wires plain envelope, TSP Rev 3 and DIDComm v2 (authcrypt, anoncrypt):
+  lost receipt, device offline, what the carrier learns, carrier switch,
+  multiple devices, foreign sender, wrong recipient key.
+- **S9, S9b** (`src/lab/load.ts`): load, 30 members.
+
+## Layout
+
+- `src/lab/types.ts`: the driver interface of the bench. This is **not**
+  the port we are looking for, only as much as the scenarios need.
+- `src/lab/world.ts`: simulated world with one Y.Doc per device and a
+  store-and-forward network with partitions and fault injection.
+- `src/lab/matrix.ts`: promises per port with the mapping scenario to
+  promise; generates the matrix.
+- `src/candidates/<id>/`: one candidate per directory, with `NOTES.md`.
+  `rltp-beekem` is the experiment on the port cut: the authority log
+  (`authority.ts`) decides membership, the key port (`keyport.ts`) delivers
+  the keys, BeeKEM or MLS; the service at the relay is in `service.ts`.
+- `src/candidates/zustellung/`: the wires of the delivery bench.
+- `rust/`: WebAssembly wrappers (`p2panda-wasm`, `beekem-wasm`, `mls-wasm`),
+  built by `scripts/build-wasm.sh`; the bindings land under
+  `src/candidates/*/pkg/`. `rust/mls-wasm/examples/vectors.rs` exchanges
+  KeyPackage, Welcome, Commit and message as raw bytes with other MLS
+  implementations (`cargo run --example vectors`).
+- Candidates marked `nodeOnly` run only in Node and in CI; the browser page
+  states the reason.
+
+## Commands
 
 ```sh
 pnpm install
-pnpm server:fetch              # Subduction-Server (Rust-Binary) für Keyhive, Lauf a
-pnpm test                      # Prüfstand-Tests
-REPORT=1 pnpm vitest run report # Ergebnistabelle aller Kandidaten
-pnpm dev                       # Browser-Lauf lokal
+pnpm wasm                       # build the Rust wrappers (Rust 1.96, wasm-bindgen 0.2.129)
+pnpm server:fetch               # Subduction server (Rust binary) for Keyhive over ARK
+pnpm test                       # bench tests
+pnpm test:rust                  # native tests of the Rust wrappers
+REPORT=1 pnpm vitest run report # result table of all candidates and matrix.md
+pnpm dev                        # browser run, local
 ```
 
-Die Browser-Seite wird bei jedem Push auf `main` über GitHub Pages
-veröffentlicht. Dort lassen sich alle Läufe auf einem echten Gerät
-starten (S9, z. B. GrapheneOS) und das Ergebnis als JSON kopieren.
+The browser page is published via GitHub Pages on every push to `main`.
+There, all runs can be started on a real device (S9, for example on
+GrapheneOS) and the result copied as JSON.

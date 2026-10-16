@@ -1,839 +1,821 @@
-# Port-Notizen: RLTP-Autorität über BeeKEM (E6, E7, E8, E9)
+# Port notes: RLTP authority over BeeKEM (E6, E7, E8, E9)
 
+As of 5 October 2026. The experiment on the cut from the synthesis:
+**authority with us, key agreement as an adapter.** A minimal authority log
+by the conflict matrix (`authority.ts`) decides membership; BeeKEM 0.4.0
+(Keyhive's CGKA as a crate of its own, without Keyhive's delegation chains)
+delivers the keys, via `rust/beekem-wasm`; Yjs the content; history via the
+predecessor chain as in Keyhive run b. Over the bench network, no server.
+Since E7 several devices per person: one BeeKEM leaf per device, the log
+knows only persons.
 
-Stand 05.10.2026. Das Experiment zum Schnitt aus der Synthese: **Autorität
-bei uns, Schlüsselvereinbarung als Adapter.** Ein minimales Autoritätslog
-nach der Konfliktmatrix (`authority.ts`) entscheidet die Mitgliedschaft;
-BeeKEM 0.4.0 (Keyhives CGKA als eigene Crate, ohne Keyhives
-Delegationsketten) liefert die Schlüssel, über `rust/beekem-wasm`; Yjs die
-Inhalte; Historie über die Vorgänger-Kette wie bei Keyhive b. Über das Netz
-des Prüfstands, ohne Server. Seit E7 mehrere Geräte je Person: ein
-BeeKEM-Blatt je Gerät, das Log kennt nur Personen.
+## Results
 
-## Ergebnisse
-
-| | Ergebnis | Grund |
+| | Result | Reason |
 |---|---|---|
-| S1–S3 | bestanden | |
-| S4a | bestanden | Bobs Eintrag unter dem alten Schlüssel bleibt lesbar („content residual“), Bob liest nichts Neues |
-| S4b | bestanden | zwei Entfernungen gleichzeitig: beide gelten, **niemand liest mit** (KV2, KV6) |
-| S4c | bestanden | gegenseitige Entfernung: **beide raus**, alle einig (Entscheidung 2 der Synthese) |
-| S4d | bestanden | Rotation neben Entfernung (KV5, KV6) |
-| S4e | nicht abbildbar | keine Gruppenregeln im Experiment |
-| S4f | bestanden | Strong Removal transitiv: Mallorys Kette ungültig; der Schlüsselbaum wird geheilt |
-| S5 | bestanden | zweites Gerät: die Person nimmt ihr eigenes Blatt auf, liest alt (Kette) und neu; die Mitgliederliste zeigt weiter nur Personen |
-| S5b | bestanden | Geräteverlust: die Person entfernt ihr Gerät, der Finder liest nach dem Entfernen nichts mehr (KV1), die Person bleibt Mitglied |
-| S5c | bestanden | Entfernen der Person entfernt alle ihre Blätter, keines liest Neues |
-| S6 | nicht bestanden | Historie erst über die Kette des nächsten Eintrags (wie Keyhive b) |
-| S6b | bestanden | |
-| S7 | bestanden | passiver Dieb (ganzer Zustand, voller Mitleser) liest nach der Rotation nichts mehr (KV5) |
-| S8 | bestanden | Gründerin ohne Sonderrolle |
-| S10a–c | nicht abbildbar | ohne Dienst; Ergebnisse der Dienst-Varianten unter E8 |
+| S1–S3 | passed | |
+| S4a | passed | Bob's entry under the old key stays readable ("content residual"), Bob reads nothing new |
+| S4b | passed | two removals at the same time: both hold, **nobody reads along** (KV2, KV6) |
+| S4c | passed | mutual removal: **both out**, everyone agrees (decision 2 of the synthesis) |
+| S4d | passed | rotation next to a removal (KV5, KV6) |
+| S4e | not applicable | no group policy in the experiment |
+| S4f | passed | strong removal transitively: Mallory's chain invalid; the key tree is healed |
+| S5 | passed | second device: the person adds her own leaf, reads old (chain) and new; the member list still shows only persons |
+| S5b | passed | lost device: the person removes her device, the finder reads nothing after the removal (KV1), the person stays a member |
+| S5c | passed | removing the person removes all her leaves, none reads anything new |
+| S6 | failed | history only via the chain of the next entry (as Keyhive b) |
+| S6b | passed | |
+| S7 | passed | a passive thief (whole state, full eavesdropper) reads nothing after the rotation (KV5) |
+| S8 | passed | founder without a special role |
+| S10a–c | not applicable | without a service; results of the service variants under E8 |
 
-Last (Node): S9b 0,67 ms je Gerät und empfangener Nachricht (Keyhive b
-0,46, p2panda 8,3, Klartext 0,06). S9 (30 Mitglieder, 500 Operationen)
-183 ms je Operation, Median aus 3. Das ist langsamer als Keyhive b (51 ms),
-und der Grund liegt nicht in BeeKEM: Das Autoritätslog rechnet bei jeder
-Operation den Fixpunkt über alle Operationen neu (quadratisch), es ist
-nicht optimiert.
+Load (Node): S9b 0.67 ms per device and received message (Keyhive b 0.46,
+p2panda 8.3, plaintext 0.06). S9 (30 members, 500 operations) 183 ms per
+operation, median of 3. That is slower than Keyhive b (51 ms), and the
+reason is not BeeKEM: the authority log recomputes the fixpoint over all
+operations on every operation (quadratic), it is not optimized.
 
-## Was das Experiment belegt
+## What the experiment shows
 
-Der Schnitt trägt. Mit der Mitgliedschaft von außen und BeeKEM nur für die
-Schlüssel besteht der Kandidat alles, was die Pflichtzeile der Matrix
-verlangt, einschließlich der drei Punkte, an denen alle anderen Kandidaten
-irgendwo scheitern: gleichzeitige Entfernungen (K10), kein Eigentümer (K9),
-PCS nach erbeutetem Gerät (K4). Die sechs Invarianten des Schlüssel-Ports
-sind damit nicht nur am Kern (`rust/beekem-wasm/tests/peer.rs`), sondern
-im Zusammenspiel mit Autoritätsentscheidungen belegt.
+The cut holds. With membership from outside and BeeKEM only for the keys,
+the candidate passes everything the mandatory row of the matrix demands,
+including the three points where every other candidate fails somewhere:
+simultaneous removals (K10), no owner (K9), PCS after a captured device
+(K4). The six invariants of the key port are thereby shown not only at the
+core (`rust/beekem-wasm/tests/peer.rs`) but in interplay with authority
+decisions.
 
-Was ein echter Adapter zusätzlich klären muss:
+What a real adapter additionally has to settle:
 
-1. **Die Bindung im Log (KV3).** Hier reist die BeeKEM-Operation als Anhang
-   der Autoritätsoperation (`cgka` im `auth`-Rahmen), ohne Digest in der
-   Operation selbst. Im Guss gehört der Digest in die Durchsetzungsoperation,
-   wie heute `contentKeyCommitment`.
-2. **Heilung.** Wird eine Aufnahme nachträglich ungültig (Strong Removal),
-   steht ihr Blatt schon im Baum. Hier entfernt es jeder Admin, der die
-   Abweichung sieht; doppelte Entfernungen sind in BeeKEM No-ops. Im Guss
-   ist das eine Pflicht der Durchsetzung: Der Baum folgt der Mitgliedschaft,
-   nie umgekehrt.
-3. **Replay-Verhalten.** BeeKEM spielt gleichzeitige Strukturänderungen erst
-   bei der nächsten eigenen Operation ein; bis dahin zeigt `members()` den
-   alten Stand, und ohne gemeinsamen Schlüssel rotiert die nächste
-   Verschlüsselung selbst. Der Adapter muss damit rechnen (S4c: „schlüssel=
-   nein“ bis zum nächsten Eintrag).
-4. **Signaturen und Autorität.** BeeKEM prüft keine Autorität, jeder Signer
-   darf entfernen. Das ist für den Schnitt genau richtig, verlangt aber,
-   dass nur Operationen aus gültigen Autoritätsentscheidungen in den Baum
-   gelangen (hier: `isValid` vor `receive`).
-5. **Historie (KV4)** kommt wie bei Keyhive b aus der App-Kette. S6 direkt
-   nach der Aufnahme bräuchte den Nudge von ARK (ein Eintrag unter dem neuen
-   Schlüssel nach jeder Aufnahme).
+1. **The binding in the log (KV3).** Here the BeeKEM operation travels as an
+   attachment of the authority operation (`cgka` in the `auth` frame),
+   without a digest in the operation itself. In the casting the digest
+   belongs in the enforcement operation, as `contentKeyCommitment` does
+   today.
+2. **Healing.** If an admission becomes invalid later (strong removal), its
+   leaf is already in the tree. Here every admin who sees the deviation
+   removes it; duplicate removals are no-ops in BeeKEM. In the casting this
+   is a duty of enforcement: the tree follows membership, never the other
+   way round.
+3. **Replay behaviour.** BeeKEM applies simultaneous structural changes only
+   on the next own operation; until then `members()` shows the old state,
+   and without a shared key the next encryption rotates itself. The adapter
+   has to reckon with that (S4c: "key=no" until the next entry).
+4. **Signatures and authority.** BeeKEM checks no authority, every signer
+   may remove. That is exactly right for the cut, but requires that only
+   operations from valid authority decisions reach the tree (here: `isValid`
+   before `receive`).
+5. **History (KV4)** comes from the app chain as in Keyhive b. S6 directly
+   after admission would need ARK's nudge (an entry under the new key after
+   every admission).
 
-## Autoritätslog: Befund aus dem Review zu PR #11
+## Authority log: finding from the review of PR #11
 
-Die erste Fassung des Fixpunkts begann mit „alle Operationen gültig“ und
-nahm für Strong Removal jede noch nicht ausgeschlossene Entfernung, auch eine
-ohne Autorität. Eine unberechtigte Entfernung (Mitglied entfernt Admin)
-unterdrückte so eine gleichzeitige gültige Aufnahme, und weil der Fixpunkt
-Ausgeschlossene nie wieder prüfte, blieb das so (Repro: Alice nimmt Eve auf,
-Carol entfernt zugleich unberechtigt Alice; Eve fehlte bei allen). Jetzt
-bestimmt jede Runde zuerst die Autorität jeder Operation aus ihren gültigen
-Vorfahren; Strong Removal trifft nur durch Entfernungen **mit** Autorität,
-und jede Runde prüft alle Operationen neu (Schranke: Operationen + 2
-Runden). Lehre für den Guss: „gültig“ sind zwei Prüfungen in fester
-Reihenfolge, Autorität vor Gleichzeitigkeit, und nur die erste darf die
-zweite speisen.
+The first version of the fixpoint started with "all operations valid" and
+took every not yet excluded removal for strong removal, even one without
+authority. An unauthorized removal (a member removes an admin) thereby
+suppressed a simultaneous valid admission, and because the fixpoint never
+re-examined the excluded, it stayed that way (repro: Alice admits Eve,
+Carol at the same time removes Alice without authority; Eve was missing
+everywhere). Now every round first determines the authority of every
+operation from its valid ancestors; strong removal strikes only through
+removals **with** authority, and every round re-checks all operations
+(bound: operations + 2 rounds). Lesson for the casting: "valid" is two
+checks in a fixed order, authority before concurrency, and only the first
+may feed the second.
 
-Entschieden 05.10. (seit E9 Schritt 1b im Kandidaten): Ketten gleichzeitiger Entfernungen. A entfernt B, B
-entfernt zugleich C (beide Admins). Heute: B's Entfernung hat Autorität und
-unterdrückt C's gleichzeitige Aufnahmen, ist aber selbst durch A ungültig,
-also bleibt C Mitglied. Konsequent wäre entweder „Entfernungen mit Autorität
-gelten immer, nur Aufnahmen eines Entfernten verfallen“ (Verallgemeinerung
-von Entscheidung 2, dann ist C raus) oder „nur gültige Entfernungen
-unterdrücken“ (dann pendelt ein Dreier-Zyklus und braucht einen Tiebreak).
+Decided 5 October (in the candidate since E9 step 1b): chains of
+simultaneous removals. A removes B, B removes C at the same time (both
+admins). Today: B's removal has authority and suppresses C's simultaneous
+admissions, but is itself invalid through A, so C stays a member.
+Consistent would be either "removals with authority always hold, only the
+admissions of a removed member lapse" (a generalization of decision 2, then
+C is out) or "only valid removals suppress" (then a three-cycle oscillates
+and needs a tiebreak).
 
-## E7: Personen im Log, Geräte im Baum
+## E7: persons in the log, devices in the tree
 
-Die Frage war, ob der Schlüssel-Port Personen oder Geräte als Mitglieder
-kennt. Antwort aus dem Experiment: **beides, auf getrennten Ebenen.** Das
-Autoritätslog führt Personen (Subjekt von `add`/`remove`, Rollen,
-Konfliktmatrix). BeeKEM führt Geräte: ein Blatt je Gerät, weil nur so ein
-einzelnes Gerät ohne die Person entfernt werden kann (S5b) und ein
-erbeutetes Gerät nicht die Blattgeheimnisse der anderen Geräte derselben
-Person preisgibt. Die Brücke ist die Gerätekarte (Person, Mitglieds-ID,
-Share-Key), die jedes Gerät vorab an alle sendet.
+The question was whether the key port knows persons or devices as members.
+Answer from the experiment: **both, on separate levels.** The authority log
+keeps persons (subject of `add`/`remove`, roles, conflict matrix). BeeKEM
+keeps devices: one leaf per device, because only then can a single device
+be removed without the person (S5b), and a captured device does not reveal
+the leaf secrets of the person's other devices. The bridge is the device
+card (person, member id, share key), which every device sends to everyone
+in advance.
 
-Drei Regeln haben gereicht:
+Three rules sufficed:
 
-1. **Aufnahme einer Person** nimmt alle zu dem Zeitpunkt bekannten Blätter
-   ihrer Geräte in den Baum (`addMember`).
-2. **Eigene Geräte nimmt die Person selbst auf**: Jedes Gerät, das selbst
-   im Baum steht und dessen Person Mitglied ist, fügt fehlende Blätter der
-   eigenen Geräte hinzu (`ensureOwnLeaves`, nach jeder Karte und jeder
-   BeeKEM-Operation). Bedingung ist „steht im Baum“, nicht „hält den
-   Schlüssel“: Direkt nach der Gründung hält niemand einen Schlüssel, erst
-   der erste Inhalt erzeugt ihn, und bis dahin blieb das Zweitgerät sonst
-   außen vor.
-3. **Entfernen einer Person** entfernt jedes ihrer Blätter, **Entfernen
-   eines Geräts** (`removeDevice`, eigene Person oder Admin) entfernt eines
-   und sendet einen Widerruf (`revoke`), damit kein Gerät es später wieder
-   aufnimmt und Admins es heilen, falls die Entfernung nicht ankam.
+1. **Admitting a person** adds all leaves of her devices known at that time
+   to the tree (`addMember`).
+2. **A person adds her own devices herself**: every device that is itself
+   in the tree and whose person is a member adds missing leaves of its own
+   devices (`ensureOwnLeaves`, after every card and every BeeKEM
+   operation). The condition is "is in the tree", not "holds the key":
+   directly after creation nobody holds a key, only the first content
+   creates it, and until then the second device would otherwise be left
+   out.
+3. **Removing a person** removes every one of her leaves, **removing a
+   device** (`removeDevice`, own person or admin) removes one and sends a
+   revocation (`revoke`) so that no device re-adds it later and admins heal
+   it in case the removal did not arrive.
 
-Was das für den Port heißt:
+What this means for the port:
 
-- Der Autoritäts-Port braucht keine Geräte. Mitglied ist eine Person, und
-  die Konfliktmatrix bleibt unverändert.
-- Der Schlüssel-Port braucht eine Abbildung Person → Geräte und zwei
-  Operationen, die es im Autoritätslog nicht gibt: Gerät aufnehmen und Gerät
-  entfernen. Beide ändern die Mitgliedschaft nicht, erzeugen aber ein neues
-  Geheimnis (KV1 gilt je Blatt, nicht je Person).
-- Wer ein Gerät aufnehmen darf, ist eine Autoritätsfrage, die hier ohne
-  Signaturen offen bleibt: Im Experiment reicht die Karte mit Personenangabe.
-  Im Guss muss ein bestehendes Gerät der Person die Bindung signieren
-  (sonst bindet sich ein Fremder an Bobs Namen), und der Widerruf gehört in
-  das Log oder in eine signierte Gerätekette, nicht in einen losen Rahmen.
-- Historie für das Zweitgerät kommt aus der Kette wie bei neuen Mitgliedern
-  (S5 liest „vorher“ erst mit dem nächsten Eintrag). Ein direkter Schlüssel-
-  Transfer zwischen den Geräten einer Person (an den Share-Key des neuen
-  Geräts) wäre schneller und wäre die Lösung für S6 im Fall Gerätewechsel.
-- Karten und Widerrufe sind Wissen je Replika und ändern sich nur durch
-  empfangene Rahmen. In einer Partition heilt ein Admin deshalb nichts, was
-  er nicht zugestellt bekommen hat; nach der Zustellung konvergieren alle
-  (Test „#14“). Ob eine Person entfernt werden kann, entscheidet das Log,
-  nicht die Kartentabelle: Nach Widerruf ihres letzten Geräts hat sie keine
-  Karte mehr, ist aber Mitglied (Test „#13“).
-- Offen: zwei Geräte derselben Person nehmen in einer Partition
-  gleichzeitig ein drittes auf (doppelte Aufnahme in BeeKEM); hier nicht
-  getestet.
+- The authority port needs no devices. A member is a person, and the
+  conflict matrix stays unchanged.
+- The key port needs a mapping person → devices and two operations that do
+  not exist in the authority log: add a device and remove a device. Neither
+  changes membership, but both create a new secret (KV1 holds per leaf,
+  not per person).
+- Who may add a device is an authority question that stays open here
+  without signatures: in the experiment the card with the person's name
+  suffices. In the casting an existing device of the person must sign the
+  binding (otherwise a stranger binds itself to Bob's name), and the
+  revocation belongs in the log or in a signed device chain, not in a loose
+  frame.
+- History for the second device comes from the chain as for new members
+  (S5 reads "before" only with the next entry). A direct key transfer
+  between a person's devices (to the new device's share key) would be
+  faster and would solve S6 for the device-change case.
+- Cards and revocations are knowledge per replica and change only through
+  received frames. In a partition an admin therefore heals nothing that was
+  not delivered; after delivery everyone converges (test "#14"). Whether a
+  person can be removed is decided by the log, not by the card table: after
+  revocation of her last device she has no card but is a member (test
+  "#13").
+- Open: two devices of the same person add a third at the same time in a
+  partition (duplicate admission in BeeKEM); not tested here.
 
-## E8: Durchsetzender, schlüsselblinder Dienst am Relay
+## E8: an enforcing, key-blind service at the relay
 
-Frage: Was bringt Durchsetzung am Relay über die Durchsetzung in den Repliken
-hinaus, und was muss der Dienst dafür wissen? Zwei Varianten desselben
-Kandidaten (`service.ts`), Transportklasse „Prüfstand-Relay, durchsetzend“:
+Question: what does enforcement at the relay add to enforcement in the
+replicas, and what must the service know for it? Two variants of the same
+candidate (`service.ts`), transport class "bench relay, enforcing":
 
-- **Sichten (Access §7.3).** Der Dienst kennt den Log nicht. Jedes
-  Mitgliedsgerät schlägt nach jeder Änderung die Sicht seines Stands vor
-  (seq, Vorgänger-Hash, identities = Geräte-IDs, m für die nächste Sicht);
-  der Dienst zählt gleichlautende Vorschläge von Geräten, die in alter und
-  neuer Sicht stehen, als Quorum (m = 1 bei einer Identität, sonst 2) und
-  bestätigt die angenommene Sicht an alle (`ack`). Vorschläge gehen an den
-  Dienst allein („behalten“).
-- **Log-Replik (Kontrolle, wie Gen 2).** Der Dienst führt eine Replik des
-  Autoritätslogs und wertet sie selbst aus.
+- **Views (Access §7.3).** The service does not know the log. After every
+  change, every member device proposes the view of its state (seq,
+  predecessor hash, identities = device ids, m for the next view); the
+  service counts identical proposals from devices that are in the old and
+  the new view as a quorum (m = 1 with one identity, otherwise 2) and
+  confirms the accepted view to everyone (`ack`). Proposals go to the
+  service alone ("keep").
+- **Log replica (control, as Gen 2).** The service keeps a replica of the
+  authority log and evaluates it itself.
 
-Beide binden ein Gerät über seine eigene Karte an seine BeeKEM-ID (ohne
-Besitznachweis; §7.3 verlangt eine Challenge) und bedienen nur Geräte, die
-laut Sicht bzw. Log Mitglied sind (Verdrängung, §9.3). Beide lassen
-**Autoritätsoperationen immer durch**, auch von Entfernten, und gaten nur
-Inhalt, Schlüsseloperationen und Widerrufe.
+Both bind a device via its own card to its BeeKEM id (without proof of
+possession; §7.3 demands a challenge) and serve only devices that are
+members per the view or the log (displacement, §9.3). Both **always let
+authority operations through**, also from removed members, and gate only
+content, key operations and revocations.
 
-| | Sichten | Log-Replik | Grund |
+| | Views | Log replica | Reason |
 |---|---|---|---|
-| S1–S8 | wie ohne Dienst | wie ohne Dienst | S4a: der gleichzeitige Eintrag des Entfernten erreicht niemanden mehr |
-| S10a Entfernter schreibt gleichzeitig | bestanden | bestanden | Relay verwirft, kein Residual; Bob wird nicht mehr bedient |
-| S10b Entfernung ohne Relay, Entfernter schreibt am Relay | bestanden | bestanden | Dienst lässt durch, bis die Entfernung ihn erreicht (Sicht veraltet, erwartet); danach verworfen |
-| S10c gegenseitige Entfernung lässt nur Carol | **nicht bestanden** | bestanden | Sichten: m=2 der alten Sicht ist mit einer Identität nicht mehr erfüllbar, der Dienst friert ein und bedient Alice weiter (§7.3 „stated residual“). Log-Replik: wertet selbst aus |
+| S1–S8 | as without a service | as without a service | S4a: the removed member's concurrent entry reaches nobody any more |
+| S10a removed member writes concurrently | passed | passed | the relay discards, no residual; Bob is no longer served |
+| S10b removal without relay, the removed writes at the relay | passed | passed | the service lets through until the removal reaches it (stale view, expected); discarded afterwards |
+| S10c mutual removal leaves only Carol | **failed** | passed | views: m=2 of the old view can no longer be met with one identity, the service freezes and keeps serving Alice (§7.3 "stated residual"). Log replica: evaluates itself |
 
-### Befunde
+### Findings
 
-1. **Evidenz ist nie gated.** Die erste Fassung verwarf auch
-   Autoritätsoperationen von Nicht-Mitgliedern. Damit sah bei gegenseitiger
-   Entfernung die Relay-Seite Bobs Entfernung von Alice nie, die Repliken
-   liefen auseinander, und mit Sichten fror der Dienst auf einem falschen
-   Stand ein. Access §9.3 sagt das schon („non-effecting evidence transport
-   of 3.6 is never gated“); das Experiment zeigt, dass es keine Feinheit ist,
-   sondern die Konfliktmatrix daran hängt. Für den Port: Der Dienst gated
-   Wirkung (Inhalt, Schlüssel), nie Evidenz (Autoritätsoperationen).
-2. **Verdrängte erfahren nichts.** Wen der Dienst nicht mehr bedient, der
-   bekommt auch die Operation nicht, die ihn entfernt hat (S10c: Bob sieht
-   weiter {bob, carol}). Ohne Dienst lernte er es aus dem Mesh. Das ist der
-   Platz von Access §10.2 `removal-notice`: eine Zustellung an einen, kein
-   Replikationsrahmen. Für E11 der erste harte Delivery-Fall aus der Gruppe
-   heraus.
-3. **Quorum friert ein.** Sichten mit festem m aus der Vorgängersicht
-   scheitern an genau den Fällen, die die Matrix löst: gegenseitige
-   Entfernung, die das Quorum unterschreitet. Die Spec nennt das „stated
-   residual“ und verlangt, m vorher zu senken; bei gleichzeitigen
-   Entfernungen gibt es kein Vorher. Die Log-Replik hat das Problem nicht,
-   weil sie dieselbe Matrix rechnet wie die Repliken. Für den Guss: Entweder
-   m folgt der Sicht selbst (m = min(2, |identities|) der **neuen** Sicht,
-   dann ist ein Einzelsignierer bei Schrumpfen auf eins zulässig), oder der
-   Dienst bekommt den Log. Sichten kaufen hier nichts, was die Log-Replik
-   nicht hat, kosten aber Verkehr (unten).
-4. **Sichten sind teuer.** Jedes Mitgliedsgerät schlägt nach jedem Rahmen
-   vor, bis der Dienst bestätigt; bei 30 Mitgliedern und 500 Operationen war
-   S9 nach zehn Minuten nicht fertig (ohne Dienst 193 ms je Operation).
-   Kleiner skaliert es noch: 10 × 100: ohne Dienst 14,6, Log-Replik 11,3,
-   Sichten 11,4 ms je Operation; 30 × 100: Sichten 59; 30 × 200: Sichten 74,
-   Log-Replik 54. Der Dienst spart sogar Arbeit (verworfene Rahmen erreichen
-   niemanden), aber die Sichten wachsen überproportional mit der Zahl der
-   Operationen. Auf der Seite läuft diese Variante deshalb nur 30 × 100
-   (`loadSize`). Abgelehnte Vorschläge
-   (falsche seq, weil die Bestätigung noch nicht da war) sind der Normalfall,
-   nicht die Ausnahme: 5 bis 10 je Szenario mit drei bis vier Geräten.
-5. **Was der Dienst lernt.** Sichten: Geräte-IDs aller Mitglieder, seq,
-   Gruppenzugehörigkeit der IDs; die IDs sind hier gruppenübergreifend gleich
-   (ein BeeKEM-Schlüsselpaar je Gerät), ein Dienst für mehrere Gruppen könnte
-   Gruppen über Geräte verbinden. Log-Replik: zusätzlich Personen, Rollen und
-   die ganze Operationsgeschichte. Gen 3 sieht Member-Anker je Gruppe vor
-   (Gerät × Gruppe); das wäre hier ein eigener Share-Key je Gruppe.
+1. **Evidence is never gated.** The first version also discarded authority
+   operations from non-members. With that, under mutual removal the relay
+   side never saw Bob's removal of Alice, the replicas diverged, and with
+   views the service froze on a wrong state. Access §9.3 already says so
+   ("non-effecting evidence transport of 3.6 is never gated"); the
+   experiment shows that this is no subtlety but that the conflict matrix
+   depends on it. For the port: the service gates effect (content, keys),
+   never evidence (authority operations).
+2. **The displaced learn nothing.** Whoever the service no longer serves
+   also does not get the operation that removed him (S10c: Bob keeps seeing
+   {bob, carol}). Without a service he learned it from the mesh. That is the
+   place of Access §10.2 `removal-notice`: a delivery to one, not a
+   replication frame. For E11 the first hard delivery case out of the
+   group.
+3. **The quorum freezes.** Views with a fixed m from the predecessor view
+   fail on exactly the cases the matrix solves: mutual removal that drops
+   below the quorum. The spec calls this "stated residual" and demands
+   lowering m beforehand; with simultaneous removals there is no
+   beforehand. The log replica has no such problem because it computes the
+   same matrix as the replicas. For the casting: either m follows the view
+   itself (m = min(2, |identities|) of the **new** view, then a single
+   signer is admissible when shrinking to one), or the service gets the log.
+   Views buy nothing here that the log replica does not have, but cost
+   traffic (below).
+4. **Views are expensive.** Every member device proposes after every frame
+   until the service confirms; with 30 members and 500 operations S9 was
+   not finished after ten minutes (without a service 193 ms per operation).
+   At smaller scale it still scales: 10 × 100: without service 14.6, log
+   replica 11.3, views 11.4 ms per operation; 30 × 100: views 59; 30 × 200:
+   views 74, log replica 54. The service even saves work (discarded frames
+   reach nobody), but the views grow superlinearly with the number of
+   operations. On the page this variant therefore runs only 30 × 100
+   (`loadSize`). Rejected proposals (wrong seq, because the confirmation
+   had not arrived yet) are the normal case, not the exception: 5 to 10 per
+   scenario with three to four devices.
+5. **What the service learns.** Views: device ids of all members, seq,
+   group affiliation of the ids; the ids are the same across groups here
+   (one BeeKEM key pair per device), a service for several groups could link
+   groups via devices. Log replica: additionally persons, roles and the
+   whole operation history. Gen 3 foresees member anchors per group (device
+   × group); here that would be an own share key per group.
 
-### Delivery-Hypothesen DV1–DV6 (von der Delivery-Session, nicht entschieden)
+### Delivery hypotheses DV1–DV6 (from the delivery session, not decided)
 
-Lesart: „bricht“ heißt bricht **am Kandidaten**; die Hypothese steht dann
-als Anforderung an den Port, nicht als widerlegt. Ein Dienst ohne diese
-Zusagen tut genau das, was die Tabelle zeigt.
+Reading: "breaks" means breaks **at the candidate**; the hypothesis then
+stands as a requirement on the port, not as refuted. A service without
+these promises does exactly what the table shows.
 
-| | Dienst-Rahmen in E8 | Befund |
+| | Service frames in E8 | Finding |
 |---|---|---|
-| DV1 Ack ist Ankunft, nie Entscheidung | `ack` bestätigt eine **angenommene** Sicht, also ein Quorum-Verdikt, kein Ankunftssignal. Für einen Vorschlag gibt es kein Ankunftssignal | bricht am Kandidaten: Verdikt und Ankunft brauchen zwei getrennte Rahmen |
-| DV2 Nichts Angenommenes endet still | Verworfene Inhalte (S10a) und abgelehnte Vorschläge (falsche seq) verschwinden ohne Rückmeldung; der Schreiber merkt nichts | bricht am Kandidaten: genau der Fehler, den DV2 verbietet |
-| DV3 Mindestens einmal, idempotent über den Inhalt | Vorschläge sind über ihren Inhalt idempotent (gleicher Hash = gleiche Unterschrift); Sequenz ist die Ordnung, Hash die Identität | hält |
-| DV4 Träger lernt nichts Verbindendes | siehe Befund 5: Geräte-IDs sind global | bricht am Kandidaten: globale Geräteschlüssel; Anker je Gruppe (Gerät × Gruppe) heilen es |
-| DV5 Ablehnungen wiederholbar, ohne Aussage über Beteiligte | es gibt keine Ablehnungen (siehe DV2) | nicht anwendbar |
-| DV6 Adresse je Beziehung oder Gruppe, nicht global | Adresse im Prüfstand ist der Gerätename; im Dienst die globale Geräte-ID | bricht am Kandidaten, wie DV4 |
+| DV1 an ack is arrival, never a decision | `ack` confirms an **accepted** view, so a quorum verdict, not an arrival signal. For a proposal there is no arrival signal | breaks at the candidate: verdict and arrival need two separate frames |
+| DV2 nothing accepted ends silently | discarded content (S10a) and rejected proposals (wrong seq) disappear without feedback; the writer notices nothing | breaks at the candidate: exactly the error DV2 forbids |
+| DV3 at least once, idempotent over the content | proposals are idempotent over their content (same hash = same signature); sequence is the order, hash the identity | holds |
+| DV4 the carrier learns nothing linking | see finding 5: device ids are global | breaks at the candidate: global device keys; anchors per group (device × group) heal it |
+| DV5 rejections repeatable, without a statement about the parties | there are no rejections (see DV2) | not applicable |
+| DV6 address per relationship or group, not global | the address in the bench is the device name; in the service the global device id | breaks at the candidate, as DV4 |
 
-Ordnung: Der Dienst braucht für Sichten eine totale Ordnung (seq +1,
-Vorgänger-Hash); die Repliken selbst brauchen nur kausale. Dienstwechsel ist
-nicht getestet; mit Sichten müsste der neue Dienst die Kette ab einer
-registrierten Sicht übernehmen, mit Log-Replik den Log nachziehen.
+Ordering: for views the service needs a total order (seq +1, predecessor
+hash); the replicas themselves need only a causal one. A service switch is
+not tested; with views the new service would have to take over the chain
+from a registered view, with the log replica catch up on the log.
 
-## Antworten auf die sieben Fragen
+## Answers to the seven questions
 
-- **Ordnung:** kausal, durch Vorgänger in Autoritätsoperationen und in
-  BeeKEM-Operationen; beide Seiten puffern, was Vorgänger vermisst.
-- **Speicher:** Autoritätslog, BeeKEM-Zustand (serialisierbar, enthält die
-  Blattgeheimnisse), Schlüsseltabelle der Kette.
-- **Identität:** Ed25519 je Gerät (Mitglieds-ID im Baum), X25519-Share-Key
-  als Pre-Key; Karte mit Personenangabe vorab an alle. Person = Name im Log.
-- **Transport:** fünf Rahmen an alle (Replication): Karte,
-  Autoritätsoperation mit angehängten BeeKEM-Operationen, lose
-  BeeKEM-Operation (Rotation, Heilung, Geräteaufnahme, Update beim
-  Schreiben), Gerätewiderruf, Inhalt mit Kette. Mit Dienst zwei weitere an
-  einen (Delivery): Sichtvorschlag an den Dienst, Bestätigung des Dienstes
-  an die bedienten Geräte. Einzelempfänger-Kandidat ohne Dienst ist nur die
-  BeeKEM-Willkommensnachricht, die hier im Add-Op an alle mitreist.
-- **Autorität:** unser Log; Strong Removal mit gegenseitiger Entfernung als
-  Ausnahme; Gründer ohne Sonderrolle. Seit E9 mit Signaturen und Politik
-  nach Access §4 (unten).
-- **Schlüssel:** BeeKEM. Neues Geheimnis je Entfernung, Rotation auf
-  Verlangen, Zusammenführung paralleler Geheimnisse über Konfliktschlüssel.
-- **Historie:** Vorgänger-Kette in der Replik.
+- **Ordering:** causal, via predecessors in authority operations and in
+  BeeKEM operations; both sides buffer what lacks predecessors.
+- **Storage:** authority log, BeeKEM state (serializable, contains the leaf
+  secrets), key table of the chain.
+- **Identity:** Ed25519 per device (member id in the tree), X25519 share key
+  as a pre-key; card with the person's name to everyone in advance. Person
+  = name in the log.
+- **Transport:** five frames to everyone (replication): card, authority
+  operation with attached BeeKEM operations, loose BeeKEM operation
+  (rotation, healing, device admission, update on write), device
+  revocation, content with chain. With a service two more to one party
+  (delivery): view proposal to the service, confirmation of the service to
+  the served devices. The only single-recipient candidate without a service
+  is the BeeKEM welcome message, which here travels to everyone inside the
+  add op.
+- **Authority:** our log; strong removal with mutual removal as the
+  exception; founder without a special role. Since E9 with signatures and
+  policy per Access §4 (below).
+- **Keys:** BeeKEM. New secret per removal, rotation on demand, merging of
+  parallel secrets via conflict keys.
+- **History:** predecessor chain in the replica.
 
-## E9: Signaturen, Politik, Fork (Schritt 1)
+## E9: signatures, policy, fork (step 1)
 
-Frage: Hält der Guss Access 0.54–0.56 am Code? Schritt 1 ersetzt im
-Autoritätslog (`authority.ts`) die Rollen und die unsignierten Operationen
-durch die Spec-Form; der Schnitt (Autorität bei uns, BeeKEM für Schlüssel)
-bleibt. Schritt 2 (Sichten-Kette nach §7.3 mit Signaturen, m aus der neuen
-Sicht, Challenge; S10c', S10d) steht aus.
+Question: does the casting Access 0.54–0.56 hold against code? Step 1
+replaces, in the authority log (`authority.ts`), the roles and the unsigned
+operations by the spec form; the cut (authority with us, BeeKEM for keys)
+stays. Step 2 (view chain per §7.3 with signatures, m from the new view,
+challenge; S10c', S10d) is pending.
 
-- **Signaturen.** Jede Operation trägt ein signature-set über ihre Hülle;
-  die id ist der Digest der Hülle (Körper ohne Beweise), eine Hülle, die
-  nicht zur id passt, ist nicht die signierte. Ein Signierer zählt, wenn
-  seine Signatur unter dem Schlüssel prüft, den die gültige Aufnahme (oder
-  die Genesis) für ihn registriert hat, und er an der Position Mitglied ist
-  (policy currency). Ed25519 je Person, über ihre Geräte geteilt (wie heute
-  der Seed); die Gruppen-DID signiert die Genesis mit und wird verworfen
-  (RLTP-ACC-3060). `@noble/curves`, synchron, damit die Faltung synchron
-  bleibt.
-- **Politik als Daten.** `any-member`, `threshold k`, `actors`, `vouch n`,
-  `all`, `any`, `strongest` (§4.2); Gültigkeit über Satisfaction-Mengen
-  (§4.4), `strongest` und die Ordnung ≥ durch Aufzählung über das endliche
-  Universum (Signierer ⊆ Mitglieder, Bürgen ⊆ Mitglieder, Ja des Subjekts;
-  Schranke 16 Mitglieder). Strukturprüfung: Aritäten, Tiefe ≤ 4, nichtleere
-  Kompositionen, vouch nur auf `member.add`, mindestens eine konkrete Regel.
-  Rollen gibt es nicht mehr: „Admin“ ist ein Eintrag in den `actors` von
-  `member.add`/`member.remove`; `policy.change` ist `strongest`. Befördern
-  = `policy.change`, das den Namen anhängt.
-- **Fork (Klassenregel 3, RLTP-ACC-3495).** `policy.change` neben einer
-  Durchsetzung (remove, policy.change): beide verfallen; im Fork verfällt
-  jede weitere Durchsetzung, Aufnahmen gehen weiter; Ende durch ein
-  `policy.change`, dessen Vorgänger beide Zweige enthalten (autorisiert
-  nach der Politik vor dem Fork, weil die Geschwister verfallen sind).
-  Strong Removal läuft vor Klassenregel 3 (§3.6: Dispositionen zuerst).
+- **Signatures.** Every operation carries a signature set over its
+  envelope; the id is the digest of the envelope (body without proofs), an
+  envelope that does not match the id is not the signed one. A signer
+  counts if its signature verifies under the key that the valid admission
+  (or the genesis) registered for it, and it is a member at the position
+  (policy currency). Ed25519 per person, shared over her devices (as the
+  seed is today); the group DID co-signs the genesis and is discarded
+  (RLTP-ACC-3060). `@noble/curves`, synchronous, so that folding stays
+  synchronous.
+- **Policy as data.** `any-member`, `threshold k`, `actors`, `vouch n`,
+  `all`, `any`, `strongest` (§4.2); validity via satisfaction sets (§4.4),
+  `strongest` and the order ≥ by enumeration over the finite universe
+  (signers ⊆ members, vouchers ⊆ members, yes of the subject; bound 16
+  members). Structural check: arities, depth ≤ 4, non-empty compositions,
+  vouch only on `member.add`, at least one concrete rule. Roles no longer
+  exist: "admin" is an entry in the `actors` of `member.add`/`member.remove`;
+  `policy.change` is `strongest`. Promoting = a `policy.change` that
+  appends the name.
+- **Fork (class rule 3, RLTP-ACC-3495).** `policy.change` next to an
+  enforcement (remove, policy.change): both lapse; in the fork every further
+  enforcement lapses, admissions go on; ended by a `policy.change` whose
+  predecessors contain both branches (authorized under the policy before
+  the fork, because the siblings lapsed). Strong removal runs before class
+  rule 3 (§3.6: dispositions first).
 
-| | Ergebnis | Grund |
+| | Result | Reason |
 |---|---|---|
-| S1–S8, S5b/c, S10a/b | unverändert | Regression |
-| S4e | **bestanden** (bisher nicht abbildbar) | zwei `policy.change` gleichzeitig: Fork, alle einig (`fork=ja`) |
-| S4j | bestanden | `policy.change` neben Entfernung: Fork, Carol bleibt; `policy.change` auf beide beendet ihn, danach wirkt die Entfernung |
-| S4g (Log) | bestanden | ohne, gefälschte, fremde Signatur und geänderte Hülle: ungültig; Genesis braucht Gründerin und Gruppenschlüssel |
-| S4h (Log) | bestanden | `threshold 2`: eine Signatur reicht nicht, zwei gleichzeitige Einzelsignaturen bilden keine Entfernung, Nicht-Mitglieder zählen nicht |
-| S4i (Log) | bestanden | `vouch 2`: eine Bürgschaft zu wenig; ohne Ja des Subjekts nichts; Bürgschaften einer anderen Aufnahme zählen nicht; vouch auf `member.remove` strukturell ungültig |
-| strongest (Log) | bestanden | löst zu `actors({alice,bob},2)` auf; `all[actors(a),actors(b)] ≥ threshold(2)` (§4.4) |
-| S10c (Sichten) | unverändert nicht bestanden | Schritt 2 |
-| S9 | 267 ms je Operation (30 × 500, Median aus 3; E6: 183) | Signaturen prüfen je Faltung neu, und die Faltung ist noch quadratisch; S9b 0,46 ms je Gerät und Zustellung (5 × 200), unverändert |
+| S1–S8, S5b/c, S10a/b | unchanged | regression |
+| S4e | **passed** (previously not applicable) | two `policy.change` at the same time: fork, everyone agrees (`fork=ja`) |
+| S4j | passed | `policy.change` next to a removal: fork, Carol stays; a `policy.change` on both ends it, afterwards the removal takes effect |
+| S4g (log) | passed | without, forged, foreign signature and altered envelope: invalid; genesis needs founder and group key |
+| S4h (log) | passed | `threshold 2`: one signature is not enough, two simultaneous single signatures form no removal, non-members do not count |
+| S4i (log) | passed | `vouch 2`: one voucher too few; nothing without the subject's yes; vouchers of another admission do not count; vouch on `member.remove` structurally invalid |
+| strongest (log) | passed | resolves to `actors({alice,bob},2)`; `all[actors(a),actors(b)] ≥ threshold(2)` (§4.4) |
+| S10c (views) | unchanged failed | step 2 |
+| S9 | 267 ms per operation (30 × 500, median of 3; E6: 183) | signatures are re-verified per fold, and the fold is still quadratic; S9b 0.46 ms per device and delivery (5 × 200), unchanged |
 
-### Aus dem Review zu PR #16 (Codex, CodeRabbit)
+### From the review of PR #16 (Codex, CodeRabbit)
 
-- **Eine Aufnahme ersetzt keine Schlüsselbindung (#17).** Die erste Fassung
-  setzte bei jeder gültigen Aufnahme den Schlüssel des Subjekts neu; unter
-  `member.add = any-member` konnte ein Mitglied Alices Namen an einen eigenen
-  Schlüssel binden und danach als Alice entfernen. Jetzt: Wer schon einen
-  Schlüssel hat, kommt nur unter demselben wieder; ein Mitglied wird nicht
-  erneut aufgenommen; zwei gleichzeitige Aufnahmen derselben Person unter
-  verschiedenen Schlüsseln verfallen beide. Ein Schlüsselwechsel braucht
-  eine eigene Regel (Access `anchor.rotate`), hier nicht gebaut. Für den
-  Guss: Die Bindung Name → Schlüssel ist ein eigener Zustand neben der
-  Mitgliedschaft; welche Operation sie setzen darf, gehört ausgesprochen.
-- **Beweise derselben Hülle werden zusammengeführt.** Signaturen und
-  Bürgschaften sind nicht Teil der id; eine zweite Kopie bringt ihre mit
-  (`'ergänzt'`), sonst gehen nachgereichte Mitsignaturen verloren und zwei
-  Repliken beurteilen dieselbe Operation verschieden. Der Kandidat nimmt
-  BeeKEM-Anhänge genau einmal in den Baum, auch wenn die Operation erst
-  durch Nachlieferung gültig wird.
-- **Strong Removal zählt geprüfte Signierer**, nie behauptete Namen; sonst
-  könnte eine angehängte ungültige Signatur unter dem Namen eines gerade
-  Entfernten eine gültige Operation zu Fall bringen.
-- **Join je Fork-Paar.** Ein `policy.change` beendet nur den Fork, dessen
-  beide Geschwister es als Vorgänger hat; eine im Fork verfallene
-  Durchsetzung bildet selbst kein weiteres Paar (sonst poisoniert ein
-  verfallenes `remove` den Join, der den Fork beenden soll).
-- **Befördern erweitert die Regeln**, statt sie durch `actors(k=1)` zu
-  ersetzen; `threshold` und `vouch` bleiben erhalten.
-- **Eine Beförderung gilt nur, solange ihre Aufnahme gilt (#18).** Ein
-  kausaler Vorgänger bindet nicht: Unter `add:vouch:1` war die Aufnahme
-  ungültig, die nachfolgende `policy.change` aber gültig, und eine spätere
-  gewöhnliche Aufnahme machte die verwaisten actors-Rechte wirksam. Neu in
-  der Hülle: `dependsOn`, eine Gültigkeitsabhängigkeit, die der Fixpunkt in
-  jeder Runde prüft (nachgereichte Beweise und spätere Invalidierung
-  eingeschlossen; nur Vorgänger erlaubt). Für den Guss: Die Spec kennt
-  Autorität nur je Position; „gilt nur mit X“ ist ein eigener Mechanismus,
-  den die Admission Chain der Membership Tasks (invite → accept → add) für
-  die Aufnahme schon leistet. Für Politik, die an einer Aufnahme hängt,
-  fehlt er, und `actors`, die Nicht-Mitglieder nennen, sind der Grund.
+- **An admission does not replace a key binding (#17).** The first version
+  reset the subject's key on every valid admission; under
+  `member.add = any-member` a member could bind Alice's name to a key of
+  its own and then remove as Alice. Now: whoever already has a key comes
+  back only under the same one; a member is not admitted again; two
+  simultaneous admissions of the same person under different keys both
+  lapse. A key change needs a rule of its own (Access `anchor.rotate`), not
+  built here. For the casting: the binding name → key is a state of its own
+  next to membership; which operation may set it should be stated.
+- **Proofs of the same envelope are merged.** Signatures and vouchers are
+  not part of the id; a second copy brings its own along (`'ergänzt'`),
+  otherwise co-signatures delivered later are lost and two replicas judge
+  the same operation differently. The candidate takes BeeKEM attachments
+  into the tree exactly once, even if the operation becomes valid only
+  through later delivery.
+- **Strong removal counts verified signers**, never claimed names;
+  otherwise an attached invalid signature under the name of someone just
+  removed could bring down a valid operation.
+- **A join per fork pair.** A `policy.change` ends only the fork whose two
+  siblings it has as predecessors; an enforcement that lapsed in the fork
+  forms no further pair itself (otherwise a lapsed `remove` poisons the
+  join that is meant to end the fork).
+- **Promotion extends the rules** instead of replacing them by
+  `actors(k=1)`; `threshold` and `vouch` are preserved.
+- **A promotion holds only as long as its admission holds (#18).** A causal
+  predecessor does not bind: under `add:vouch:1` the admission was invalid,
+  the following `policy.change` valid, and a later ordinary admission made
+  the orphaned actors rights effective. New in the envelope: `dependsOn`, a
+  validity dependency that the fixpoint checks every round (including
+  proofs delivered later and later invalidation; only predecessors
+  allowed). For the casting: the spec knows authority only per position;
+  "holds only with X" is a mechanism of its own, which the admission chain
+  of the membership tasks (invite → accept → add) already provides for the
+  admission. For policy that hangs on an admission it is missing, and
+  `actors` that name non-members are the reason.
 
-### Schritt 1b: Invarianten (Konsolidierung nach dem Review)
+### Step 1b: invariants (consolidation after the review)
 
-Die vier Review-Runden waren Spezialfälle einer Klasse: Reihenfolge,
-geteilte Beweise, konkurrierende Aufnahmen, Abhängigkeiten. Statt weitere
-Repros zu flicken, gelten jetzt vier Invarianten, drei davon als
-Eigenschaftstests mit seeded Graphen (`tests/authority-props.test.ts`, 60
-Graphen, Partitionen, Beweise auf Kopien verteilt, Schlüsselkonflikte,
-unberechtigte Signierer, Beförderungen mit dependsOn):
+The four review rounds were special cases of one class: ordering, shared
+proofs, competing admissions, dependencies. Instead of patching further
+repros, four invariants now hold, three of them as property tests with
+seeded graphs (`tests/authority-props.test.ts`, 60 graphs, partitions,
+proofs distributed over copies, key conflicts, unauthorized signers,
+promotions with dependsOn):
 
-- **I1 Determinismus.** Gleicher Evidenzbestand ergibt gleichen Zustand
-  (Mitglieder, Politik, Version, Fork, Gültigkeit je Operation), unabhängig
-  von Zustellreihenfolge und davon, wie Beweise auf Kopien verteilt sind.
-- **I2 Keine Rechte aus gescheiterten Aufnahmen.** Eine Beförderung gilt
-  nur, wenn jede Aufnahme gilt, von der sie abhängt; jedes Mitglied hat eine
-  gültige Aufnahme, und sein Schlüssel stammt aus ihr.
-- **I3 Schlüssel gewinnen nie durch Kopien.** Je Person höchstens ein
-  Schlüssel unter allen gültigen Aufnahmen; zusätzliche Kopien oder
-  Teil-Beweise ändern den Zustand nicht (Monotonie der Zusammenführung).
-- **I4 Der Baum folgt dem Zustand.** Die Schlüsselseite reagiert nicht je
-  Rahmen, sondern gleicht sich nach jeder Faltung und vor jedem Verschlüsseln
-  mit dem Zustand ab (`reconcile`): Blätter von Nicht-Mitgliedern entfernen,
-  fehlende Blätter von Mitgliedern nachziehen (nach einer Rotation, wenn
-  gerade kein gemeinsamer Schlüssel gehalten wird), eigene Geräte nachziehen.
-  Jedes Mitglied mit Schlüssel repariert, ohne Politik-Quorum (löst Befund 5).
-  **Designänderung gegenüber E6 (Notiz 4 dort):** BeeKEM-Anhänge gehen
-  immer in den Baum, ob die Autoritätsoperation gilt oder nicht. Der Baum
-  hat seine eigene kausale Geschichte; spielt eine Replik einen Anhang nicht
-  ein, kann sie keine Operation mehr einspielen, die darauf aufbaut (etwa die
-  Rotation eines Schreibers), und die Repliken laufen auseinander (Repro:
-  Carol, die eine im Fork verfallene Entfernung nie eingespielt hatte, konnte
-  Daves Eintrag nicht öffnen). Autorität wirkt deshalb als Reparatur nach der
-  Faltung, nicht als Tor vor dem Baum; KV1 hält, weil die Reparatur vor dem
-  Verschlüsseln läuft und BeeKEM gleichzeitige Reparaturen zusammenführt.
-  Das ist auch, was Keyhive tut (Delegationen und BeeKEM werden getrennt
-  zusammengeführt, die Kaskade repariert). Repro, der vorher fehlschlug:
-  Daves Replik sah Alices Entfernung von Bob zuerst, dann Bobs Aufnahme von
-  x als unterdrückt; Carols gleichzeitige Regeländerung ließ die Entfernung
-  im Fork verfallen, die Aufnahme wurde gültig, und x fehlte im Baum
+- **I1 Determinism.** The same evidence yields the same state (members,
+  policy, version, fork, validity per operation), independent of delivery
+  order and of how proofs are distributed over copies.
+- **I2 No rights from failed admissions.** A promotion holds only if every
+  admission it depends on holds; every member has a valid admission, and
+  its key comes from it.
+- **I3 Keys never win through copies.** Per person at most one key among all
+  valid admissions; additional copies or partial proofs do not change the
+  state (monotonicity of the merge).
+- **I4 The tree follows the state.** The key side does not react per frame
+  but reconciles with the state after every fold and before every
+  encryption (`reconcile`): remove leaves of non-members, add missing
+  leaves of members (after a rotation, when no shared key is held at the
+  moment), add own devices. Every member with a key repairs, without a
+  policy quorum (resolves finding 5). **Design change against E6 (note 4
+  there):** BeeKEM attachments always go into the tree, whether the
+  authority operation holds or not. The tree has its own causal history; if
+  a replica does not apply an attachment, it can no longer apply any
+  operation that builds on it (for instance a writer's rotation), and the
+  replicas diverge (repro: Carol, who had never applied a removal that
+  lapsed in a fork, could not open Dave's entry). Authority therefore acts
+  as a repair after the fold, not as a gate before the tree; KV1 holds
+  because the repair runs before encryption and BeeKEM merges simultaneous
+  repairs. That is also what Keyhive does (delegations and BeeKEM are merged
+  separately, the cascade repairs). Repro that failed before: Dave's
+  replica saw Alice's removal of Bob first, then Bob's admission of x as
+  suppressed; Carol's simultaneous policy change let the removal lapse in
+  the fork, the admission became valid, and x was missing from the tree
   (`tests/rltp-beekem.test.ts`).
-- **Entfernungsketten nach dem Entscheid vom 05.10.** nachgezogen: Entfernungen
-  mit Autorität gelten immer, nur die übrigen Operationen eines gleichzeitig
-  Entfernten verfallen (A entfernt B, B entfernt zugleich C: beide raus).
-  Der Kandidat hatte seit E6 noch die alte Regel (B's Entfernung verfiel).
-  Eine selbst verfallene Entfernung (Fork, Autorität) unterdrückt nichts.
+- **Removal chains per the decision of 5 October** caught up: removals with
+  authority always hold, only the remaining operations of a simultaneously
+  removed member lapse (A removes B, B removes C at the same time: both
+  out). The candidate still had the old rule since E6 (B's removal lapsed).
+  A removal that lapsed itself (fork, authority) suppresses nothing.
 
-### Schritt 2: Sichten-Kette nach §7.3 mit Signaturen
+### Step 2: view chain per §7.3 with signatures
 
-Der Sichten-Dienst (`service.ts`) prüft seit Schritt 2 Signaturen und
-Besitz, keine Behauptungen: jedes Gerät hat einen Ed25519-Geräteschlüssel
-(in der Karte), `identities` einer Sicht sind die Geräteschlüssel aller
-Geräte der Mitglieder (eine Identität je Gerät, E7), ein Sichtvorschlag
-trägt die Signatur des Geräts über den Sichtinhalt (7110), der Dienst führt
-Kopien zusammen und zählt nur Signierer, die in alter und neuer Sicht stehen
-und deren Signatur prüft (7180). Bindung Gerät → Schlüssel über einen
-Besitznachweis: der Dienst stellt auf die Karte eine Challenge, das Gerät
-signiert sie; ohne Antwort zählt kein Vorschlag und kein Schreiben (7.3
-„proof of possession“). Lesen (Zustellung) ist im Prüfstand nicht an den
-Besitznachweis gebunden, weil die Challenge das Gerät erreichen muss; in der
-Spec läuft Lesen über eine authentisierte Session.
+Since step 2 the view service (`service.ts`) checks signatures and
+possession, not claims: every device has an Ed25519 device key (in the
+card), the `identities` of a view are the device keys of all devices of the
+members (one identity per device, E7), a view proposal carries the device's
+signature over the view content (7110), the service merges copies and
+counts only signers that are in the old and the new view and whose
+signature verifies (7180). Binding device → key via a proof of possession:
+the service issues a challenge to the card, the device signs it; without an
+answer no proposal and no write counts (7.3 "proof of possession"). Reading
+(delivery) is not bound to the proof of possession in the bench, because
+the challenge has to reach the device; in the spec reading runs over an
+authenticated session.
 
-| | Ergebnis | Grund |
+| | Result | Reason |
 |---|---|---|
-| S10d (Dienst) | bestanden | gefälschte Signatur, fremde Signatur unter eigenem Namen, Signierer außerhalb der alten Sicht, Replay einer alten Sicht, falscher Vorgänger, unbeantwortete Challenge: nichts davon zählt; Schreiben ohne Besitznachweis wird verworfen |
-| S10c' Regel `parent` (Access 0.56 §7.3, wie geschrieben) | **nicht bestanden** | Quorum = effektives m der Vorgängersicht (2); nach gegenseitiger Entfernung bleibt eine Identität, der Dienst friert ein: der „stated residual“ der Spec |
-| S10c' Regel `new` (Guss-Plan 0.54: m_effective = min(m_parent, \|identities_new\|)) | bestanden | Carol allein trägt die neue Sicht, Alice und Bob werden nicht mehr bedient |
-| S1–S10b | unverändert | in beiden Regeln und in der Log-Replik |
+| S10d (service) | passed | forged signature, foreign signature under own name, signer outside the old view, replay of an old view, wrong predecessor, unanswered challenge: none of them counts; a write without proof of possession is discarded |
+| S10c' rule `parent` (Access 0.56 §7.3, as written) | **failed** | quorum = effective m of the predecessor view (2); after mutual removal one identity remains, the service freezes: the spec's "stated residual" |
+| S10c' rule `new` (casting plan 0.54: m_effective = min(m_parent, \|identities_new\|)) | passed | Carol alone carries the new view, Alice and Bob are no longer served |
+| S1–S10b | unchanged | under both rules and in the log replica |
 
-**Befund 9 (für 0.57): Guss-Plan und Spec widersprechen sich bei m.** Der
-Guss-Plan 0.54 (§7.3-Zeile) beschloss „m folgt der neuen Sicht“, damit
-gegenseitige Entfernung den Dienst nicht einfriert (E8 Befund 3); Access
-0.56 §7.3 hält am Quorum der Vorgängersicht fest und nennt das Einfrieren
-ausdrücklich als „stated residual“ (die Gruppe senkt m vorher, Ausweg ist
-die Neuregistrierung). Beides ist hier gebaut und gemessen; die
-Entscheidung steht aus. Bei gleichzeitigen Entfernungen gibt es kein
-„vorher“, deshalb trägt die Spec-Regel genau den Fall nicht, den die
-Matrix löst (S4c), und die Gruppe verliert ihre Dienstbindung.
+**Finding 9 (for 0.57): casting plan and spec contradict each other on m.**
+The casting plan 0.54 (§7.3 line) decided "m follows the new view" so that
+mutual removal does not freeze the service (E8 finding 3); Access 0.56 §7.3
+keeps the quorum of the predecessor view and explicitly names the freezing
+as "stated residual" (the group lowers m beforehand, the way out is
+re-registration). Both are built and measured here; the decision is
+pending. With simultaneous removals there is no "beforehand", so the spec
+rule does not carry exactly the case the matrix solves (S4c), and the group
+loses its service binding.
 
-### Schritt 3: Fixpunkt, schneller Pfad
+### Step 3: fixpoint, fast path
 
-Die 267 ms je Operation (Schritt 1) kamen nicht aus der Faltung, sondern
-daraus, dass nach jeder Operation komplett neu gefaltet wurde (jede Faltung
-quadratisch, 500 Operationen → kubisch). Jetzt gibt es einen schnellen
-Pfad: Eine Operation, die auf allen aktuellen Köpfen aufbaut, ist mit nichts
-gleichzeitig; sie kann keine frühere Operation verfallen lassen (Strong
-Removal und Klassenregel 3 brauchen Gleichzeitigkeit) und keinen Fork
-öffnen oder beenden, der nicht schon durch ihre Vorgänger bestimmt ist. Ihre
-Gültigkeit hängt nur vom gefalteten Zustand ab, also genügt ein Schritt.
-Erst eine gleichzeitige Operation oder eine Nachlieferung von Beweisen löst
-die volle Faltung aus. Die volle Faltung selbst ist unverändert quadratisch.
+The 267 ms per operation (step 1) did not come from the fold but from
+folding completely anew after every operation (every fold quadratic, 500
+operations → cubic). Now there is a fast path: an operation that builds on
+all current heads is concurrent with nothing; it can let no earlier
+operation lapse (strong removal and class rule 3 need concurrency) and open
+or end no fork that is not already determined by its predecessors. Its
+validity depends only on the folded state, so one step suffices. Only a
+concurrent operation or a later delivery of proofs triggers the full fold.
+The full fold itself is unchanged quadratic.
 
-Eigenschaftstest I5 (`authority-props.test.ts`): schneller Pfad und volle
-Faltung liefern nach jeder einzelnen Operation denselben Zustand, über die
-60 seeded Graphen mit Partitionen, Forks, dependsOn und Kopien.
+Property test I5 (`authority-props.test.ts`): fast path and full fold yield
+the same state after every single operation, over the 60 seeded graphs with
+partitions, forks, dependsOn and copies.
 
-| | vorher | nachher |
+| | before | after |
 |---|---|---|
-| S9 (30 × 500, Median aus 3) | 267 ms/Op (E6 ohne Signaturen: 183) | **17,8 ms/Op** (Keyhive b: 51) |
-| S9b (5 × 200) | 0,46 ms je Gerät und Zustellung | 0,50 |
-| Sichten, 30 × 100 | 59 ms/Op (E8) | 31,9 ms/Op |
+| S9 (30 × 500, median of 3) | 267 ms/op (E6 without signatures: 183) | **17.8 ms/op** (Keyhive b: 51) |
+| S9b (5 × 200) | 0.46 ms per device and delivery | 0.50 |
+| views, 30 × 100 | 59 ms/op (E8) | 31.9 ms/op |
 
-## E10: Träger-Prüfstand, erster Durchgang (12.10.)
+## E10: carrier bench, first pass (12 October)
 
-Der Träger spielt den Gegner (`src/lab/traeger.ts`, Katalog T im Plan).
-Fehlerinjektion am Prüfstand-Relay (`World.carrier()`): verlieren,
-zurückhalten je Gerät, umordnen, verdoppeln, verändern, erneut einspielen;
-derselbe Katalog läuft über PWS (`transport.faults`, Hülle um den echten
-Server). Beide Träger zeigen dasselbe Bild:
+The carrier plays the adversary (`src/lab/traeger.ts`, catalogue T in the
+plan). Fault injection at the bench relay (`World.carrier()`): drop,
+withhold per device, reorder, duplicate, tamper, replay; the same
+catalogue runs over PWS (`transport.faults`, a wrapper around the real
+server). Both carriers show the same picture:
 
-| | Tür | Relay | PWS | Befund |
+| | Door | Relay | PWS | Finding |
 |---|---|---|---|---|
-| T1 Rahmen still verloren | DV2, I12 | ~~nicht bestanden~~ bestanden | ~~nicht bestanden~~ bestanden | Erster Durchgang: **keine Lückenreparatur**, eine verlorene Autoritätsoperation blieb verloren. Seit dem zweiten Durchgang nennt jeder Inhalt die Autoritätsköpfe seines Schreibers, und die Replik fordert fehlende Vorgänger beim Autor nach (unten, „Lückenreparatur“). Reparatur ist eine Pflicht der Replik, nicht des Trägers. |
-| T2 umordnen | I2 | bestanden | bestanden | Beim Bau kam heraus: lose BeeKEM-Operationen, die vor ihren Vorgängern ankamen, wurden verworfen statt gepuffert. Jetzt `pendingCgka`, bei jeder Reparatur erneut versucht. |
-| T3 doppelt | DV3 | bestanden | bestanden | idempotent über id und Inhalt |
-| T4 alte Entfernung erneut | I8 | bestanden | bestanden | `bekannt`, kein Zustandswechsel. Seit den versiegelten Rahmen spielt der Träger alle alten Autoritätsrahmen von Alice erneut ein; die Entfernung kann er nicht mehr auswählen. |
-| T5 verändert / Müll | D1 | bestanden | bestanden | Digest der Hülle, Form vor Inhalt; Müll wird notiert, nie geworfen (neu: `receive` wirft nicht mehr). Seit den versiegelten Rahmen kann der Träger nichts Gezieltes mehr schreiben (eine Aufnahme zur Entfernung umdeuten); er kann nur zerstören. Und Zerstörtes holt die Lückenreparatur zurück: Alices nächster Inhalt belegt die fehlenden Operationen, Alice sendet sie erneut, Dave und Eve kommen doch an. Ein beschädigter Eintrag mit bekanntem Schlüssel wird verworfen und notiert; einer ohne Schlüssel bleibt `ungeöffnet`, hält aber nichts mehr auf (Review zu #31). |
-| T6 einem Gerät ein Eintrag vorgehalten | D5, I5 | ~~nicht bestanden~~ bestanden | ~~nicht bestanden~~ bestanden | Erster Durchgang: nicht bemerkbar. Mit den Köpfen im Umschlag bemerkt Carol die Lücke, sobald irgendjemand auf dem vorgehaltenen Eintrag aufbaut (hier Daves Inhalt), und holt ihn bei dem, der aufgebaut hat. Der Träger kann einen einzelnen Eintrag also nicht dauerhaft vorhalten, ohne alles danach ebenfalls vorzuhalten. |
-| T6b Gerät eingefroren (alles vorgehalten) | D5, I5 | nicht bestanden | nicht bestanden | **Blind ist nicht bemerkbar.** Carol sieht einen stehenden Feed und kann ihn nicht von Stille unterscheiden; es gibt kein beglaubigtes Ziel, gegen das sie ihren Stand prüfen könnte. Das ist die Tür, die ein Dienst der Klasse Sicht/Log mit Attestation schließt (Replication §4.1), und die Frage 3 an PWS. |
-| T7 entferntes Gerät fragt weiter | §9.3, KV1 | bestanden | bestanden | Klasse blind bedient Carol weiter, sie öffnet nichts (KV1); mit Dienst der Klasse Sicht wird sie verweigert (zweiter Lauf mit `dienst: 'sichten'`). Die Tür unterscheidet Klassen, nicht Träger. |
-| T8 Trägerwechsel mitten im Leben | I15 | nicht abbildbar | bestanden | Relay: kein Wechsel. PWS: Export/Import, danach Aufnahme und Schreiben auf dem neuen Server, der Neue liest die ganze Historie. Beim Bau: Aufnahme gibt den Schlüssel erst mit der nächsten Rotation (BeeKEM), das Szenario muss zwischen Aufnahme und Schreiben zustellen. |
-| T11 zwei Gruppen auf einem Träger | DV4/DV6 | nicht abbildbar | nicht abbildbar | Grenze des Harness: ein Kandidat trägt eine Gruppe. Was ein Träger je Gruppe liest (Namen, Gerätenummern), zeigt T12. |
-| T12 versiegelter Eintrag | I6 | ~~nicht bestanden~~ bestanden | ~~nicht bestanden~~ bestanden | Erster Durchgang: Rahmen im Klartext (#24), nur Inhalt versiegelt. Dritter Durchgang: alles über den Träger ist ein versiegelter Eintrag, Karten gehen über die Begegnung (unten, „Versiegelte Rahmen“). |
+| T1 frame silently lost | DV2, I12 | ~~failed~~ passed | ~~failed~~ passed | First pass: **no gap repair**, a lost authority operation stayed lost. Since the second pass every content names its writer's authority heads, and the replica requests missing predecessors from the author (below, "gap repair"). Repair is a duty of the replica, not of the carrier. |
+| T2 reorder | I2 | passed | passed | While building it came out that loose BeeKEM operations arriving before their predecessors were discarded instead of buffered. Now `pendingCgka`, retried on every repair. |
+| T3 duplicate | DV3 | passed | passed | idempotent over id and content |
+| T4 old removal replayed | I8 | passed | passed | `known`, no state change. Since sealed frames the carrier replays all of Alice's old authority frames; it can no longer select the removal. |
+| T5 tampered / garbage | D1 | passed | passed | digest of the envelope, form before content; garbage is noted, never thrown (new: `receive` no longer throws). Since sealed frames the carrier can no longer write anything targeted (reinterpret an admission as a removal); it can only destroy. And what is destroyed, gap repair brings back: Alice's next content evidences the missing operations, Alice resends them, Dave and Eve arrive after all. A damaged entry with a known key is discarded and noted; one without a key stays `unopened` but no longer holds anything up (review of #31). |
+| T6 one entry withheld from one device | D5, I5 | ~~failed~~ passed | ~~failed~~ passed | First pass: not noticeable. With the heads in the envelope Carol notices the gap as soon as anyone builds on the withheld entry (here Dave's content), and fetches it from whoever built on it. The carrier therefore cannot withhold a single entry permanently without withholding everything after it as well. |
+| T6b device frozen (everything withheld) | D5, I5 | failed | failed | **Blind is not noticeable.** Carol sees a standing feed and cannot tell it from silence; there is no attested target against which she could check her state. That is the door a service of class view/log with attestation closes (Replication §4.1), and question 3 to PWS. |
+| T7 removed device keeps asking | §9.3, KV1 | passed | passed | class blind keeps serving Carol, she opens nothing (KV1); with a service of class view she is refused (second run with `dienst: 'sichten'`). The door distinguishes classes, not carriers. |
+| T8 carrier switch mid-life | I15 | not applicable | passed | relay: no switch. PWS: export/import, then admission and writing on the new server, the newcomer reads the whole history. While building: admission hands out the key only with the next rotation (BeeKEM), the scenario has to deliver between admission and writing. |
+| T11 two groups on one carrier | DV4/DV6 | not applicable | not applicable | limit of the harness: one candidate carries one group. What a carrier reads per group (names, device numbers) is shown by T12. |
+| T12 sealed entry | I6 | ~~failed~~ passed | ~~failed~~ passed | First pass: frames in plaintext (#24), only content sealed. Third pass: everything over the carrier is a sealed entry, cards go over the encounter (below, "sealed frames"). |
 
-Nicht gelaufen: T9/T10 (Zustellungs-Adapter, E11). T6b, T7, T8 und T11
-kamen im zweiten Durchgang dazu; der Trägerwechsel läuft über den
-optionalen Haken `CarrierFaults.rebind`, den nur PWS bietet.
+Not run: T9/T10 (delivery adapter, E11). T6b, T7, T8 and T11 were added in
+the second pass; the carrier switch runs over the optional hook
+`CarrierFaults.rebind`, which only PWS offers.
 
-**Was der Träger-Prüfstand damit schon gezeigt hat:** Die roten Zellen
-sind keine Eigenschaften eines Trägers, sondern des Kandidaten bzw. der
-Dienstklasse: Lückenreparatur und versiegelte Rahmen fehlten im Kandidaten
-(die erste ist inzwischen gebaut), beglaubigte Ziele fehlen jeder Klasse
-blind. Ein zweiter Träger (PWS) liefert exakt dieselbe Matrixzeile. Für die
-Auswertung heißt das: Träger unterscheiden sich erst bei T7–T11 und in den
-Kosten.
+**What the carrier bench has already shown:** the red cells are not
+properties of a carrier but of the candidate or of the service class: gap
+repair and sealed frames were missing in the candidate (the first has since
+been built), attested targets are missing from every blind class. A second
+carrier (PWS) delivers exactly the same matrix row. For the evaluation this
+means: carriers differ only at T7–T11 and in cost.
 
-### Lückenreparatur (I12), zweiter Durchgang
+### Gap repair (I12), second pass
 
-Gebaut nach Replication §5.12, ohne den Träger zu ändern:
+Built per Replication §5.12, without changing the carrier:
 
-- **Umschlag.** Jeder Inhalt trägt `heads` (die Autoritätsköpfe des
-  Schreibers beim Schreiben) und `by` (seinen Geräteschlüssel). Das ist der
-  Access-Envelope in kleinster Form; Autoritätsoperationen tragen ihre
-  Vorgänger ohnehin (`preds`, `dependsOn`).
-- **Erkennen.** Eine Lücke ist ein Vorgänger, den ein gehaltener Eintrag
-  nennt und das Log nicht hält: aus wartenden Autoritätsoperationen und aus
-  ungeöffneten Inhalten. Geprüft nach jeder Faltung (`reconcile`) und bei
-  jedem Inhalt.
-- **Anfordern.** Ein Rahmen `repair` an die Geräte des Autors des Belegs
-  (bei Inhalt `by`, bei Operationen die Geräte der Signierer), mit `missing`,
-  `evidence` (die nennenden Einträge) und `have` (eigene Köpfe). Je fehlender
-  ID ein Lauf. Die Belege hängen an den Autoritätsabhängigkeiten (Umschläge
-  bleiben aufgehoben, bis alle Köpfe im Log sind), nicht am Schlüsselbaum:
-  ein Inhalt kann zu öffnen sein und trotzdem eine Lücke belegen (Review zu
-  #27: verlorene Regeländerung). Geht die Anfrage verloren, wiederholt die
-  Replik sie, sobald ein Rahmen eines adressierten Geräts eintrifft (die
-  Quelle ist erreichbar, hat aber nicht geantwortet), höchstens dreimal je
-  Lauf; Anfragen gehen nur auf Verkehr hin hinaus, also keine Schleife.
-  Danach bleibt der Lauf sichtbar offen (`anfragen=3`), bis der Adapter ihn
-  mit `rerunRepair(gerät)` neu startet, etwa nach Netzheilung (#30); der
-  Neustart setzt den Zähler zurück und fragt die Quellen erneut.
-- **Antworten.** Nur ein adressiertes Gerät antwortet, nur auf eine belegte
-  Anfrage, mit dem Abschluss der fehlenden Operationen ohne den Abschluss
-  der Köpfe des Fragenden, in kausaler Reihenfolge, als die ursprünglichen
-  Rahmen (die Replik dedupliziert: `bekannt`). Dazu hält jedes Gerät die
-  Autoritätsrahmen, die es gesendet oder angenommen hat. Unter einem Dienst
-  der Klasse Sicht/Log ist die Anfrage ein Schreiben (Besitznachweis und
-  Mitgliedschaft, I7).
-- **Zustand.** `lücke=N (awaiting-source)` bzw. `lücke=0 (repariert N)` im
-  Status; ein Lauf endet, wenn der Vorgänger eintrifft. Nicht modelliert:
-  `repair-horizon` (der Prüfstand hat keine Uhr) und `awaiting-source` als
-  gemeldetes Ergebnis an den Nutzer; beides sind Aufgaben des Adapters, nicht
-  des Kandidaten.
+- **Envelope.** Every content carries `heads` (the writer's authority heads
+  at the time of writing) and `by` (its device key). That is the Access
+  envelope in its smallest form; authority operations carry their
+  predecessors anyway (`preds`, `dependsOn`).
+- **Detection.** A gap is a predecessor that a held entry names and the log
+  does not hold: from waiting authority operations and from unopened
+  content. Checked after every fold (`reconcile`) and on every content.
+- **Request.** A `repair` frame to the devices of the author of the
+  evidence (for content `by`, for operations the devices of the signers),
+  with `missing`, `evidence` (the naming entries) and `have` (own heads).
+  One run per missing id. The evidence hangs on the authority dependencies
+  (envelopes are kept until all heads are in the log), not on the key tree:
+  a content can be openable and still evidence a gap (review of #27: lost
+  policy change). If the request is lost, the replica repeats it as soon as
+  a frame from an addressed device arrives (the source is reachable but has
+  not answered), at most three times per run; requests go out only in
+  response to traffic, so no loop. After that the run stays visibly open
+  (`anfragen=3`) until the adapter restarts it with `rerunRepair(device)`,
+  for instance after network healing (#30); the restart resets the counter
+  and asks the sources again.
+- **Answer.** Only an addressed device answers, only to an evidenced
+  request, with the closure of the missing operations minus the closure of
+  the asker's heads, in causal order, as the original frames (the replica
+  deduplicates: `known`). For this, every device keeps the authority frames
+  it has sent or accepted. Under a service of class view/log the request is
+  a write (proof of possession and membership, I7).
+- **State.** `lücke=N (awaiting-source)` or `lücke=0 (repariert N)` in the
+  status; a run ends when the predecessor arrives. Not modelled:
+  `repair-horizon` (the bench has no clock) and `awaiting-source` as a
+  reported result to the user; both are tasks of the adapter, not of the
+  candidate.
 
-Prüfung: T1 auf Relay und PWS (Relay: der verlorene Rahmen wird erneut
-zugestellt; PWS: Alice legt ihn als neue Resource ab), dazu der
-Kandidatentest „Lückenreparatur“ (Anfrage vorgehalten: Zustand sichtbar
-offen; freigegeben: repariert, und nur Alice antwortet). Was der Träger
-dabei zusätzlich sieht: Köpfe (Hashes) und Geräteschlüssel je Inhalt, siehe
-`pws/NOTES.md`, Prüfpunkt 3. Für den Port: Der Umschlag macht aus
-„Zurückhalten“ (T6) ein „alles Zurückhalten“ (T6b); erst die beglaubigte
-Sicht schließt auch das.
+Check: T1 on relay and PWS (relay: the lost frame is delivered again; PWS:
+Alice stores it as a new resource), plus the candidate test "gap repair"
+(request withheld: state visibly open; released: repaired, and only Alice
+answers). What the carrier additionally sees: heads (hashes) and device
+keys per content, see `pws/NOTES.md`, check 3. For the port: the envelope
+turns "withholding" (T6) into "withholding everything" (T6b); only the
+attested view closes that as well.
 
-### Versiegelte Rahmen (T12), dritter Durchgang
+### Sealed frames (T12), third pass
 
-Weg 1 (Anton 12.10.): T12 jetzt, mit einem minimalen Willkommen im
-Prüfstand; E11 ersetzt es durch den Zustellungs-Adapter.
+Path 1 (Anton, 12 October): T12 now, with a minimal welcome in the bench;
+E11 replaces it by the delivery adapter.
 
-- **Alles über den Träger ist ein Eintrag.** Autoritätsoperationen,
-  Widerrufe, Reparaturanfragen und Inhalte gehen als `sealed`: der innere
-  Rahmen unter dem Eintragsschlüssel (BeeKEM `encrypt`, wie bisher nur der
-  Inhalt), dazu die Vorgänger-Tabelle. Im Klartext bleibt nur der Umschlag:
-  `kind` (Art des inneren Rahmens, für den Dienst), `heads`, `by`. Die
-  Referenz eines Eintrags ist ein Hash über Zufall und Klartext, damit
-  gleichlautende Rahmen (eine erneut gesendete Operation, zwei gleiche
-  Anfragen) verschiedene Schlüssel bekommen.
-- **Drei Dinge bleiben außen.** BeeKEM-Operationen (selbst Chiffretext an
-  die Blätter; sie gehen ihrer Autoritätsoperation als eigene Rahmen
-  voraus, weil der Neuling sie ohne Eintragsschlüssel in den Baum nehmen
-  muss). Das Willkommen an ein neues Gerät: die Gruppe und die Aufnahme,
-  mit X25519 gegen den Willkommensschlüssel der Karte, HKDF, AES-GCM; nur
-  dieses Gerät kann es öffnen. Und die Karten: sie gehen über den
-  Begegnungskanal (`direct` im Harness, Zustellung ohne Träger, ohne Dienst,
-  ohne Fehlerinjektion), wie in der Spec Karten aus der Begegnung kommen.
-  Mit Prüfstand-Dienst gehen Karten weiter über den Dienst, weil der die
-  Gerätebindung aus der Karte lernt (in der Spec aus der Sicht). Der Dienst
-  der Klasse Log liest das Autoritätslog (§9.3): dafür gibt es den
-  Klartextmodus (`klartext`), nur für ihn.
-- **Neulinge lesen die Historie mit der Aufnahme.** Die Vorgänger-Tabellen
-  der versiegelten Autoritätsrahmen reichen die Schlüsselkette bis zur
-  Genesis weiter: S6 (Historie ohne neuen Eintrag) besteht jetzt, nicht erst
-  über die Kette des nächsten Inhalts.
-- **Eine Entfernung wird unter dem Schlüssel vor der Entfernung
-  versiegelt**, aber erst nach den BeeKEM-Anhängen gesendet: Der Entfernte
-  muss sie noch öffnen können (Access §10.2, Zustellung der Entfernung), die
-  anderen öffnen sie mit dem alten Schlüssel, den BeeKEM behält. Ohne diese
-  Reihenfolge erfuhr Carol in S4j nie von ihrer Entfernung und der Fork fand
-  nicht statt.
-- **Zwei getrennte Steuerungen (Review zu #31, drei Runden).** Die erste
-  Fassung hängte Baumangleichung und Lückenreparatur an dieselbe Bedingung
-  „keine ungeöffneten Autoritätsrahmen“; das war ein Zirkel: warten auf
-  Vollständigkeit und zugleich den Weg dorthin sperren, und jeder beschädigte
-  Rahmen sperrte dauerhaft. Jetzt:
-  - *Lückenreparatur ohne Sperre.* Belege kommen nur aus geöffneten
-    Einträgen (der Schreiber hatte den Schlüssel) und aus wartenden
-    Operationen. Ungeöffnete Rahmen belegen nichts, ihr Umschlag ist
-    unverbürgt; sie halten auch nichts auf. Ein beschädigter Rahmen, gleich
-    wo beschädigt, ist damit für die Reparatur unsichtbar; was er enthielt,
-    holt der nächste intakte Beleg. Nebeneffekt: die Anfragen sind weniger
-    geworden (T2 vorher 7 Anfragen und drei dreifache Antworten, jetzt 2).
-  - *Baumangleichung mit Zurückhaltung.* Ein ungeöffneter Autoritätsrahmen
-    heißt: diese Replik weiß, dass ihr Log hinter dem Umlauf liegt. Ob er noch
-    aufgeht, nie aufgeht (Epoche ohne uns, bis die Tabelle eines späteren
-    Eintrags ihn bringt) oder beschädigt ist, kann sie nicht unterscheiden.
-    In allen drei Fällen fasst sie fremde Blätter nicht an, weder entfernen
-    (Heilung) noch nachziehen, sonst nähme sie das Blatt eines eben
-    Aufgenommenen heraus oder das eines eben Entfernten wieder hinein (so sah
-    der erste Lauf aus: Dutzende `heal`/`heal-add`, und in T2 brachte Dave
-    Carol zurück in den Baum). Das tun die Mitglieder auf dem Stand (I4:
-    jedes Mitglied mit Schlüssel). Gezielt, nicht pauschal (Runde 4): Es
-    zählen nur Rahmen, deren Schlüsseloperation im Baum ist, also aus einer
-    Epoche, in der diese Replik dabei ist; ein Rahmen mit unbekannter
-    `keyOp` sagt nichts über ihr Log aus und hält nichts auf. Die eigenen
-    Geräte zieht sie immer nach, dafür bürgt der Baum (ohne Schlüssel geht
-    es nicht): ein unlesbarer Rahmen sperrt kein Zweitgerät. Lesen,
-    Schreiben, Reparatur laufen in jedem Fall weiter. Eine Schlüsseloperation
-    allein löst keine Angleichung aus; angeglichen wird nach
-    Autoritätsoperationen und vor dem Schreiben.
-  - *Folge für T2:* Bobs Entfernung von Carol ist gleichzeitig mit Daves
-    Aufnahme und unter einem Schlüssel ohne Dave versiegelt. Dave liest sie
-    erst mit dem nächsten Eintrag eines Mitglieds, das sie gelesen hat
-    (Kette, wie Keyhive b); T2 schreibt deshalb am Ende noch einmal.
-- **Der Umschlag ist unverbürgt (#32).** `kind` im Klartext steuert nur
-  die Ausnahme des Dienstes (Autoritätsrahmen passieren ohne
-  Mitgliedschaftsgate, weil sie Evidenz für die Konfliktmatrix sind, aber
-  nur von Geräten mit bewiesenem Schlüssel). Was der Umschlag behauptet, muss
-  der Inhalt einlösen: Stimmt die innere Art nicht mit `kind` überein, wird
-  der Eintrag verworfen und notiert. Sonst könnte ein entferntes Gerät mit
-  aufbewahrtem Zustand frischen Inhalt als `auth` deklarieren und am Dienst
-  vorbei zustellen (Regression im Dienst-Test).
-- **Beschädigte Einträge halten nichts auf.** Die Regel „keine Angleichung
-  und keine Lückenprüfung bei ungeöffneten Autoritätsrahmen“ gilt nur für
-  Rahmen, deren Schlüssel noch kommen kann (Schlüsseloperation nicht im Baum
-  oder Versuche nicht erschöpft). Ein Eintrag, der mit bekanntem Schlüssel
-  nicht aufgeht, ist beschädigt und fliegt raus; einer mit erschöpften
-  Versuchen bleibt liegen, zählt aber nicht. Was sie enthielten, holt die
-  Reparatur über die Belege späterer Einträge (Review zu #31: vorher sperrte
-  ein zerstörter Rahmen jede Reparatur dauerhaft).
-- **Schreiben wartet.** Wer gerade keinen Schlüssel hat und nicht rotieren
-  kann (das eigene Blatt fehlt, etwa nach einer gleichzeitigen Entfernung,
-  die später verfällt), stellt den Rahmen zurück (`queued`), bis ein
-  Mitglied das Blatt nachzieht (I4) und der nächste Rahmen den Schlüssel
-  bringt. Das ist das „Healing = Schreiben wartet“ des Primers.
-- **Ohne Schlüssel keine Autorität.** Ohne Schlüssel liest ein Gerät seit
-  den versiegelten Rahmen auch das Log nicht weiter (`ungeöffnet=N`), bis
-  die nächste Rotation eines Mitglieds es wieder erreicht (und über deren
-  Tabelle die Schlüssel der versiegelten Autoritätsrahmen).
-- **Angleichung nach jeder Rotation (#33, S4f).** Eine Rotation führt
-  gleichzeitige Baumänderungen zusammen (KV6): erst danach stehen etwa die
-  Blätter aus einem verfallenen Zweig (Mallorys Einladungen von x und y) im
-  Baum. Nach der Heilung hatte niemand einen Schlüssel (Heilung braucht
-  einen), Alices nächster Eintrag rotierte, die Rotation holte x und y in
-  den Baum, und der Eintrag ging an fünf Blätter: x und y lasen neuen
-  Inhalt, obwohl kein Log sie als Mitglieder führte. Jetzt gilt vor jedem
-  Eintrag: Die Empfängermenge ist der Baum nach der Rotation, und die wird
-  geprüft, nicht vorausgesetzt. Erst heilen (immer, auch wenn diese Replik
-  zurückliegt: Vertraulichkeit geht vor Angleichungsruhe, ein zu früh
-  entferntes Blatt zieht ein Mitglied auf dem Stand nach, ein Eintrag an
-  ein Nicht-Mitglied ist nicht rückholbar), fremde Blätter nachziehen nur
-  auf dem Stand, dann `treeSafe`: jedes Blatt im Baum gehört zu einem
-  Mitglied laut Log, sonst wartet der Eintrag (`queued`, Notiz „schreiben
-  wartet“). Nur eine Reparaturanfrage geht dann unversiegelt hinaus, sie
-  trägt keine Geheimnisse, damit die Lückenreparatur nie an der
-  Vertraulichkeitsregel hängt (Review zu #34). Ausnahme bleibt die
-  Entfernung: ihr Eintrag wird unter dem Schlüssel versiegelt, den der
-  Entfernte noch hat (§10.2); sein Blatt ist für diesen einen Eintrag
-  Empfänger, alle anderen Fremden nicht. S4f prüft seitdem die
-  Vertraulichkeit nach der Heilung, nicht nur die Mitgliedschaft; vorher
-  stand dort `keys: —`. Nebeneffekt: Befund 8 löst sich, Bob bekommt nach
-  der verfallenen Entfernung sein Blatt mit der nächsten Rotation nachgezogen
-  und liest den nächsten Eintrag.
+- **Everything over the carrier is an entry.** Authority operations,
+  revocations, repair requests and content go as `sealed`: the inner frame
+  under the entry key (BeeKEM `encrypt`, as before only for content), plus
+  the predecessor table. Only the envelope stays in plaintext: `kind` (kind
+  of the inner frame, for the service), `heads`, `by`. The reference of an
+  entry is a hash over randomness and plaintext, so that identical frames
+  (a resent operation, two identical requests) get different keys.
+- **Three things stay outside.** BeeKEM operations (themselves ciphertext
+  to the leaves; they precede their authority operation as frames of their
+  own, because the newcomer has to take them into the tree without an entry
+  key). The welcome to a new device: the group and the admission, with
+  X25519 against the card's welcome key, HKDF, AES-GCM; only that device
+  can open it. And the cards: they go over the encounter channel (`direct`
+  in the harness, delivery without a carrier, without a service, without
+  fault injection), as in the spec cards come from the encounter. With a
+  bench service, cards still go over the service, because it learns the
+  device binding from the card (in the spec from the view). The service of
+  class log reads the authority log (§9.3): for that there is the plaintext
+  mode (`klartext`), only for it.
+- **Newcomers read the history with the admission.** The predecessor tables
+  of the sealed authority frames pass the key chain on down to the genesis:
+  S6 (history without a new entry) now passes, not only via the chain of
+  the next content.
+- **A removal is sealed under the key before the removal**, but sent only
+  after the BeeKEM attachments: the removed member must still be able to
+  open it (Access §10.2, delivery of the removal), the others open it with
+  the old key, which BeeKEM keeps. Without this order Carol in S4j never
+  learned of her removal and the fork did not happen.
+- **Two separate controls (review of #31, three rounds).** The first version
+  hung tree reconciliation and gap repair on the same condition "no
+  unopened authority frames"; that was a circle: waiting for completeness
+  while blocking the way there, and every damaged frame blocked
+  permanently. Now:
+  - *Gap repair without a lock.* Evidence comes only from opened entries
+    (the writer had the key) and from waiting operations. Unopened frames
+    evidence nothing, their envelope is unvouched; nor do they hold anything
+    up. A damaged frame, wherever damaged, is thereby invisible to repair;
+    what it contained is fetched by the next intact evidence. Side effect:
+    fewer requests (T2 before 7 requests and three triple answers, now 2).
+  - *Tree reconciliation with restraint.* An unopened authority frame means:
+    this replica knows its log lags behind what is in circulation. Whether
+    it will still open, never open (an epoch without us, until the table of
+    a later entry brings it) or is damaged, it cannot tell. In all three
+    cases it does not touch foreign leaves, neither remove (healing) nor
+    add, otherwise it would take out the leaf of someone just admitted or
+    put back the leaf of someone just removed (that is what the first run
+    looked like: dozens of `heal`/`heal-add`, and in T2 Dave brought Carol
+    back into the tree). The members on the current state do that (I4:
+    every member with a key). Targeted, not blanket (round 4): only frames
+    whose key operation is in the tree count, so from an epoch in which
+    this replica is present; a frame with an unknown `keyOp` says nothing
+    about its log and holds nothing up. Its own devices it always adds, the
+    tree vouches for that (without a key it does not work): an unreadable
+    frame blocks no second device. Reading, writing, repair continue in any
+    case. A key operation alone triggers no reconciliation; reconciliation
+    happens after authority operations and before writing.
+  - *Consequence for T2:* Bob's removal of Carol is concurrent with Dave's
+    admission and sealed under a key without Dave. Dave reads it only with
+    the next entry of a member that has read it (chain, as Keyhive b); T2
+    therefore writes once more at the end.
+- **The envelope is unvouched (#32).** `kind` in plaintext only controls
+  the service's exception (authority frames pass without the membership
+  gate because they are evidence for the conflict matrix, but only from
+  devices with a proven key). What the envelope claims, the content has to
+  redeem: if the inner kind does not match `kind`, the entry is discarded
+  and noted. Otherwise a removed device with kept state could declare fresh
+  content as `auth` and deliver it past the service (regression in the
+  service test).
+- **Damaged entries hold nothing up.** The rule "no reconciliation and no
+  gap check while authority frames are unopened" applies only to frames
+  whose key may still arrive (key operation not in the tree or attempts not
+  exhausted). An entry that does not open with a known key is damaged and
+  is thrown out; one with exhausted attempts stays but does not count. What
+  they contained is fetched by repair via the evidence of later entries
+  (review of #31: before, a destroyed frame blocked every repair
+  permanently).
+- **Writing waits.** Whoever has no key at the moment and cannot rotate
+  (own leaf missing, for instance after a simultaneous removal that later
+  lapses) puts the frame back (`queued`) until a member adds the leaf (I4)
+  and the next frame brings the key. That is the primer's "healing =
+  writing waits".
+- **No authority without a key.** Without a key a device, since sealed
+  frames, no longer reads the log either (`ungeöffnet=N`) until the next
+  rotation of a member reaches it again (and via its table the keys of the
+  sealed authority frames).
+- **Reconciliation after every rotation (#33, S4f).** A rotation merges
+  simultaneous tree changes (KV6): only afterwards do, for instance, the
+  leaves from a lapsed branch (Mallory's invitations of x and y) stand in
+  the tree. After healing nobody had a key (healing needs one), Alice's
+  next entry rotated, the rotation brought x and y into the tree, and the
+  entry went to five leaves: x and y read new content although no log
+  listed them as members. Now, before every entry: the recipient set is the
+  tree after the rotation, and it is checked, not assumed. Heal first
+  (always, even if this replica lags behind: confidentiality outranks
+  reconciliation quiet, a leaf removed too early is re-added by a member on
+  the current state, an entry to a non-member cannot be recalled), add
+  foreign leaves only on the current state, then `treeSafe`: every leaf in
+  the tree belongs to a member per the log, otherwise the entry waits
+  (`queued`, note "writing waits"). Only a repair request then goes out
+  unsealed, it carries no secrets, so that gap repair never hangs on the
+  confidentiality rule (review of #34). The exception remains the removal:
+  its entry is sealed under the key the removed member still has (§10.2);
+  its leaf is a recipient for this one entry, all other strangers are not.
+  S4f has since checked confidentiality after healing, not only
+  membership; before it said `keys: —`. Side effect: finding 8 resolves,
+  Bob gets his leaf re-added with the next rotation after the lapsed
+  removal and reads the next entry.
 
-- **Kosten (Befund 12).** Jede Autoritätsoperation ist jetzt ein
-  BeeKEM-Eintrag, den jede Replik mit `decrypt` öffnet. Keyhive sucht den
-  Schlüssel über den Hash der PCS-Epoche und spielt für eine Epoche, die
-  nicht die aktuelle ist, die Baumgeschichte nach (Profil: blake3 und
-  Serialisierung des Baums); je Aufruf mehrere bis zehn Millisekunden bei
-  30 Mitgliedern, wachsend mit der Geschichte. In S9 (50 Operationen je
-  Zustellrunde, ständiges Entfernen und Wiederaufnehmen) trifft das jede
-  Replik mit Rückstand. Gegenmaßnahmen im Kandidaten: `keyOp` im Umschlag
-  (Digest der letzten Schlüsseloperation des Schreibers, das keyOpDigest
-  der Spec): kein BeeKEM-Versuch, bevor die Operation im Baum ist; eine
-  Schlüsselgeneration je Replik: kein zweiter Versuch ohne neuen Schlüssel;
-  höchstens drei BeeKEM-Versuche je Eintrag, danach nur die Tabelle eines
-  späteren Eintrags (kein Gate auf „hat Schlüssel“: ohne aktuellen Schlüssel
-  öffnet BeeKEM noch frühere Epochen, und genau so kommt eine Entfernung
-  an); Kodierung über `Buffer` (die zeichenweisen base64-Helfer waren 40 %
-  der Zeit). Ergebnis: S9 30 × 100 **201 ms/Op**, 30 × 500 **823 ms/Op**
-  (superlinear, Geschichte), vorher 17,8; S9b 0,29 ms je Gerät und
-  Zustellung (vorher 0,50, Buffer). Was bleibt, liegt im
-  Wrapper (`rust/beekem-wasm`: historische Schlüssel nicht gecacht) und im
-  Muster „ein Eintrag je Operation“; eine Kettung von Einträgen derselben
-  Epoche unter einem abgeleiteten Schlüssel würde S9 nicht helfen (jede
-  Operation wechselt die Epoche). Für den Vergleich der Kandidaten ist das
-  die Zahl, die gilt: versiegelt, nicht Klartext.
+- **Cost (finding 12).** Every authority operation is now a BeeKEM entry
+  that every replica opens with `decrypt`. Keyhive looks up the key via the
+  hash of the PCS epoch and, for an epoch that is not the current one,
+  replays the tree history (profile: blake3 and serialization of the tree);
+  several to ten milliseconds per call at 30 members, growing with the
+  history. In S9 (50 operations per delivery round, constant removing and
+  re-admitting) that hits every replica that lags behind. Countermeasures in
+  the candidate: `keyOp` in the envelope (the digest of the writer's last
+  key operation, the spec's keyOpDigest): no BeeKEM attempt before the
+  operation is in the tree; one key generation per replica: no second
+  attempt without a new key; at most three BeeKEM attempts per entry, after
+  that only the table of a later entry (no gate on "has key": without a
+  current key BeeKEM still opens earlier epochs, and that is exactly how a
+  removal arrives); encoding via `Buffer` (the character-wise base64
+  helpers were 40 % of the time). Result: S9 30 × 100 **201 ms/op**,
+  30 × 500 **823 ms/op** (superlinear, history), before 17.8; S9b 0.29 ms
+  per device and delivery (before 0.50, Buffer). What remains lies in the
+  wrapper (`rust/beekem-wasm`: historical keys not cached) and in the
+  pattern "one entry per operation"; chaining entries of the same epoch
+  under a derived key would not help S9 (every operation changes the
+  epoch). For the comparison of candidates this is the number that counts:
+  sealed, not plaintext.
 
-Prüfung: T12 auf Relay und PWS (`carried()` bzw. der Server-Speicher: keine
-Namen, kein Inhalt, nur Chiffretext mit Umschlag; PWS `visible()`: keine
-Personen, kein `card`); S1–S10, E9, Lückenreparatur, Dienstvarianten alle
-unverändert bestanden. Für den Port: Der Umschlag im Klartext ist das, was
-ein Träger lernt: Art des Rahmens, Köpfe als Hashes, ein Geräteschlüssel als
-Pseudonym; dazu Größen, Zeiten und die Gerätenamen des Prüfstands.
+Check: T12 on relay and PWS (`carried()` or the server storage: no names,
+no content, only ciphertext with an envelope; PWS `visible()`: no persons,
+no `card`); S1–S10, E9, gap repair, service variants all passed unchanged.
+For the port: the plaintext envelope is what a carrier learns: kind of the
+frame, heads as hashes, a device key as a pseudonym; plus sizes, times and
+the bench's device names.
 
-### Beglaubigtes Ziel für die Klasse Sicht (D5, I5), 13.10.
+### Attested target for class view (D5, I5), 13 October
 
-Der Prüfstand-Dienst beglaubigt jetzt sein Konvergenzziel nach Replication
-§4.1 (Form 0.26, verkürzt: ohne genesisDigest, session, registrationCore):
-`seq` in Kette, `prev` als Digest des Vorgängers, `chain` als Digest des
-ersten Ziels, Signatur unter einem Attestationsschlüssel, der über die
-Sitzung stabil ist (damit Equivocation beweisbar wäre), Scope `stored`:
-ein schlüsselblinder Dienst beglaubigt, was er hält, nie Zulässigkeit.
-`heads` sind hier die Referenzen aller gespeicherten versiegelten
-Einträge (der Dienst sieht die Kette der Einträge nicht, also keine echten
-Köpfe; grow-only, wie die Konsistenzpflicht verlangt). Dazu hält der
-Dienst die durchgelassenen Einträge nach Referenz und liefert sie auf
-`fetch` nach (Quellenpflicht, I1/I12 gegen den Dienst als Quelle).
+The bench service now attests its convergence target per Replication §4.1
+(form 0.26, shortened: without genesisDigest, session, registrationCore):
+`seq` in a chain, `prev` as the digest of the predecessor, `chain` as the
+digest of the first target, a signature under an attestation key that is
+stable over the session (so that equivocation would be provable), scope
+`stored`: a key-blind service attests what it holds, never admissibility.
+`heads` here are the references of all stored sealed entries (the service
+does not see the chain of entries, so no real heads; grow-only, as the
+consistency duty demands). In addition the service keeps the entries it let
+through by reference and delivers them on `fetch` (source duty, I1/I12
+against the service as a source).
 
-Auf Geräteseite ein **Sync-Tick** (`Candidate.poll`, vom Prüfstand zu
-Beginn jeder Zustellrunde gerufen, die App kommt in den Vordergrund): mit
-Dienst fragt das Gerät `target-request` mit einer Nonce und `since` (das
-letzte Ziel, das es kennt). Drei getrennte Prüfungen am Ziel (Review zu
-#36, drei Gegenproben): **Signatur** unter dem beim ersten Mal gesehenen
-Schlüssel (TOFU wie §7.3); **Kette**: seq genau +1, `prev` = Digest des
-angenommenen Vorgängers, `chain` = Kettenidentität, sonst liegt das Ziel
-mit Notiz; der Dienst reicht auf `since` die Zwischenziele nach, damit die
-Kette auch dann prüfbar ist, wenn andere Geräte dazwischen gefragt haben;
-**Frische**: die offene Anfrage beantwortet nur ein Ziel mit ihrem Echo
-(signiert) und an dieses Gerät, ein altes gültiges Ziel ist ein
-Kettenglied, nie eine Antwort. Der Fehlbestand ist eine Menge von
-Digests.
+On the device side a **sync tick** (`Candidate.poll`, called by the bench
+at the start of every delivery round, the app comes to the foreground):
+with a service the device asks `target-request` with a nonce and `since`
+(the last target it knows). Three separate checks on the target (review of
+#36, three counter-checks): **signature** under the key seen the first time
+(TOFU as §7.3); **chain**: seq exactly +1, `prev` = digest of the accepted
+predecessor, `chain` = chain identity, otherwise the target lies with a
+note; on `since` the service delivers the intermediate targets so that the
+chain is checkable even if other devices asked in between; **freshness**:
+the open request is answered only by a target with its echo (signed) and
+to this device, an old valid target is a chain link, never an answer. The
+missing set is a set of digests.
 
-**Die Empfangsgrenze (Runde 3, Codex: „‚vorhanden‘ war nacheinander eine
-Zahl, eine Referenz und ein Entschlüsselungserfolg“).** Drei Aussagen,
-drei Zustände, getrennt gehalten:
+**The reception boundary (round 3, Codex: "'present' was in turn a count, a
+reference and a decryption success").** Three statements, three states,
+kept apart:
 
-| Zustand | Aussage | Wo |
+| State | Statement | Where |
 |---|---|---|
-| verifiziert gespeichert | die Bytes dieses Eintrags liegen hier; Identität = Digest der Bytes, dieselbe, die der Dienst beglaubigt | `stored` (Gerät), `stored` nach Digest (Dienst) |
-| entschlüsselt | der Inhalt ist lesbar | `keys`, `heads`, Tabelle |
-| fachlich geprüft | Art stimmt mit dem Umschlag, die Autorität hat geurteilt | Fold, `verworfen`-Notizen |
+| verified stored | the bytes of this entry lie here; identity = digest of the bytes, the same the service attests | `stored` (device), `stored` by digest (service) |
+| decrypted | the content is readable | `keys`, `heads`, table |
+| checked | the kind matches the envelope, the authority has judged | fold, `verworfen` notes |
 
-Der Zielfortschritt kommt **nur** aus dem ersten Zustand: ein Eintrag
-des Ziels ist nachgeliefert, wenn byte-identische Bytes da sind, gleich
-ob sie sich schon öffnen lassen. Eine beschädigte Kopie hat einen anderen
-Digest und zählt nicht; beim nächsten Tick wird alles erneut geholt, was
-das Ziel nennt und nicht gespeichert ist. Die Entschlüsselung und ihr
-Versuchszähler liegen dahinter und sind je Kopie (nach Digest) geführt:
-eine beschädigte Kopie derselben Referenz verbraucht nicht die Versuche
-der richtigen. Dieselben Bytes ein zweites Mal sind ein Duplikat (T3) und
-werden nicht erneut angenommen. Durchgängig geprüft: vorgehalten,
-beschädigt geliefert, richtig nachgeliefert, wiederhergestellt. Beide Anfragen gehen unversiegelt (nur IDs) und sind beim
-Dienst ein Lesen: bewiesener Schlüssel und Mitgliedschaft (I7). Status:
-`ziel=seq N (M fehlen, K geholt)` bzw. `ziel=angefragt, keine Antwort`.
+Target progress comes **only** from the first state: an entry of the target
+is delivered when byte-identical bytes are there, whether or not they can
+be opened yet. A damaged copy has a different digest and does not count;
+on the next tick everything the target names and is not stored is fetched
+again. Decryption and its attempt counter lie behind that and are kept per
+copy (by digest): a damaged copy of the same reference does not use up the
+attempts of the right one. The same bytes a second time are a duplicate
+(T3) and are not accepted again. Checked end to end: withheld, delivered
+damaged, delivered right, recovered. Both requests go out unsealed (ids
+only) and are a read at the service: proven key and membership (I7).
+Status: `ziel=seq N (M fehlen, K geholt)` or `ziel=angefragt, keine
+Antwort`.
 
-Ergebnis: T6 besteht mit Sicht jetzt über das Ziel (ein Eintrag
-vorgehalten → im Ziel genannt → beim Dienst geholt), T6b besteht (Feed
-eingefroren → Anfrage ohne Antwort, samplebar). Klasse blind bleibt bei
-T6b rot, dort gibt es kein Ziel; PWS ebenso, bis der Feed beglaubigt ist
-(Frage 3 an Dmitri). Nicht modelliert: der Horizont, nach dem „keine
-Antwort“ ein Ergebnis wird; Rotation des Attestationsschlüssels;
-Equivocation-Beweis aus zwei Ketten.
+Result: T6 with a view service now passes via the target (one entry
+withheld → named in the target → fetched from the service), T6b passes
+(feed frozen → request without an answer, sampleable). Class blind stays
+red at T6b, there is no target there; PWS likewise until the feed is
+attested (question 3 to Dmitri). Not modelled: the horizon after which "no
+answer" becomes a result; rotation of the attestation key; equivocation
+proof from two chains.
 
-### KV3 am Kandidaten: Schlüsseloperation ohne Logeintrag (S11, 14.10.)
+### KV3 at the candidate: key operation without a log entry (S11, 14 October)
 
-Review zu PR #37 (Codex): die Positivkontrolle las über den erbeuteten
-Altzustand mit, nicht über das Blatt; eine Fälschung, die gar kein Blatt
-erzeugt, bestand S11 trotzdem. Jetzt liest `attackerOpen` mit `via:
-'forged'` ausschließlich über das Blatt; ohne wirksames Blatt ist S11
-„nicht bestanden“ (Angreifer-Modell wirkungslos), ohne Fälschung nach
-der Entfernung „nicht abbildbar“. Regression: `tests/rltp-beekem.test.ts`.
+Review of PR #37 (Codex): the positive control read along via the captured
+old state, not via the leaf; a forgery that created no leaf at all still
+passed S11. Now `attackerOpen` with `via: 'forged'` reads exclusively via
+the leaf; without an effective leaf S11 is "failed" (attacker model
+ineffective), without a forgery after the removal "not applicable".
+Regression: `tests/rltp-beekem.test.ts`.
 
-KV3 („das Log bindet die Epoche an das Geheimnis“) hatte in der Matrix
-kein Szenario. S11 prüft die Zusage von der Angriffsseite: Mallory
-erbeutet ihren eigenen Zustand, wird entfernt und nimmt mit dem alten
-Zustand ein neues Blatt für sich in den Baum (`forgeKeyOp`, Fähigkeit
-`forge-key-op`: eine BeeKEM-Aufnahme, die kein Logeintrag deckt). Die
-Rahmen erreichen alle Mitglieder wie über den Träger. Positivkontrolle
-davor: solange sie Mitglied ist, ist dasselbe Blatt ihr gutes Recht (K7)
-und liest. Nach der Entfernung liest es nichts: der Baum folgt dem Log,
-die Angleichung vor jedem Eintrag (`treeSafe`) nimmt das ungedeckte Blatt
-heraus, bevor ein Schlüssel es erreicht. Bestanden in allen Varianten;
-für die anderen Kandidaten nicht abbildbar (keine Fälschung aus
-erbeutetem Zustand modelliert).
+KV3 ("the log binds the epoch to the secret") had no scenario in the
+matrix. S11 checks the promise from the attack side: Mallory captures her
+own state, is removed and with the old state adds a new leaf for herself to
+the tree (`forgeKeyOp`, capability `forge-key-op`: a BeeKEM admission that
+no log entry covers). The frames reach all members as over the carrier.
+Positive control beforehand: as long as she is a member, the same leaf is
+her right (K7) and reads. After the removal it reads nothing: the tree
+follows the log, reconciliation before every entry (`treeSafe`) takes the
+uncovered leaf out before a key reaches it. Passed in all variants; not
+applicable for the other candidates (no forgery from a captured state
+modelled).
 
-### Konformitätsmatrix und die Dienstvarianten am Träger (13.10.)
+### Conformance matrix and the service variants at the carrier (13 October)
 
-Die Matrix (`src/lab/matrix.ts`, Ausgabe `REPORT=1 pnpm test report` und
-die Seite) läuft S1–S10 und T1–T12 für alle Kandidaten. Eine Zusage gilt
-nur, wenn jedes zugeordnete Szenario besteht; besteht ein Teil und der
-Rest ist nicht abbildbar, steht „teilweise“ (Review zu #35: vorher machte
-ein bestandener Teil eine zusammengesetzte Zusage grün, und A4 „beide
-draußen“ stützte sich auf S4c, das nur Einigkeit verlangt; jetzt prüft
-S4c2 das Soll samt Vertraulichkeit, und das zeigt gleich etwas: p2panda
-lässt nach gegenseitiger Entfernung beide draußen, aber Bob liest Carols
-neuen Eintrag noch, wie in S4b). Für die
-Dienstvarianten dieses Kandidaten ist der Katalog T damit zum ersten Mal
-gelaufen; was dabei rot wurde, sind Befunde, nicht Fehler des Prüfstands:
+The matrix (`src/lab/matrix.ts`, output `REPORT=1 pnpm test report` and
+the page) runs S1–S10 and T1–T12 for all candidates. A promise holds only
+if every mapped scenario passes; if a part passes and the rest is not
+applicable, it says "partial" (review of #35: before, a passed part turned
+a composite promise green, and A4 "both out" rested on S4c, which only
+demands agreement; now S4c2 checks the expectation including
+confidentiality, and that immediately shows something: p2panda leaves both
+out after mutual removal, but Bob still reads Carol's new entry, as in
+S4b). For the service variants of this candidate catalogue T has thereby
+run for the first time; what turned red are findings, not bench errors:
 
-| | Sichten | Log-Replik (Klartextmodus) | Befund |
+| | Views | Log replica (plaintext mode) | Finding |
 |---|---|---|---|
-| T1 Rahmen still verloren | ✓ | ✗ | Im Klartextmodus reisen die BeeKEM-Anhänge im Autoritätsrahmen; geht er verloren, fehlt auch der Schlüssel, der nächste Inhalt lässt sich nicht öffnen und belegt nichts. Die Lückenreparatur holt Autorität, keine Schlüssel (bekannte Grenze, I12 ist Autoritätsreparatur). |
-| T2 Umordnung | ✗ | ✗ | Mit Dienst kommt ein umgeordneter Inhalt vor dem Besitznachweis des Schreibers oder vor der Sicht, die ihn zulässt; der Dienst verwirft ihn endgültig, statt ihn zu halten. Beim blinden Träger trägt die Replik die Reihenfolge, beim Dienst müsste er sie tragen (Access §9.3: Evidenztransport nie gated, Inhalt gated, aber ein Urteil „zu früh“ ist keines von beiden). Offen. |
-| T5 verändert | ✓ | ✗ | Klartextmodus: ein abgeschnittener Autoritätsrahmen wird verworfen, aber Dave und Eve kommen nicht nach, weil im Klartextmodus kein Inhalt sie belegt (s. T1). |
-| T6 ein Eintrag vorgehalten | ✓ | ✗ | wie T1: ohne Schlüssel kein Beleg. |
-| T6b Feed eingefroren | ~~✗~~ ✓ | ✗ | Seit der Attestation (unten): der Dienst der Klasse Sicht beglaubigt sein Ziel, Carol fragt beim Sync-Tick und bekommt keine Antwort, der Zustand sagt es. Log-Replik: Klartextmodus ohne Zielabfrage im Test, Befund bleibt dort. |
-| T12 versiegelt | ✗ | ✗ | Mit Prüfstand-Dienst gehen Karten über den Dienst (Gerätebindung aus der Karte); der Log-Dienst liest das Log im Klartext, das ist seine Klasse (§9.3). Der Träger sieht hier, was der Dienst sehen soll. |
+| T1 frame silently lost | ✓ | ✗ | In plaintext mode the BeeKEM attachments travel inside the authority frame; if it is lost, the key is lost too, the next content cannot be opened and evidences nothing. Gap repair fetches authority, not keys (known limit, I12 is authority repair). |
+| T2 reorder | ✗ | ✗ | With a service a reordered content arrives before the writer's proof of possession or before the view that admits it; the service discards it for good instead of holding it. With a blind carrier the replica carries the order, with a service it would have to (Access §9.3: evidence transport never gated, content gated, but a verdict "too early" is neither). Open. |
+| T5 tampered | ✓ | ✗ | plaintext mode: a truncated authority frame is discarded, but Dave and Eve do not follow, because in plaintext mode no content evidences them (see T1). |
+| T6 one entry withheld | ✓ | ✗ | as T1: without a key no evidence. |
+| T6b feed frozen | ~~✗~~ ✓ | ✗ | Since the attestation (above): the service of class view attests its target, Carol asks at the sync tick and gets no answer, the state says so. Log replica: plaintext mode without a target query in the test, the finding remains there. |
+| T12 sealed | ✗ | ✗ | With a bench service cards go over the service (device binding from the card); the log service reads the log in plaintext, that is its class (§9.3). The carrier sees here what the service is meant to see. |
 
-Was die Matrix für die anderen Kandidaten zeigt: Ein T-Szenario, dessen
-Fehlerregel beim Träger nie greift (Keyhive nennt alles `event`, p2panda
-und Klartext ihre Operationen anders), steht als „nicht abbildbar“, nicht
-als bestanden; das waren im ersten Lauf stille Treffer. T2, T3, T7 und T12
-gelten für alle, weil sie ohne Rahmenart auskommen: p2panda scheitert an
-der Umordnung (T2), Klartext an Duplikaten (T3) und am Entfernten (T7),
-Keyhive und p2panda bestehen T12 (binäre Rahmen ohne Namen).
+What the matrix shows for the other candidates: a T scenario whose fault
+rule never applies at the carrier (Keyhive names everything `event`,
+p2panda and plaintext name their operations differently) stands as "not
+applicable", not as passed; in the first run those were silent hits. T2,
+T3, T7 and T12 apply to everyone because they need no frame kind: p2panda
+fails on reordering (T2), plaintext on duplicates (T3) and on the removed
+member (T7), Keyhive and p2panda pass T12 (binary frames without names).
 
-### Wo der Code vom Guss abweichen musste (Befund für 0.57)
+### Where the code had to deviate from the casting (finding for 0.57)
 
-1. **Autor einer k-of-n-Operation.** Die Spec disponiert „eine Entfernung
-   ihres Autors“ (RLTP-ACC-3400); eine Operation mit signature-set hat
-   keinen einen Autor. Hier verfällt sie, sobald **einer** ihrer gültigen
-   Signierer gleichzeitig entfernt wird (fail-closed). Der Guss sollte das
-   sagen: alle Mitsignierer sind Autoren, oder nur der `author` des
-   Umschlags.
-2. **Befördern ist Verfassung.** Ohne Rollen ist „x wird Admin“ ein
-   `policy.change`. Wer gleichzeitig entfernt wird und jemanden befördert
-   (S4f), löst keinen Fork aus, weil Strong Removal zuerst greift; stünde
-   Klassenregel 3 zuerst, forkte jede Entfernung eines Admins, der gerade
-   befördert. Die Reihenfolge der Dispositionen trägt damit mehr, als §3.6
-   vermuten lässt; sie sollte als Regel mit Rationale stehen.
-3. **Was im Fork weitergeht.** §3.6 sagt „fails closed“. Hier verfällt nur
-   Durchsetzung; Aufnahmen und Inhalte laufen weiter (der Schlüsselbaum
-   folgt der Mitgliedschaft). Ob eine Aufnahme im Fork gelten soll, ist eine
-   Entscheidung für den Guss.
-4. **Konsens des Subjekts.** `vouch` verlangt „A enthält das Subjekt“; hier
-   prüft die Subjekt-Signatur unter dem Schlüssel aus der Aufnahme selbst,
-   bevor das Subjekt Mitglied ist. Eine Aufnahme ohne vouch-Regel braucht
-   hier kein Ja des Subjekts; in der Spec liefert das die Membership Tasks
-   (accept), außerhalb des Logs. Die Bürgschaft ist an die Nonce der
-   Aufnahme gebunden, nicht an ein Accept-Dokument (Vereinfachung).
-5. **Heilung unter Quorum.** In Schritt 1 heilte nur, wer
-   `may(person, member.remove)` erfüllte; unter `threshold 2` niemand. Seit
-   Schritt 1b repariert jedes Mitglied mit Schlüssel (I4): Heilung ist das
-   Angleichen des Baums an die Mitgliedschaft, keine Mitgliedschafts-
-   entscheidung. Für den Guss: so aussprechen.
-7. **Gültigkeitsabhängigkeit** (`dependsOn`, aus #18): „gilt nur mit X“ ist
-   ein eigener Mechanismus neben Autorität je Position; die Admission Chain
-   der Membership Tasks leistet ihn für die Aufnahme, für Politik, die an
-   einer Aufnahme hängt, fehlt er, und `actors`, die Nicht-Mitglieder
-   nennen, sind der Grund.
-8. **Wiederaufnahme nach verfallener Entfernung.** Verfällt eine
-   Entfernung nachträglich (Fork), ist das Blatt des Betroffenen schon aus
-   dem Baum. Aufgelöst mit der Angleichung nach jeder Rotation (#33): das
-   nächste schreibende Mitglied zieht das Blatt nach, der Eintrag erreicht
-   ihn (`tests/rltp-beekem.test.ts`). Für den Guss bleibt die Frage, ob
-   das Blatt unter demselben Share-Key wiederkommen darf oder frisches
-   Material braucht (ein Schlüsselzustand nach einer Entfernung wird nie
-   wiederverwendet); der Prüfstand nimmt dasselbe Blatt.
-6. **Nicht modelliert:** pending exits in der policy currency (5.4, kein
-   `member.leave` im Prüfstand); der Transportkosten-Bound der Politik
-   (§4.4); `strongest` jenseits von 16 Mitgliedern (symbolische Ordnung
-   nötig, die Spec erlaubt sie); Schlüsselwechsel einer Person
-   (`anchor.rotate`).
+1. **Author of a k-of-n operation.** The spec disposes "a removal of its
+   author" (RLTP-ACC-3400); an operation with a signature set has no single
+   author. Here it lapses as soon as **one** of its valid signers is removed
+   at the same time (fail-closed). The casting should say so: all
+   co-signers are authors, or only the `author` of the envelope.
+2. **Promotion is constitution.** Without roles, "x becomes admin" is a
+   `policy.change`. Whoever is removed at the same time as promoting
+   someone (S4f) triggers no fork, because strong removal applies first;
+   if class rule 3 came first, every removal of an admin who is promoting
+   at that moment would fork. The order of the dispositions therefore
+   carries more than §3.6 suggests; it should stand as a rule with
+   rationale.
+3. **What goes on in a fork.** §3.6 says "fails closed". Here only
+   enforcement lapses; admissions and content go on (the key tree follows
+   membership). Whether an admission should hold in a fork is a decision
+   for the casting.
+4. **Consent of the subject.** `vouch` demands "A contains the subject";
+   here the subject's signature verifies under the key from the admission
+   itself, before the subject is a member. An admission without a vouch
+   rule needs no yes of the subject here; in the spec the membership tasks
+   provide that (accept), outside the log. The voucher is bound to the
+   nonce of the admission, not to an accept document (simplification).
+5. **Healing under a quorum.** In step 1 only those healed who satisfied
+   `may(person, member.remove)`; under `threshold 2` nobody. Since step 1b
+   every member with a key repairs (I4): healing is the reconciliation of
+   the tree with membership, not a membership decision. For the casting:
+   say so.
+7. **Validity dependency** (`dependsOn`, from #18): "holds only with X" is a
+   mechanism of its own next to authority per position; the admission chain
+   of the membership tasks provides it for the admission, for policy that
+   hangs on an admission it is missing, and `actors` that name non-members
+   are the reason.
+8. **Re-admission after a lapsed removal.** If a removal lapses later
+   (fork), the affected member's leaf is already out of the tree. Resolved
+   with reconciliation after every rotation (#33): the next writing member
+   re-adds the leaf, the entry reaches him (`tests/rltp-beekem.test.ts`).
+   For the casting the question remains whether the leaf may come back
+   under the same share key or needs fresh material (a key state after a
+   removal is never reused); the bench takes the same leaf.
+6. **Not modelled:** pending exits in the policy currency (5.4, no
+   `member.leave` in the bench); the transport cost bound of the policy
+   (§4.4); `strongest` beyond 16 members (a symbolic order is needed, the
+   spec allows it); a person's key change (`anchor.rotate`).

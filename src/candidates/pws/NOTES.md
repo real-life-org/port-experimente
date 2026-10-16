@@ -1,172 +1,171 @@
-# Port-Notizen: RLTP über BeeKEM auf Portable Web Spaces (E12)
+# Port notes: RLTP over BeeKEM on Portable Web Spaces (E12)
 
-Stand 11.10.2026. Plan: `rltp/design/port-experimente-2026-10.md`, E12;
-Hintergrund `rltp/design/pws-bruecke-2026-10.md`. Portable Web Spaces (PWS,
-ex Wallet Attached Storage, W3C CCG v0.5) als Speicher einer Gruppe, mit
-dem unveränderten BeeKEM-Kandidaten (E6–E9) darüber. Nur der Transport
-wechselt. Server: `was-teaching-server` 0.42.2 im Prozess
-(`startTestServer`, eigener Temp-Speicher je Server), Client
-`@interop/was-client` 0.96; beide verlangen Node ≥ 24.
+As of 11 October 2026. Plan: `rltp/design/port-experimente-2026-10.md`,
+E12; background `rltp/design/pws-bruecke-2026-10.md`. Portable Web Spaces
+(PWS, formerly Wallet Attached Storage, W3C CCG v0.5) as a group's storage,
+with the unchanged BeeKEM candidate (E6–E9) on top. Only the transport
+changes. Server: `was-teaching-server` 0.42.2 in process
+(`startTestServer`, own temp storage per server), client
+`@interop/was-client` 0.96; both require Node ≥ 24.
 
-## Variante (a): blinder Speicher
+## Variant (a): blind storage
 
-- **Ein Space je Gruppe, eine Collection `frames`.** Jeder Rahmen des
-  Kandidaten (Karte, Autoritätsoperation mit BeeKEM-Anhängen, lose
-  BeeKEM-Operation, Widerruf, Inhalt mit Kette) wird als JSON-Resource
-  `{from, label, b}` unter der ID `<gerät>-<laufnummer>` abgelegt; der
-  Server prüft nichts am Inhalt (Klartext-Collection, die Bytes sind unsere
-  versiegelten Rahmen).
-- **Lesen über den changes-Feed**, je Gerät mit eigenem Checkpoint; Rahmen
-  anderer Geräte gehen an `candidate.receive`, eigene werden übersprungen.
-  Offline = kein Push, kein Pull; der Ausgang puffert.
-- **Controller des Spaces ist ein Gruppenschlüssel** (`did:key`), den alle
-  Geräte halten und mit dem alle signieren. Für WAS ist die Gruppe damit ein
-  Controller. Mitgliedschaft kennt der Server nicht; wer den Schlüssel hat,
-  liest und schreibt. Entfernen wirkt nur über die Schlüsselepoche (KV1),
-  nie am Server.
-- Partitionen: Im Prüfstand mit eigenem Transport ist nur die erste Gruppe
-  online; die anderen puffern, ohne Mesh untereinander (Konvention aller
-  Kandidaten mit eigenem Transport, wie Gen 2 und Keyhive über ARK).
+- **One space per group, one collection `frames`.** Every frame of the
+  candidate (card, authority operation with BeeKEM attachments, loose BeeKEM
+  operation, revocation, content with chain) is stored as a JSON resource
+  `{from, label, b}` under the id `<device>-<sequence>`; the server checks
+  nothing about the content (a plaintext collection, the bytes are our
+  sealed frames).
+- **Reading via the changes feed**, per device with its own checkpoint;
+  frames of other devices go to `candidate.receive`, own ones are skipped.
+  Offline = no push, no pull; the outbox buffers.
+- **The space controller is a group key** (`did:key`) that all devices hold
+  and sign with. For WAS the group is thereby one controller. The server
+  knows no membership; whoever has the key reads and writes. Removal acts
+  only through the key epoch (KV1), never at the server.
+- Partitions: in the bench, with own transport only the first group is
+  online; the others buffer, without a mesh among themselves (the
+  convention for all candidates with own transport, like Gen 2 and Keyhive
+  over ARK).
 
-### Ergebnisse (Prüfpunkt 1: trägt PWS als blinder Speicher?)
+### Results (check 1: does PWS carry as blind storage?)
 
-| | Ergebnis | Grund |
+| | Result | Reason |
 |---|---|---|
-| S1–S4f, S4j, S5, S5c, S6b, S8 | bestanden | wie am Prüfstand-Relay |
-| S6 | nicht bestanden | wie ohne Server: Historie erst über die Kette |
-| S4e, S4j | bestanden | Fork und Fork-Ende laufen über den Feed wie über das Relay |
-| S5b, S7 | nicht abbildbar | der Prüfstand sieht die Rahmen nicht (sie liegen beim Server), also kein Diebstahl-Modell über `w.log` |
-| S10a–c | nicht abbildbar | der Server ist blind, kein durchsetzender Dienst (Variante a) |
-| S9 (30 × 100, ein Lauf) | 105 ms/Op, davon 83 % Warten auf HTTP (`idleMs`); aktiv ≈ 18 ms/Op wie am Relay (E9 Schritt 3: 17,8) | der Server kostet Zeit, nicht der Kandidat; Sichten-Dienst am Relay: 31,9 |
-| S9b (5 × 100) | 17,9 ms je Eintrag, davon 87 % HTTP | Inhalt geht als eine Resource je Eintrag |
+| S1–S4f, S4j, S5, S5c, S6b, S8 | passed | as at the bench relay |
+| S6 | failed | as without a server: history only via the chain |
+| S4e, S4j | passed | fork and fork end run over the feed as over the relay |
+| S5b, S7 | not applicable | the bench does not see the frames (they lie at the server), so no theft model via `w.log` |
+| S10a–c | not applicable | the server is blind, no enforcing service (variant a) |
+| S9 (30 × 100, one run) | 105 ms/op, of which 83 % waiting for HTTP (`idleMs`); active ≈ 18 ms/op as at the relay (E9 step 3: 17.8) | the server costs time, not the candidate; view service at the relay: 31.9 |
+| S9b (5 × 100) | 17.9 ms per entry, of which 87 % HTTP | content goes as one resource per entry |
 
-**Antwort auf Prüfpunkt 1: ja.** Jedes Szenario, das am Prüfstand-Relay
-besteht, besteht auch über PWS, ohne Änderung am Kandidaten. Der Feed
-liefert die Rahmen in Schreibreihenfolge des Servers; die Puffer des
-Kandidaten (`wartet`, BeeKEM-Vorgänger) tragen jede Reihenfolge.
+**Answer to check 1: yes.** Every scenario that passes at the bench relay
+also passes over PWS, with no change to the candidate. The feed delivers
+frames in the server's write order; the candidate's buffers (`waiting`,
+BeeKEM predecessors) carry any order.
 
-### Prüfpunkt 3: was der Server lernt
+### Check 3: what the server learns
 
-**Korrektur nach dem Review zu PR #23 (#24):** Die erste Fassung dieser
-Notiz war falsch. Der Server sieht die Rahmen im Klartext, Base64 ist keine
-Verschlüsselung. Aus `visible()` nach Gründung, zwei Aufnahmen und einem
-Eintrag, am HTTP-Payload geprüft:
+**Correction after the review of PR #23 (#24):** the first version of this
+note was wrong. The server sees the frames in plaintext, Base64 is not
+encryption. From `visible()` after creation, two admissions and one entry,
+checked on the HTTP payload:
 
-| Rahmen | im Klartext beim Server (Stand #24) | seit E10, versiegelte Rahmen |
+| Frame | in plaintext at the server (state at #24) | since E10, sealed frames |
 |---|---|---|
-| `card` | Personenname, BeeKEM-ID, Share-Key, Geräteschlüssel | geht nicht mehr über den Server (Begegnungskanal) |
-| `auth`, `policy` | die ganze Autoritätsoperation: Art, Subjekt, Signierer, Politik, Schlüsselbindung, Vorgänger; dazu die BeeKEM-Anhänge | `sealed`: Chiffretext, Umschlag `kind`, `heads` (Hashes), `by` (Geräteschlüssel) |
-| `cgka` | BeeKEM-Operationen (signiert, Pfadgeheimnisse verschlüsselt) | unverändert; die Anhänge einer Operation gehen ihr als eigene Rahmen voraus |
-| `content` | `c`, `iv`, `tab`, `ref`: versiegelt; Umschlag `heads`, `by` | wie `auth` |
-| `repair` | Reparaturanfrage (E10, I12): fehlende und belegende IDs, Köpfe, Adressaten | `sealed` |
-| `welcome` | — | an ein Gerät verschlüsselt (`to` = sein Willkommensschlüssel) |
+| `card` | person name, BeeKEM id, share key, device key | no longer goes over the server (encounter channel) |
+| `auth`, `policy` | the whole authority operation: kind, subject, signers, policy, key binding, predecessors; plus the BeeKEM attachments | `sealed`: ciphertext, envelope `kind`, `heads` (hashes), `by` (device key) |
+| `cgka` | BeeKEM operations (signed, path secrets encrypted) | unchanged; the attachments of an operation precede it as frames of their own |
+| `content` | `c`, `iv`, `tab`, `ref`: sealed; envelope `heads`, `by` | as `auth` |
+| `repair` | repair request (E10, I12): missing and evidencing ids, heads, addressees | `sealed` |
+| `welcome` | — | encrypted to one device (`to` = its welcome key) |
 
-`visible()` nach Gründung, zwei Aufnahmen und einem Eintrag: keine Person,
-keine Karte; jeder versiegelte Rahmen (`auth`, `policy`, `content`,
-`repair`) nur `by, c, heads, iv, keyOp, kind, ref, t, tab`, das Willkommen
-`c, eph, iv, t, to`, BeeKEM-Operationen `op, t`. Der Absatz darunter
-beschreibt den Stand vor den versiegelten Rahmen.
+`visible()` after creation, two admissions and one entry: no person, no
+card; every sealed frame (`auth`, `policy`, `content`, `repair`) only
+`by, c, heads, iv, keyOp, kind, ref, t, tab`, the welcome `c, eph, iv, t,
+to`, BeeKEM operations `op, t`. The paragraph below describes the state
+before sealed frames.
 
-Personen `alice`, `bob`, `carol` sind damit für den Server lesbar, ebenso
-Mitgliedschaft, Regeln und wer wen aufgenommen hat. Nicht lesbar: Inhalte
-und die Gruppengeheimnisse. Der Grund liegt nicht bei PWS, sondern beim
-Prüfstand-Kandidaten: Er versiegelt Inhalte (KV1 ist das Thema von E6–E9),
-nicht die Rahmen; das Prüfstand-Relay war nur per Konvention blind. Die
-Spec versiegelt jeden replizierten Eintrag unter dem Epochenschlüssel
-(Replication Contract, „key-blind by construction“; Access-Envelope) und
-liefert Willkommen und Karten getrennt zu. Für E12 heißt das: Variante (a)
-ist „blind“ nur für Inhalte; ein blinder Träger im Sinn der Spec braucht
-den versiegelten Eintrag, und der gehört in den Träger-Prüfstand (E10/E11)
-als eigene Tür, nicht in diesen Kandidaten.
+Persons `alice`, `bob`, `carol` were thereby readable for the server, as
+were membership, policy and who admitted whom. Not readable: content and
+the group secrets. The reason lay not with PWS but with the bench
+candidate: it sealed content (KV1 is the topic of E6–E9), not the frames;
+the bench relay was blind only by convention. The spec seals every
+replicated entry under the epoch key (Replication Contract, "key-blind by
+construction"; Access envelope) and delivers welcomes and cards separately.
+For E12 this means: variant (a) is "blind" only for content; a blind carrier
+in the spec's sense needs the sealed entry, and that belongs in the carrier
+bench (E10/E11) as a door of its own, not in this candidate.
 
-Zusätzlich sieht der Server: Resource-IDs mit Gerätenamen und Laufnummer
-(ein Pseudonym je Gerät × Gruppe wäre die Antwort, E8 Befund 5), die
-Rahmen-Labels, Größen und die Lesezeitpunkte je Gerät über die
-Checkpoints.
+The server additionally sees: resource ids with device names and sequence
+numbers (a pseudonym per device × group would be the answer, E8 finding
+5), the frame labels, sizes and the read times per device via the
+checkpoints.
 
-### Prüfpunkt 4: Serverwechsel
+### Check 4: server switch
 
-`space.exportBlob()` → neuer Server → `space.import()` unter derselben
-Space-ID: 1 Collection, 8 Resources übernommen, 0 übersprungen, Space-Metadaten wiederhergestellt; Provenienz „unattested“ für alle 10 Einträge, weil wir keine Export-Signaturen setzen. Checkpoints sind Fakt des alten Servers (der
-Feed wird neu gelesen, `seen` filtert Bekanntes). Ein neues Gerät liest die
-ganze Historie vom neuen Server, Schreiben geht weiter, Mitgliedschaft
-stimmt. Das ist ihr erklärtes Ziel „Data Portability“, und für uns reicht
-es: Der Replication Contract verlangt nichts vom Träger, was der Umzug
-verlieren könnte; Autorität und Schlüssel leben bei den Mitgliedern.
+`space.exportBlob()` → new server → `space.import()` under the same space
+id: 1 collection, 8 resources taken over, 0 skipped, space metadata
+restored; provenance "unattested" for all 10 entries, because we set no
+export signatures. Checkpoints are a fact of the old server (the feed is
+read anew, `seen` filters what is known). A new device reads the whole
+history from the new server, writing continues, membership is right. That
+is their declared goal "data portability", and for us it suffices: the
+Replication Contract demands nothing from the carrier that the move could
+lose; authority and keys live with the members.
 
-## Prüfpunkt 2: was die Gruppe als Controller kosten würde (Varianten b, c)
+## Check 2: what the group as controller would cost (variants b, c)
 
-Nicht gebaut; aus dem Server-Code (`was-teaching-server` 0.42.2) abgeleitet.
+Not built; derived from the server code (`was-teaching-server` 0.42.2).
 
-- **Controller-Register.** `src/lib/validateDid.ts` lässt als Controller
-  `did:key` und `did:webvh` zu; `src/lib/webvhController.ts` löst ein
-  selbst gehostetes `did:webvh` aus einem Log im Space auf und prüft die
-  Historie lokal; `src/zcap.ts` (1 863 Zeilen) hängt diesen Resolver in die
-  Signaturprüfung (`setDidResolver(didResolverWithWebvh(…))`). Ein
-  RLTP-Profil wäre eine weitere Methode derselben Klasse („verified log“):
-  das Log ist unsere Sichten-Kette (E9 Schritt 2), der Schlüsselsatz des
-  „Controller-Dokuments“ sind die `identities` der zuletzt verifizierten
-  Sicht, jede unter `capabilityInvocation`. Unterschied zu `did:webvh`: Ein
-  Eintrag ist nicht von einem Schlüssel des Vorgängers signiert, sondern von
-  m Identitäten aus Vorgänger ∩ Nachfolger (Schnittregel); die
-  Log-Verifikation braucht also eine Quorumregel statt der
-  Einzelsignatur. Der Resolver-Anschluss existiert, die Methode nicht.
-- **Container-Regel.** `src/lib/containerRule.ts`: Space löschen, Space-Meta
-  ersetzen, Collection löschen sind „controller-only“ = direkte
-  Root-Invocation durch den Controller. Mit der Gruppe als Controller wäre
-  jedes gelistete Gerät „der Controller“ und dürfte löschen. Ein Profil
-  müsste diese Operationen an ein Quorum binden; HTTP-Signaturen tragen eine
-  Signatur, kein Quorum. Weg: ein quorum-signierter Eintrag in der Kette
-  (`terminal`, Access §7.3 kennt ihn), den der Server als Löschauftrag
-  liest, statt einer signierten Anfrage.
-- **Verdrängung.** Entfernen wirkt heute nur über die Epoche. Mit der Kette
-  als Controller-Historie würde die nächste Sicht einen entfernten
-  Geräteschlüssel aus dem Dokument nehmen; die current-key-set rule von WAS
-  macht das serverseitig sofort wirksam, samt allem, was dieser Schlüssel
-  delegiert hat. Das ist Dienstklasse „Sicht“ aus Access §9.3, ohne eigenen
-  Dienst.
-- **Variante (c), Log-Replik:** der Server materialisiert das Autoritätslog.
-  Das wäre ein Governing-Profil ihrer Governing History Logs
-  (Server prüft nur das Zeilenformat, Leser verifizieren) plus
-  Server-Auswertung: deutlich größerer Eingriff als (b).
-- **Was wir mitbringen müssten:** ein Pseudonym je Gerät × Gruppe gegenüber
-  dem Server (E8 Befund 5), die Kette als Resource-Log im Space, und die
-  Entscheidung zu Befund 9 (welche Quorumregel die Kette fährt).
+- **Controller registry.** `src/lib/validateDid.ts` admits `did:key` and
+  `did:webvh` as controllers; `src/lib/webvhController.ts` resolves a
+  self-hosted `did:webvh` from a log in the space and verifies the history
+  locally; `src/zcap.ts` (1,863 lines) hooks this resolver into signature
+  verification (`setDidResolver(didResolverWithWebvh(…))`). An RLTP profile
+  would be another method of the same class ("verified log"): the log is
+  our view chain (E9 step 2), the key set of the "controller document" are
+  the `identities` of the last verified view, each under
+  `capabilityInvocation`. Difference to `did:webvh`: an entry is not signed
+  by a key of its predecessor but by m identities from predecessor ∩
+  successor (intersection rule); log verification therefore needs a quorum
+  rule instead of the single signature. The resolver hook exists, the
+  method does not.
+- **Container rule.** `src/lib/containerRule.ts`: deleting a space,
+  replacing space meta, deleting a collection are "controller-only" =
+  direct root invocation by the controller. With the group as controller,
+  every listed device would be "the controller" and could delete. A profile
+  would have to bind these operations to a quorum; HTTP signatures carry
+  one signature, not a quorum. Way out: a quorum-signed entry in the chain
+  (`terminal`, Access §7.3 knows it) that the server reads as a delete
+  order, instead of a signed request.
+- **Displacement.** Today removal acts only via the epoch. With the chain
+  as controller history, the next view would take a removed device key out
+  of the document; WAS's current-key-set rule makes that effective at the
+  server immediately, including everything that key delegated. That is
+  service class "view" from Access §9.3, without a service of our own.
+- **Variant (c), log replica:** the server materializes the authority log.
+  That would be a governing profile of their governing history logs (the
+  server checks only the line format, readers verify) plus server-side
+  evaluation: a clearly larger intervention than (b).
+- **What we would have to bring:** a pseudonym per device × group towards
+  the server (E8 finding 5), the chain as a resource log in the space, and
+  the decision on finding 9 (which quorum rule the chain runs).
 
-**Schätzung:** (b) ist ein Profil im Register plus eine Container-Ausnahme,
-auf ihrer Seite vielleicht wenige hundert Zeilen an einem Resolver, dessen
-Anschluss schon existiert; (c) ein neuer Server-Teil. Mit (a) als Boden
-reicht (b) für alles, was E8 vom Dienst verlangt hat, und ihre Spec bliebe
-unverändert, wenn das Register offen ist.
+**Estimate:** (b) is a profile in the registry plus a container exception,
+on their side perhaps a few hundred lines at a resolver whose hook already
+exists; (c) a new server part. With (a) as the floor, (b) suffices for
+everything E8 demanded of the service, and their spec would stay unchanged
+if the registry is open.
 
-## Träger-Prüfstand (E10)
+## Carrier bench (E10)
 
-`transport.faults` legt die Fehler des Katalogs T über den echten Server:
-Verlust und Veränderung vor dem Put, Zurückhalten je Gerät und Umordnung
-beim Lesen (alle Geräte signieren mit demselben Schlüssel, der Server kann
-sie nicht unterscheiden), Wiederholung als neue Resource. Vorenthaltene Rahmen bleiben je Gerät
-aufgehoben, bis die Regel fällt (#28): der Checkpoint des Feeds rückt
-weiter, der Rahmen nicht. Ergebnis
-identisch mit dem Relay: T2–T5 bestanden, T1/T6/T12 nicht (Befunde beim
-Kandidaten und bei der Klasse blind, siehe `rltp-beekem/NOTES.md`, E10).
-Eine Lücke (T1) war hier besonders still: Der Put kam beim Server nie an,
-und niemand hat es bemerkt. Zweiter Durchgang mit Lückenreparatur im
-Kandidaten: T1 und T6 bestanden (Bob fordert bei Alice nach, Alice legt den
-Rahmen als neue Resource ab; der Feed trägt ihn dann wie jeden anderen),
-T6b (Feed eingefroren) weiter nicht; T12 seit den versiegelten Rahmen
-bestanden (der Server hält nur Chiffretext mit Umschlag); T7 bestanden (der Server
-bedient das entfernte Gerät weiter, es öffnet nichts), T8 bestanden
-(`rebind` = Umzug per Export/Import mitten im Leben, danach Aufnahme und
-Schreiben auf dem neuen Server), T11 nicht abbildbar (eine Gruppe je
-Kandidat). Ein abgewiesener Put bleibt daneben im Ausgang und wird
-wiederholt (`awaiting-transport`).
+`transport.faults` lays the faults of catalogue T over the real server:
+loss and tampering before the put, withholding per device and reordering
+on read (all devices sign with the same key, the server cannot tell them
+apart), replay as a new resource. Withheld frames are kept per device
+until the rule is lifted (#28): the feed checkpoint advances, the frame
+does not. Result identical to the relay: T2–T5 passed, T1/T6/T12 not
+(findings on the candidate and on class blind, see `rltp-beekem/NOTES.md`,
+E10). One gap (T1) was particularly silent here: the put never reached the
+server, and nobody noticed. Second pass with gap repair in the candidate:
+T1 and T6 passed (Bob asks Alice, Alice stores the frame as a new resource;
+the feed then carries it like any other), T6b (feed frozen) still not; T12
+passed since sealed frames (the server holds only ciphertext with an
+envelope); T7 passed (the server keeps serving the removed device, it opens
+nothing), T8 passed (`rebind` = move by export/import mid-life, then
+admission and writing on the new server), T11 not applicable (one group per
+candidate). A rejected put stays in the outbox beside it and is retried
+(`awaiting-transport`).
 
-## Grenzen des Prüfstands
+## Limits of the bench
 
-- Lesen ist nicht an den Besitznachweis gebunden, weil der Gruppenschlüssel
-  geteilt ist (Variante a). Mit (b) hätte jedes Gerät seinen eigenen.
-- `w.log` ist leer: Szenarien, die am Verkehr messen (S7, S5b, S10), sind
-  nicht abbildbar. Ein Mithör-Modell am Server wäre möglich (Diebstahl =
-  Zugriff auf den Server-Speicher), aber ein anderes Angreifer-Modell.
-- Node ≥ 24 nur für diesen Kandidaten; die CI läuft auf 22 und überspringt
-  ihn, bis sie angehoben wird.
+- Reading is not bound to proof of possession, because the group key is
+  shared (variant a). With (b) every device would have its own.
+- `w.log` is empty: scenarios that measure on the traffic (S7, S5b, S10)
+  are not applicable. An eavesdropping model at the server would be
+  possible (theft = access to the server storage), but that is a different
+  attacker model.
+- Node ≥ 24 only for this candidate; CI runs on 22 and skips it until it is
+  raised.

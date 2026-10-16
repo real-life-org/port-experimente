@@ -1,102 +1,103 @@
-# Port-Notizen: Keyhive (Lauf a, Automerge über ARK und Subduction)
+# Port notes: Keyhive (run a, Automerge over ARK and Subduction)
 
-Stand 03.10.2026. So, wie Keyhive gedacht ist: `@automerge/automerge-repo-keyhive`
-(ARK) 0.6.0-alpha.1 mit dem automerge-repo-Fork 2.6.0-subduction.48,
-`@automerge/automerge-subduction` 0.16.1, und ein echter Subduction-Server
-(`subduction_cli` 0.18.0, Rust, Release-Binary) als Relay. Eigener Transport:
-Der Prüfstand schaltet Geräte nur online/offline; Partition heißt, nur die
-erste Gruppe erreicht den Server. Nur in Node und in der CI, der Browser kann
-keinen Server starten. Ein Gerät je Person.
+As of 3 October 2026. Keyhive the way it is meant to be used:
+`@automerge/automerge-repo-keyhive` (ARK) 0.6.0-alpha.1 with the
+automerge-repo fork 2.6.0-subduction.48, `@automerge/automerge-subduction`
+0.16.1, and a real Subduction server (`subduction_cli` 0.18.0, Rust,
+release binary) as the relay. Own transport: the bench only switches
+devices online and offline; a partition means only the first group reaches
+the server. Node and CI only, the browser cannot start a server. One device
+per person.
 
-Aufbau wie in Lauf b: eine **Admin-Gruppe ist Miteigentümerin des Dokuments**,
-Admins kommen in die Gruppe, Mitglieder direkt ans Dokument (siehe Befund 2).
+Setup as in run b: an **admin group co-owns the document**, admins go into
+the group, members directly onto the document (see finding 2).
 
-## Ergebnisse
+## Results
 
-| | Ergebnis | Grund |
+| | Result | Reason |
 |---|---|---|
-| S1–S3 | bestanden | |
-| S4a | bestanden | Bobs gleichzeitiger Eintrag wird **verworfen** (Alice und Carol sehen ihn nicht), anders als in Lauf b: Der Server nimmt Bobs Blob nach dem Widerruf nicht mehr an |
-| S4b | bestanden | gleichzeitige Entfernungen verschiedener Personen: niemand liest mit |
-| S4c | nicht bestanden | Bob kann die Gründerin nicht entfernen (Wurzel der Delegationen, wie Lauf b). Dazu Befund 3: Carol sieht Bob weiter als Mitglied |
-| S4d | bestanden | `forcePcsUpdate` neben einer Entfernung |
-| S4e | nicht abbildbar | keine Gruppenregeln |
-| S4f | nicht bestanden | ARK widerruft mit `retain_all_other_members = true`: Wer von Mallory eingeladen wurde, bleibt (x). Offline kann x niemanden einladen, weil x das Dokument nie bekam. Dazu Befund 3 |
-| S5 | nicht abbildbar | Person als Gruppe ihrer Geräte, im Prüfstand nicht verdrahtet |
-| S6 | bestanden | ARKs „nudge“: Nach jeder Aufnahme ein Edit unter dem neuen Schlüssel, damit das neue Mitglied die Historie lesen kann. Keine App-Kette nötig (Automerge liefert den Inhalts-DAG) |
-| S6b | bestanden | |
-| S7 | nicht abbildbar | ein Angreifer müsste Sedimentree-Blobs vom Server lesen; nicht verdrahtet |
-| S8 | bestanden | Admin entfernt ohne die Gründerin |
+| S1–S3 | passed | |
+| S4a | passed | Bob's concurrent entry is **discarded** (Alice and Carol do not see it), unlike run b: the server no longer accepts Bob's blob after the revocation |
+| S4b | passed | simultaneous removals of different people: nobody reads along |
+| S4c | failed | Bob cannot remove the founder (root of the delegations, as in run b). Plus finding 3: Carol keeps seeing Bob as a member |
+| S4d | passed | `forcePcsUpdate` next to a removal |
+| S4e | not applicable | no group policy |
+| S4f | failed | ARK revokes with `retain_all_other_members = true`: whoever Mallory invited stays (x). Offline, x cannot invite anyone because x never received the document. Plus finding 3 |
+| S5 | not applicable | a person as a group of their devices, not wired in the bench |
+| S6 | passed | ARK's "nudge": after every admission an edit under the new key, so the new member can read the history. No app chain needed (Automerge provides the content DAG) |
+| S6b | passed | |
+| S7 | not applicable | an attacker would have to read Sedimentree blobs from the server; not wired |
+| S8 | passed | an admin removes without the founder |
 
-Last (Node, inklusive Warten auf Ruhe, deshalb nur grob): S9 (30 Mitglieder,
-500 Autoritätsoperationen) 153 s, davon 131 s Warten; läuft durch, anders als
-p2panda. S9b (10 Mitglieder, 100 Einträge) 10,5 s, davon 10,1 s Warten. Die
-Wartezeit ist durch den Server bestimmt (Keyhive-Zustand im 2-s-Takt), nicht
-durch Rechenzeit.
+Load (Node, including waiting for quiescence, hence rough): S9 (30 members,
+500 authority operations) 153 s, of which 131 s waiting; it completes,
+unlike p2panda. S9b (10 members, 100 entries) 10.5 s, of which 10.1 s
+waiting. The waiting time is set by the server (Keyhive state every 2 s),
+not by compute.
 
-## Befunde
+## Findings
 
-1. **Der Weg zum Server ist unausgesprochen.** ARK braucht die Kontaktkarte
-   des Servers vorab (`syncServer: {contactCardJson, peerId}`), der Server
-   gibt sie aber nirgends aus: Er erzeugt sie bei jedem Start neu mit
-   Zufall, die Ready-Datei enthält nur Port und Peer-ID, ein Entwicklungs-
-   Seed ist nicht dokumentiert. Über die Leitung geht es: Ein Bootstrap-Hive
-   mit `syncServer: "none"` fragt `RequestContactCard`, der Server antwortet
-   mit angehängter Karte, und ARK nimmt sie mit `receiveContactCard` an.
-   Der Kandidat fängt sie dort ab. Dazu zwei weitere Stolpersteine: Das
-   Subduction-Wasm muss vor ARK initialisiert sein (`initSubduction()`), und
-   der Server hasht seinen Socket-String als Service-Namen, der Client den
-   Host der URL (Port 0 geht deshalb nicht).
-2. **„Admin“ heißt in Keyhive nicht „darf jeden entfernen“.** Ein direkt am
-   Dokument eingesetzter Admin darf nur Delegationen widerrufen, die von ihm
-   selbst abstammen (`keyhive_core`, `revoke_member`: Nachweis über die
-   eigene Delegationskette oder über eine Gruppe, in der man ist). ARKs
-   `addMemberToDoc(…, Access.admin())` reicht daher für S4b und S8 nicht
-   („keyhive rejected this“). Mit der Admin-Gruppe als Miteigentümerin
-   (`generateGroup`, `keyhive.addMember(group, doc, admin)`) bestehen beide.
-   Die Gründerin bleibt trotzdem unentfernbar (S4c).
-3. **Nicht-Admins sehen Änderungen der Admin-Gruppe nicht.** Wird ein Admin
-   aus der Gruppe entfernt (S4c Bob, S4f Mallory), listen die übrigen
-   Mitglieder ihn weiter, auch nach 6 s Ruhe. Entfernungen am Dokument (S2,
-   S8) kommen bei allen an. Vermutung: Für ein Mitglied, das nicht in der
-   Gruppe ist, sind deren Ereignisse in Keyhive nicht „erreichbar“, der
-   Server reicht sie ihm nicht weiter. Ob der Entfernte danach noch
-   mitlesen kann, prüft S4c nicht; offen.
-4. **ARK behält Einladungen eines Entfernten** (`retain_all_other_members =
-   true`, S4f). Das ist eine Produktentscheidung von ARK, keine Grenze von
-   Keyhive.
+1. **The path to the server is unstated.** ARK needs the server's contact
+   card up front (`syncServer: {contactCardJson, peerId}`), but the server
+   publishes it nowhere: it generates it afresh with randomness on every
+   start, the ready file holds only port and peer id, a development seed is
+   undocumented. Over the wire it works: a bootstrap hive with
+   `syncServer: "none"` asks `RequestContactCard`, the server answers with
+   the card attached, and ARK accepts it via `receiveContactCard`. The
+   candidate intercepts it there. Two further stumbling blocks: the
+   Subduction wasm must be initialized before ARK (`initSubduction()`), and
+   the server hashes its socket string as the service name while the
+   client hashes the host of the URL (so port 0 does not work).
+2. **"Admin" in Keyhive does not mean "may remove anyone".** An admin set
+   directly on the document may only revoke delegations that descend from
+   itself (`keyhive_core`, `revoke_member`: proof via its own delegation
+   chain or via a group it belongs to). ARK's
+   `addMemberToDoc(…, Access.admin())` is therefore not enough for S4b and
+   S8 ("keyhive rejected this"). With the admin group as co-owner
+   (`generateGroup`, `keyhive.addMember(group, doc, admin)`) both pass. The
+   founder nevertheless remains unremovable (S4c).
+3. **Non-admins do not see changes to the admin group.** When an admin is
+   removed from the group (S4c Bob, S4f Mallory), the remaining members
+   keep listing them, even after 6 s of quiescence. Removals on the
+   document (S2, S8) reach everyone. Conjecture: for a member not in the
+   group, the group's events are not "reachable" in Keyhive, so the server
+   does not forward them. Whether the removed can still read along is not
+   checked by S4c; open.
+4. **ARK keeps the invitations of a removed member**
+   (`retain_all_other_members = true`, S4f). That is a product decision of
+   ARK, not a limit of Keyhive.
 
-## Vergleich der beiden Keyhive-Läufe
+## Comparison of the two Keyhive runs
 
-| | Lauf a (Automerge, ARK, Subduction) | Lauf b (Yjs, `@keyhive/keyhive`, Prüfstand-Netz) |
+| | Run a (Automerge, ARK, Subduction) | Run b (Yjs, `@keyhive/keyhive`, bench network) |
 |---|---|---|
-| S4a Eintrag eines gleichzeitig Entfernten | verworfen (Server) | bleibt sichtbar |
-| S4c gegenseitige Entfernung | ✗ (Sicht der Nicht-Admins veraltet) | ✓ |
-| S6 Historie direkt nach Aufnahme | ✓ (Nudge) | ✗ (erst nach nächstem Eintrag) |
-| S7 PCS | nicht abbildbar | ✓ |
-| Historie | Automerge-Commits plus ARK-Hülle | eigene Vorgänger-Kette für Yjs |
-| Server | unverzichtbar (Relay, ordnet nicht) | keiner |
+| S4a entry of a concurrently removed member | discarded (server) | stays visible |
+| S4c mutual removal | ✗ (non-admins' view stale) | ✓ |
+| S6 history directly after admission | ✓ (nudge) | ✗ (only after the next entry) |
+| S7 PCS | not applicable | ✓ |
+| History | Automerge commits plus ARK envelope | own predecessor chain for Yjs |
+| Server | indispensable (relay, does not order) | none |
 
-Was ein Adapter für Yjs ersetzen muss, zeigt die Differenz: den Inhalts-DAG
-für die Vorgänger-Kette (Lauf b baut ihn selbst) und den Nudge nach der
-Aufnahme. Alles andere ist in beiden Läufen gleich: Delegationsketten,
-BeeKEM, Seniorität der Gründerin.
+The difference shows what an adapter for Yjs has to replace: the content
+DAG for the predecessor chain (run b builds it itself) and the nudge after
+admission. Everything else is the same in both runs: delegation chains,
+BeeKEM, the founder's seniority.
 
-## Antworten auf die sieben Fragen
+## Answers to the seven questions
 
-- **Ordnung:** Subduction (Sedimentree) ordnet Blobs kausal, Keyhive puffert
-  Ereignisse mit fehlenden Abhängigkeiten. Die App muss nichts ordnen.
-- **Speicher:** `StorageAdapterInterface` für Repo und ARK (Blobs, Keyhive-
-  Archiv und -Ereignisse, Pre-Key-Geheimnisse, PCS-Schlüssel-Hashes).
-- **Identität:** Ed25519 je Peer (WebCrypto oder Speicher), Kontaktkarte mit
-  Pre-Keys; Karten werden außerhalb des Bandes getauscht.
-- **Transport:** ein WebSocket zum Subduction-Server; darüber Blobs
-  (Sedimentree) und Keyhive-Ereignisse (SUK-Rahmen). Kein P2P.
-- **Autorität:** Delegationsketten, Konflikte nach Seniorität, Kausaltiefe,
-  Digest. Der Server prüft Zugriff mit seinem eigenen Keyhive, bevor er
-  Blobs annimmt oder herausgibt (S4a). Keine Einhängestelle für eigene Regeln.
-- **Schlüssel:** BeeKEM; ARK dreht nach eigenen Aufnahmen (`forcePcsUpdate`
-  plus Nudge), nach Widerrufen verlässt es sich auf CGKA.
-- **Historie:** Automerge-Commits tragen die Vorgänger, ARK hängt je Blob die
-  Schlüssel der Vorgänger an (`blob-interceptor`); ein neues Mitglied liest
-  die Historie nach dem Nudge sofort.
+- **Ordering:** Subduction (Sedimentree) orders blobs causally, Keyhive
+  buffers events with missing dependencies. The app orders nothing.
+- **Storage:** `StorageAdapterInterface` for repo and ARK (blobs, Keyhive
+  archive and events, pre-key secrets, PCS key hashes).
+- **Identity:** Ed25519 per peer (WebCrypto or storage), contact card with
+  pre-keys; cards are exchanged out of band.
+- **Transport:** one WebSocket to the Subduction server; over it blobs
+  (Sedimentree) and Keyhive events (SUK frames). No P2P.
+- **Authority:** delegation chains, conflicts by seniority, causal depth,
+  digest. The server checks access with its own Keyhive before it accepts
+  or hands out blobs (S4a). No hook for own rules.
+- **Keys:** BeeKEM; ARK rotates after its own admissions (`forcePcsUpdate`
+  plus nudge), after revocations it relies on CGKA.
+- **History:** Automerge commits carry the predecessors, ARK attaches the
+  predecessors' keys per blob (`blob-interceptor`); a new member reads the
+  history immediately after the nudge.
