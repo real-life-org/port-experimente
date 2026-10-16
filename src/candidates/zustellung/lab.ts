@@ -14,6 +14,9 @@ export function labWire(): Wire {
     async unpack(frame) {
       return frame
     },
+    async forge(payload) {
+      return payload // kein Absender im Rahmen: der Draht kann ihn nicht prüfen, das Dokument muss es
+    },
     observe(frame): Observation {
       try {
         const env = JSON.parse(dec.decode(frame)) as { rkid?: string }

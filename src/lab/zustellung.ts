@@ -41,6 +41,11 @@ export interface Endpoint {
   pack(payload: Uint8Array): Promise<Uint8Array>
   unpack(frame: Uint8Array): Promise<Uint8Array>
   observe(frame: Uint8Array): Observation
+  /**
+   * Wie `pack`, an denselben Empfängerschlüssel, aber mit den Beziehungsschlüsseln eines Dritten als Absender
+   * (Z4: nur der Absender ist fremd, der Empfänger unverändert; Review zu #41, Issue #42).
+   */
+  forge(payload: Uint8Array, sender: Party): Promise<Uint8Array>
 }
 
 /** Der Draht: je Beziehung zwei Endpunkte aus den Beziehungsschlüsseln beider Seiten. */
@@ -140,6 +145,8 @@ interface Submission {
   frame: Uint8Array
   address: string
   report: Report | null
+  /** Verfügbarkeit des Transports beim letzten Versuch, getrennt vom Trias-Zustand (Issue #43). */
+  transport: 'ok' | 'offline' | 'unreachable'
   rounds: number
   sinceDeposit: number
   deposits: number
@@ -156,43 +163,57 @@ export class Zusteller {
 
   /** Einliefern: Bericht sofort, wenn der Träger oder das Gerät nicht da sind; sonst `accepted`. */
   submit(digest: string, frame: Uint8Array, address: string): void {
-    const s: Submission = { digest, frame, address, report: null, rounds: 0, sinceDeposit: 0, deposits: 0 }
+    const s: Submission = { digest, frame, address, report: null, transport: 'ok', rounds: 0, sinceDeposit: 0, deposits: 0 }
     this.submissions.set(digest, s)
     this.tryDeposit(s)
   }
+  /**
+   * Einliefern. Der Bericht `awaiting-transport` gibt es nur VOR der Trias (§6.1): eine Störung nach `accepted`
+   * ändert den Trias-Zustand nicht, sie steht in `transport` (Issue #43).
+   */
   private tryDeposit(s: Submission) {
+    const before = s.report === null || s.report.state === 'awaiting-transport'
     if (!this.online()) {
-      s.report = { state: 'awaiting-transport', reason: 'offline' }
+      s.transport = 'offline'
+      if (before) s.report = { state: 'awaiting-transport', reason: 'offline' }
       return
     }
     try {
       this.carrier().deposit(s.address, s.frame)
+      s.transport = 'ok'
       s.deposits++
       s.sinceDeposit = 0
-      if (s.report === null || s.report.state === 'awaiting-transport') s.report = { state: 'accepted' }
+      if (before) s.report = { state: 'accepted' }
     } catch (e) {
-      if (e instanceof WireUnreachable) s.report = { state: 'awaiting-transport', reason: 'transport-unreachable' }
-      else throw e
+      if (!(e instanceof WireUnreachable)) throw e
+      s.transport = 'unreachable'
+      if (before) s.report = { state: 'awaiting-transport', reason: 'transport-unreachable' }
     }
   }
-  /** Eine Runde: Wartendes erneut einliefern, Unbestätigtes nach ACK_WAIT wiederholen, nach GIVE_UP aufgeben. */
+  /**
+   * Eine Runde: Wartendes erneut einliefern, Unbestätigtes nach ACK_WAIT wiederholen. Die erklärte Aufgabegrenze
+   * gilt für jede Einlieferung ohne Quittung, ob vor oder nach `accepted`, auch bei späterer Störung (Issue #43).
+   */
   advance() {
     for (const s of this.submissions.values()) {
       s.rounds++
       s.sinceDeposit++
-      if (s.report?.state === 'delivered') continue
+      if (s.report?.state === 'delivered' || s.report?.state === 'failed') continue
+      if (s.rounds >= HORIZON.giveUp) {
+        s.report = { state: 'failed', reason: 'expired-by-adapter-policy' }
+        this.notes.push(`${s.digest.slice(0, 8)} aufgegeben nach ${s.rounds} Runden (zuletzt ${s.transport})`)
+        continue
+      }
       if (s.report === null || s.report.state === 'awaiting-transport') {
         this.tryDeposit(s)
         continue
       }
-      if (s.report.state === 'accepted' && s.rounds >= HORIZON.giveUp) {
-        s.report = { state: 'failed', reason: 'expired-by-adapter-policy' }
-        this.notes.push(`${s.digest.slice(0, 8)} aufgegeben nach ${s.rounds} Runden`)
-        continue
-      }
       // Mindestens einmal: ohne Quittung noch einmal dieselben Bytes (der Empfänger dedupliziert, §6.3).
-      if (s.report.state === 'accepted' && s.sinceDeposit >= HORIZON.ackWait) this.tryDeposit(s)
+      if (s.sinceDeposit >= HORIZON.ackWait) this.tryDeposit(s)
     }
+  }
+  transport(digest: string) {
+    return this.submissions.get(digest)?.transport
   }
   acknowledged(digest: string) {
     const s = this.submissions.get(digest)
@@ -250,10 +271,11 @@ export class Device {
 
   /** Ein Dokument unter dem Anker des Ausstellers signieren und an den Partner versiegeln (Delivery §4, §5). */
   async sealed(issuer: Party, payload: Record<string, Json>, threadId = crypto.randomUUID()) {
-    const unsigned = { id: crypto.randomUUID(), type: DOC_TYPE, issuer: issuer.anchor, recipient: this.peer.anchor, threadId, issuedAt: new Date().toISOString(), payload }
-    const doc = await diSign({ anchor: issuer.anchor, ed: { priv: issuer.ed.priv } }, unsigned, new Date().toISOString())
-    const env = await seal(doc as unknown as Json, this.peer.rkid)
-    return { digest: await digestBytes(enc.encode(jcs(doc))), bytes: enc.encode(jcs(env)) }
+    return sealDoc(issuer, this.peer, payload, threadId)
+  }
+  /** Ein Dokument eines Dritten an DIESES Gerät versiegelt (Angreifer-Sicht: Mallory an Bob). */
+  async sealedFor(issuer: Party, payload: Record<string, Json>, threadId = crypto.randomUUID()) {
+    return sealDoc(issuer, this.party, payload, threadId)
   }
 
   /** Eine Runde: abholen, öffnen, quittieren; Quittungen verbuchen; Wartendes vorantreiben. */
@@ -320,6 +342,13 @@ export class Device {
     this.completed.add(v.digest!)
     this.zusteller.submit(ackDigest, ackFrame, this.peerEndpoint.address)
   }
+}
+
+async function sealDoc(issuer: Party, recipient: Party, payload: Record<string, Json>, threadId: string) {
+  const unsigned = { id: crypto.randomUUID(), type: DOC_TYPE, issuer: issuer.anchor, recipient: recipient.anchor, threadId, issuedAt: new Date().toISOString(), payload }
+  const doc = await diSign({ anchor: issuer.anchor, ed: { priv: issuer.ed.priv } }, unsigned, new Date().toISOString())
+  const env = await seal(doc as unknown as Json, recipient.rkid)
+  return { digest: await digestBytes(enc.encode(jcs(doc))), bytes: enc.encode(jcs(env)) }
 }
 
 // ── Welt: zwei Parteien, ein Träger, Runden ──────────────────────────────────
@@ -461,28 +490,57 @@ export const deliveryScenarios: Array<{ id: string; title: string; run: (wire: W
   },
 ]
 
-deliveryScenarios.push({
-  id: 'Z4',
-  title: 'Fremder Absender: Mallory liefert ein Dokument „von Alice“ an Bobs Adresse ein; wo wird es abgewiesen?',
-  async run(wire) {
-    const w = new Welt(wire)
-    const a = await party('alice')
-    const b = await party('bob')
-    const m = await party('mallory')
-    const { A, B } = await w.pair(a, b)
-    // Mallory kennt Bobs Adresse und seinen rkid (öffentlich); sie hat Alices Anker nicht. Für den Draht nimmt sie
-    // ihre eigene Beziehung zu Bob (TSP/DIDComm: ihr VID bzw. kid), aber Bobs Endpunkt kennt nur Alice.
-    const forged = { ...(await A.sealed(m, { note: 'von-mallory' })) }
-    const mw = await wire.bind(m, b)
-    const frame = await mw.b.pack(forged.bytes)
-    w.carrier.deposit(B.endpoint.address, frame)
-    await w.rounds(2)
-    const atWire = B.dispositions.some((d) => d.startsWith('failed(malformed)'))
-    const atDoc = B.dispositions.includes('failed(proof-invalid)')
-    const ok = B.received.length === 0 && (atWire || atDoc)
-    return { outcome: ok ? 'bestanden' : 'nicht bestanden', detail: `abgewiesen ${atWire ? 'am Draht (Rahmen nicht zu öffnen)' : atDoc ? 'am Dokument (Beweis gilt nicht für Alices Anker)' : 'NICHT'}; Dispositionen ${B.dispositions.join(',')}` }
+/** Wo ein Rahmen abgewiesen wurde: am Draht (der Rahmen öffnet sich nicht; Meldung des Drahts) oder am Dokument (Stufen der lib: Umschlag, Beweis). */
+const rejectedWhere = (B: Device) => {
+  const atWire = B.dispositions.some((d) => d.startsWith('failed(malformed): '))
+  const atEnvelope = B.dispositions.includes('failed(malformed)') || B.dispositions.includes('failed(decryption-failed)')
+  const atProof = B.dispositions.includes('failed(proof-invalid)')
+  const where = atWire ? 'am Draht (Rahmen nicht zu öffnen)' : atEnvelope ? 'am Dokument (Umschlag: rkid unbekannt oder nicht zu öffnen)' : atProof ? 'am Dokument (Beweis gilt nicht für Alices Anker)' : 'NICHT'
+  return { ok: B.received.length === 0 && (atWire || atEnvelope || atProof), where }
+}
+
+deliveryScenarios.push(
+  {
+    id: 'Z4',
+    title: 'Fremder Absender: Mallory liefert ein Dokument „von Alice“ an Bobs unveränderten Empfängerschlüssel; wo wird es abgewiesen?',
+    async run(wire) {
+      const w = new Welt(wire)
+      const a = await party('alice')
+      const b = await party('bob')
+      const m = await party('mallory')
+      const { B } = await w.pair(a, b)
+      // Mallory kennt Bobs Adresse und seinen öffentlichen Beziehungsschlüssel zu Alice (der Träger sieht die Adresse,
+      // der Schlüssel ist öffentlich); sie hat Alices Anker und Alices Beziehungsschlüssel nicht. Nur der Absender ist
+      // fremd, der Empfängerschlüssel ist der echte (Issue #42).
+      const forged = await B.sealedFor(m, { note: 'von-mallory' })
+      const frame = await B.endpoint.forge(forged.bytes, m)
+      w.carrier.deposit(B.endpoint.address, frame)
+      await w.rounds(2)
+      const r = rejectedWhere(B)
+      return { outcome: r.ok ? 'bestanden' : 'nicht bestanden', detail: `abgewiesen ${r.where}; Dispositionen ${B.dispositions.join(',')}` }
+    },
   },
-})
+  {
+    id: 'Z5',
+    title: 'Falscher Empfängerschlüssel: ein Rahmen an eine andere Beziehung Bobs landet an Bobs Adresse',
+    async run(wire) {
+      const w = new Welt(wire)
+      const a = await party('alice')
+      const b = await party('bob')
+      const c = await party('carol')
+      const { A, B } = await w.pair(a, b)
+      // Carol packt korrekt an ihre eigene Beziehung zu Bob (anderer Endpunkt, anderer Schlüssel); der Träger
+      // liefert den Rahmen an Bobs Alice-Adresse. Bobs Alice-Endpunkt muss ihn abweisen, nie öffnen.
+      const other = await wire.bind(c, b)
+      const doc = await B.sealedFor(c, { note: 'von-carol' })
+      const frame = await other.b.pack(doc.bytes)
+      w.carrier.deposit(B.endpoint.address, frame)
+      await w.rounds(2)
+      const r = rejectedWhere(B)
+      return { outcome: r.ok ? 'bestanden' : 'nicht bestanden', detail: `abgewiesen ${r.where}; Dispositionen ${B.dispositions.join(',')}; Adressen verschieden: ${other.b.address !== B.endpoint.address ? 'ja' : 'nein'}` }
+    },
+  },
+)
 
 export async function runDelivery(make: WireFactory): Promise<DeliveryResult[]> {
   const out: DeliveryResult[] = []

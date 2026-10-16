@@ -40,6 +40,13 @@ export function didcommWire(mode: 'authcrypt' | 'anoncrypt' = 'authcrypt'): Wire
           const jwe = mode === 'authcrypt' ? await pack({ message, sender: { kid: peer.kid, privateJwk: peer.privateJwk }, recipient: { kid: self.kid, publicJwk: self.publicJwk } }) : await packAnoncrypt({ message, recipient: { kid: self.kid, publicJwk: self.publicJwk } })
           return enc.encode(jwe)
         },
+        async forge(payload, sender) {
+          // Fremder Absender mit eigenem kid, an denselben Empfängerschlüssel (self.publicJwk) und dieselbe Adresse.
+          const im = identity(sender.seed, `didcomm:${who.rkid}`)
+          const message = { id: crypto.randomUUID(), type: 'https://real-life.org/rltp/sealed-envelope', from: im.did, to: [self.did], body: { env: b64u(payload) } }
+          const jwe = mode === 'authcrypt' ? await pack({ message, sender: { kid: im.kid, privateJwk: im.privateJwk }, recipient: { kid: self.kid, publicJwk: self.publicJwk } }) : await packAnoncrypt({ message, recipient: { kid: self.kid, publicJwk: self.publicJwk } })
+          return enc.encode(jwe)
+        },
         async unpack(frame) {
           const r = await unpack(dec.decode(frame), { kid: self.kid, privateJwk: self.privateJwk }, mode === 'authcrypt' ? { publicJwk: peer.publicJwk } : undefined)
           const body = (r.message as { body?: { env?: string } }).body

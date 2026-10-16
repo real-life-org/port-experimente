@@ -33,7 +33,8 @@ auf die Zusagen hin, die der Port verlangt, nicht auf die Form von 0.79.
 | Z1 Was der Träger lernt | bestanden | kein Inhalt, kein Anker, kein Name. lab: rkid, 668 B. TSP: Sender- und Empfänger-VID, 996 B. DIDComm authcrypt: `skid` und kid, 2562 B; anoncrypt: nur kid, 2209 B |
 | Z2 Trägerwechsel | bestanden | Wartendes (`awaiting-transport`) geht auf dem neuen Träger hinaus; die Beziehung (rkid, Anker) bleibt; der Draht braucht keine Neuverhandlung |
 | Z3 Mehrgerät | bestanden | zwei Geräte unter einer Adresse: der Träger hält den Rahmen, bis jedes registrierte Gerät ihn bestätigt hat; beide quittieren, der Sender nimmt die erste |
-| Z4 Fremder Absender | bestanden | lab und anoncrypt: der Rahmen öffnet sich, das Dokument fällt am Beweis (`failed(proof-invalid)`); TSP und authcrypt: der Rahmen öffnet sich nicht (`signature verification failed`, `no recipients[] entry for kid`) |
+| Z4 Fremder Absender (an Bobs unveränderten Empfängerschlüssel, nur der Absender ist fremd) | bestanden | lab und anoncrypt: der Rahmen öffnet sich, das Dokument fällt am Beweis (`failed(proof-invalid)`); TSP: Außensignatur gegen Alices Schlüssel schlägt fehl; authcrypt: ECDH-1PU mit Alices Schlüssel schlägt fehl. Beides am Draht (Issue #42) |
+| Z5 Falscher Empfängerschlüssel (Carols Beziehung zu Bob, an Bobs Alice-Adresse geliefert) | bestanden | TSP, authcrypt, anoncrypt: eigene Adresse und eigener Schlüssel je Beziehung, der Rahmen öffnet sich nicht (`no recipients[] entry for kid`, Signatur). lab: die Adresse ist hier der rkid der Partei, nicht der Beziehung (Vereinfachung des Prüfstands), der Umschlag öffnet sich, der Beweis fällt |
 
 ## Was das Experiment belegt
 
@@ -57,10 +58,25 @@ auf die Zusagen hin, die der Port verlangt, nicht auf die Form von 0.79.
    Absenders im Rahmen: Z4.
 4. **Absenderprüfung: am Draht oder am Dokument (Frage neu).** TSP und
    authcrypt weisen einen fremden Absender ab, bevor das Dokument gesehen
-   wird; lab und anoncrypt erst am Beweis des Dokuments. Beides hält, aber
-   nur die zweite Stufe ist bei uns Pflicht (§5a.4: Einlieferung ohne
-   Absender; der Beweis unter dem Anker ist die Absenderprüfung). Ein Port
-   darf die Drahtprüfung nicht voraussetzen.
+   wird (Z4: Außensignatur, ECDH-1PU, beide an den Absenderschlüssel
+   gebunden, den Bobs Endpunkt als Alices kennt); lab und anoncrypt erst
+   am Beweis des Dokuments, weil ihr Rahmen keinen Absender trägt. Beides
+   hält, aber nur die zweite Stufe ist bei uns Pflicht (§5a.4: Einlieferung
+   ohne Absender; der Beweis unter dem Anker ist die Absenderprüfung). Ein
+   Port darf die Drahtprüfung nicht voraussetzen, und anoncrypt darf keine
+   behaupten (Issue #42).
+7. **Adresse je Beziehung (Z5).** TSP und DIDComm leiten hier je Beziehung
+   eine eigene Identität ab; ein Rahmen an Bobs Carol-Schlüssel öffnet sich
+   an Bobs Alice-Endpunkt nicht. Der lab-Draht nimmt den rkid der Partei
+   als Adresse, also dieselbe für alle Beziehungen: eine Vereinfachung des
+   Prüfstands, nicht die Form der lib (Delivery §5a.2: rkid je Beziehung).
+8. **Trias bleibt, Aufgabegrenze gilt (Issue #43).** Nach `accepted` nimmt
+   eine Störung (Gerät offline, Träger unerreichbar) den Zustand nicht
+   zurück; `awaiting-transport` gibt es nur vor der Trias (§6.1). Die
+   Verfügbarkeit steht getrennt (`transport`), die erklärte Aufgabegrenze
+   gilt für jede Einlieferung ohne Quittung, auch bei späterer Störung;
+   eine Quittung nach `failed` heißt `delivered(late)`. Als Regression
+   gepinnt.
 5. **Trägerwechsel ohne Beziehungsverlust (Frage 4)** ist beim Zusteller
    billig, weil nichts an der Beziehung am Träger hängt: Registrierung neu,
    Wartendes neu einliefern.
@@ -78,5 +94,5 @@ auf die Zusagen hin, die der Port verlangt, nicht auf die Form von 0.79.
   `spec/adapter-vti-mediator.md` §9.
 - TSP geroutet (Intermediär im Pfad, `packRouted`) und DIDComm `forward`:
   erst, wenn ein Intermediär im Prüfstand sitzt.
-- Aufgeben (`failed(expired-by-adapter-policy)`) und späte Quittung
-  (`late`): gebaut, nicht als Szenario gepinnt.
+- Aufgeben und späte Quittung sind als Regression gepinnt (Zusteller),
+  nicht als Draht-Szenario.

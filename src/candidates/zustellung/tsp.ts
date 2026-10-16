@@ -40,6 +40,12 @@ export function tspWire(): Wire {
           const m = await unpack(frame, { receiverDecryptionKey: self.xSecret, senderSigningKey: peer.edPublic })
           return new Uint8Array(m.payload)
         },
+        async forge(payload, sender) {
+          // Fremder Absender mit eigenem VID, an denselben Empfängerschlüssel (self.xPublic) und dieselbe Adresse.
+          const im = identity(sender.seed, `tsp:${who.rkid}`)
+          const m = await pack(payload, im.vid, self.vid, { senderSigningKey: im.edSecret, receiverEncryptionKey: self.xPublic })
+          return m.bytes
+        },
         observe(frame): Observation {
           const e = decodeEnvelope(frame)
           return { absender: e.envelope.sender === peer.vid ? `VID(${who.name === 'alice' ? 'bob' : 'alice'})` : e.envelope.sender, empfaenger: `VID(${who.name})`, revision: String(e.revision), groesse: frame.length }
