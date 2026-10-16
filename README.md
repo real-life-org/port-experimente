@@ -16,8 +16,8 @@ workshop repository (`rltp/design/port-experimente-2026-10.md`).
   Portable Web Spaces carries a group as blind storage.
 - **The conformance matrix**, interactive: 40 promises per port, 13
   candidates, every cell with its scenarios and the recorded result:
-  https://claude.ai/artifact/Ph4c9RDUN3gbPYVybisbsB. Snapshot of the run of
-  16 October 2026. The same matrix as Markdown comes from
+  https://real-life.org/port-experimente/matrix.html (source `public/matrix.html`).
+  Snapshot of the run of 16 October 2026. The same matrix as Markdown comes from
   `REPORT=1 pnpm vitest run report` (file `matrix.md`); the browser page
   renders it at the end of a run.
 - **How to read it.** A promise is kept only if every scenario mapped to it
