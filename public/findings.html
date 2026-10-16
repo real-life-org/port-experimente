@@ -58,7 +58,9 @@ table { border-collapse: collapse; width: 100%; font-size: 14px; font-variant-nu
 th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
 th { font-weight: 600; font-size: 13px; color: var(--muted); }
 td.num { text-align: right; font-family: var(--mono); }
-.ok { color: var(--good); } .no { color: var(--bad); } .na { color: var(--none); }
+.ok { color: var(--good); } .no { color: var(--bad); } .na { color: var(--none); } .part { color: #9a6a12; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .part { color: #e0b25a; } }
+:root[data-theme="dark"] .part { color: #e0b25a; }
 .note { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 14px 16px; font-size: 14px; margin: 16px 0; }
 .note p:last-child { margin-bottom: 0; }
 footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); }
@@ -81,8 +83,8 @@ footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--line);
   <div class="n">01</div>
   <div>
     <h3>One authority log, two key protocols, the same promise row</h3>
-    <p>We run our authority log (membership decided by a conflict matrix, signed entries, policy) over two group key protocols: BeeKEM, Keyhive's CGKA, and MLS (RFC 9420, OpenMLS 0.9.1). Both deliver an identical row in the matrix: 25 promises kept, 1 not kept, 15 not applicable. The one gap is the same in both: a blind carrier that freezes a device's feed is not detectable without an attested target.</p>
-    <p class="evidence">What MLS needs from the layer above, because it is linear (one commit per epoch): a single healer per group, reconciliation after every commit, a welcome that carries the digest of its admitting commit, and re-sealing of frames whose epoch lost a tiebreak. A room model where the commit itself decides membership scores 14 / 9 / 18 on the same bench. Candidates <code>rltp-beekem</code>, <code>rltp-mls</code>.</p>
+    <p>We run our authority log (membership decided by a conflict matrix, signed entries, policy) over two group key protocols: BeeKEM, Keyhive's CGKA, and MLS (RFC 9420, OpenMLS 0.9.1). Both deliver an identical row in the matrix: 25 promises kept, 1 not kept, 5 not applicable, 10 untested. The one gap is the same in both: a blind carrier that freezes a device's feed is not detectable without an attested target.</p>
+    <p class="evidence">What MLS needs from the layer above, because it is linear (one commit per epoch): a single healer per group, reconciliation after every commit, a welcome that carries the digest of its admitting commit, and re-sealing of frames whose epoch lost a tiebreak. A room model where the commit itself decides membership keeps 14 promises on the same bench, 9 not kept, 8 not applicable. Candidates <code>rltp-beekem</code>, <code>rltp-mls</code>.</p>
   </div>
 </div>
 
@@ -116,26 +118,26 @@ footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--line);
   <div>
     <h3>Portable Web Spaces carries a group as blind storage, with one gap</h3>
     <p>One space per group, one collection of sealed frames, reading over the per-device changes feed, the space controller is a group key. Every scenario passes as it does over our own relay, including the adversarial carrier scenarios and a server switch by export and import.</p>
-    <p class="evidence">What the server learns: space id, frame counts and sizes, timestamps, the addressee of welcomes; no names, no device numbers. The gap: a frozen feed is not detectable while the server issues no attested target. That is exactly the job a group controller profile would have. Load at 30 members, 100 operations: about 290 ms per operation, half of it HTTP. Candidate <code>rltp-beekem-pws</code>.</p>
+    <p class="evidence">What the server learns: the space id; per resource the sender device id and the frame label as plaintext fields, a resource id made of that device id and a sequence number, size and timestamp; the addressee of welcomes. Content, person names and the group secrets stay sealed. A pseudonym per device and group would remove the device ids from the server; that is not built. The gap: a frozen feed is not detectable while the server issues no attested target. That is exactly the job a group controller profile would have. Load at 30 members, 100 operations: about 290 ms per operation, half of it HTTP. Candidate <code>rltp-beekem-pws</code>.</p>
   </div>
 </div>
 
 <h2>The matrix, in numbers</h2>
-<p>Promises kept, not kept, not applicable, per candidate. The <a href="./matrix.html">full matrix</a> shows every cell with its scenarios and what the bench recorded.</p>
+<p>Promises kept, partial, not kept and not applicable per candidate, counted from the cells of the <a href="./matrix.html">full matrix</a>, which shows every cell with its scenarios and what the bench recorded. Ten of the 41 promises have no scenario yet and are untested for every candidate; they are left out here.</p>
 <div class="tablewrap"><table>
-  <tr><th>Candidate</th><th class="ok">kept</th><th class="no">not kept</th><th class="na">n/a</th></tr>
-  <tr><td>RLTP over BeeKEM</td><td class="num ok">25</td><td class="num no">1</td><td class="num na">15</td></tr>
-  <tr><td>RLTP over MLS</td><td class="num ok">25</td><td class="num no">1</td><td class="num na">15</td></tr>
-  <tr><td>RLTP over BeeKEM or MLS, with a view-class service</td><td class="num ok">26</td><td class="num no">3</td><td class="num na">12</td></tr>
-  <tr><td>RLTP over BeeKEM on Portable Web Spaces</td><td class="num ok">25</td><td class="num no">1</td><td class="num na">15</td></tr>
-  <tr><td>RLTP with a log-replica service</td><td class="num ok">22</td><td class="num no">7</td><td class="num na">12</td></tr>
-  <tr><td>MLS room, commit decides membership (two committer modes)</td><td class="num ok">14</td><td class="num no">9</td><td class="num na">18</td></tr>
-  <tr><td>Keyhive 0.3.0-alpha.1</td><td class="num ok">14</td><td class="num no">6</td><td class="num na">21</td></tr>
-  <tr><td>p2panda-spaces 0.7.1</td><td class="num ok">12</td><td class="num no">6</td><td class="num na">23</td></tr>
-  <tr><td>Keyhive over ARK with Subduction</td><td class="num ok">11</td><td class="num no">4</td><td class="num na">26</td></tr>
-  <tr><td>WoT generation 2 (our own, in production)</td><td class="num ok">8</td><td class="num no">5</td><td class="num na">28</td></tr>
+  <tr><th>Candidate</th><th class="ok">kept</th><th class="part">partial</th><th class="no">not kept</th><th class="na">n/a</th></tr>
+  <tr data-cand="rltp-beekem"><td>RLTP over BeeKEM</td><td class="num ok">25</td><td class="num part">0</td><td class="num no">1</td><td class="num na">5</td></tr>
+  <tr data-cand="rltp-mls"><td>RLTP over MLS</td><td class="num ok">25</td><td class="num part">0</td><td class="num no">1</td><td class="num na">5</td></tr>
+  <tr data-cand="rltp-beekem-sichten rltp-mls-sichten"><td>RLTP over BeeKEM or MLS, with a view-class service</td><td class="num ok">26</td><td class="num part">0</td><td class="num no">3</td><td class="num na">2</td></tr>
+  <tr data-cand="rltp-beekem-pws"><td>RLTP over BeeKEM on Portable Web Spaces</td><td class="num ok">22</td><td class="num part">3</td><td class="num no">1</td><td class="num na">5</td></tr>
+  <tr data-cand="rltp-beekem-logreplik"><td>RLTP with a log-replica service</td><td class="num ok">22</td><td class="num part">0</td><td class="num no">7</td><td class="num na">2</td></tr>
+  <tr data-cand="consensual-mls-any-staged consensual-mls-owner"><td>MLS room, commit decides membership (two committer modes)</td><td class="num ok">14</td><td class="num part">0</td><td class="num no">9</td><td class="num na">8</td></tr>
+  <tr data-cand="keyhive"><td>Keyhive 0.3.0-alpha.1</td><td class="num ok">12</td><td class="num part">2</td><td class="num no">6</td><td class="num na">11</td></tr>
+  <tr data-cand="p2panda"><td>p2panda-spaces 0.7.1</td><td class="num ok">10</td><td class="num part">2</td><td class="num no">6</td><td class="num na">13</td></tr>
+  <tr data-cand="keyhive-ark"><td>Keyhive over ARK with Subduction</td><td class="num ok">9</td><td class="num part">2</td><td class="num no">4</td><td class="num na">16</td></tr>
+  <tr data-cand="gen2"><td>WoT generation 2 (our own, in production)</td><td class="num ok">7</td><td class="num part">1</td><td class="num no">5</td><td class="num na">18</td></tr>
 </table></div>
-<p class="evidence">"Not applicable" means the candidate has no capability for the scenario (no policy, no service, no own transport) or the carrier fault never touched a frame of that kind. It is a gap in coverage, never a pass. The three RLTP rows with 25 / 1 / 15 are not cell-identical: BeeKEM and MLS are, PWS differs in five cells (three partial because the bench cannot watch traffic at the server, KV3 not applicable for the same reason, I15 kept because the carrier switch is built there) and the totals happen to coincide.</p>
+<p class="evidence">A promise is kept only if every scenario mapped to it passed. "Partial" means some scenarios passed and the rest were not applicable; it is not a kept promise. "Not applicable" means the candidate has no capability for the scenario (no policy, no service, no own transport) or the carrier fault never touched a frame of that kind. It is a gap in coverage, never a pass. RLTP over PWS is not the same row as RLTP over BeeKEM: three promises are partial and one is not applicable because the bench cannot watch traffic at the server (S5b, S7, S11), and the carrier switch (I15) is kept only there.</p>
 
 <h2>Two findings specific to MLS</h2>
 <ul>
