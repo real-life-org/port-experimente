@@ -9,15 +9,10 @@ workshop repository (`rltp/design/port-experimente-2026-10.md`).
 
 ## Results
 
-- **The four findings**, for readers outside the project:
-  https://claude.ai/artifact/R8tvExLN2E4wARL8WELo9a. One authority log over
-  two key protocols yields the same promise row; without history there is
-  no CRDT; delivery semantics live in the adapter, not in the wire;
-  Portable Web Spaces carries a group as blind storage.
-- **The conformance matrix**, interactive: 40 promises per port, 13
-  candidates, every cell with its scenarios and the recorded result:
-  https://claude.ai/artifact/Ph4c9RDUN3gbPYVybisbsB. Snapshot of the run of
-  16 October 2026. The same matrix as Markdown comes from
+- **The conformance matrix**, interactive: 41 promises across three ports,
+  13 candidates, every cell with its scenarios and the recorded result:
+  https://real-life.org/port-experimente/matrix.html (source `public/matrix.html`).
+  Snapshot of the run of 16 October 2026. The same matrix as Markdown comes from
   `REPORT=1 pnpm vitest run report` (file `matrix.md`); the browser page
   renders it at the end of a run.
 - **How to read it.** A promise is kept only if every scenario mapped to it

@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Port Experiment Findings</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column, findings as numbered claims with their evidence; data in small tables. */
+:root {
+  --bg: #f7f5f0;
+  --surface: #ffffff;
+  --fg: #1f2a2e;
+  --muted: #5d6b70;
+  --line: #d9d4ca;
+  --accent: #1f5f6b;
+  --accent-soft: #e1eef0;
+  --good: #2e7d4f;
+  --bad: #b3432b;
+  --none: #596669;
+  --display: "Fraunces", Georgia, "Times New Roman", serif;
+  --body: "IBM Plex Sans", "Segoe UI", Helvetica, Arial, sans-serif;
+  --mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #151c1f; --surface: #1d2629; --fg: #e8e4dc; --muted: #a2adb1; --line: #34424a;
+    --accent: #7fc3cf; --accent-soft: #223a40; --good: #7fcf9a; --bad: #e8876f; --none: #a2adb1;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #151c1f; --surface: #1d2629; --fg: #e8e4dc; --muted: #a2adb1; --line: #34424a;
+  --accent: #7fc3cf; --accent-soft: #223a40; --good: #7fcf9a; --bad: #e8876f; --none: #a2adb1;
+  color-scheme: dark;
+}
+body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 16px; line-height: 1.55; }
+.wrap { max-width: 760px; margin: 0 auto; padding-block: 40px 72px; padding-inline: 20px; }
+header { display: grid; gap: 14px; padding-bottom: 28px; border-bottom: 1px solid var(--line); margin-bottom: 36px; }
+.eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+h1 { font-family: var(--display); font-weight: 500; font-size: clamp(30px, 5vw, 44px); line-height: 1.1; margin: 0; text-wrap: balance; }
+.lede { font-size: 18px; color: var(--muted); margin: 0; max-width: 60ch; }
+h2 { font-family: var(--display); font-weight: 600; font-size: 24px; margin: 44px 0 10px; text-wrap: balance; }
+h3 { font-family: var(--body); font-weight: 600; font-size: 17px; margin: 28px 0 6px; }
+p { margin: 0 0 14px; max-width: 65ch; }
+ul { margin: 0 0 14px; padding-left: 22px; max-width: 65ch; }
+li { margin-bottom: 6px; }
+a { color: var(--accent); }
+.claim { display: grid; grid-template-columns: 44px 1fr; gap: 14px; padding: 18px 0; border-top: 1px solid var(--line); }
+.claim:last-of-type { border-bottom: 1px solid var(--line); }
+.claim .n { font-family: var(--mono); font-size: 13px; color: var(--muted); padding-top: 5px; }
+.claim h3 { margin: 0 0 6px; font-size: 18px; }
+.claim p:last-child { margin-bottom: 0; }
+.evidence { font-size: 14px; color: var(--muted); }
+.evidence code, code { font-family: var(--mono); font-size: 0.92em; background: var(--accent-soft); padding: 1px 5px; border-radius: 3px; }
+.tablewrap { overflow-x: auto; margin: 12px 0 18px; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-weight: 600; font-size: 13px; color: var(--muted); }
+td.num { text-align: right; font-family: var(--mono); }
+.ok { color: var(--good); } .no { color: var(--bad); } .na { color: var(--none); } .part { color: #85590e; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .part { color: #e0b25a; } }
+:root[data-theme="dark"] .part { color: #e0b25a; }
+.note { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 14px 16px; font-size: 14px; margin: 16px 0; }
+.note p:last-child { margin-bottom: 0; }
+footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); }
+@media (max-width: 480px) { .claim { grid-template-columns: 1fr; gap: 4px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div class="eyebrow">Real Life Trust Protocol · port experiments · 16 October 2026</div>
+  <h1>What the port experiments found so far</h1>
+  <p class="lede">Thirteen candidate stacks, one test bench, forty-one promises. Four findings that matter for secure data storage, group spaces and delivery, with the evidence behind each.</p>
+</header>
+
+<p>The test bench runs the same scenarios against every candidate: group membership under conflict (S1 to S11), an adversarial carrier (T1 to T12) and, since this week, pair delivery (T9, T10, Z1 to Z5). A candidate is a stack behind a narrow driver interface. Results are promises per port, not scores: each cell says whether all scenarios mapped to a promise passed. Everything below is reproducible from the public repository, linked at the end.</p>
+
+<h2>Four findings</h2>
+
+<div class="claim">
+  <div class="n">01</div>
+  <div>
+    <h3>One authority log, two key protocols, the same promise row</h3>
+    <p>We run our authority log (membership decided by a conflict matrix, signed entries, policy) over two group key protocols: BeeKEM, Keyhive's CGKA, and MLS (RFC 9420, OpenMLS 0.9.1). Both deliver an identical row in the matrix: 25 promises kept, 1 not kept, 5 not applicable, 10 untested. The one gap is the same in both: a blind carrier that freezes a device's feed is not detectable without an attested target.</p>
+    <p class="evidence">What MLS needs from the layer above, because it is linear (one commit per epoch): a single healer per group, reconciliation after every commit, a welcome that carries the digest of its admitting commit, and re-sealing of frames whose epoch lost a tiebreak. A room model where the commit itself decides membership keeps 14 promises on the same bench, 9 not kept, 8 not applicable. Candidates <code>rltp-beekem</code>, <code>rltp-mls</code>.</p>
+  </div>
+</div>
+
+<div class="claim">
+  <div class="n">02</div>
+  <div>
+    <h3>Without history there is no CRDT, not even for new entries</h3>
+    <p>If a newcomer only receives keys from the epoch it joined, it cannot read earlier entries. That part is expected. What the bench showed in addition: the newcomer cannot integrate <em>new</em> entries either, because CRDT updates reference the entry before them. A second device of an existing member reads nothing at all.</p>
+    <p class="evidence">For independent chat lines this never surfaces. For shared state (a map, a calendar, a board) a key chain across epochs is a precondition, not a comfort. Scenarios S5, S6, S6b on the model without history; the same scenarios pass with a predecessor table in every sealed frame.</p>
+  </div>
+</div>
+
+<div class="claim">
+  <div class="n">03</div>
+  <div>
+    <h3>Delivery semantics live in the adapter, not in the wire</h3>
+    <p>We sent the same sealed envelope through four wires: our plain envelope, TSP Rev 3 and DIDComm v2 in authcrypt and anoncrypt mode. All four produce the same delivery behaviour: a sender status trias, at-least-once with receiver dedup, a pre-transport report when offline, carrier switch without losing the relationship. The wires differ only in what the carrier learns and where a foreign sender is rejected.</p>
+    <div class="tablewrap"><table>
+      <tr><th>Wire</th><th>Carrier sees sender</th><th>Frame size</th><th>Foreign sender rejected</th></tr>
+      <tr><td>plain envelope (rkid)</td><td>no</td><td class="num">668 B</td><td>at the document (proof)</td></tr>
+      <tr><td>TSP Rev 3 direct</td><td>yes, relationship VID</td><td class="num">996 B</td><td>at the wire (outer signature)</td></tr>
+      <tr><td>DIDComm v2 authcrypt</td><td>yes, <code>skid</code></td><td class="num">2562 B</td><td>at the wire (ECDH-1PU)</td></tr>
+      <tr><td>DIDComm v2 anoncrypt</td><td>no</td><td class="num">2209 B</td><td>at the document (proof)</td></tr>
+    </table></div>
+    <p class="evidence">A port must not rely on the wire's sender check; the document proof is the one that is always there. Identities per relationship on all wires. Libraries: <code>@openvtc/vti-tsp-js</code> 0.3.0, <code>@openvtc/vti-didcomm-js</code> 0.12.0.</p>
+  </div>
+</div>
+
+<div class="claim">
+  <div class="n">04</div>
+  <div>
+    <h3>Portable Web Spaces carries a group as blind storage, with one gap</h3>
+    <p>One space per group, one collection of sealed frames, reading over the per-device changes feed, the space controller is a group key. Every scenario passes as it does over our own relay, including the adversarial carrier scenarios and a server switch by export and import.</p>
+    <p class="evidence">What the server learns: the space id; per resource the sender device id and the frame label as plaintext fields, a resource id made of that device id and a sequence number, size and timestamp; the addressee of welcomes. Content, person names and the group secrets stay sealed. A pseudonym per device and group would remove the device ids from the server; that is not built. The gap: a frozen feed is not detectable while the server issues no attested target. That is exactly the job a group controller profile would have. Load at 30 members, 100 operations: about 290 ms per operation, half of it HTTP. Candidate <code>rltp-beekem-pws</code>.</p>
+  </div>
+</div>
+
+<h2>The matrix, in numbers</h2>
+<p>Promises kept, partial, not kept and not applicable per candidate, counted from the cells of the <a href="./matrix.html">full matrix</a>, which shows every cell with its scenarios and what the bench recorded. Ten of the 41 promises have no scenario yet and are untested for every candidate; they are left out here.</p>
+<div class="tablewrap"><table>
+  <tr><th>Candidate</th><th class="ok">kept</th><th class="part">partial</th><th class="no">not kept</th><th class="na">n/a</th></tr>
+  <tr data-cand="rltp-beekem"><td>RLTP over BeeKEM</td><td class="num ok">25</td><td class="num part">0</td><td class="num no">1</td><td class="num na">5</td></tr>
+  <tr data-cand="rltp-mls"><td>RLTP over MLS</td><td class="num ok">25</td><td class="num part">0</td><td class="num no">1</td><td class="num na">5</td></tr>
+  <tr data-cand="rltp-beekem-sichten rltp-mls-sichten"><td>RLTP over BeeKEM or MLS, with a view-class service</td><td class="num ok">26</td><td class="num part">0</td><td class="num no">3</td><td class="num na">2</td></tr>
+  <tr data-cand="rltp-beekem-pws"><td>RLTP over BeeKEM on Portable Web Spaces</td><td class="num ok">22</td><td class="num part">3</td><td class="num no">1</td><td class="num na">5</td></tr>
+  <tr data-cand="rltp-beekem-logreplik"><td>RLTP with a log-replica service</td><td class="num ok">22</td><td class="num part">0</td><td class="num no">7</td><td class="num na">2</td></tr>
+  <tr data-cand="consensual-mls-any-staged consensual-mls-owner"><td>MLS room, commit decides membership (two committer modes)</td><td class="num ok">14</td><td class="num part">0</td><td class="num no">9</td><td class="num na">8</td></tr>
+  <tr data-cand="keyhive"><td>Keyhive 0.3.0-alpha.1</td><td class="num ok">12</td><td class="num part">2</td><td class="num no">6</td><td class="num na">11</td></tr>
+  <tr data-cand="p2panda"><td>p2panda-spaces 0.7.1</td><td class="num ok">10</td><td class="num part">2</td><td class="num no">6</td><td class="num na">13</td></tr>
+  <tr data-cand="keyhive-ark"><td>Keyhive over ARK with Subduction</td><td class="num ok">9</td><td class="num part">2</td><td class="num no">4</td><td class="num na">16</td></tr>
+  <tr data-cand="gen2"><td>WoT generation 2 (our own, in production)</td><td class="num ok">7</td><td class="num part">1</td><td class="num no">5</td><td class="num na">18</td></tr>
+</table></div>
+<p class="evidence">A promise is kept only if every scenario mapped to it passed. "Partial" means some scenarios passed and the rest were not applicable; it is not a kept promise. "Not applicable" means the candidate has no capability for the scenario (no policy, no service, no own transport) or the carrier fault never touched a frame of that kind. It is a gap in coverage, never a pass. RLTP over PWS is not the same row as RLTP over BeeKEM: three promises are partial and one is not applicable because the bench cannot watch traffic at the server (S5b, S7, S11), and the carrier switch (I15) is kept only there.</p>
+
+<h2>Two findings specific to MLS</h2>
+<ul>
+  <li><strong>A clone's commit locks out the original device.</strong> If a stolen device state commits, the real device cannot process that commit (OpenMLS accepts no message from its own leaf) and falls permanently behind the tree. The healer sees no reason to act. Something must detect "a commit from my own leaf that I did not make" and request a fresh welcome.</li>
+  <li><strong>A stale stolen state can force rollbacks.</strong> With snapshots for the last eight epochs, a commit from an old epoch with a lower hash makes every member roll back, re-seal and heal. No access is gained, but the lever repeats. A possible rule: commits from leaves the log has removed never enter the tiebreak.</li>
+</ul>
+
+<div class="note">
+  <p><strong>Welcome size, measured.</strong> With the ratchet tree in the welcome: 839 B at one member, 2.7 KB at ten, 6.5 KB at thirty, about 190 B per further member. A 16 KB message bound is reached around eighty members.</p>
+</div>
+
+<h2>What we would like to work on with this group</h2>
+<ul>
+  <li><strong>A group controller profile for a space</strong> (with Portable Web Spaces): the controller key set is a quorum-signed authorization view, the server attests its stored frontier, members verify convergence against it. Our side of that is built and measured.</li>
+  <li><strong>The comparison matrix on GitHub</strong>: we keep our own rows current and contribute scenarios.</li>
+  <li><strong>Delivery over TSP and DIDComm</strong>: the four-wire bench is public; adding a real mediator or intermediary as a carrier is the next step.</li>
+</ul>
+
+<footer>
+  Source and notes: <a href="https://github.com/real-life-org/port-experimente">github.com/real-life-org/port-experimente</a> (candidates under <code>src/candidates/*/NOTES.md</code>, matrix via <code>REPORT=1 pnpm test report</code>). Bench in the browser: <a href="./">real-life.org/port-experimente</a>. Specifications: <a href="https://trust-protocol.real-life.org">trust-protocol.real-life.org</a>. Contact: Anton Tranelis, Real Life Organisation.
+</footer>
+</div>
+</body>
+</html>
