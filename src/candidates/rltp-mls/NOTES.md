@@ -27,7 +27,7 @@ Flackern); Erwartungen in `tests/rltp-mls.test.ts`.
 | T1–T7, T12 | bestanden | wie BeeKEM |
 | T6b | nicht bestanden (blind) / bestanden (Sicht) | wie BeeKEM (D5) |
 | T8, T11 | nicht abbildbar | wie BeeKEM |
-| S11 | nicht abbildbar | `forge-key-op` läuft bislang nur am BeeKEM-Port; KV3 für MLS offen |
+| S11 | bestanden | KV3: das gefälschte Blatt bekommt nie Zugang; Befund unten („Fälschung als Geschwister“) |
 
 ## Was anders ist als bei BeeKEM
 
@@ -132,6 +132,21 @@ er stand):
 
 ## Befunde
 
+- **KV3, Fälschung als Geschwister (S11, 16.10.).** Der erbeutete Zustand
+  einer Entfernten (so, wie er war: Mitglied) nimmt ein neues Blatt auf.
+  Bei MLS ist das ein Commit auf die Epoche *vor* der Entfernung, also ein
+  Geschwister des Entfernungs-Commits. Je nach Hash gewinnt er den
+  Tiebreak: dann fallen die Mitglieder auf die alte Epoche zurück, nehmen
+  die Fälschung, versiegeln ihre gestrandeten Rahmen neu, und der Heiler
+  entfernt beide Blätter der Entfernten wieder. Zugang bekommt das Blatt
+  nie (Angleichen vor jedem Eintrag, `treeSafe`), fünf Läufe in Folge. Der
+  Hebel, der bleibt: ein Entfernter kann mit grindbaren Hashes Rückfälle
+  und Neu-Versiegeln erzwingen, so lange seine Epoche in den
+  Momentaufnahmen liegt (8). Bei BeeKEM gibt es den Hebel nicht (die
+  Aufnahme wird nebenläufig zusammengeführt und geheilt, ohne Rückfall).
+  Ein Blatt ohne Karte liest auch als Mitglied nichts (K7 über Karten),
+  bei beiden Ports; MLS heilt es sofort nach dem Commit, BeeKEM erst vor
+  dem nächsten Eintrag (deshalb misst S11 „Baum +1 oder Epoche weiter“).
 - **KeyPackage-Wiederverwendung.** MLS sieht ein KeyPackage als einmalig
   vor; die Karte des Prüfstands trägt eines als Share-Key, und eine
   Wiederaufnahme (S4j, T4) nutzt dieselbe Karte. Der Peer legt das

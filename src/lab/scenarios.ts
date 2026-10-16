@@ -497,23 +497,25 @@ export const scenarios: Scenario[] = [
       const inject = async (frames: Array<{ label: string; body: Uint8Array }>) => {
         for (const f of frames) for (const d of ['alice', 'bob', 'carol']) await w.candidate.receive(d, { id: id++, from: 'mallory', label: f.label, body: f.body })
       }
-      const tree = (d: string) => Number(/baum=(\d+)/.exec(w.candidate.status(d))?.[1] ?? NaN)
+      const num = (d: string, key: string) => Number(new RegExp(`${key}=(\\d+)`).exec(w.candidate.status(d))?.[1] ?? NaN)
       // Positivkontrolle, bevor der Angriff irgendetwas beweisen soll: Das gefälschte Blatt wirkt (es öffnet, was
-      // der erbeutete Zustand unter dem neuen Geheimnis versiegelt), und die Mitglieder nehmen die Operation in
-      // ihren Baum (ein Blatt mehr), solange Mallory Mitglied ist. Ob ein Blatt ohne Karte als Mitglied Neues
+      // der erbeutete Zustand unter dem neuen Geheimnis versiegelt), und die Mitglieder verarbeiten die Operation,
+      // solange Mallory Mitglied ist: ein Blatt mehr im Baum (BeeKEM, geheilt erst vor dem nächsten Eintrag) oder
+      // eine Epoche weiter (MLS, geheilt sofort nach dem Commit). Ob ein Blatt ohne Karte als Mitglied Neues
       // liest, ist eine Frage des Kandidaten (K7), nicht des Angriffs; es wird berichtet, nicht gewertet.
-      const before = tree('alice')
+      const treeBefore = num('alice', 'baum')
+      const epochBefore = num('alice', 'epoche')
       const forged1 = await w.candidate.forgeKeyOp!(stolen)
       if (!forged1.frames.length) return { outcome: 'nicht abbildbar', authority: 'der Angreifer konnte keine Schlüsseloperation erzeugen', keys: '—' }
       await inject(forged1.frames)
       await w.flush()
-      const accepted = tree('alice') === before + 1
+      const accepted = num('alice', 'baum') === treeBefore + 1 || (Number.isFinite(epochBefore) && num('alice', 'epoche') > epochBefore)
       const control = forged1.works && accepted
       await w.write('alice', 'kontrolle')
       await w.flush()
       await feed(forged1.frames)
       const readsAsMember = attackerDoc.getArray<string>('eintraege').toArray().includes('kontrolle')
-      const controlText = `Kontrolle: Blatt wirkt ${forged1.works ? 'ja' : 'NEIN'}, Mitglieder nehmen es in den Baum ${accepted ? 'ja' : 'NEIN'}; als Mitglied liest es Neues: ${readsAsMember ? 'ja' : 'nein'}`
+      const controlText = `Kontrolle: Blatt wirkt ${forged1.works ? 'ja' : 'NEIN'}, Mitglieder verarbeiten die Operation ${accepted ? 'ja' : 'NEIN'}; als Mitglied liest es Neues: ${readsAsMember ? 'ja' : 'nein'}`
       if (!control) {
         return { outcome: 'nicht bestanden', authority: 'Angreifer-Modell wirkungslos', keys: controlText }
       }
