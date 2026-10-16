@@ -1,93 +1,92 @@
-# Port-Notizen: WoT Gen 2
+# Port notes: WoT Gen 2
 
-Stand 03.10.2026. `@web_of_trust/core` 0.6.0 und `@web_of_trust/adapter-yjs`
-0.3.0 von npm, `InProcessLogBroker` als Relay im Prozess (Test-Broker,
-weicht vom echten Relay ab, siehe unten), `OutboxMessagingAdapter` vor dem
-Messaging wie im RLS. Ein Gerät je Person.
+As of 3 October 2026. `@web_of_trust/core` 0.6.0 and
+`@web_of_trust/adapter-yjs` 0.3.0 from npm, `InProcessLogBroker` as the
+relay in process (test broker, deviates from the real relay, see below),
+`OutboxMessagingAdapter` in front of messaging as in the RLS. One device
+per person.
 
-## Ergebnisse
+## Results
 
-| | Ergebnis | Grund |
+| | Result | Reason |
 |---|---|---|
-| S1 | bestanden | |
-| S2 | bestanden | Relay sperrt die alte Schlüsselgeneration; Carol liest nichts Neues |
-| S3 | bestanden | Bob schreibt offline, der Edit wird nach dem Catch-up nachgereicht |
-| S4a | bestanden | Bobs gleichzeitiger Eintrag trägt die alte Generation und wird verworfen |
-| S4b | nicht bestanden | Bob ist befördert, aber `adapter-yjs` 0.3.0 sendet kein `admin-add` an den Broker; sein `space-rotate` wird nicht angenommen (siehe Befund 1) |
-| S4c | bestanden, **formal** | aus demselben Grund kann Bob nicht durchsetzen; gleichzeitige Durchsetzung findet gar nicht statt. Bob selbst sieht danach eine veraltete Mitgliedschaft |
-| S4d | nicht abbildbar | keine Rotation ohne Mitgliedschaftsänderung (privat) |
-| S4e | nicht abbildbar | keine Gruppenregeln |
-| S4f | bestanden, **formal** | Mallorys Kette entsteht offline gar nicht (ohne Relay keine Zustellung); die Entfernung wird nicht gegen eine bestehende Kette geprüft |
-| S5 | nicht abbildbar | Zweitgeräte laufen über das PersonalDoc, das im Prozess ein Singleton ist. Speicher zu teilen hieße, genau diesen Weg zu umgehen |
-| S6 | bestanden | Einladung trägt alle Generationsschlüssel und einen Snapshot |
-| S7 | nicht abbildbar | keine öffentliche Rotation; Angreifer-Zugriff auf Inbox nicht verdrahtet |
-| S8 | nicht bestanden | wie S4b: Das Relay erfährt nie von Bobs Beförderung; ohne Alice entfernt niemand wirksam, Dave liest weiter |
+| S1 | passed | |
+| S2 | passed | the relay locks the old key generation; Carol reads nothing new |
+| S3 | passed | Bob writes offline, the edit is delivered after catch-up |
+| S4a | passed | Bob's concurrent entry carries the old generation and is discarded |
+| S4b | failed | Bob is promoted, but `adapter-yjs` 0.3.0 sends no `admin-add` to the broker; his `space-rotate` is not accepted (see finding 1) |
+| S4c | passed, **formally** | for the same reason Bob cannot enforce; concurrent enforcement does not happen at all. Bob himself sees a stale membership afterwards |
+| S4d | not applicable | no rotation without a membership change (private) |
+| S4e | not applicable | no group policy |
+| S4f | passed, **formally** | Mallory's chain never comes into being offline (no delivery without relay); the removal is not checked against an existing chain |
+| S5 | not applicable | second devices go through the PersonalDoc, which is a singleton in the process. Sharing storage would mean bypassing exactly that path |
+| S6 | passed | the invitation carries all generation keys and a snapshot |
+| S7 | not applicable | no public rotation; attacker access to the inbox not wired |
+| S8 | failed | as S4b: the relay never learns of Bob's promotion; without Alice nobody removes effectively, Dave keeps reading |
 
-S9 (30 Mitglieder, 500 Operationen): Node 15,6 s, davon 7,2 s Warten auf
-Ruhe; Headless Chrome 145 13,4 s, davon 7,2 s Warten. Aktive Zeit grob
-6 bis 8 s, also etwa 12 bis 17 ms je Operation (Klartext: 0,04 bis 0,08 ms).
-Untergrenze, weil auch während des Wartens gearbeitet wird.
+S9 (30 members, 500 operations): Node 15.6 s, of which 7.2 s waiting for
+quiescence; headless Chrome 145 13.4 s, of which 7.2 s waiting. Active
+time roughly 6 to 8 s, so about 12 to 17 ms per operation (plaintext: 0.04
+to 0.08 ms). A lower bound, because work also happens while waiting.
 
-## Befunde
+## Findings
 
-1. **Befördete Admins können nicht durchsetzen: Lücke der Implementierung,
-   nicht von Gen 2.** Sync 005 verlangt beim Befördern ein `admin-add` an
-   den Broker, signiert mit einem bestehenden Admin-Schlüssel
-   (`wot-spec/03-wot-sync/005-gruppen.md`, „Neue Admins hinzufügen“). Das
-   echte `wot-relay` verarbeitet `admin-add`. `adapter-yjs` 0.3.0 sendet es
-   bewusst nicht („KEIN admin-add-Broker-Send (Nicht-Ziel)“ in
-   `promoteToAdmin`). Folge, auch im RLS: Nur die Gründerin kann wirksam
-   entfernen. Der `InProcessLogBroker` hat zusätzlich keinen Handler für
-   `admin-add`; der Prüfstand würde es also auch nach einer Korrektur im
-   Adapter erst mit einem passenden Broker zeigen.
-2. **Gleichzeitige Durchsetzung bildet der Prüfstand für Gen 2 nicht ab.**
-   Gen 2 hat ein Relay; nach der Partition-Konvention bleibt nur eine Seite
-   online. S4b und S4c sind deshalb einseitig. Selbst mit `admin-add`
-   würde das Relay ordnen (streng `gen+1`, der zweite bekommt
-   `GENERATION_TAKEN` und baut neu auf). Gleichzeitigkeit gibt es in Gen 2
-   nur als „offline vorgemerkt, später seriell durchgesetzt“.
-3. **Ohne Relay keine Gruppe.** Geräte, die nicht am Relay hängen, können
-   nicht miteinander reden (kein P2P).
-4. **Rotation hängt an der Mitgliedschaft.** Es gibt keine Rotation „einfach
-   so“; PCS nach einem erbeuteten Gerät ist damit nicht herstellbar.
+1. **Promoted admins cannot enforce: a gap of the implementation, not of
+   Gen 2.** Sync 005 requires an `admin-add` to the broker on promotion,
+   signed with an existing admin key (`wot-spec/03-wot-sync/005-gruppen.md`,
+   "adding new admins"). The real `wot-relay` processes `admin-add`.
+   `adapter-yjs` 0.3.0 deliberately does not send it ("NO admin-add broker
+   send (non-goal)" in `promoteToAdmin`). Consequence, also in the RLS:
+   only the founder can remove effectively. The `InProcessLogBroker`
+   additionally has no handler for `admin-add`; the bench would show it
+   even after a fix in the adapter only with a matching broker.
+2. **The bench does not model concurrent enforcement for Gen 2.** Gen 2
+   has a relay; by the partition convention only one side stays online.
+   S4b and S4c are therefore one-sided. Even with `admin-add` the relay
+   would order (strictly `gen+1`, the second gets `GENERATION_TAKEN` and
+   rebuilds). Concurrency exists in Gen 2 only as "noted offline, enforced
+   serially later".
+3. **No group without a relay.** Devices not attached to the relay cannot
+   talk to each other (no P2P).
+4. **Rotation is tied to membership.** There is no rotation "just so"; PCS
+   after a captured device cannot be established.
 
-## Abweichungen des InProcessLogBroker vom echten Relay
+## Deviations of the InProcessLogBroker from the real relay
 
-Der Prüfstand nutzt den Test-Broker aus `@web_of_trust/core` 0.6.0, nicht
-`wot-relay`. Bekannte Unterschiede:
+The bench uses the test broker from `@web_of_trust/core` 0.6.0, not
+`wot-relay`. Known differences:
 
-- `present-capability` wird nicht kryptografisch geprüft, nur als Scope
-  vermerkt.
-- `admin-add` und andere unbekannte Frames werden ohne Wirkung mit leerem
-  Receipt quittiert.
-- Inbox-Store-and-Forward liegt im `InMemoryMessagingAdapter` (statische
-  Warteschlange), nicht im Broker.
+- `present-capability` is not checked cryptographically, only noted as a
+  scope.
+- `admin-add` and other unknown frames are acknowledged with an empty
+  receipt and no effect.
+- Inbox store-and-forward lives in the `InMemoryMessagingAdapter` (static
+  queue), not in the broker.
 
-Ein Lauf gegen das echte Relay (`packages/e2e-log-sync`: `RelayServer` mit
-`:memory:`-SQLite über WebSocket) wäre die nächste Stufe, wenn eine dieser
-Stellen für die Port-Entscheidung wichtig wird.
+A run against the real relay (`packages/e2e-log-sync`: `RelayServer` with
+`:memory:` SQLite over WebSocket) would be the next step, if one of these
+points becomes relevant for the port decision.
 
-## Antworten auf die sieben Fragen
+## Answers to the seven questions
 
-- **Ordnung:** Das Relay ordnet Rotationen total (`gen+1`), Inhalte laufen
-  als Log-Einträge je Gerät mit `seq`; der Adapter puffert selbst
-  (blocked-by-key, Catch-up).
-- **Speicher:** DocLogStore (Log, deviceId, vorgemerkte Entfernungen),
-  CompactStore (Snapshots, nicht geloggte Edits), KeyManagement
-  (Generationsschlüssel), Metadaten. Vier Speicher je Gerät.
-- **Identität:** did:key (Ed25519), X25519 für ECIES; DID-Resolver für
-  keyAgreement anderer Mitglieder.
-- **Transport:** zwei Wege. Inbox (space-invite, key-rotation,
-  member-update; ECIES je Empfänger) und Log-Sync über das Relay
+- **Ordering:** the relay orders rotations totally (`gen+1`), content runs
+  as log entries per device with `seq`; the adapter buffers itself
+  (blocked-by-key, catch-up).
+- **Storage:** DocLogStore (log, deviceId, pending removals), CompactStore
+  (snapshots, unlogged edits), KeyManagement (generation keys), metadata.
+  Four stores per device.
+- **Identity:** did:key (Ed25519), X25519 for ECIES; DID resolver for other
+  members' keyAgreement.
+- **Transport:** two paths. Inbox (space-invite, key-rotation,
+  member-update; ECIES per recipient) and log sync over the relay
   (log-entry, sync-request, space-register, space-rotate,
   present-capability).
-- **Autorität:** Regeln im Client (`_members`-Ereignisse, höhere Generation
-  gewinnt, bei Gleichstand `removed`), Durchsetzung beim Relay
-  (Admin-Menge aus `space-register`, laut Spec erweitert per `admin-add`;
-  Generations-Sperre). Keine Einhängestelle für fremde Regeln.
-- **Schlüssel:** Admin erzeugt den neuen Gruppenschlüssel (AES-GCM) und
-  verteilt ihn per ECIES an jedes verbleibende Mitglied; eigene Geräte
-  über das PersonalDoc. Zweiphasig: vormerken, Relay bestätigt, dann
-  festschreiben.
-- **Historie:** Einladung trägt alle bisherigen Generationsschlüssel und
-  einen verschlüsselten Snapshot; danach Catch-up über das Relay-Log.
+- **Authority:** rules in the client (`_members` events, higher generation
+  wins, on a tie `removed`), enforcement at the relay (admin set from
+  `space-register`, extended per spec by `admin-add`; generation lock). No
+  hook for foreign rules.
+- **Keys:** an admin generates the new group key (AES-GCM) and distributes
+  it by ECIES to every remaining member; own devices via the PersonalDoc.
+  Two phases: note, relay confirms, then commit.
+- **History:** the invitation carries all previous generation keys and an
+  encrypted snapshot; afterwards catch-up over the relay log.

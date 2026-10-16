@@ -1,96 +1,94 @@
-# Port-Notizen: Keyhive (Lauf b, Yjs)
+# Port notes: Keyhive (run b, Yjs)
 
-Stand 03.10.2026. `@keyhive/keyhive` 0.3.0-alpha.1 (Tag `next`), die
-WebAssembly-Bindings des Rust-Kerns, ohne Automerge. Inhalt bleibt Yjs. Ohne
-Server: alle Nachrichten gehen über das Netz des Prüfstands an alle. Ein Gerät
-je Person. Lauf a (Automerge über ARK und Subduction) steht in `../keyhive-ark/NOTES.md`, mit Vergleich der beiden Läufe.
+As of 3 October 2026. `@keyhive/keyhive` 0.3.0-alpha.1 (tag `next`), the
+WebAssembly bindings of the Rust core, without Automerge. Content stays in
+Yjs. No server: all messages go over the bench network to everyone. One
+device per person. Run a (Automerge over ARK and Subduction) is in
+`../keyhive-ark/NOTES.md`, with a comparison of the two runs.
 
-Aufbau wie in der README und in ARK: eine **Admin-Gruppe ist Miteigentümerin
-des Dokuments**. Admins kommen in die Gruppe, Mitglieder direkt ans Dokument.
-Nur so darf ein Admin auch Delegationen widerrufen, die er nicht selbst
-ausgestellt hat (sonst „Proof missing to authorize revocation“).
+Setup as in the README and in ARK: an **admin group co-owns the
+document**. Admins go into the group, members directly onto the document.
+Only this way may an admin also revoke delegations they did not issue
+themselves (otherwise "Proof missing to authorize revocation").
 
-## Ergebnisse
+## Results
 
-| | Ergebnis | Grund |
+| | Result | Reason |
 |---|---|---|
-| S1–S3 | bestanden | |
-| S4a | bestanden | Bobs gleichzeitiger Eintrag bleibt für Alice und Carol sichtbar (wie bei p2panda) |
-| S4b | bestanden | **gleichzeitige Entfernungen: niemand liest mit** (anders als p2panda) |
-| S4c | bestanden | Bob kann die Gründerin nicht entfernen: Sie ist Wurzel aller Delegationen (Seniorität). Alice entfernt Bob |
-| S4d | bestanden | `forcePcsUpdate` neben einer Entfernung |
-| S4e | nicht abbildbar | keine Gruppenregeln (feste Stufen Relay/Read/Edit/Admin) |
-| S4f | nicht bestanden | Mallorys Kette (x, y) bleibt, siehe offene Beobachtung |
-| S5 | nicht abbildbar | Person als Gruppe ihrer Geräte gibt es, im Prüfstand noch nicht verdrahtet |
-| S6 | nicht bestanden | direkt nach der Aufnahme keine Historie |
-| S6b | bestanden | nach dem nächsten Eintrag die ganze Historie, über die Vorgänger-Kette |
-| S7 | bestanden | Nach `forcePcsUpdate` liest ein passiver Angreifer nichts Neues mehr, siehe Abschnitt S7. Kein anderer Kandidat kann S7 abbilden |
-| S8 | bestanden | ein Admin entfernt ohne die Gründerin |
+| S1–S3 | passed | |
+| S4a | passed | Bob's concurrent entry stays visible to Alice and Carol (as with p2panda) |
+| S4b | passed | **simultaneous removals: nobody reads along** (unlike p2panda) |
+| S4c | passed | Bob cannot remove the founder: she is the root of all delegations (seniority). Alice removes Bob |
+| S4d | passed | `forcePcsUpdate` next to a removal |
+| S4e | not applicable | no group policy (fixed levels Relay/Read/Edit/Admin) |
+| S4f | failed | Mallory's chain (x, y) remains, see the open observation |
+| S5 | not applicable | a person as a group of their devices exists, not yet wired in the bench |
+| S6 | failed | no history directly after admission |
+| S6b | passed | after the next entry the whole history, via the predecessor chain |
+| S7 | passed | after `forcePcsUpdate` a passive attacker reads nothing new, see the S7 section. No other candidate can model S7 |
+| S8 | passed | an admin removes without the founder |
 
-Last (Node): S9 (30 Mitglieder, 500 Autoritätsoperationen) 25,6 s, 51 ms je
-Operation; Headless Chrome 145 im Median 13 s, 26 ms. S9b (10 Mitglieder,
-100 Einträge) **0,46 ms je Gerät und Nachricht** (p2panda 8,3 ms, Klartext
-0,06 ms).
+Load (Node): S9 (30 members, 500 authority operations) 25.6 s, 51 ms per
+operation; headless Chrome 145 median 13 s, 26 ms. S9b (10 members, 100
+entries) **0.46 ms per device and message** (p2panda 8.3 ms, plaintext
+0.06 ms).
 
-## S7 im Detail: was geprüft ist und was nicht
+## S7 in detail: what is tested and what is not
 
-Geprüft (Prüfstand-Modell): Ein **passiver** Angreifer erbeutet Bobs ganzen
-Gerätezustand (Keyhive-Archiv, Signierschlüssel, die Schlüsseltabelle der
-App-Vorgänger-Kette, Bobs Yjs-Stand) und sieht danach allen Verkehr. Er wertet
-ihn mit derselben Logik aus wie ein ehrliches Gerät (Ereignisse aufnehmen,
-bekannte Schlüssel, Vorgänger-Kette, CGKA, Wiederholung).
+Tested (bench model): a **passive** attacker captures Bob's entire device
+state (Keyhive archive, signing key, the key table of the app's
+predecessor chain, Bob's Yjs state) and afterwards sees all traffic. It
+evaluates it with the same logic as an honest device (ingest events, known
+keys, predecessor chain, CGKA, retry).
 
-- Positivkontrolle: Einen Eintrag zwischen Diebstahl und Rotation liest er.
-- Nach `forcePcsUpdate` durch Bob liest er den nächsten Eintrag nicht.
-- Alice und Carol lesen ihn.
+- Positive control: it reads an entry between theft and rotation.
+- After `forcePcsUpdate` by Bob it does not read the next entry.
+- Alice and Carol read it.
 
-Nicht geprüft: ein **aktiver** Angreifer, der mit dem erbeuteten Schlüssel
-selbst Operationen einspeist (etwa eine eigene CGKA-Aktualisierung vor Bob);
-ob Bob die Kompromittierung bemerkt; Rotation durch andere als das
-kompromittierte Gerät. Die Aussage ist also: PCS gegen einen passiven
-Mitleser nach einer Rotation durch das betroffene Gerät, im Kern und in der
-App-Kette dieses Kandidaten.
+Not tested: an **active** attacker who injects operations with the captured
+key (for example its own CGKA update before Bob); whether Bob notices the
+compromise; rotation by a device other than the compromised one. The claim
+is therefore: PCS against a passive eavesdropper after a rotation by the
+affected device, in the core and in this candidate's app chain.
 
-## Befunde
+## Findings
 
-1. **Historie ist Sache der App.** Keyhive selbst gibt einem neuen Mitglied
-   keinen Zugang zu alten Einträgen. ARK baut dafür eine Hülle um jeden
-   Eintrag: die Schlüssel der Vorgänger, verschlüsselt mit dem eigenen
-   Schlüssel des Eintrags (`blob-interceptor.js`). Die Vorgänger kommen aus
-   den Abhängigkeiten der Automerge-Commits. Für Yjs baut der Kandidat diese
-   Hülle nach; die Vorgänger sind die seit dem letzten eigenen Eintrag
-   gesehenen Einträge. Folge: Historie erst ab dem nächsten Eintrag (S6 ✗,
-   S6b ✓). Für unseren Port heißt das: P3 braucht einen **Inhalts-DAG**, den
-   bei Yjs der Adapter (oder unser Log) liefern muss.
-2. **Gründerin ist nicht entfernbar.** Andere Admins können die Wurzel der
-   Delegationen nicht widerrufen (S4c). Das ist Keyhives Seniorität; für
-   „die Gruppe gehört sich selbst“ (K9) ist die Gründerin damit dauerhaft
-   besonders.
-3. **Offene Beobachtung zu Kaskaden.** In unserem Aufbau bleiben Personen,
-   die eine später entfernte Admin eingeladen hat, Mitglied und lesen weiter,
-   auch ohne Gleichzeitigkeit und mit `retain_all_other_members = false`.
-   Die Design-Doku verspricht eine Kaskade. Ob das ein Fehler ist oder am
-   verschachtelten Aufbau (Gruppe als Miteigentümerin) liegt, ist nicht
-   geklärt.
+1. **History is the app's business.** Keyhive itself gives a new member no
+   access to old entries. ARK builds an envelope around every entry for
+   this: the keys of the predecessors, encrypted with the entry's own key
+   (`blob-interceptor.js`). The predecessors come from the dependencies of
+   the Automerge commits. For Yjs the candidate rebuilds this envelope; the
+   predecessors are the entries seen since the last own entry. Consequence:
+   history only from the next entry on (S6 ✗, S6b ✓). For our port this
+   means: P3 needs a **content DAG**, which for Yjs the adapter (or our log)
+   must provide.
+2. **The founder cannot be removed.** Other admins cannot revoke the root
+   of the delegations (S4c). That is Keyhive's seniority; for "the group
+   owns itself" (K9) the founder stays permanently special.
+3. **Open observation on cascades.** In our setup, people invited by a
+   later-removed admin stay members and keep reading, even without
+   concurrency and with `retain_all_other_members = false`. The design
+   docs promise a cascade. Whether that is a bug or due to the nested setup
+   (group as co-owner) is unresolved.
 
-## Antworten auf die sieben Fragen
+## Answers to the seven questions
 
-- **Ordnung:** Keyhive puffert selbst. `ingestEventsBytes` hält Ereignisse
-  mit fehlenden Abhängigkeiten zurück. Inhalte puffert der Kandidat, bis sie
-  sich entschlüsseln lassen. Ereignisse, die beim Aufnehmen fremder
-  Ereignisse entstehen, werden nicht weitergeleitet (wie ARK, sonst Echo).
-- **Speicher:** Keyhive-Archiv (`toArchive`), Ciphertext-Store, Pre-Key-
-  Geheimnisse; dazu beim Kandidaten die Schlüsseltabelle der Einträge.
-- **Identität:** Ed25519-Signierschlüssel je Peer; Kontaktkarte (mit
-  Pre-Keys) muss vor der Einladung vorliegen. Abbildung auf did:key: offen
-  (beides Ed25519).
-- **Transport:** drei Arten: Kontaktkarten, Keyhive-Ereignisse
-  (Delegationen, Widerrufe, CGKA-Operationen, Pre-Keys) und Inhalte in der
-  Hülle. Alle an alle.
-- **Autorität:** Delegationsketten (convergent capabilities), Konflikte nach
-  Seniorität, Kausaltiefe, Digest. Keine Einhängestelle für eigene Regeln.
-- **Schlüssel:** BeeKEM. Neuer Schlüssel bei Entfernung, `forcePcsUpdate`
-  für Rotation ohne Mitgliedschaftsänderung, PCS nachgewiesen (S7).
-- **Historie:** über die Vorgänger-Kette in der Replik, nicht über die
-  Einladung. Das ist die Form, die Access §9.4 („causal encryption“) als P3
-  vorsieht, nur dass die Kette außerhalb von Keyhive gebaut werden muss.
+- **Ordering:** Keyhive buffers itself. `ingestEventsBytes` holds back
+  events with missing dependencies. The candidate buffers content until it
+  can be decrypted. Events that arise while ingesting foreign events are
+  not forwarded (as in ARK, otherwise echo).
+- **Storage:** Keyhive archive (`toArchive`), ciphertext store, pre-key
+  secrets; plus, in the candidate, the key table of the entries.
+- **Identity:** an Ed25519 signing key per peer; the contact card (with
+  pre-keys) must be present before the invitation. Mapping to did:key:
+  open (both Ed25519).
+- **Transport:** three kinds: contact cards, Keyhive events (delegations,
+  revocations, CGKA operations, pre-keys) and content in the envelope. All
+  to everyone.
+- **Authority:** delegation chains (convergent capabilities), conflicts by
+  seniority, causal depth, digest. No hook for own rules.
+- **Keys:** BeeKEM. New key on removal, `forcePcsUpdate` for rotation
+  without a membership change, PCS demonstrated (S7).
+- **History:** via the predecessor chain in the replica, not via the
+  invitation. That is the form Access §9.4 ("causal encryption") intends
+  for P3, except that the chain has to be built outside Keyhive.
