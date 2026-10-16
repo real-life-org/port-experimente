@@ -148,6 +148,8 @@ interface Submission {
   /** Verfügbarkeit des Transports beim letzten Versuch, getrennt vom Trias-Zustand (Issue #43). */
   transport: 'ok' | 'offline' | 'unreachable'
   rounds: number
+  /** Runden seit der Annahme (`accepted`); die Aufgabegrenze zählt erst ab hier (§6.1: vor der Trias gibt es kein Aufgeben, nur den Bericht). */
+  sinceAccepted: number | null
   sinceDeposit: number
   deposits: number
 }
@@ -163,7 +165,7 @@ export class Zusteller {
 
   /** Einliefern: Bericht sofort, wenn der Träger oder das Gerät nicht da sind; sonst `accepted`. */
   submit(digest: string, frame: Uint8Array, address: string): void {
-    const s: Submission = { digest, frame, address, report: null, transport: 'ok', rounds: 0, sinceDeposit: 0, deposits: 0 }
+    const s: Submission = { digest, frame, address, report: null, transport: 'ok', rounds: 0, sinceAccepted: null, sinceDeposit: 0, deposits: 0 }
     this.submissions.set(digest, s)
     this.tryDeposit(s)
   }
@@ -183,7 +185,10 @@ export class Zusteller {
       s.transport = 'ok'
       s.deposits++
       s.sinceDeposit = 0
-      if (before) s.report = { state: 'accepted' }
+      if (before) {
+        s.report = { state: 'accepted' }
+        s.sinceAccepted = 0
+      }
     } catch (e) {
       if (!(e instanceof WireUnreachable)) throw e
       s.transport = 'unreachable'
@@ -191,17 +196,19 @@ export class Zusteller {
     }
   }
   /**
-   * Eine Runde: Wartendes erneut einliefern, Unbestätigtes nach ACK_WAIT wiederholen. Die erklärte Aufgabegrenze
-   * gilt für jede Einlieferung ohne Quittung, ob vor oder nach `accepted`, auch bei späterer Störung (Issue #43).
+   * Eine Runde: Wartendes erneut einliefern, Unbestätigtes nach ACK_WAIT wiederholen. Zwei Fristen, sauber getrennt
+   * (Issue #43): vor der Annahme gibt es kein Aufgeben, nur den ehrlichen Bericht je Runde (§6.1, die Einlieferung
+   * ist noch beim Adapter); ab der Annahme zählt die erklärte Aufgabegrenze, auch bei späterer Störung.
    */
   advance() {
     for (const s of this.submissions.values()) {
       s.rounds++
       s.sinceDeposit++
+      if (s.sinceAccepted !== null) s.sinceAccepted++
       if (s.report?.state === 'delivered' || s.report?.state === 'failed') continue
-      if (s.rounds >= HORIZON.giveUp) {
+      if (s.sinceAccepted !== null && s.sinceAccepted >= HORIZON.giveUp) {
         s.report = { state: 'failed', reason: 'expired-by-adapter-policy' }
-        this.notes.push(`${s.digest.slice(0, 8)} aufgegeben nach ${s.rounds} Runden (zuletzt ${s.transport})`)
+        this.notes.push(`${s.digest.slice(0, 8)} aufgegeben ${s.sinceAccepted} Runden nach der Annahme (zuletzt ${s.transport})`)
         continue
       }
       if (s.report === null || s.report.state === 'awaiting-transport') {

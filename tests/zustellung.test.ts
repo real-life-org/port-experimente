@@ -69,6 +69,20 @@ describe('Zusteller: Trias und Aufgabegrenze (Issue #43)', () => {
     expect(A.zusteller.report(d)).toEqual({ state: 'delivered', late: true })
   }, 60_000)
 
+  it('von Anfang an offline: kein Aufgeben vor der Annahme, nur der Bericht; nach Wiederverbindung geht es hinaus', async () => {
+    const w = new Welt(labWire())
+    const { A, B } = await w.pair(await party('alice'), await party('bob'))
+    A.online = false
+    const d = await A.send({ note: 'lange-offline' })
+    await w.rounds(HORIZON.giveUp + 3)
+    expect(A.zusteller.report(d)).toEqual({ state: 'awaiting-transport', reason: 'offline' })
+    A.online = true
+    const n = await w.until(() => A.zusteller.report(d)?.state === 'delivered')
+    expect(n).toBeGreaterThan(0)
+    expect(A.zusteller.report(d)).toEqual({ state: 'delivered', late: false })
+    expect(B.received.length).toBe(1)
+  }, 60_000)
+
   it('Sender offline nach accepted: accepted bleibt, Aufgabe nach der Grenze', async () => {
     const w = new Welt(labWire())
     const { A, B } = await w.pair(await party('alice'), await party('bob'))

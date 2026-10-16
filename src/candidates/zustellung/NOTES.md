@@ -73,10 +73,11 @@ auf die Zusagen hin, die der Port verlangt, nicht auf die Form von 0.79.
 8. **Trias bleibt, Aufgabegrenze gilt (Issue #43).** Nach `accepted` nimmt
    eine Störung (Gerät offline, Träger unerreichbar) den Zustand nicht
    zurück; `awaiting-transport` gibt es nur vor der Trias (§6.1). Die
-   Verfügbarkeit steht getrennt (`transport`), die erklärte Aufgabegrenze
-   gilt für jede Einlieferung ohne Quittung, auch bei späterer Störung;
-   eine Quittung nach `failed` heißt `delivered(late)`. Als Regression
-   gepinnt.
+   Verfügbarkeit steht getrennt (`transport`). Zwei Fristen: vor der
+   Annahme gibt es kein Aufgeben, nur den ehrlichen Bericht je Runde (die
+   Einlieferung liegt noch beim Adapter); ab der Annahme zählt die
+   erklärte Aufgabegrenze, auch bei späterer Störung. Eine Quittung nach
+   `failed` heißt `delivered(late)`. Drei Regressionen.
 5. **Trägerwechsel ohne Beziehungsverlust (Frage 4)** ist beim Zusteller
    billig, weil nichts an der Beziehung am Träger hängt: Registrierung neu,
    Wartendes neu einliefern.
