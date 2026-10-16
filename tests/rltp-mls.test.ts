@@ -57,6 +57,19 @@ describe('Kandidat RLTP-Autorität über MLS', () => {
     })
   }, 300_000)
 
+  it('S11 am MLS-Port: beide Zweige des Tiebreaks enden ohne Zugang (Issue #45)', async () => {
+    const s11 = scenarios.find((s) => s.id === 'S11')!
+    const seen = new Set<string>()
+    for (let i = 0; i < 16 && seen.size < 2; i++) {
+      const r = await runScenario(() => rltpBeekem({ keyPort: 'mls' }), s11)
+      expect(r.outcome, `${r.authority} | ${r.keys}`).toBe('bestanden')
+      expect(r.authority).toContain('gemeinsamer Vorgänger von Fälschung und Entfernung: ja')
+      if (r.authority.includes('Fälschung gewann')) seen.add('gewann')
+      if (r.authority.includes('Fälschung verlor')) seen.add('verlor')
+    }
+    expect([...seen].sort()).toEqual(['gewann', 'verlor'])
+  }, 180_000)
+
   it('S11 am MLS-Port: eine wirkungslose Fälschung besteht nicht', async () => {
     const s11 = scenarios.find((s) => s.id === 'S11')!
     const noop = () => {

@@ -182,6 +182,68 @@ fn rotation_als_vorschlag_durch_den_gruender_committet() {
     assert!(thief.decrypt(&s.ciphertext).is_err(), "Dieb liest nach der Rotation nichts");
 }
 
+/// KV3 am Port (Issue #45): der erbeutete Zustand einer Entfernten nimmt ein Blatt auf, als Geschwister des
+/// Entfernungs-Commits (gleicher Vorgänger). Beide Zweige des Tiebreaks gezielt: die Fälschung gewinnt (die
+/// Mitglieder fallen zurück und nehmen sie; eine erneute Entfernung heilt) und die Fälschung verliert (stale).
+/// Das Blatt liest in keinem Fall, was nach der Heilung versiegelt wird.
+#[test]
+fn faelschung_als_geschwister_der_entfernung_beide_zweige() {
+    use mls_wasm::peer::{digest_of, Error};
+    let mut seen_win = false;
+    let mut seen_lose = false;
+    for _ in 0..40 {
+        if seen_win && seen_lose {
+            break;
+        }
+        let gid = b"kv3".to_vec();
+        let mut alice = Peer::new().unwrap();
+        let mut bob = Peer::new().unwrap();
+        let mut mallory = Peer::new().unwrap();
+        alice.create(&gid).unwrap();
+        let (_, wb) = alice.add(bob.share_key()).unwrap();
+        bob.receive(&wb).unwrap();
+        let (cm, wm) = alice.add(mallory.share_key()).unwrap();
+        bob.receive(&cm).unwrap();
+        mallory.receive(&wm).unwrap();
+        // Erbeutet: Mallorys Zustand auf der Epoche, auf der Alice sie gleich entfernt (gemeinsamer Vorgänger).
+        let parent = alice.epoch();
+        assert_eq!(mallory.epoch(), parent);
+        let mut thief = Peer::from_state(&mallory.export_state().unwrap()).unwrap();
+        let removal = alice.remove(mallory.id()).unwrap().unwrap();
+        bob.receive(&removal).unwrap();
+        let mut leaf = Peer::new().unwrap();
+        let (forged, welcome) = thief.add(leaf.share_key()).unwrap();
+        leaf.receive(&welcome).unwrap();
+        let wins = digest_of(&forged) < digest_of(&removal);
+        let ra = alice.receive(&forged);
+        let rb = bob.receive(&forged);
+        if wins {
+            seen_win = true;
+            assert!(matches!(ra, Err(Error::LostTiebreak)), "{ra:?}");
+            assert!(matches!(rb, Err(Error::LostTiebreak)), "{rb:?}");
+            // Zurückgefallen: Mallory und ihr Blatt stehen im Baum; die Heilung (Log: Mallory ist raus) entfernt beide.
+            assert_eq!(alice.members().len(), 4);
+            let heal1 = alice.remove(mallory.id()).unwrap().unwrap();
+            bob.receive(&heal1).unwrap();
+            let heal2 = alice.remove(leaf.id()).unwrap().unwrap();
+            bob.receive(&heal2).unwrap();
+            let _ = leaf.receive(&heal1);
+            let _ = leaf.receive(&heal2);
+        } else {
+            seen_lose = true;
+            assert!(matches!(ra, Err(Error::Stale(_))), "{ra:?}");
+            assert!(matches!(rb, Err(Error::Stale(_))), "{rb:?}");
+        }
+        assert_eq!(alice.members().len(), 2);
+        assert_eq!(alice.members(), bob.members());
+        let s = alice.encrypt(b"r", b"nach-der-heilung").unwrap();
+        assert_eq!(bob.decrypt(&s.ciphertext).unwrap().0, b"nach-der-heilung");
+        assert!(leaf.decrypt(&s.ciphertext).is_err(), "das gefälschte Blatt liest nichts");
+        assert!(thief.decrypt(&s.ciphertext).is_err(), "der erbeutete Zustand liest nichts");
+    }
+    assert!(seen_win && seen_lose, "beide Zweige des Tiebreaks gesehen: gewinnt={seen_win} verliert={seen_lose}");
+}
+
 /// Vertrag Punkt 2: ein Rückfall reicht über mehrere eigene Commits zurück, bis zum Verzweigungspunkt.
 #[test]
 fn rueckfall_ueber_mehrere_epochen() {

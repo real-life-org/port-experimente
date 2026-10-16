@@ -1256,10 +1256,10 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
       await port.load()
       const st = stolen as { state: Uint8Array; keys: Map<string, Uint8Array>; appliedOps: Set<string>; ks?: KeyState; forged?: KeyState }
       st.ks ??= { peer: port.fromState(st.state), keys: st.keys, heads: [], pending: [], keyGen: 0, stored: new Set(), tried: new Map(), envelopes: new Map(), appliedOps: st.appliedOps, notes: [] }
-      // Die Fälschung geht vom erbeuteten Zustand aus, wie er war (Mitglied): der Angreifer spielt seine eigene
-      // Entfernung nicht ein. Bei MLS ist das ein Commit auf die Epoche vor der Entfernung, ein Geschwister des
-      // Entfernungs-Commits; bei BeeKEM eine nebenläufige Aufnahme. Der mitlesende Zustand (st.ks) folgt dem Verkehr.
-      const forger = port.fromState(st.state)
+      // Die Fälschung geht von einer Kopie des mitlesenden Zustands aus, so weit er dem Verkehr bis jetzt gefolgt
+      // ist (seine eigene Entfernung spielt der Angreifer nicht ein, s. S11). Bei MLS ist das ein Commit auf die
+      // Epoche, auf der der Angreifer steht, bei BeeKEM eine nebenläufige Aufnahme. `epoch` nennt den Vorgänger.
+      const forger = port.fromState(st.ks.peer.exportState())
       const leaf = port.peer()
       if (groupId) leaf.join(groupId)
       st.forged = { peer: leaf, keys: new Map(), heads: [], pending: [], keyGen: 0, stored: new Set(), tried: new Map(), envelopes: new Map(), appliedOps: new Set(), notes: [] }
@@ -1273,6 +1273,10 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
       const op = added.op
       if (!op) return { frames: [], works: false }
       noteOp(st.ks, op)
+      // Ab jetzt ist der Fälscher der Zustand des Angreifers: die Kopie davor könnte den Commit ihres eigenen Blatts
+      // nicht verarbeiten (OpenMLS nimmt keine Nachricht vom eigenen Blatt an) und bliebe stehen, wie Mallorys
+      // echtes Gerät. Der Angreifer folgt dem Verkehr mit dem Zustand weiter, der committet hat.
+      st.ks.peer = forger
       // Nachweis, dass das Blatt wirkt: es öffnet, was der erbeutete Zustand unter dem Geheimnis nach der
       // Aufnahme versiegelt (sonst bewiese das Szenario nichts über den Angriff, Review zu #37).
       let works = false
@@ -1294,7 +1298,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
         if (r.updateOp) leaf.receive(r.updateOp)
         works = dec.decode(leaf.decrypt(r.ciphertext).plaintext) === 'probe'
       } catch {}
-      return { frames: [{ label: 'cgka', body: enc.encode(JSON.stringify({ t: 'cgka', op: b64(op) } satisfies Wire)) }], works }
+      return { frames: [{ label: 'cgka', body: enc.encode(JSON.stringify({ t: 'cgka', op: b64(op) } satisfies Wire)) }], works, epoch: port.linear ? forger.epoch() - 1 : undefined }
     },
   }
 }

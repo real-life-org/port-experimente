@@ -132,14 +132,19 @@ er stand):
 
 ## Befunde
 
-- **KV3, Fälschung als Geschwister (S11, 16.10.).** Der erbeutete Zustand
-  einer Entfernten (so, wie er war: Mitglied) nimmt ein neues Blatt auf.
-  Bei MLS ist das ein Commit auf die Epoche *vor* der Entfernung, also ein
-  Geschwister des Entfernungs-Commits. Je nach Hash gewinnt er den
-  Tiebreak: dann fallen die Mitglieder auf die alte Epoche zurück, nehmen
-  die Fälschung, versiegeln ihre gestrandeten Rahmen neu, und der Heiler
-  entfernt beide Blätter der Entfernten wieder. Zugang bekommt das Blatt
-  nie (Angleichen vor jedem Eintrag, `treeSafe`), fünf Läufe in Folge. Der
+- **KV3, Fälschung als Geschwister (S11, 16.10.).** Der Zustand der
+  Entfernten wird unmittelbar vor der Entfernung erbeutet, auf derselben
+  Epoche, auf der Alice sie entfernt (S11 prüft den gemeinsamen
+  Vorgänger; Issue #45). Die Fälschung ist damit ein Geschwister des
+  Entfernungs-Commits. Je nach Hash gewinnt sie den Tiebreak: dann fallen
+  die Mitglieder auf die alte Epoche zurück, nehmen die Fälschung,
+  versiegeln ihre gestrandeten Rahmen neu, und der Heiler entfernt beide
+  Blätter der Entfernten wieder (S11 meldet „Fälschung gewann“, Epoche
+  geht weiter). Verliert sie, ist sie veraltet. Beide Zweige sind
+  gezielt belegt: nativ (`faelschung_als_geschwister…`, Schleife bis
+  beide Zweige gesehen) und am Kandidaten (Test wiederholt S11, bis beide
+  Zweige vorkamen). Zugang bekommt das Blatt in keinem Zweig
+  (Angleichen vor jedem Eintrag, `treeSafe`). Der
   Hebel, der bleibt: ein Entfernter kann mit grindbaren Hashes Rückfälle
   und Neu-Versiegeln erzwingen, so lange seine Epoche in den
   Momentaufnahmen liegt (8). Bei BeeKEM gibt es den Hebel nicht (die
@@ -147,6 +152,26 @@ er stand):
   Ein Blatt ohne Karte liest auch als Mitglied nichts (K7 über Karten),
   bei beiden Ports; MLS heilt es sofort nach dem Commit, BeeKEM erst vor
   dem nächsten Eintrag (deshalb misst S11 „Baum +1 oder Epoche weiter“).
+- **Alter Zustand, tiefer Rückfall (S11 beim Bau, 16.10.).** Fälscht ein
+  Angreifer von einem Zustand, der mehrere Epochen zurückliegt, prüfen
+  die Mitglieder den Commit gegen die Momentaufnahme dieser Epoche (bis 8
+  zurück) und fallen bei kleinerem Hash dorthin zurück, mit Neu-Versiegeln
+  und Heilung über alle Epochen dazwischen (gesehen: drei Epochen). Kein
+  Zugang, aber ein wiederholbarer Hebel, solange die Epoche in den
+  Momentaufnahmen liegt. Für den Port: Momentaufnahmen sollten Commits
+  von Blättern, die das Log inzwischen entfernt hat, gar nicht erst zum
+  Tiebreak zulassen (Prüfregel „Committer ist Mitglied der Retained Set
+  der Epoche“, mls-abgleich §6 (i)). Nicht gebaut; als Befund notiert.
+- **Der Commit eines Klons sperrt das Original (S11, 16.10.).** Spielt ein
+  erbeuteter Zustand (dasselbe Blatt) einen Commit ein, kann das echte
+  Gerät ihn nicht verarbeiten: OpenMLS nimmt keine Nachricht vom eigenen
+  Blatt an. Das Gerät bleibt mit `wartende-cgka` auf seiner Epoche stehen
+  und liest nichts Neues mehr, obwohl sein Blatt im Baum steht; der
+  Heiler sieht keinen Grund, es neu aufzunehmen. Bei BeeKEM werden die
+  Operationen zusammengeführt. Für den Port: ein Gerät, das hinter einem
+  Commit seines eigenen Blatts steht, muss sich neu willkommen heißen
+  lassen (Erkennung: eigener Blattindex, nicht eigene Operation). Nicht
+  gebaut; als Befund notiert.
 - **KeyPackage-Wiederverwendung.** MLS sieht ein KeyPackage als einmalig
   vor; die Karte des Prüfstands trägt eines als Share-Key, und eine
   Wiederaufnahme (S4j, T4) nutzt dieselbe Karte. Der Peer legt das
