@@ -489,45 +489,59 @@ export const scenarios: Scenario[] = [
       let fed = w.log.length
       // Der Angreifer sieht allen Verkehr und seine eigenen Rahmen. Gelesen wird nur über das gefälschte Blatt:
       // der erbeutete Altzustand liest als Mitglied ohnehin (das ist S7), er darf die Kontrolle nicht tragen.
-      const feed = async (frames: Array<{ label: string; body: Uint8Array }>) => {
-        for (const f of frames) for (const u of await w.candidate.attackerOpen(stolen, { id: id++, from: 'mallory', label: f.label, body: f.body }, 'forged')) Y.applyUpdate(attackerDoc, u)
-        for (const m of w.log.slice(fed)) for (const u of await w.candidate.attackerOpen(stolen, m, 'forged')) Y.applyUpdate(attackerDoc, u)
+      const feedWith = async (st: unknown, frames: Array<{ label: string; body: Uint8Array }>) => {
+        for (const f of frames) for (const u of await w.candidate.attackerOpen(st, { id: id++, from: 'mallory', label: f.label, body: f.body }, 'forged')) Y.applyUpdate(attackerDoc, u)
+        for (const m of w.log.slice(fed)) for (const u of await w.candidate.attackerOpen(st, m, 'forged')) Y.applyUpdate(attackerDoc, u)
         fed = w.log.length
       }
+      const feed = (frames: Array<{ label: string; body: Uint8Array }>) => feedWith(stolen, frames)
+      // Die Rahmen erreichen alle Geräte wie über den Träger, auch Mallorys eigenes (sonst bliebe es eine Epoche
+      // zurück, und der zweite Diebstahl träfe nicht die Epoche der Entfernung).
       const inject = async (frames: Array<{ label: string; body: Uint8Array }>) => {
-        for (const f of frames) for (const d of ['alice', 'bob', 'carol']) await w.candidate.receive(d, { id: id++, from: 'mallory', label: f.label, body: f.body })
+        for (const f of frames) for (const d of ['alice', 'bob', 'carol', 'mallory']) await w.candidate.receive(d, { id: id++, from: 'mallory', label: f.label, body: f.body })
       }
-      const tree = (d: string) => Number(/baum=(\d+)/.exec(w.candidate.status(d))?.[1] ?? NaN)
+      const num = (d: string, key: string) => Number(new RegExp(`${key}=(\\d+)`).exec(w.candidate.status(d))?.[1] ?? NaN)
       // Positivkontrolle, bevor der Angriff irgendetwas beweisen soll: Das gefälschte Blatt wirkt (es öffnet, was
-      // der erbeutete Zustand unter dem neuen Geheimnis versiegelt), und die Mitglieder nehmen die Operation in
-      // ihren Baum (ein Blatt mehr), solange Mallory Mitglied ist. Ob ein Blatt ohne Karte als Mitglied Neues
+      // der erbeutete Zustand unter dem neuen Geheimnis versiegelt), und die Mitglieder verarbeiten die Operation,
+      // solange Mallory Mitglied ist: ein Blatt mehr im Baum (BeeKEM, geheilt erst vor dem nächsten Eintrag) oder
+      // eine Epoche weiter (MLS, geheilt sofort nach dem Commit). Ob ein Blatt ohne Karte als Mitglied Neues
       // liest, ist eine Frage des Kandidaten (K7), nicht des Angriffs; es wird berichtet, nicht gewertet.
-      const before = tree('alice')
+      const treeBefore = num('alice', 'baum')
+      const epochBefore = num('alice', 'epoche')
       const forged1 = await w.candidate.forgeKeyOp!(stolen)
       if (!forged1.frames.length) return { outcome: 'nicht abbildbar', authority: 'der Angreifer konnte keine Schlüsseloperation erzeugen', keys: '—' }
       await inject(forged1.frames)
       await w.flush()
-      const accepted = tree('alice') === before + 1
+      const accepted = num('alice', 'baum') === treeBefore + 1 || (Number.isFinite(epochBefore) && num('alice', 'epoche') > epochBefore)
       const control = forged1.works && accepted
       await w.write('alice', 'kontrolle')
       await w.flush()
       await feed(forged1.frames)
       const readsAsMember = attackerDoc.getArray<string>('eintraege').toArray().includes('kontrolle')
-      const controlText = `Kontrolle: Blatt wirkt ${forged1.works ? 'ja' : 'NEIN'}, Mitglieder nehmen es in den Baum ${accepted ? 'ja' : 'NEIN'}; als Mitglied liest es Neues: ${readsAsMember ? 'ja' : 'nein'}`
+      const controlText = `Kontrolle: Blatt wirkt ${forged1.works ? 'ja' : 'NEIN'}, Mitglieder verarbeiten die Operation ${accepted ? 'ja' : 'NEIN'}; als Mitglied liest es Neues: ${readsAsMember ? 'ja' : 'nein'}`
       if (!control) {
         return { outcome: 'nicht bestanden', authority: 'Angreifer-Modell wirkungslos', keys: controlText }
       }
-      // Entfernt: dieselbe Operation deckt kein Logeintrag mehr; sie darf keinen Zugang eröffnen. Das zweite Blatt
-      // kennt nur den Verkehr ab jetzt; mehr braucht es nicht, geprüft wird allein der Eintrag danach.
+      // Der Angriff: der Angreifer steht mit seiner Kopie auf der Epoche, auf der Alice Mallory entfernt (er ist dem
+      // Verkehr bis hierher gefolgt), und fälscht von dort, ohne seine Entfernung einzuspielen. Bei einem linearen
+      // Port ist die Fälschung damit das Geschwister des Entfernungs-Commits (gemeinsamer Vorgänger, Issue #45) und
+      // kann den Tiebreak gewinnen; der Kandidat muss dann zurückfallen und heilen. Das zweite Blatt kennt nur den
+      // Verkehr ab jetzt; geprüft wird allein der Eintrag danach.
+      const parentA = num('alice', 'epoche')
       await w.remove('alice', 'mallory')
       await w.flush()
-      await feed([])
       const forged2 = await w.candidate.forgeKeyOp!(stolen)
-      // Nach der Entfernung hat der Altzustand kein aktuelles Geheimnis mehr; ob das Blatt wirkt, ist hier die
-      // Frage des Szenarios selbst, nicht Voraussetzung. Verlangt wird nur, dass die Operation zustande kommt.
+      // Ob das Blatt nach der Entfernung wirkt, ist hier die Frage des Szenarios selbst, nicht Voraussetzung.
+      // Verlangt wird nur, dass die Operation zustande kommt.
       if (!forged2.frames.length) return { outcome: 'nicht abbildbar', authority: 'der Angreifer konnte nach der Entfernung keine Schlüsseloperation erzeugen', keys: controlText }
+      const sameParent = !Number.isFinite(parentA) || forged2.epoch === parentA
+      const epochAtRemoval = num('alice', 'epoche')
       await inject(forged2.frames)
       await w.flush()
+      // Linearer Port: gewinnt die Fälschung den Tiebreak, fallen die Mitglieder zurück und heilen (Alice meldet
+      // den Rückfall, die Epoche geht weiter); verliert sie, ist sie veraltet. Beide Zweige müssen ohne Zugang enden.
+      const rolledBack = w.candidate.status('alice').includes('Tiebreak verloren')
+      const tiebreak = !Number.isFinite(epochAtRemoval) ? 'kein Tiebreak (zusammengeführt)' : rolledBack || num('alice', 'epoche') > epochAtRemoval ? 'Fälschung gewann (Rückfall, dann Heilung)' : 'Fälschung verlor (veraltet)'
       await w.write('alice', 'nachher')
       await w.flush()
       await feed(forged2.frames)
@@ -535,8 +549,8 @@ export const scenarios: Scenario[] = [
       const honest = ['alice', 'bob', 'carol'].every((d) => w.read(d).includes('nachher'))
       const m = membersAgree(w, ['alice', 'bob', 'carol'])
       return {
-        outcome: verdict(!leaked && honest && m.agree && !w.members('alice').includes('mallory')),
-        authority: `${m.text}; Zustand alice: ${w.candidate.status('alice')}`,
+        outcome: verdict(!leaked && honest && m.agree && !w.members('alice').includes('mallory') && sameParent),
+        authority: `${m.text}; gemeinsamer Vorgänger von Fälschung und Entfernung: ${Number.isFinite(parentA) ? `${sameParent ? 'ja' : 'NEIN'} (Epoche ${parentA}, Fälschung auf ${forged2.epoch})` : 'ohne Epochen'}; ${tiebreak}; Zustand alice: ${w.candidate.status('alice')}`,
         keys: `${controlText}; nach der Entfernung liest das gefälschte Blatt Neues: ${leaked ? 'JA (KV3 verletzt)' : 'nein'}; Mitglieder lesen: ${honest ? 'ja' : 'nein'}`,
       }
     },

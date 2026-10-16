@@ -162,7 +162,7 @@ export interface Candidate {
    * wirkungslos und das Szenario nicht bestanden. Lesen danach über
    * `attackerOpen(stolen, msg, 'forged')`.
    */
-  forgeKeyOp?(stolen: unknown): Promise<{ frames: Array<{ label: string; body: Uint8Array }>; works: boolean }>
+  forgeKeyOp?(stolen: unknown): Promise<{ frames: Array<{ label: string; body: Uint8Array }>; works: boolean; epoch?: number }>
 }
 
 /** Baut einen Kandidaten; darf asynchron sein (Node-only-Kandidaten werden erst beim Aufruf geladen). */

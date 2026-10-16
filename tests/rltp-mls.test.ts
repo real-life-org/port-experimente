@@ -35,7 +35,7 @@ describe('Kandidat RLTP-Autorität über MLS', () => {
       S10a: 'nicht abbildbar',
       S10b: 'nicht abbildbar',
       S10c: 'nicht abbildbar',
-      S11: 'nicht abbildbar', // forge-key-op bislang nur am BeeKEM-Port
+      S11: 'bestanden', // KV3: das gefälschte Blatt (Commit auf die Epoche vor der Entfernung) gewinnt höchstens den Tiebreak, nie Zugang
     })
   }, 300_000)
 
@@ -56,6 +56,31 @@ describe('Kandidat RLTP-Autorität über MLS', () => {
       T12: 'bestanden',
     })
   }, 300_000)
+
+  it('S11 am MLS-Port: beide Zweige des Tiebreaks enden ohne Zugang (Issue #45)', async () => {
+    const s11 = scenarios.find((s) => s.id === 'S11')!
+    const seen = new Set<string>()
+    for (let i = 0; i < 16 && seen.size < 2; i++) {
+      const r = await runScenario(() => rltpBeekem({ keyPort: 'mls' }), s11)
+      expect(r.outcome, `${r.authority} | ${r.keys}`).toBe('bestanden')
+      expect(r.authority).toContain('gemeinsamer Vorgänger von Fälschung und Entfernung: ja')
+      if (r.authority.includes('Fälschung gewann')) seen.add('gewann')
+      if (r.authority.includes('Fälschung verlor')) seen.add('verlor')
+    }
+    expect([...seen].sort()).toEqual(['gewann', 'verlor'])
+  }, 180_000)
+
+  it('S11 am MLS-Port: eine wirkungslose Fälschung besteht nicht', async () => {
+    const s11 = scenarios.find((s) => s.id === 'S11')!
+    const noop = () => {
+      const c = rltpBeekem({ keyPort: 'mls' })
+      c.forgeKeyOp = async () => ({ frames: [{ label: 'cgka', body: new TextEncoder().encode(JSON.stringify({ t: 'cgka', op: '' })) }], works: false })
+      return c
+    }
+    const r = await runScenario(noop, s11)
+    expect(r.outcome, r.authority).toBe('nicht bestanden')
+    expect(r.authority).toContain('wirkungslos')
+  }, 60_000)
 
   it('Review #39: der Heiler ist das kleinste Mitglied mit Blatt, nicht das kleinste laut Log', async () => {
     // Alice gründet; Bob entfernt sie neben einer Regeländerung, der Fork verwirft die Entfernung: Alice ist laut

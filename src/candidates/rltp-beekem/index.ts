@@ -1026,8 +1026,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
 
   return {
     id: options.dienst ? `rltp-beekem-${options.dienst}${options.mRule === 'new' ? '-m-neu' : ''}` : 'rltp-beekem',
-    // forge-key-op (S11) läuft bislang nur über den BeeKEM-Port (Blatt mit Baumhistorie); für MLS „nicht abbildbar“.
-    capabilities: new Set<Capability>(['roles', 'policy', 'rotate', 'steal', ...(port.linear ? [] : (['forge-key-op'] as Capability[])), 'multi-device', 'device-remove', ...(service ? (['service'] as Capability[]) : [])]),
+    capabilities: new Set<Capability>(['roles', 'policy', 'rotate', 'steal', 'forge-key-op', 'multi-device', 'device-remove', ...(service ? (['service'] as Capability[]) : [])]),
     service,
 
     async addDevice(person, device) {
@@ -1221,7 +1220,7 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
     members: (d) => personMembers(dev(d)),
     status: (d) => {
       const s = dev(d)
-      return [`baum=${(s.peer.members() as Uint8Array[]).length}`, `schlüssel=${s.peer.hasKey() ? 'ja' : 'nein'}`, `fork=${s.auth.forked() ? 'ja' : 'nein'}`, `regeln=v${s.auth.policyVersion()}`, ...(s.pendingCgka.length ? [`wartende-cgka=${s.pendingCgka.length}`] : []), ...(s.waitingAuth.length ? [`wartende-auth=${s.waitingAuth.length}`] : []), ...(s.pending.length ? [`ungeöffnet=${s.pending.length}`] : []), ...(service && s.target.asked ? [s.target.answered < s.target.asked ? `ziel=angefragt, keine Antwort${s.target.seq === null ? '' : ` (zuletzt seq ${s.target.seq})`}` : `ziel=seq ${s.target.seq} (${s.target.missing.size} fehlen, ${s.target.fetched} geholt)`] : []), ...(s.repairs.size ? [`lücke=${[...s.repairs.values()].filter((r) => r.outcome === 'awaiting-source').length} (${[...s.repairs.values()].some((r) => r.outcome === 'awaiting-source') ? 'awaiting-source' : `repariert ${[...s.repairs.values()].filter((r) => r.outcome === 'repaired').length}`})`, `anfragen=${[...s.repairs.values()].reduce((n, r) => n + r.attempts, 0)}`] : []), ...s.notes.slice(0, 3), ...notes.slice(0, 2)].join('; ')
+      return [`baum=${(s.peer.members() as Uint8Array[]).length}`, ...(port.linear ? [`epoche=${s.peer.epoch()}`] : []), `schlüssel=${s.peer.hasKey() ? 'ja' : 'nein'}`, `fork=${s.auth.forked() ? 'ja' : 'nein'}`, `regeln=v${s.auth.policyVersion()}`, ...(s.pendingCgka.length ? [`wartende-cgka=${s.pendingCgka.length}`] : []), ...(s.waitingAuth.length ? [`wartende-auth=${s.waitingAuth.length}`] : []), ...(s.pending.length ? [`ungeöffnet=${s.pending.length}`] : []), ...(service && s.target.asked ? [s.target.answered < s.target.asked ? `ziel=angefragt, keine Antwort${s.target.seq === null ? '' : ` (zuletzt seq ${s.target.seq})`}` : `ziel=seq ${s.target.seq} (${s.target.missing.size} fehlen, ${s.target.fetched} geholt)`] : []), ...(s.repairs.size ? [`lücke=${[...s.repairs.values()].filter((r) => r.outcome === 'awaiting-source').length} (${[...s.repairs.values()].some((r) => r.outcome === 'awaiting-source') ? 'awaiting-source' : `repariert ${[...s.repairs.values()].filter((r) => r.outcome === 'repaired').length}`})`, `anfragen=${[...s.repairs.values()].reduce((n, r) => n + r.attempts, 0)}`] : []), ...s.notes.slice(0, 3), ...notes.slice(0, 2)].join('; ')
     },
 
     async steal(d) {
@@ -1256,30 +1255,50 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
       // ohne dass ein Logeintrag es deckt. Das neue Blatt ist sein Lesegerät.
       await port.load()
       const st = stolen as { state: Uint8Array; keys: Map<string, Uint8Array>; appliedOps: Set<string>; ks?: KeyState; forged?: KeyState }
-      const ks = (st.ks ??= { peer: port.fromState(st.state), keys: st.keys, heads: [], pending: [], keyGen: 0, stored: new Set(), tried: new Map(), envelopes: new Map(), appliedOps: st.appliedOps, notes: [] })
+      st.ks ??= { peer: port.fromState(st.state), keys: st.keys, heads: [], pending: [], keyGen: 0, stored: new Set(), tried: new Map(), envelopes: new Map(), appliedOps: st.appliedOps, notes: [] }
+      // Die Fälschung geht von einer Kopie des mitlesenden Zustands aus, so weit er dem Verkehr bis jetzt gefolgt
+      // ist (seine eigene Entfernung spielt der Angreifer nicht ein, s. S11). Bei MLS ist das ein Commit auf die
+      // Epoche, auf der der Angreifer steht, bei BeeKEM eine nebenläufige Aufnahme. `epoch` nennt den Vorgänger.
+      const forger = port.fromState(st.ks.peer.exportState())
       const leaf = port.peer()
       if (groupId) leaf.join(groupId)
       st.forged = { peer: leaf, keys: new Map(), heads: [], pending: [], keyGen: 0, stored: new Set(), tried: new Map(), envelopes: new Map(), appliedOps: new Set(), notes: [] }
-      const op = (await ks.peer.add(leaf.id, leaf.shareKey)).op
+      let added: { op: Uint8Array | null; welcome?: Uint8Array }
+      try {
+        added = await forger.add(leaf.id, leaf.shareKey)
+      } catch (e) {
+        notes.push(`Fälschung: ${(e as Error).message}`)
+        return { frames: [], works: false }
+      }
+      const op = added.op
       if (!op) return { frames: [], works: false }
-      noteOp(ks, op)
+      noteOp(st.ks, op)
+      // Ab jetzt ist der Fälscher der Zustand des Angreifers: die Kopie davor könnte den Commit ihres eigenen Blatts
+      // nicht verarbeiten (OpenMLS nimmt keine Nachricht vom eigenen Blatt an) und bliebe stehen, wie Mallorys
+      // echtes Gerät. Der Angreifer folgt dem Verkehr mit dem Zustand weiter, der committet hat.
+      st.ks.peer = forger
       // Nachweis, dass das Blatt wirkt: es öffnet, was der erbeutete Zustand unter dem Geheimnis nach der
       // Aufnahme versiegelt (sonst bewiese das Szenario nichts über den Angriff, Review zu #37).
       let works = false
       try {
-        // Das Blatt braucht die Historie des Baums wie jedes neue Gerät; der erbeutete Zustand trägt sie.
-        for (const h of ks.peer.history?.() ?? []) {
-          leaf.receive(h)
-          noteOp(st.forged, h)
+        if (added.welcome && leaf.welcome) {
+          // MLS: das Blatt tritt über das Willkommen bei, das der erbeutete Zustand selbst ausstellt.
+          leaf.welcome(added.welcome)
+        } else {
+          // BeeKEM: das Blatt braucht die Historie des Baums wie jedes neue Gerät; der erbeutete Zustand trägt sie.
+          for (const h of forger.history?.() ?? []) {
+            leaf.receive(h)
+            noteOp(st.forged, h)
+          }
+          leaf.receive(op)
         }
-        leaf.receive(op)
         noteOp(st.forged, op)
         const probe = enc.encode('probe')
-        const r = await ks.peer.encrypt(crypto.getRandomValues(new Uint8Array(32)), [], probe)
+        const r = await forger.encrypt(crypto.getRandomValues(new Uint8Array(32)), [], probe)
         if (r.updateOp) leaf.receive(r.updateOp)
         works = dec.decode(leaf.decrypt(r.ciphertext).plaintext) === 'probe'
       } catch {}
-      return { frames: [{ label: 'cgka', body: enc.encode(JSON.stringify({ t: 'cgka', op: b64(op) } satisfies Wire)) }], works }
+      return { frames: [{ label: 'cgka', body: enc.encode(JSON.stringify({ t: 'cgka', op: b64(op) } satisfies Wire)) }], works, epoch: port.linear ? forger.epoch() - 1 : undefined }
     },
   }
 }
