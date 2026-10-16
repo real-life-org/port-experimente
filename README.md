@@ -23,6 +23,9 @@ Port ab. Plan und Begründung: `rltp/design/port-experimente-2026-10.md`.
   BeeKEM oder MLS (`rltp-mls`, derselbe Kandidatencode).
 - `src/candidates/consensual-mls/`: Consensuals Raummodell nachgebaut (E14b):
   MLS ohne Autoritätslog, `any-staged` oder `owner` als Committer.
+- `src/lab/zustellung.ts` + `src/candidates/zustellung/`: Zustellungs-
+  Prüfstand (E11): Paar-Verkehr über die Drähte Prüfstand-Umschlag, TSP und
+  DIDComm; Szenarien T9, T10, Z1–Z4.
 - `rust/mls-wasm/examples/vectors.rs`: Testvektoren für MLS zu zweit mit
   anderen Implementierungen (E14a), `cargo run --example vectors`.
 - `rust/`: WebAssembly-Hüllen (`p2panda-wasm`, `beekem-wasm`, `mls-wasm`), gebaut von
