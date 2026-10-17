@@ -381,4 +381,18 @@ describe('K1a breite Matrix', () => {
     expect(one.crashed, one.detail).toBeFalsy()
     expect(one.outcome, one.detail).toBe('bestanden')
   }, 600_000)
+
+  it('X15: Vereinigung zweier Beziehungen zu M auf A2, während auf A1 ein Akt läuft (consented, Karte unterwegs): die Vereinigung trägt die Gegenseite M', async () => {
+    const two = byId(await runX15(k1a(), false, ['X15'])).X15!
+    expect(two.crashed, two.detail).toBeFalsy()
+    // Die Vereinigung entsteht aus Ms Mapping auf A2s neuem Tupel und wandert als Operation durchs Journal; kein Schritt über eigene Tupel nötig.
+    expect(two.outcome, two.detail).toBe('bestanden')
+    expect(two.measures.entriesToMediator).toBe(1)
+    expect(two.measures.actsConnected).toBe(2)
+    expect(two.measures.mediatorResolved).toBe(2)
+    expect(two.measures.doubleFinalEffects).toBe(0)
+    const one = byId(await runX15(k1a({ devices: 1 }), true, ['X15'])).X15!
+    expect(one.crashed, one.detail).toBeFalsy()
+    expect(one.outcome, one.detail).toBe('bestanden')
+  }, 600_000)
 })

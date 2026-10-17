@@ -263,7 +263,7 @@ export const promiseEn: Record<string, { title: string; ref: string; gap: string
   },
   "MG7": {
     "title": "Continuity across devices: two encounters of the same persons on different devices become one relationship, no doubles",
-    "ref": "§6a 2300, 6975; I-6 (X7, X14, X15)",
+    "ref": "§6a 2300, 6975, 6987; I-6 (X7, X14, X15)",
     "gap": null
   },
   "MG8": {
@@ -342,6 +342,7 @@ export const scenarioEn: Record<string, string> = {
   "X12": "Lost receipt and unreachable carrier per device (T9/T10 with several devices): effect once, both devices equal afterwards",
   "X13": "M1 and M2 each issue an introduction to A while separated, A's shared budget per mediator relationship stands at 9; A1 sees only one, A2 only the other (mediator devices against the shared budget, 8510, 8640.10)",
   "X14": "A1 and A2 separately introduce the same person C to B (two acts, one purpose): double introduction, union of the acts at B and C (6975, I-6)",
+  "X15": "Union of two relationships with M (6975) while an act runs on one (consented, card in transit): A1 consents, A2, separated from A1, meets M again and unites (6987.5/.6/.10/.12/.14)",
   "X21": "Journal duplicated, reordered, incomplete: completed batches after an old and a double restore, concurrent requests, a crash before commit; loss of request, answer and receipt, each for more than 12 rounds (HSC-440, review 9)"
 }
 

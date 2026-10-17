@@ -655,6 +655,54 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
     },
   },
   {
+    id: 'X15',
+    title: 'Vereinigung zweier Beziehungen zu M (6975), während auf einer ein Akt läuft (consented, Karte unterwegs): A1 stimmt zu, A2 trifft getrennt davon M erneut und vereinigt (6987.5/.6/.10/.12/.14)',
+    async run(c, serial) {
+      const s = await setup(c, serial)
+      const r = await introduceAny(s, s.ma, s.mb, serial)
+      if (!('act' in r)) return fail(`Vorstellung verweigert: ${r.refused}`)
+      if ((await s.w.until(() => knowsAct(s.w, 'A', r.act) && knowsAct(s.w, 'B', r.act), 10)) < 0) return fail('Akt nicht bei A und B')
+      // B ist weg: As Karte bleibt unterwegs (consented, nicht verbunden), während A eine zweite Beziehung zu M öffnet.
+      // A1 und A2 sind dabei voneinander getrennt (kein Journal): die Zustimmung auf A1 und die Vereinigung auf A2 laufen nebeneinander.
+      for (const d of s.w.of('B')) d.online = false
+      const selfA = (await s.A.cand.keys.pair('self/A')).rkid
+      if (!serial) for (const d of s.w.of('A')) s.w.carrier.faults.withhold(d.name, (f) => f.address === selfA)
+      await s.A.consent(r.act)
+      await s.w.rounds(1)
+      const e2 = await s.w.encounter(s.A2, s.Mm) // A2 trifft M1 erneut; seriell trifft A1 M1
+      const nUnion = await s.w.until(() => relationshipsTo(s.w, s.A2, 'M').entries === 1, 15)
+      const midState = s.w.of('A').map((d) => M.act(d.state, r.act).state)
+      s.w.carrier.faults.reset()
+      for (const d of s.w.of('B')) d.online = true
+      await s.B.consent(r.act)
+      await s.w.until(() => [...s.w.of('A'), ...s.w.of('B')].every((d) => M.act(d.state, r.act).state === 'connected'), 15)
+      const n = Math.max(await untilStable(s.w, 'A'), await untilStable(s.w, 'M'))
+      // Gemessen je Gerät: Einträge zu M (Soll einer mit beiden Tupeln), der Akt verbunden, seine Mediatorbeziehung aufgelöst auf die vereinigte (6987.10), die Annahme im Budget der vereinigten (6987.6).
+      const per = s.w.of('A').map((d) => {
+        const rels = relationshipsTo(s.w, d, 'M')
+        const a = d.state.acts.find((x) => x.id === r.act)
+        const rel = a ? M.findRel(d.state, a.mediator) : undefined
+        const resolved = !!rel && !rel.departed && rel.tuples.some((t) => t.id === e2.x.id) && rel.tuples.some((t) => t.id === M.tuple(d.state, M.head(M.rel(d.state, s.am)).id).id)
+        return { d, rels, state: a?.state ?? '–', resolved, budget: !!rel && rel.accepted.some((e) => e.act === r.act) }
+      })
+      const entries = Math.max(entriesAcross(s.w, 'A', 'M'), entriesAcross(s.w, 'M', 'A'))
+      const mPer = s.w.of('M').map((d) => ({ d, rels: relationshipsTo(s.w, d, 'A') }))
+      const equivocation = s.w.of('M').flatMap((d) => d.state.findings).filter((f) => f.includes('Equivokation')).length
+      // 6987.5/6987.14: nach der Vereinigung hält M die Sicht auf dem Kopf der vereinigten Beziehung.
+      const viewOnHead = s.w.of('M').filter((d) => { const rel = M.rel(d.state, s.ma); return rel.view?.scope === M.head(rel).id }).length
+      const fe = finalEffects(s.w, 'A')
+      const connectsAtB = ledger(s.w, 'B').get(`connect:${r.act}`)?.size ?? 0
+      const agree = s.w.agree('A')
+      const connected = per.filter((x) => x.state === 'connected').length
+      const ok = nUnion > 0 && n > 0 && entries === 1 && per.every((x) => x.rels.entries === 1 && x.rels.tuples === 2 && x.state === 'connected' && x.resolved && x.budget) && mPer.every((x) => x.rels.entries === 1) && viewOnHead === mPer.length && equivocation === 0 && fe.total === 0 && connectsAtB === 1 && agree.agree
+      return {
+        outcome: mark(ok),
+        detail: `vereinigt nach ${nUnion} Runden (Akt dabei ${midState.join('/')}); ${per.map((x) => `${x.d.name}: ${x.rels.entries} Eintrag/Einträge zu M mit ${x.rels.tuples} Tupel(n), Akt ${x.state}, Mediatorbeziehung ${x.resolved ? 'vereinigt' : 'nicht die vereinigte'}, Annahme im Budget ${x.budget ? 'ja' : 'nein'}`).join('; ')}; ${mPer.map((x) => `${x.d.name}: ${x.rels.entries} Eintrag/Einträge zu A`).join(', ')}; Ms Sicht auf dem Kopf: ${viewOnHead} von ${mPer.length}; B verbunden ${connectsAtB}×; Equivokationen ${equivocation}; doppelte Wirkungen ${fe.total}; stabil nach ${n} Runden`,
+        measures: { roundsToUnion: nUnion, entriesToMediator: entries, actsConnected: connected, mediatorResolved: per.filter((x) => x.resolved).length, acceptanceInBudget: per.filter((x) => x.budget).length, mediatorViewOnHead: viewOnHead, connectsAtB, equivocations: equivocation, doubleFinalEffects: fe.total + Math.max(0, connectsAtB - 1), roundsToConverge: n },
+      }
+    },
+  },
+  {
     id: 'X21',
     title: 'Journal doppelt, umgeordnet, unvollständig: abgeschlossene Batches nach altem und doppeltem Restore, gleichzeitige Anfragen, Absturz vor dem Commit; Verlust von Anfrage, Antwort und Quittung je über 12 Runden (HSC-440, Review 9)',
     async run(c, serial) {
