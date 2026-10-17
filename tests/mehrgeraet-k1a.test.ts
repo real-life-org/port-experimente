@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { Welt15 } from '../src/lab/mehrgeraet/welt'
 import { HolderDevice } from '../src/lab/mehrgeraet/holder'
 import { runX15 } from '../src/lab/mehrgeraet/scenarios'
@@ -435,3 +435,29 @@ describe('K1a breite Matrix', () => {
     expect(one.measures.cardsProducedByA).toBe(1)
   }, 600_000)
 })
+    // Review 11 B1: das Ledger-Orakel zählt die Endwirkungen beider Personen; A hat Zustimmung und Verbindung je aus zwei Operationen.
+    expect(two.measures.doubleFinalEffectsA).toBe(2)
+    expect(two.measures.doubleFinalEffectsB).toBe(0)
+    expect(two.measures.doubleFinalEffects).toBe(2)
+    expect(two.measures.doubleEffectKindsA).toBe('connect, consent')
+    expect(two.detail).toMatch(/doppelte Endwirkungen bei A: 2/)
+    expect(one.measures.doubleFinalEffects).toBe(0)
+  }, 600_000)
+
+  it('X18 Gegenlauf (Review 11 B1): ohne den Übergabe-Digest in der Projektion sind As Geräte gleich; das Orakel fängt As doppelte Endwirkungen trotzdem', async () => {
+    const proto = HolderDevice.prototype as unknown as { projection: () => M.Projection }
+    const projection = proto.projection
+    const spy = vi.spyOn(proto, 'projection').mockImplementation(function (this: HolderDevice) {
+      const p = projection.call(this)
+      for (const a of Object.values(p.acts)) a.ownCardDigest = null
+      return p
+    })
+    try {
+      const x = byId(await runX15(k1a(), false, ['X18'])).X18!
+      expect(x.crashed, x.detail).toBeFalsy()
+      expect(x.measures.projectionAgrees, x.detail).toBe(1) // die Digest-Divergenz ist ausgeblendet
+      expect(x.measures.doubleFinalEffectsA, x.detail).toBe(2)
+      expect(x.outcome, x.detail).toBe('nicht bestanden')
+    } finally {
+      spy.mockRestore()
+    }

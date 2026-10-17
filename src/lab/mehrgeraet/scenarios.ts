@@ -109,7 +109,7 @@ function finalEffects(w: Welt15, person: string) {
   }
   const doubleConsumption = [...keyActs.values()].filter((s) => s.size > 1).length
   const contradictions = [...l.keys()].filter((id) => id.startsWith('decline:') && l.has(`consent:${id.slice(8)}`)).length
-  return { doubles: doubles.length, doubleConsumption, contradictions, total: doubles.length + doubleConsumption + contradictions }
+  return { doubles: doubles.length, doubleIds: doubles, doubleConsumption, contradictions, total: doubles.length + doubleConsumption + contradictions }
 }
 
 /** Angenommene Akte einer Person über alle Geräte (verschiedene Akt-Ids). */
@@ -809,8 +809,14 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       // Welche Übergabe der Akt trägt (8326: der Digest des Kartendokuments): verschiedene Digests heißen, die Geräte sind uneins.
       const handOvers = new Set(s.w.of('A').map((d) => M.act(d.state, r.act).ownCardDigest)).size
       const states = [...s.w.of('A'), ...s.w.of('B')].map((d) => `${d.name}: ${M.act(d.state, r.act).state}`)
-      const ok = nA > 0 && nB > 0 && connectsAtB === 1 && conflicts === 0 && tuplesAtB.every((x) => x === 1) && agree.agree && states.every((x) => x.endsWith('connected'))
-      return { outcome: mark(ok), detail: `${states.join(', ')}; A: ${cards} Karten-Dokument(e), ${cardKeys} Kartenschlüssel, Zustimmung aus ${consents} Operation(en); B: Karten empfangen ${cardsAtB.join('/')}, verbunden ${connectsAtB}×, Konfliktmarke K auf ${conflicts} Gerät(en), Tupel des Akts je Gerät ${tuplesAtB.join('/')}; Übergabe-Digests des Akts auf den A-Geräten: ${handOvers}; A stabil gleich nach ${nA} Runden: ${agree.agree ? 'ja' : 'nein'}, B nach ${nB}`, measures: { cardsProducedByA: cards, cardKeys, consentOperations: consents, connectsAtB, cardConflictsAtB: conflicts, doubleFinalEffects: Math.max(0, connectsAtB - 1), handOverDigestsOnA: handOvers, projectionAgrees: agree.agree ? 1 : 0, roundsToConverge: nA } }
+      // Endwirkungen beider Personen über das gemeinsame Ledger-Orakel (Review 11 B1): eine Effekt-Id aus mehr als einer Operation ist doppelt, unabhängig davon, ob die Projektionen gleich sind.
+      const feA = finalEffects(s.w, 'A')
+      const feB = finalEffects(s.w, 'B')
+      const kindsA = [...new Set(feA.doubleIds.map((id) => id.split(':')[0]!))].sort().join(', ')
+      const doubles = feA.total + feB.total
+      const ok = nA > 0 && nB > 0 && doubles === 0 && connectsAtB === 1 && conflicts === 0 && tuplesAtB.every((x) => x === 1) && agree.agree && states.every((x) => x.endsWith('connected'))
+      const reasons = [doubles > 0 ? `doppelte Endwirkungen (A ${feA.total}${kindsA ? `: ${kindsA}` : ''}, B ${feB.total})` : '', !agree.agree ? 'die Projektionen von A bleiben verschieden' : ''].filter(Boolean)
+      return { outcome: mark(ok), detail: `${states.join(', ')}; A: ${cards} Karten-Dokument(e), ${cardKeys} Kartenschlüssel, Zustimmung aus ${consents} Operation(en); doppelte Endwirkungen bei A: ${feA.total}${kindsA ? ` (${kindsA} je aus zwei Operationen)` : ''}, bei B: ${feB.total}; B: Karten empfangen ${cardsAtB.join('/')}, verbunden ${connectsAtB}×, Konfliktmarke K auf ${conflicts} Gerät(en), Tupel des Akts je Gerät ${tuplesAtB.join('/')}; Übergabe-Digests des Akts auf den A-Geräten: ${handOvers}; A stabil gleich nach ${nA} Runden: ${agree.agree ? 'ja' : 'nein'}, B nach ${nB}${reasons.length ? `; nicht bestanden wegen: ${reasons.join('; ')}` : ''}`, measures: { cardsProducedByA: cards, cardKeys, consentOperations: consents, connectsAtB, cardConflictsAtB: conflicts, doubleFinalEffects: doubles, doubleFinalEffectsA: feA.total, doubleFinalEffectsB: feB.total, doubleEffectKindsA: kindsA || '–', handOverDigestsOnA: handOvers, projectionAgrees: agree.agree ? 1 : 0, roundsToConverge: nA } }
     },
   },
   {
