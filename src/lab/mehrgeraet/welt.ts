@@ -2,7 +2,7 @@
 // virtuelle Uhr, Store je Gerät, Begegnungen als Begegnungskanal.
 
 import { Carrier, MemoryStore, VirtualClock } from '../zustellung'
-import { HolderDevice, type DeviceState, type MultiDeviceCandidate } from './holder'
+import { frameHash, HolderDevice, type DeviceState, type MultiDeviceCandidate } from './holder'
 import * as M from './model'
 import { rand } from '@real-life/trust-protocol'
 
@@ -161,6 +161,45 @@ export class Welt15 {
     if (!first) return { agree: true, diff: '' }
     const other = ps.find((x) => x.p !== first.p)
     return other ? { agree: false, diff: `${first.name} ≠ ${other.name}` } : { agree: true, diff: '' }
+  }
+
+  /**
+   * Tatsächliche Einlieferungen am Träger ab `from` (Index in `carrier.carried`), einschließlich jeder Wiederholung
+   * (Plan Abschnitt 5, Tor-Review 9 zu X21): Rahmen und Bytes der Geräte einer Person, getrennt „zwischen eigenen
+   * Geräten“ (Self-Adresse) und „zu Gegenseite/M“, je Art (`own:<art>` / `peer:<art>`) und je erzeugendem Gerät; `repeats` sind Einlieferungen
+   * derselben Bytes, die schon einmal eingeliefert waren (auch vor `from`). Zugeordnet wird über `produced` der Geräte.
+   */
+  deposits(person: string, selfRkid: string, from = 0) {
+    const origin = new Map<string, { device: string; kind: string }>()
+    for (const d of this.devices) if (d.person === person) for (const [h, kind] of d.produced) origin.set(h, { device: d.name, kind })
+    const seen = new Set<string>()
+    const out = { own: { frames: 0, bytes: 0 }, toPeer: { frames: 0, bytes: 0 }, repeats: 0, byKind: {} as Record<string, { frames: number; bytes: number }>, byDevice: {} as Record<string, Record<string, number>> }
+    this.carrier.carried.forEach((f, i) => {
+      const h = frameHash(f.bytes)
+      const o = origin.get(h)
+      const repeat = seen.has(h)
+      seen.add(h)
+      if (i < from || !o) return
+      const side = f.address === selfRkid ? out.own : out.toPeer
+      side.frames++
+      side.bytes += f.bytes.length
+      if (repeat) out.repeats++
+      const k = (out.byKind[`${f.address === selfRkid ? 'own' : 'peer'}:${o.kind}`] ??= { frames: 0, bytes: 0 })
+      k.frames++
+      k.bytes += f.bytes.length
+      const dv = (out.byDevice[o.device] ??= {})
+      dv[o.kind] = (dv[o.kind] ?? 0) + 1
+    })
+    return out
+  }
+  /** Art eines Rahmens am Träger (Messung, für Störregeln je Art): erzeugendes Gerät und Art, sonst undefined. */
+  frameOrigin(bytes: Uint8Array): { device: string; kind: string } | undefined {
+    const h = frameHash(bytes)
+    for (const d of this.devices) {
+      const kind = d.produced.get(h)
+      if (kind) return { device: d.name, kind }
+    }
+    return undefined
   }
 
   /** Verkehr über alle Geräte einer Person. */

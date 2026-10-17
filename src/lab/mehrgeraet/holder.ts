@@ -50,6 +50,9 @@ export interface KeyScheme {
   pair(ctx: string): Promise<Keys>
 }
 
+/** Kennung versiegelter Bytes für die Verkehrsmessung (X21): gleiche Bytes, gleiche Kennung, also auch jede Wiederholung. */
+export const frameHash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('base64')
+
 export function derive(seed: Uint8Array, ctx: string): Uint8Array {
   return new Uint8Array(createHash('sha256').update(seed).update(ctx).digest())
 }
@@ -259,6 +262,12 @@ export class HolderDevice {
   private sync: { pending: boolean; wait: number; backoff: number } = { pending: false, wait: 0, backoff: 1 }
   /** Anzahl gesendeter Nachhol-Anfragen (Messgröße des Reparaturverkehrs). */
   syncRequests = 0
+  /**
+   * Messung (X21, Plan Abschnitt 5): Art jedes Rahmens, den dieses Gerät erzeugt hat, je SHA-256 der versiegelten
+   * Bytes; so ordnet die Welt jede Einlieferung am Träger samt Wiederholung einem Gerät und einer Art zu. Nur Messung:
+   * nicht Teil des Zustands, kein Einfluss auf das Verhalten, übersteht den Neuaufbau derselben Instanz.
+   */
+  readonly produced = new Map<string, string>()
   /** Produktionsabsichten (B4): eigene und die der anderen eigenen Geräte aus dem Journal; lesbar für Messungen. */
   intents = new Map<string, Intent>()
   /** Aufgezeichnet, noch nicht eingeliefert: geht nach dem nächsten Commit hinaus. */
@@ -495,6 +504,7 @@ export class HolderDevice {
     const env = await seal(doc as unknown as Json, toRkid)
     const bytes = enc.encode(jcs(env))
     const digest = await digestBytes(enc.encode(jcs(doc)))
+    this.produced.set(frameHash(bytes), type === TYPES.journalSync ? (payload.reply ? 'journal-sync-reply' : 'journal-sync') : (type.split('/').slice(-2)[0] ?? type))
     this.zusteller.record(digest, bytes, toRkid)
     this.held.push(digest)
     this.expected.set(digest, recipient)
@@ -945,6 +955,7 @@ export class HolderDevice {
     const ackEnv = await seal(ackDoc as unknown as Json, doc.replyTo)
     const ackBytes = enc.encode(jcs(ackEnv))
     const ackDigest = await digestBytes(enc.encode(jcs(ackDoc)))
+    this.produced.set(frameHash(ackBytes), 'delivery-ack')
     this.acks.set(v.digest!, { frame: ackBytes, digest: ackDigest, address: doc.replyTo })
     this.zusteller.record(ackDigest, ackBytes, doc.replyTo)
     this.held.push(ackDigest)

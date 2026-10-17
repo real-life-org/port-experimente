@@ -150,6 +150,43 @@ function entriesAcross(w: Welt15, person: string, other: string): number {
   return keys.size
 }
 
+/** Vorstellung über den autorisierten Pfad (B6): darf M1 keinen Schlüssel benennen (K1a teilt sie), stellt M2 vor. */
+async function introduceAny(s: Setup, relA: string, relB: string, serial: boolean): Promise<{ act: string } | { refused: string }> {
+  const r = await s.Mm.introduce(relA, relB)
+  if ('act' in r || serial) return r
+  return s.M2.introduce(relA, relB)
+}
+
+/** Alle Geräte einer Person kennen den Akt (sonst wäre eine Entscheidung darauf ein Fehler im Szenario, kein Messwert). */
+const knowsAct = (w: Welt15, person: string, act: string) => w.of(person).every((d) => d.state.acts.some((a) => a.id === act))
+
+/** Journal je Gerät (X11, X21): Batches und Bytes, die das Gerät kennt; ohne Nachholen (K0) nicht messbar. */
+function journalOf(d: HolderDevice): { batches: number; bytes: number } | null {
+  const all = d.cand.batchesAfter?.({})
+  return all ? { batches: all.length, bytes: all.reduce((n, f) => n + f.body.length, 0) } : null
+}
+
+/** Batches, die ein Gerät einer Person nicht kennt, ein Schwestergerät aber schon (über die Köpfe); null ohne Köpfe. */
+function missingBatches(w: Welt15, person: string): number | null {
+  const ds = w.of(person)
+  if (ds.some((d) => !d.cand.heads || !d.cand.batchesAfter)) return null
+  let n = 0
+  for (const d of ds) for (const e of ds) if (d !== e) n += e.cand.batchesAfter!(d.cand.heads!()).length
+  return n
+}
+
+/** Runden, bis über `quiet` Runden nichts mehr an der Self-Adresse eingeliefert wird (die Reparatur endet); −1 bei Grenze. */
+async function untilQuiet(w: Welt15, self: string, quiet = 3, max = 30): Promise<number> {
+  let still = 0
+  for (let i = 1; i <= max; i++) {
+    const mark = w.carrier.carried.length
+    await w.rounds(1)
+    still = w.carrier.carried.slice(mark).some((f) => f.address === self) ? 0 : still + 1
+    if (still >= quiet) return i - quiet
+  }
+  return -1
+}
+
 // ── Szenarien ────────────────────────────────────────────────────────────────
 
 export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandidate, serial: boolean) => Promise<Body> }> = [
@@ -488,6 +525,118 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const dup = s.B.dispositions.filter((d) => d === 'duplicate-known').length
       const ok = n > 0 && connectsAtB === 1 && dup >= 1 && m > 0
       return { outcome: mark(ok), detail: `A1: Karte ${M.act(s.A.state, r.act).o} nach ${n} Runden; B: Verbindung ${connectsAtB}×, ${dup}× duplicate-known; A-Geräte gleich nach ${m} Runden`, measures: { rounds: n, duplicateKnownAtB: dup, doubleFinalEffects: Math.max(0, connectsAtB - 1), roundsToConverge: m } }
+    },
+  },
+  {
+    id: 'X21',
+    title: 'Journal doppelt, umgeordnet, unvollständig: abgeschlossene Batches nach altem und doppeltem Restore, gleichzeitige Anfragen, Absturz vor dem Commit; Verlust von Anfrage, Antwort und Quittung je über 12 Runden (HSC-440, Review 9)',
+    async run(c, serial) {
+      if (serial) return na('ein Gerät: kein Journal zwischen Geräten')
+      const s = await setup(c, serial, ['C'])
+      const { C, mc } = s.thirds.C!
+      const self = (await s.A.cand.keys.pair('self/A')).rkid
+      const oldA2 = s.w.stores.get('A2')!.snapshot() // A2 vor beiden Akten
+      // Fachlicher Verlauf: ein Akt mit Zustimmung auf A1, einer mit Zustimmung auf A2 (A2s eigene Batches stehen danach nur noch in A1s Journal).
+      const acts: string[] = []
+      for (const [other, dev, peer] of [[mc, s.A, C], [s.mb, s.A2, s.B]] as const) {
+        const r = await introduceAny(s, s.ma, other, serial)
+        if (!('act' in r)) return fail(`Vorstellung verweigert: ${r.refused}`)
+        acts.push(r.act)
+        if ((await s.w.until(() => knowsAct(s.w, 'A', r.act), 10)) < 0) return fail('Akt nicht auf beiden Geräten')
+        await dev.consent(r.act)
+        await peer.consent(r.act)
+        await s.w.until(() => s.w.of('A').every((d) => M.act(d.state, r.act).state === 'connected'), 15)
+      }
+      await s.w.rounds(4)
+      const ref = M.canonical(s.A.projection())
+      const before = s.w.of('A').map(journalOf)
+      const start = s.w.carrier.carried.length
+      const req0 = s.w.of('A').reduce((n, d) => n + d.syncRequests, 0)
+      const restoreA2 = async () => {
+        s.w.stores.get('A2')!.restore(oldA2)
+        await s.A2.reload()
+      }
+      const behind = () => (missingBatches(s.w, 'A') ?? 0) > 0 || M.canonical(s.A2.projection()) !== ref ? 1 : 0
+      // Phase 1: A2 aus dem alten Abbild, A1 startet zugleich neu (zwei gleichzeitige Anfragen), Umordnung und Duplikate an;
+      // nach zwei Runden A2 noch einmal aus demselben Abbild (doppelter Restore), dann stürzt A2 einmal vor dem Commit ab.
+      s.w.carrier.faults.reverse(true)
+      s.w.carrier.faults.duplicate(true)
+      await restoreA2()
+      await s.A.reload()
+      await s.w.rounds(2)
+      await restoreA2()
+      s.A2.crashAt = 'before-commit'
+      await s.w.rounds(1)
+      const crashed = s.A2.crashes.length
+      if (crashed) await s.A2.reload()
+      const restore = await untilStable(s.w, 'A', 40)
+      s.w.carrier.faults.reset()
+      // Phasen 2–4: je ein frischer Restore von A2, dann 15 Runden Verlust einer Art auf der Self-Adresse, dann ohne Fachoperation weiter.
+      const loss = async (match: (o: { device: string; kind: string }) => boolean) => {
+        await restoreA2()
+        s.w.carrier.faults.drop((f) => {
+          const o = f.address === self ? s.w.frameOrigin(f.bytes) : undefined
+          return !!o && match(o)
+        })
+        await s.w.rounds(15)
+        const b = behind()
+        s.w.carrier.faults.reset()
+        return { behind: b, rounds: await untilStable(s.w, 'A', 40) }
+      }
+      const requests = await loss((o) => o.device === 'A2' && o.kind === 'journal-sync')
+      const answers = await loss((o) => o.device !== 'A2' && (o.kind === 'journal' || o.kind === 'journal-sync-reply'))
+      const receipts = await loss((o) => o.kind === 'delivery-ack')
+      const quiet = await untilQuiet(s.w, self)
+      // Messung: Endstand und der ganze Reparaturverkehr seit dem ersten Restore.
+      const missing = missingBatches(s.w, 'A')
+      const lostState = s.w.of('A').filter((d) => M.canonical(d.projection()) !== ref).length
+      const fe = finalEffects(s.w, 'A')
+      const journalConflicts = s.w.of('A').flatMap((d) => d.state.findings).filter((f) => f.includes('Journal-Konflikt')).length
+      const t = s.w.deposits('A', self, start)
+      const k = (kind: string) => t.byKind[`own:${kind}`] ?? { frames: 0, bytes: 0 }
+      const answersBy = (d: string) => (t.byDevice[d]?.['journal'] ?? 0) + (t.byDevice[d]?.['journal-sync-reply'] ?? 0)
+      const after = s.w.of('A').map(journalOf)
+      const phases = [restore, requests.rounds, answers.rounds, receipts.rounds]
+      const measures: Record<string, number> = {
+        repairRoundsRestore: restore,
+        repairRoundsRequestLoss: requests.rounds,
+        repairRoundsAnswerLoss: answers.rounds,
+        repairRoundsReceiptLoss: receipts.rounds,
+        behindAfterRequestLoss: requests.behind,
+        behindAfterAnswerLoss: answers.behind,
+        behindAfterReceiptLoss: receipts.behind,
+        roundsUntilQuiet: quiet,
+        devicesWithLostState: lostState,
+        doubleFinalEffects: fe.doubles + fe.doubleConsumption,
+        remainingConflicts: fe.contradictions + journalConflicts,
+        ownFrames: t.own.frames,
+        ownBytes: t.own.bytes,
+        journalFrames: k('journal').frames,
+        journalBytes: k('journal').bytes,
+        syncRequestFrames: k('journal-sync').frames,
+        syncReplyFrames: k('journal-sync-reply').frames,
+        ackFrames: k('delivery-ack').frames,
+        repeatedDeposits: t.repeats,
+        answersA1: answersBy('A1'),
+        answersA2: answersBy('A2'),
+        framesToCounterpart: t.toPeer.frames,
+        bytesToCounterpart: t.toPeer.bytes,
+        syncRequests: s.w.of('A').reduce((n, d) => n + d.syncRequests, 0) - req0,
+        crashes: crashed,
+      }
+      if (missing !== null) measures.missingBatches = missing
+      if (before.every(Boolean) && after.every(Boolean)) {
+        measures.journalBatchesBefore = Math.max(...before.map((j) => j!.batches))
+        measures.journalBatchesAfter = Math.max(...after.map((j) => j!.batches))
+        measures.journalBytesBefore = Math.max(...before.map((j) => j!.bytes))
+        measures.journalBytesAfter = Math.max(...after.map((j) => j!.bytes))
+      }
+      const ok = missing === 0 && phases.every((n) => n > 0) && requests.behind === 1 && answers.behind === 1 && lostState === 0 && measures.doubleFinalEffects === 0 && measures.remainingConflicts === 0 && quiet >= 0
+      return {
+        outcome: mark(ok),
+        detail: `Reparatur in Runden: Restore ${restore}, Anfrageverlust ${requests.rounds}, Antwortverlust ${answers.rounds}, Quittungsverlust ${receipts.rounds} (zurück nach dem Verlust: ${[requests.behind, answers.behind, receipts.behind].join('/')}); still nach ${quiet} Runden; fehlende Batches ${missing ?? 'nicht messbar (kein Nachholen)'}; Geräte mit anderem Stand als vorher ${lostState}; doppelte Wirkungen ${measures.doubleFinalEffects}, Konflikte ${measures.remainingConflicts}; Self-Adresse ${t.own.frames} Rahmen / ${t.own.bytes} B (Journal ${k('journal').frames}/${k('journal').bytes} B, Anfragen ${k('journal-sync').frames}, Antworten ${k('journal-sync-reply').frames}, Quittungen ${k('delivery-ack').frames}, Wiederholungen ${t.repeats}; Antworten A1 ${answersBy('A1')}, A2 ${answersBy('A2')}); an Gegenseiten ${t.toPeer.frames} Rahmen; Journal ${measures.journalBatchesBefore ?? '–'} → ${measures.journalBatchesAfter ?? '–'} Batches`,
+        measures,
+      }
     },
   },
 ]

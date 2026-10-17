@@ -85,7 +85,7 @@ export const promises: Promise[] = [
   { id: 'MG8', port: 'mehrgerät', title: 'Enrollment: ein neues Gerät sieht alles und handelt sofort', ref: 'HSC-020 Ersatz, Identity Enrollment (X8)', scenarios: ['X8'] },
   { id: 'MG9', port: 'mehrgerät', title: 'Gerätewiderruf: ein widerrufenes Gerät liest nichts Neues, auch nicht mit dem alten Zustand', ref: 'Identity Widerruf; K7 (X9, später X20)', scenarios: ['X9'] },
   { id: 'MG10', port: 'mehrgerät', title: 'Rechte je Gerät oder App: eine eingeschränkte App kann nur, was ihr Recht erlaubt', ref: 'Delegationsprofil K2 (X10, später X22)', scenarios: ['X10'] },
-  { id: 'MG11', port: 'mehrgerät', title: 'Konvergenz nach langer Trennung: gleiche fachliche Projektion aller Geräte', ref: 'HSC-440; Plan E15 Abschnitt 5 (X11, später X21)', scenarios: ['X11'] },
+  { id: 'MG11', port: 'mehrgerät', title: 'Konvergenz nach langer Trennung und Journalreparatur: gleiche fachliche Projektion aller Geräte, kein fehlender Batch, die Reparatur endet', ref: 'HSC-440; Plan E15 Abschnitt 5 (X11, X21)', scenarios: ['X11', 'X21'] },
   { id: 'MG12', port: 'mehrgerät', title: 'Zustellung bei Mehrgerät: Quittungsverlust und unerreichbarer Träger je Gerät enden nie still, Wirkung einmal', ref: 'Delivery 6.1, 6.3 (X12)', scenarios: ['X12'] },
 ]
 

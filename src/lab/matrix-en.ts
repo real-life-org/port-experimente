@@ -282,8 +282,8 @@ export const promiseEn: Record<string, { title: string; ref: string; gap: string
     "gap": null
   },
   "MG11": {
-    "title": "Convergence after a long separation: the same projection on all devices",
-    "ref": "HSC-440; E15 plan section 5 (X11, later X21)",
+    "title": "Convergence after a long separation and journal repair: the same projection on all devices, no missing batch, the repair ends",
+    "ref": "HSC-440; E15 plan section 5 (X11, X21)",
     "gap": null
   },
   "MG12": {
@@ -339,7 +339,8 @@ export const scenarioEn: Record<string, string> = {
   "X9": "A loses A2 and revokes it: B and M must not reach A2 any more, A1 still",
   "X10": "A second app of A as a further device with a restricted right (read only)",
   "X11": "Long separation (30 rounds), both devices act, then union: stable convergence, journal size",
-  "X12": "Lost receipt and unreachable carrier per device (T9/T10 with several devices): effect once, both devices equal afterwards"
+  "X12": "Lost receipt and unreachable carrier per device (T9/T10 with several devices): effect once, both devices equal afterwards",
+  "X21": "Journal duplicated, reordered, incomplete: completed batches after an old and a double restore, concurrent requests, a crash before commit; loss of request, answer and receipt, each for more than 12 rounds (HSC-440, review 9)"
 }
 
 /** Candidate id → name and one line. */

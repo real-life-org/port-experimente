@@ -330,3 +330,28 @@ describe('K1a Schritt 1: Abnahmelauf', () => {
     expect(r.X6!.outcome, r.X6!.detail).toBe('bestanden')
   }, 300_000)
 })
+
+// Breite K1a-Matrix (Plan Abschnitt 4, Review-9-Schluss): X13–X18 und X21, je mit zwei Geräten und seriell.
+describe('K1a breite Matrix', () => {
+  it('X21: Journal nach altem und doppeltem Restore unter Umordnung, Duplikaten, gleichzeitigen Anfragen; Verlust von Anfrage, Antwort, Quittung je über 12 Runden', async () => {
+    const r = byId(await runX15(k1a(), false, ['X21']))
+    const x = r.X21!
+    expect(x.crashed, x.detail).toBeFalsy()
+    expect(x.outcome, x.detail).toBe('bestanden')
+    expect(x.measures.missingBatches).toBe(0)
+    expect(x.measures.doubleFinalEffects).toBe(0)
+    expect(x.measures.remainingConflicts).toBe(0)
+    // Jede Verlustphase hat das Gerät wirklich hinter sich gelassen (sonst prüft sie nichts), und danach konvergiert es.
+    for (const k of ['RequestLoss', 'AnswerLoss']) {
+      expect(x.measures[`behindAfter${k}`], k).toBe(1)
+      expect(x.measures[`repairRounds${k}`] as number, k).toBeGreaterThan(0)
+    }
+    expect(x.measures.repairRoundsRestore as number).toBeGreaterThan(0)
+    expect(x.measures.repairRoundsReceiptLoss as number).toBeGreaterThan(0)
+    // Voller Reparaturverkehr gemessen, nicht erfunden: Einlieferungen samt Wiederholungen, Antworten, Quittungen, Bytes.
+    for (const k of ['ownFrames', 'ownBytes', 'journalFrames', 'journalBytes', 'syncRequestFrames', 'syncReplyFrames', 'ackFrames', 'repeatedDeposits', 'syncRequests', 'journalBatchesBefore', 'journalBatchesAfter']) expect(typeof x.measures[k], k).toBe('number')
+    expect(x.measures.repeatedDeposits as number).toBeGreaterThan(0)
+    expect(x.measures.journalBatchesAfter).toBe(x.measures.journalBatchesBefore) // keine neue Fachoperation: das Journal wächst nicht
+    expect(byId(await runX15(k1a(), true, ['X21'])).X21!.outcome).toBe('nicht abbildbar')
+  }, 600_000)
+})
