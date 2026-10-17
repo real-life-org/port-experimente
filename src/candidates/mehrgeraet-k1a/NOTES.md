@@ -24,7 +24,10 @@ limit are assigned to one device in advance.
   own earlier incarnations, and with its own heads. The requester keeps
   asking with backoff (1, 2, 4, up to 16 rounds) until an answer shows
   that its heads cover the answerer's, so a lost request, answer or
-  receipt does not end the repair (gate review 9). A device restored from
+  receipt does not end the repair (gate review 9). The bench counts a
+  repair as finished only when no device of the person still waits for
+  catch-up and the self address stays silent for longer than the largest
+  re-request interval (gate review 11). A device restored from
   an old backup thus recovers its own history (consumed keys, accepted
   acts) and the siblings' steps; X6 passes. Two requests at once, a
   restore during an answer and a double restore were checked by the
@@ -87,8 +90,8 @@ scenario that has one.
 | X15 union ∥ running act | passed | passed | A2, separated from A1, unites the two relationships to M while A1's card is in transit; one entry with two tuples on both devices, the act connected, its mediator and acceptance on the united relationship, M's view on the united head |
 | X16 old stock after class revocation | failed | passed | A2, separated, accepts a ticket on a key A1 withdrew; after healing both devices hold the act and the key is consumed |
 | X17 parallel production | failed | passed | both devices refill and send revision 2 with different keys; one revision number from two operations, M records 6270 findings; probe sequence (6680) not modelled |
-| X18 two cards of one act | failed | passed | B receives two card documents with the same card key, connects once, no conflict mark; A's devices keep different hand-over digests and never agree |
-| X21 journal robustness | passed | n/a | repair after old and double restore with reordering, duplicates, concurrent requests and two crashes in 7 rounds; after 15 rounds of lost requests, answers or receipts each in 1 round; no missing batch, no double effect, no conflict; 621 frames and 1.5 MB on the self address, of which 260 journal frames (1.09 MB for an 11-batch, 22 kB journal) and 438 repeats; the journal does not grow |
+| X18 two cards of one act | failed | passed | fails for two reasons: A's ledger holds consent and connect of the act each from two operations (two double final effects at A, none at B), and A's devices keep different hand-over digests and never agree; B receives two card documents with the same card key, connects once, no conflict mark |
+| X21 journal robustness | passed | n/a | repair after old and double restore with reordering, duplicates, concurrent requests and two crashes in 7 rounds; after 15 rounds of lost requests, answers, journal batches alone (reply head and receipts delivered) or receipts each in 1 round; after every phase no missing batch key and the reference projection on both devices; repair ends with no device waiting for catch-up and 17 silent rounds on the self address; no double effect, no conflict; 813 frames and 2.1 MB on the self address, of which 395 journal frames (1.65 MB for an 11-batch, 22 kB journal); 569 repeats, 566 on the self address and 3 to counterparts; the journal does not grow |
 
 Counts over X1 to X18 and X21 with two devices: 11 kept, 7 not kept, 1
 not applicable (K0: 1 kept, 17 not kept, 1 not applicable).
@@ -148,16 +151,27 @@ X20); X8 and X11 do not show a union of the person's own tuples (X14).
   and duplicates, with A2 crashing before and A1 after a commit, recovers
   every batch (its own earlier incarnation's included) in 7 rounds. After
   15 rounds of lost requests (only A2's), lost answers (A1's journal frames
-  and replies) or lost receipts on the self address, the device converges
-  within one round of healing, without any new domain operation, and the
-  self address falls silent at once. Lost requests and answers leave A2
-  behind for the whole loss; lost receipts do not (the answers arrive, only
-  their acknowledgement is missing). The cost is the full journal on every
-  answer: 260 journal frames carry 1.09 MB to repair an 11-batch journal of
-  22 kB; 438 of 621 deposits on the self address are repeats by the
-  delivery layer, 306 are receipts; A1 sends 284 answer frames, A2 two.
-  Three frames go from A's devices to counterparts during the repair. The
-  journal does not grow during repair.
+  and replies), lost journal batches alone (A1's journal frames, while the
+  reply head and the receipts pass) or lost receipts on the self address,
+  the device converges within one round of healing, without any new domain
+  operation; after every phase both devices hold every batch key and the
+  reference projection. Lost requests, answers and batches leave A2 behind
+  for the whole loss; lost receipts do not (the answers arrive, only their
+  acknowledgement is missing). With the reply head delivered but the
+  batches lost, A2 sees that its heads do not cover A1's and keeps asking.
+  The repair counts as finished only when no device of A still waits for
+  catch-up and the self address then stays silent for 17 rounds, longer
+  than the largest re-request interval of 16 (gate review 11 B2: a device
+  silent in its backoff is not done). The counter-run in which A2's head
+  comparison answers "not covered" after every restore keeps A2 waiting
+  for 60 rounds with about 48 more self frames, and X21 fails. The cost is
+  the full journal on every answer: 395 journal frames carry 1.65 MB to
+  repair an 11-batch journal of 22 kB; of the 813 deposits on the self
+  address 355 are receipts, and 566 of them are repeats by the delivery
+  layer (3 more repeats go to counterparts); A1 sends 423 answer frames,
+  A2 two. Three frames go from A's devices to counterparts during the
+  repair. The journal does not grow during repair. Exact frame and byte
+  counts vary slightly between runs.
 - **Mediator devices hold the shared budget (X13).** Two mediator devices
   issuing offline against A's budget at nine do not overrun it: A's
   devices split the acceptance quota, the device without quota blocks, and
@@ -183,11 +197,19 @@ X20); X8 and X11 do not show a union of the person's own tuples (X14).
   M records the conflict (6270). Static rights cover consumption (budget,
   nameable keys), not changes of the class or of revision numbers.
 - **Two hand-overs of one act do not fold (X18).** Both devices consent and
-  send a card; with one seed the card key is the same, so B sees a
-  repetition and connects once. A's devices each keep their own hand-over
-  digest, since the fold takes the last hand-over operation, and their
-  projections never agree. With keys per device (K2) B would also see two
-  different cards (8910.8).
+  send a card. A's ledger then holds the consent and the connect of the
+  act each from two operations: two double final effects at A, counted by
+  the same ledger oracle as in the other scenarios (gate review 11 B1; the
+  first cut counted only B's connect). With one seed the card key is the
+  same, so B sees a repetition and connects once, no double effect at B.
+  A's devices also each keep their own hand-over digest, since the fold
+  takes the last hand-over operation, and their projections never agree.
+  The two reasons are independent: with the digest hidden from the
+  projection A's devices agree and X18 still fails on A's double effects
+  (permanent counter-run). With keys per device (K2) B would also see two
+  different cards (8910.8). The multi-writer contract needs a rule for
+  concurrent consents and hand-overs that fixes convergence and a single
+  final effect.
 - **Bench note: a repeated ticket after a budget refusal.** The ticket that
   A refuses for budget (8640.13) consumes the key; the mediator repeats the
   unacknowledged ticket and A then records 8640.12 (mediator conformance)
@@ -207,7 +229,11 @@ X20); X8 and X11 do not show a union of the person's own tuples (X14).
 - The journal is a plain list of batches in the device's store; no
   cleanup, no tombstones, no bound on its size; every sibling that
   receives a request answers with all batches after the requester's heads,
-  and every new request of the backoff is answered again in full (X21: 1.09 MB of
+  and every new request of the backoff is answered again in full (X21: 1.65 MB of
   journal frames for a 22 kB journal).
+- X21 ends a repair by the catch-up flag of the devices (`syncPending`) and
+  a silent window on the self address; the batch-loss phase drops all of
+  A1's journal frames for 15 rounds, not a chosen subset of batches, and
+  every loss phase starts from a fresh restore of A2 only.
 - Every scenario runs one person per role with two devices; X19, X20, X22
   and X23 are not built, X10 needs rights per app.
