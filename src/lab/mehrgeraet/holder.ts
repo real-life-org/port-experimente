@@ -139,6 +139,13 @@ export interface CandidateDevice {
   /** Flüchtiger Stand des Kandidaten für die Rücknahme eines Schritts (Tor-Review 7 B1): ohne Inkarnationswechsel, anders als `restore`. Ohne Methoden hält der Kandidat nichts Rücknehmbares. */
   snapshot?(): unknown
   rollback?(snapshot: unknown): void
+  /**
+   * Eigene Tupel über Geräte (K1a Schritt 2): die Geräte lernen die Tupel ihrer Schwestergeräte (Journal), also kann ein
+   * Gerät zwei eigene Tupel halten, die nebenläufig auf verschiedenen Geräten geöffnet wurden und deren eingefrorene
+   * Kandidatenlisten (2300) einander nicht enthalten. Mit `true` trägt das Gerät dann den späten Kandidaten nach und probt
+   * nach (`lateProbes` im Holder). Ohne Feld (K0) geschieht nichts.
+   */
+  readonly lateProbes?: boolean
   /** Was der Kandidat dauerhaft hält (Journal); Teil des Store-Abbilds. */
   persist(): unknown
   /** Neuaufbau aus dem Store; ein Kandidat mit Inkarnationen wechselt hier die Inkarnation. */
@@ -352,6 +359,7 @@ export class HolderDevice {
     for (const op of tx.ops) M.apply(this.state, op)
     for (const i of tx.intents) if (!this.intents.has(i.digest)) this.intents.set(i.digest, i)
     await this.relisten()
+    await this.lateProbes()
     await this.refillAll()
   }
 
@@ -697,11 +705,50 @@ export class HolderDevice {
   private blind(t: M.Tuple, anchor: string): string {
     return createHmac('sha256', this.pairKeyOf(t)).update(anchor).digest('base64')
   }
-  /** Probe auf dem neuen Tupel: geblendete Kandidaten (die Gegenanker aller anderen gehaltenen Tupel, eingefroren bei der Öffnung). */
-  private async sendProbe(t: M.Tuple): Promise<void> {
-    const entries = t.candidates.filter((c) => c !== t.peer).map((c) => this.blind(t, c))
+  /** Probe auf dem neuen Tupel: geblendete Kandidaten (die Gegenanker aller anderen gehaltenen Tupel, eingefroren bei der Öffnung); `only` = nur diese (späte Kandidaten). */
+  private async sendProbe(t: M.Tuple, only?: string[]): Promise<void> {
+    const entries = (only ?? t.candidates).filter((c) => c !== t.peer).map((c) => this.blind(t, c))
     if (!entries.length) return
     await this.sendDoc(TYPES.probe, t.ownKey, t.peer, t.peerKeyAgreement, (await this.keysFor(t.ownKey)).rkid, { entries })
+  }
+  /**
+   * Nebenläufige eigene Tupel (K1a Schritt 2): zwei Tupel verschiedener Beziehungen, von denen keines in der eingefrorenen
+   * Kandidatenliste des anderen steht (2300). Auf einem Gerät kommt das nicht vor: das später geöffnete Tupel hat jedes
+   * frühere einer nicht abgegangenen Beziehung im Schnappschuss (`candidates()`). Es entsteht nur, wenn zwei Geräte der
+   * Person je ein Tupel öffnen, bevor das Journal das andere bringt (X7, X14).
+   */
+  private concurrentPairs(): Array<[M.Tuple, M.Tuple]> {
+    const live = this.state.relationships.filter((r) => !r.departed).flatMap((r) => r.tuples.map((t) => ({ t, rel: r.id })))
+    const out: Array<[M.Tuple, M.Tuple]> = []
+    for (let i = 0; i < live.length; i++)
+      for (let j = i + 1; j < live.length; j++) {
+        const x = live[i]!
+        const y = live[j]!
+        if (x.rel === y.rel || x.t.candidates.includes(y.t.peer) || y.t.candidates.includes(x.t.peer)) continue
+        out.push(x.t.record > y.t.record ? [x.t, y.t] : [y.t, x.t])
+      }
+    return out
+  }
+  /**
+   * Späte Probe (K1a Schritt 2). Annahme über das Inventar hinaus: der Schnappschuss von 2300 („the active heads of its
+   * relationships then“) gilt für die Person; ein Tupel, das ein Schwestergerät nebenläufig geöffnet hat, wird nachgetragen,
+   * sobald das Gerät es kennt (6750 bleibt für alles, was der Person bei der Öffnung nicht gehörte). Nachgetragen wird beim
+   * Tupel mit dem größeren Record-Anker (die Rolle des Ankunftstupels, 2290), und dieses Tupel probt nur den neuen Eintrag.
+   * Alles Weitere ist der unveränderte Kontinuitätsfluss: ein Treffer der Gegenseite verpflichtet sie zu einem Mapping
+   * (6845.1), vereinigt aber nichts (6804); vereinigt wird nur auf ein verifiziertes Mapping (6975.1: „The only trigger is
+   * the verification of a counterpart continuity mapping“), in einer Transaktion samt eigenem Mapping (6975.2), und die
+   * Gegenseite vereinigt auf dieses (6975.2) oder hält nur die Kante (6975.3). Der Nachtrag ist eine Operation im Schritt
+   * des Geräts, also ein Batch im Journal: das Schwestergerät faltet ihn und probt nicht noch einmal; probt es nebenläufig
+   * dasselbe, wertet die Gegenseite die zweite Probe ohne neues Mapping aus (Pflicht schon in `hit`).
+   */
+  private async lateProbes(): Promise<void> {
+    if (!this.cand.lateProbes) return
+    for (const [probed, other] of this.concurrentPairs()) {
+      const t = M.tuple(this.state, probed.id)
+      if (t.candidates.includes(other.peer)) continue // in dieser Runde schon nachgetragen (mehrere Paare an einem Tupel)
+      this.emit({ kind: 'candidates', tuple: t.id, add: [other.peer] })
+      await this.sendProbe(t, [other.peer])
+    }
   }
   private async sendMapping(arrival: M.Tuple, other: M.Tuple): Promise<void> {
     const pair = M.pairKey(arrival.id, other.id)
@@ -820,7 +867,8 @@ export class HolderDevice {
       const aging = r.stock.filter((k) => k.state === 'active' && !M.usable(k.expiresAt, now)).map((k) => k.anchor)
       if (aging.length) await this.guarded(async () => void this.emit({ kind: 'age', rel: r.id, anchors: aging })) // 8475.S5
     }
-    // B6: fällige Arbeit folgt aus dem Zustand, nicht aus dem Ereignis; `refill` ist leer, wenn nichts fehlt.
+    // B6: fällige Arbeit folgt aus dem Zustand, nicht aus dem Ereignis; `refill` und `lateProbes` sind leer, wenn nichts fehlt.
+    if (this.cand.lateProbes && this.concurrentPairs().length) await this.guarded(() => this.lateProbes())
     await this.refillAll()
   }
 

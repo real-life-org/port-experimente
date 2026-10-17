@@ -409,6 +409,6 @@ export const candidateEn: Record<string, { name: string; desc: string }> = {
   },
   "k1a-static": {
     "name": "K1a: journal, static rights",
-    "desc": "one seed; every committed step travels as a journal batch with its production intents; acceptance budget and nameable stock keys split statically across devices"
+    "desc": "one seed; every committed step travels as a journal batch with its production intents; acceptance budget and nameable stock keys split statically across devices; own tuples opened concurrently on two devices are probed again and united through the counterpart's mapping"
   }
 }

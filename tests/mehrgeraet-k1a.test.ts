@@ -3,6 +3,7 @@ import { Welt15 } from '../src/lab/mehrgeraet/welt'
 import { HolderDevice } from '../src/lab/mehrgeraet/holder'
 import { runX15 } from '../src/lab/mehrgeraet/scenarios'
 import { k1a, K1aDevice } from '../src/candidates/mehrgeraet-k1a'
+import { k0 } from '../src/candidates/mehrgeraet-k0'
 import * as M from '../src/lab/mehrgeraet/model'
 
 // E15 K1a Schritt 1: der Abnahmelauf aus Tor-Review 6 (Plan 6e).
@@ -404,23 +405,10 @@ describe('K1a breite Matrix', () => {
     }
   }, 600_000)
 
-  it('X14: A1 und A2 stellen B dieselbe Person C vor; B1 und B2 stimmen getrennt je einem zu: beide verbunden, aber nie vereinigt (kein Vereinigungsschritt über eigene Tupel)', async () => {
-    const two = byId(await runX15(k1a(), false, ['X14'])).X14!
-    expect(two.crashed, two.detail).toBeFalsy()
-    expect(two.measures.actsIssued, two.detail).toBe(2)
-    expect(two.measures.doubleFinalEffects).toBe(0)
-    // Jede Probe prüft ein Gerät, das das andere Tupel nicht kennt; nach der Heilung des Journals prüft niemand neu.
-    expect(two.measures.duplicates as number, two.detail).toBeGreaterThan(0)
-    expect(two.outcome, two.detail).toBe('nicht bestanden')
-    const one = byId(await runX15(k1a({ devices: 1 }), true, ['X14'])).X14!
-    expect(one.crashed, one.detail).toBeFalsy()
-    expect(one.outcome, one.detail).toBe('bestanden')
-  }, 600_000)
-
   it('X15: Vereinigung zweier Beziehungen zu M auf A2, während auf A1 ein Akt läuft (consented, Karte unterwegs): die Vereinigung trägt die Gegenseite M', async () => {
     const two = byId(await runX15(k1a(), false, ['X15'])).X15!
     expect(two.crashed, two.detail).toBeFalsy()
-    // Die Vereinigung entsteht aus Ms Mapping auf A2s neuem Tupel und wandert als Operation durchs Journal; kein Schritt über eigene Tupel nötig.
+    // Die Vereinigung entsteht aus Ms Mapping auf A2s neuem Tupel und wandert als Operation durchs Journal.
     expect(two.outcome, two.detail).toBe('bestanden')
     expect(two.measures.entriesToMediator).toBe(1)
     expect(two.measures.actsConnected).toBe(2)
@@ -495,4 +483,161 @@ describe('K1a breite Matrix', () => {
       spy.mockRestore()
     }
   }, 600_000)
+})
+
+// K1a Schritt 2 (Anton 18.10.): Vereinigung eigener Tupel. Zwei Geräte derselben Person öffnen nebenläufig je ein Tupel
+// zur selben Gegenperson; das Journal teilt die Tupel, aber keine Probe hat das andere Tupel geprüft (2300 ist je Gerät
+// eingefroren). Das Gerät, das zwei nebenläufige eigene Tupel hält, ergänzt die Kandidatenliste des Tupels mit dem
+// größeren Record-Anker um das andere und probt nach; die Gegenseite trifft, mappt, und die Vereinigung entsteht wie
+// immer aus einem verifizierten Mapping (6975.1, 6975.2), als Operation im Journal.
+//   1. X7 besteht mit zwei Geräten.
+//   2. X14 besteht mit zwei Geräten.
+//   3. Alle übrigen Szenarien wie in NOTES (X15 besteht weiter).
+//   4. Beide Geräte vereinigen getrennt voneinander: nach der Heilung ein Eintrag, eine Vereinigungswirkung je Kante.
+//   5. Doppelte und umgeordnete Batches: genau eine Wirkung, gleiche Projektion.
+//   6. K0 verfehlt X7 mit zwei Geräten weiter (Eichung).
+
+async function twoByTwo() {
+  const w = new Welt15(k1a())
+  const A = await w.person('A', 'A1')
+  const B = await w.person('B', 'B1')
+  const Mm = await w.person('M', 'M1')
+  await w.encounter(A, Mm)
+  await w.encounter(B, Mm)
+  await w.rounds(2)
+  const A2 = await w.enrol(A, 'A2')
+  const B2 = await w.enrol(B, 'B2')
+  await w.rounds(3)
+  return { w, A, A2, B, B2 }
+}
+const relsTo = (w: Welt15, d: HolderDevice, other: string) => d.state.relationships.filter((r) => !r.departed && r.tuples.some((t) => w.personOf(t.peer) === other))
+const tuplesTo = (w: Welt15, d: HolderDevice, other: string) => relsTo(w, d, other).flatMap((r) => r.tuples)
+/** Effekt-Id → erzeugende Operationen über alle Geräte einer Person (wie das Ledger-Orakel der Szenarien). */
+function ledgerOf(w: Welt15, person: string) {
+  const m = new Map<string, Set<string>>()
+  for (const d of w.of(person)) for (const e of d.state.effects) {
+    if (!m.has(e.id)) m.set(e.id, new Set())
+    m.get(e.id)!.add(e.op)
+  }
+  return m
+}
+const doubles = (w: Welt15, person: string) => [...ledgerOf(w, person).entries()].filter(([, ops]) => ops.size > 1).map(([id]) => id)
+const unions = (w: Welt15, person: string) => [...ledgerOf(w, person).keys()].filter((id) => id.startsWith('union:'))
+
+describe('K1a Schritt 2: Vereinigung eigener Tupel', () => {
+  it('1. X7: A1 trifft B1, A2 trifft B2 in derselben Runde: jedes Gerät hält einen Eintrag mit beiden Tupeln (zwei Geräte und seriell)', async () => {
+    const two = byId(await runX15(k1a(), false, ['X7'])).X7!
+    expect(two.crashed, two.detail).toBeFalsy()
+    expect(two.outcome, two.detail).toBe('bestanden')
+    expect(two.measures.duplicates).toBe(0)
+    const one = byId(await runX15(k1a({ devices: 1 }), true, ['X7'])).X7!
+    expect(one.crashed, one.detail).toBeFalsy()
+    expect(one.outcome, one.detail).toBe('bestanden')
+  }, 600_000)
+
+  it('1b. Gegenlauf: K1a ohne späte Probe (`lateProbes` aus) verfehlt X7 wie vor Schritt 2', async () => {
+    const base = k1a()
+    const off = <T extends object>(d: T): T => Object.assign(d, { lateProbes: false })
+    const without = { ...base, first: async (...a: Parameters<typeof base.first>) => off(await base.first(...a)), enrol: async (...a: Parameters<typeof base.enrol>) => { const r = await base.enrol(...a); off(r.cand); return r } }
+    const x = byId(await runX15(without, false, ['X7'])).X7!
+    expect(x.crashed, x.detail).toBeFalsy()
+    expect(x.outcome, x.detail).toBe('nicht bestanden')
+    expect(x.measures.duplicates as number).toBeGreaterThan(0)
+  }, 300_000)
+
+  it('2. X14: zwei Vorstellungen derselben Person C, B1 und B2 stimmen getrennt zu: B und C vereinigen (zwei Geräte und seriell)', async () => {
+    const two = byId(await runX15(k1a(), false, ['X14'])).X14!
+    expect(two.crashed, two.detail).toBeFalsy()
+    expect(two.measures.actsIssued, two.detail).toBe(2)
+    expect(two.measures.duplicates, two.detail).toBe(0)
+    expect(two.measures.doubleFinalEffects, two.detail).toBe(0)
+    expect(two.outcome, two.detail).toBe('bestanden')
+    const one = byId(await runX15(k1a({ devices: 1 }), true, ['X14'])).X14!
+    expect(one.crashed, one.detail).toBeFalsy()
+    expect(one.outcome, one.detail).toBe('bestanden')
+  }, 600_000)
+
+  it('3. alle Szenarien mit zwei Geräten: nur X7 und X14 wechseln auf bestanden, der Rest wie in NOTES', async () => {
+    const r = byId(await runX15(k1a(), false))
+    for (const x of Object.values(r)) expect(x.crashed, `${x.scenario}: ${x.detail}`).toBeFalsy()
+    const want: Record<string, string> = {
+      X1: 'bestanden', X2: 'bestanden', X3: 'nicht bestanden', X4: 'bestanden', X5: 'bestanden', X6: 'bestanden', X7: 'bestanden', X8: 'bestanden', X9: 'nicht bestanden', X10: 'nicht abbildbar', X11: 'bestanden', X12: 'bestanden',
+      X13: 'bestanden', X14: 'bestanden', X15: 'bestanden', X16: 'nicht bestanden', X17: 'nicht bestanden', X18: 'nicht bestanden', X21: 'bestanden',
+    }
+    for (const [id, outcome] of Object.entries(want)) expect(r[id]?.outcome, `${id}: ${r[id]?.detail}`).toBe(outcome)
+  }, 1_800_000)
+
+  it('4. A1 und A2 vereinigen getrennt voneinander (Journal zurückgehalten): nach der Heilung ein Eintrag, eine Vereinigungswirkung je Kante, Ledger sauber', async () => {
+    const { w, A, A2, B, B2 } = await twoByTwo()
+    const selfA = (await A.cand.keys.pair('self/A')).rkid
+    await w.encounter(A, B)
+    await w.encounter(A2, B2)
+    // Sobald beide A-Geräte beide Tupel zu B kennen, sind sie voneinander getrennt: jedes vereinigt für sich.
+    let separated = false
+    const separate = () => {
+      if (separated || tuplesTo(w, A, 'B').length !== 2 || tuplesTo(w, A2, 'B').length !== 2) return
+      separated = true
+      for (const d of w.of('A')) w.carrier.faults.withhold(d.name, (f) => f.address === selfA)
+    }
+    const united = (d: HolderDevice) => relsTo(w, d, 'B').map((r) => r.tuples.length).join() === '2'
+    for (let i = 0; i < 20 && !(united(A) && united(A2)); i++) await w.rounds(1, separate)
+    expect(separated).toBe(true)
+    expect(united(A), 'A1 hält einen Eintrag mit beiden Tupeln').toBe(true)
+    expect(united(A2), 'A2 hält einen Eintrag mit beiden Tupeln').toBe(true)
+    // Jedes Gerät hat aus eigener Operation vereinigt.
+    const own = (d: HolderDevice) => d.state.effects.filter((e) => e.id.startsWith('union:') && e.op.startsWith(`${d.name}@`)).length
+    expect(own(A), 'A1 vereinigt selbst').toBeGreaterThan(0)
+    expect(own(A2), 'A2 vereinigt selbst').toBeGreaterThan(0)
+    w.carrier.faults.reset()
+    let stable = 0
+    for (let i = 0; i < 30 && stable < 3; i++) {
+      await w.rounds(1)
+      stable = w.agree('A').agree && w.agree('B').agree ? stable + 1 : 0
+    }
+    expect(w.agree('A')).toEqual({ agree: true, diff: '' })
+    expect(w.agree('B')).toEqual({ agree: true, diff: '' })
+    for (const d of [A, A2]) expect(relsTo(w, d, 'B').map((r) => r.tuples.length)).toEqual([2])
+    for (const d of [B, B2]) expect(relsTo(w, d, 'A').map((r) => r.tuples.length)).toEqual([2])
+    expect(unions(w, 'A').length).toBe(1)
+    expect(doubles(w, 'A')).toEqual([])
+    expect(doubles(w, 'B')).toEqual([])
+    for (const d of [...w.of('A'), ...w.of('B')]) expect(d.state.applied.filter((k, i, a) => a.indexOf(k) !== i), d.name).toEqual([])
+  }, 180_000)
+
+  it('5. doppelte und umgeordnete Batches: genau eine Vereinigungswirkung, gleiche Projektion', async () => {
+    const { w, A, A2, B, B2 } = await twoByTwo()
+    w.carrier.faults.duplicate(true)
+    w.carrier.faults.reverse(true)
+    await w.encounter(A, B)
+    await w.encounter(A2, B2)
+    let stable = 0
+    for (let i = 0; i < 40 && stable < 3; i++) {
+      await w.rounds(1)
+      const united = [A, A2].every((d) => relsTo(w, d, 'B').length === 1) && [B, B2].every((d) => relsTo(w, d, 'A').length === 1)
+      stable = united && w.agree('A').agree && w.agree('B').agree ? stable + 1 : 0
+    }
+    w.carrier.faults.reset()
+    expect(stable).toBe(3)
+    expect(M.canonical(A2.projection())).toBe(M.canonical(A.projection()))
+    expect(M.canonical(B2.projection())).toBe(M.canonical(B.projection()))
+    for (const d of [A, A2, B, B2]) {
+      expect(d.state.applied.filter((k, i, a) => a.indexOf(k) !== i), d.name).toEqual([])
+      const ids = d.state.effects.map((e) => e.id).filter((id) => id.startsWith('union:'))
+      expect(new Set(ids).size, d.name).toBe(ids.length)
+    }
+    expect(unions(w, 'A').length).toBe(1)
+    expect(unions(w, 'B').length).toBe(1)
+    expect(doubles(w, 'A')).toEqual([])
+    expect(doubles(w, 'B')).toEqual([])
+    // Ein bekannter Vereinigungsbatch ein weiteres Mal geliefert: nichts Neues.
+    const batch = (A.cand as K1aDevice).journal().find((b) => b.ops.some((o) => o.kind === 'union'))!
+    expect((A2.cand as K1aDevice).receiveOwnFrame(new TextEncoder().encode(JSON.stringify(batch)))).toEqual({ ops: [], intents: [] })
+  }, 180_000)
+
+  it('6. Eichung: K0 verfehlt X7 mit zwei Geräten weiter', async () => {
+    const x = byId(await runX15(k0(), false, ['X7'])).X7!
+    expect(x.crashed, x.detail).toBeFalsy()
+    expect(x.outcome, x.detail).toBe('nicht bestanden')
+    expect(x.measures.duplicates as number).toBeGreaterThan(0)
+  }, 300_000)
 })
