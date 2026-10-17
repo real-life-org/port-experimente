@@ -35,6 +35,11 @@ import * as M from './model'
 
 const enc = new TextEncoder()
 const dec = new TextDecoder()
+/**
+ * Ist `a` später geöffnet als `b`? Nach `openedAt` (Geräteuhr), bei Gleichstand nach dem Record-Anker (2290, nur als
+ * deterministische Wahl, keine Zeitaussage). Dieselbe Richtung wie die späte Probe (`concurrentPairs`).
+ */
+const laterOpened = (a: M.Tuple, b: M.Tuple) => (a.openedAt !== b.openedAt ? a.openedAt > b.openedAt : a.record > b.record)
 
 // ── Schlüssel ────────────────────────────────────────────────────────────────
 
@@ -142,8 +147,8 @@ export interface CandidateDevice {
   /**
    * Eigene Tupel über Geräte (K1a Schritt 2): die Geräte lernen die Tupel ihrer Schwestergeräte (Journal), also kann ein
    * Gerät zwei eigene Tupel halten, die nebenläufig auf verschiedenen Geräten geöffnet wurden und deren eingefrorene
-   * Kandidatenlisten (2300) einander nicht enthalten. Mit `true` trägt das Gerät dann den späten Kandidaten nach und probt
-   * nach (`lateProbes` im Holder). Ohne Feld (K0) geschieht nichts.
+   * Kandidatenlisten (2300) einander nicht enthalten. Mit `true` trägt das Gerät dann beim später geöffneten Tupel den
+   * späten Kandidaten nach und probt nach (`lateProbes` im Holder). Ohne Feld (K0) geschieht nichts.
    */
   readonly lateProbes?: boolean
   /** Was der Kandidat dauerhaft hält (Journal); Teil des Store-Abbilds. */
@@ -718,6 +723,9 @@ export class HolderDevice {
    * Kandidatenliste des anderen steht (2300). Auf einem Gerät kommt das nicht vor: das später geöffnete Tupel hat jedes
    * frühere einer nicht abgegangenen Beziehung im Schnappschuss (`candidates()`). Es entsteht nur, wenn zwei Geräte der
    * Person je ein Tupel öffnen, bevor das Journal das andere bringt (X7, X14).
+   * Jedes Paar kommt als [später, früher] nach `openedAt` (Geräteuhr des öffnenden Geräts, Tor-Review 13 B1, Anton 18.10.
+   * Option (i')). Paare mit gleichem `openedAt` fehlen: keines der beiden ist später, keines trägt nach (Prüfstandsannahme,
+   * NOTES „Late candidates and opening time“).
    */
   private concurrentPairs(): Array<[M.Tuple, M.Tuple]> {
     const live = this.state.relationships.filter((r) => !r.departed).flatMap((r) => r.tuples.map((t) => ({ t, rel: r.id })))
@@ -727,17 +735,21 @@ export class HolderDevice {
         const x = live[i]!
         const y = live[j]!
         if (x.rel === y.rel || x.t.candidates.includes(y.t.peer) || y.t.candidates.includes(x.t.peer)) continue
-        out.push(x.t.record > y.t.record ? [x.t, y.t] : [y.t, x.t])
+        if (x.t.openedAt === y.t.openedAt) continue // Gleichstand: strikt nach 6750 kein Nachtrag
+        out.push(x.t.openedAt > y.t.openedAt ? [x.t, y.t] : [y.t, x.t])
       }
     return out
   }
   /**
    * Späte Probe (K1a Schritt 2). Annahme über das Inventar hinaus: der Schnappschuss von 2300 („the active heads of its
    * relationships then“) gilt für die Person; ein Tupel, das ein Schwestergerät nebenläufig geöffnet hat, wird nachgetragen,
-   * sobald das Gerät es kennt. Nachgetragen wird beim Tupel mit dem größeren Record-Anker (die Rolle des Ankunftstupels,
-   * 2290), und dieses Tupel probt nur den neuen Eintrag. Record-Anker ordnen keine Öffnungszeiten: das früher geöffnete
-   * Tupel kann so einen später entstandenen Anker tragen, gegen 6750 (Tor-Review 13 B1, Gegenlauf in den Tests; die Regel
-   * entscheidet Anton, Plan 6j).
+   * sobald das Gerät es kennt, und zwar nur beim **später geöffneten** Tupel (`openedAt`, Anton 18.10. Option (i')): das
+   * spätere hätte das frühere im Schnappschuss gehabt, wäre das Journal da gewesen; das frühere kann einen Anker, der bei
+   * seiner Öffnung noch nicht existierte, nie tragen (6750). Das spätere Tupel probt nur den neuen Eintrag; es ist damit
+   * das Ankunftstupel der Gegenseite (6960) und, ohne Absicht, das Tupel, auf dem `resumeDuties` ein Mapping neu produziert.
+   * Gleicher `openedAt`: kein Nachtrag. Die Ordnung liest die Geräteuhren der Person; Versatz zwischen A1 und A2 kann sie
+   * auf einem Paar umkehren (schlimmstenfalls trägt das frühere Tupel nach, wie vor dieser Regel), und das ist As eigene
+   * Offenlegungsregel (die Gegenseite kann `openedAt` nicht prüfen).
    * Alles Weitere ist der unveränderte Kontinuitätsfluss: ein Treffer der Gegenseite verpflichtet sie zu einem Mapping
    * (6845.1), vereinigt aber nichts (6804); vereinigt wird nur auf ein verifiziertes Mapping (6975.1: „The only trigger is
    * the verification of a counterpart continuity mapping“), in einer Transaktion samt eigenem Mapping (6975.2), und die
@@ -774,7 +786,9 @@ export class HolderDevice {
    * 6845.10: offene Mapping-Pflichten (hit, sent) ohne lokale Übergabe werden wieder aufgenommen. Kennt das Gerät die
    * Absicht dazu (HSC-120, B4): dieselben Bytes, wenn es sie selbst erzeugt hat (Wiederanlauf, neue Inkarnation); eine
    * Absicht eines anderen eigenen Geräts bleibt bei dem (keine Neuproduktion, keine stille Übernahme). Ohne Absicht
-   * (K0, Zustandskopie) wird das Mapping neu produziert.
+   * (K0, Zustandskopie) wird das Mapping neu produziert, auf dem später geöffneten Tupel des Paars (`laterOpened`, dieselbe
+   * Richtung wie die späte Probe); der Empfänger löst `entry` unter dem symmetrischen Paarschlüssel gegen jedes eigene
+   * Tupel auf, die Wahl ist also Konvention, keine Bedingung der Verifikation.
    */
   private async resumeDuties(): Promise<void> {
     for (const d of this.state.duties) {
@@ -793,7 +807,7 @@ export class HolderDevice {
       const tb = this.state.relationships.flatMap((r) => r.tuples).find((t) => t.id === d.pair[1])
       if (!ta || !tb) continue
       if (M.relOfTuple(this.state, ta.id)?.departed) continue // 6845.7
-      const [arrival, other] = ta.record > tb.record ? [ta, tb] : [tb, ta]
+      const [arrival, other] = laterOpened(ta, tb) ? [ta, tb] : [tb, ta]
       await this.guarded(() => this.sendMapping(arrival, other))
     }
   }

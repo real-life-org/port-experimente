@@ -72,10 +72,11 @@ limit are assigned to one device in advance.
   other's frozen candidate list. On one device this cannot happen, because
   a later tuple always has every earlier one of a held relationship in its
   snapshot, so the condition identifies concurrent openings without knowing
-  which device opened what. For each pair the device adds the other
-  tuple's counterpart anchor to the candidate list of the tuple with the
-  larger record anchor (operation `candidates`) and sends a probe on that
-  tuple carrying only the new blinded entry. From there the unchanged
+  which device opened what. For each pair the device adds the earlier
+  tuple's counterpart anchor to the candidate list of the tuple opened
+  later (`openedAt`, operation `candidates`) and sends a probe on that
+  tuple carrying only the new blinded entry; the earlier tuple receives
+  nothing (see "Late candidates and opening time" below). From there the unchanged
   continuity flow runs: the counterpart, whose own devices share both of
   its tuples through its journal, finds a hit and owes a mapping (6845.1);
   the side verifies it and unites (6975.1, 6975.2) with its own mapping in
@@ -133,18 +134,48 @@ limit are assigned to one device in advance.
     opened concurrently is added once the device knows it. Whether a
     concurrent opening on another device counts as "then" is not decided
     by the inventory.
-  - **6750 is not kept (gate review 13 B1).** The tuple that receives the
-    late candidate is chosen by the larger record anchor, and record
-    anchors do not order opening times. Counter-run (permanent test,
-    measuring the current behaviour): A1 opens `z-first` to B; one second
-    later A2 opens `a-second` to C, with no journal exchange between them.
-    After the sync both A devices hold C's anchor in the candidate list of
-    the earlier tuple `z-first`, and a late probe with it goes to B. C's
-    anchor did not exist when `z-first` was opened, so the earlier tuple
-    carries an entry from after its creation, which 6750 excludes even
-    under the person-wide reading of 2300. The rule is open: late
-    candidates only for causally concurrent openings, the late candidate
-    as a changed promise, or no late candidates (X7 and X14 fail again).
+  - **Late candidates and opening time (gate review 13 B1, decided 18
+    October, option (i')).** Only the tuple opened later receives a late
+    candidate, and only the counterpart anchor of the tuple opened
+    earlier: had the journal arrived in time, the later tuple's snapshot
+    (2300) would have held the earlier one, while the earlier tuple can
+    never have held an anchor that did not exist when it opened (6750:
+    the frozen set holds only anchors that existed at opening). The order
+    is `openedAt`, the clock of the device that opened the tuple; the
+    record anchor (2290) orders heads, not opening times, and is not used
+    for the direction. Counter-run (permanent test 8): A1 opens `z-first`
+    to B; one second later A2 opens `a-second` to C, with no journal
+    exchange between them, so the record anchors run opposite to the
+    opening times. After the sync both A devices hold B's anchor as a late
+    candidate of `a-second`, a late probe with it goes to C, `z-first`
+    holds no C anchor and sends no late probe; no hit, no union, A's
+    projections agree. Assumptions of the bench:
+    - **Tie.** Two concurrent tuples with the same `openedAt` get no late
+      candidate on either side and no late probe (strict 6750: neither is
+      later); the pair stays two entries until another flow connects it
+      (test 8b). The bench clock is shared and only moves when a scenario
+      moves it, so X7 and X14 would open both tuples in the same
+      millisecond. They now put one second between the two openings (X7
+      between the two encounters, X14 between B1's and B2's connection;
+      steps 4, 5 and 7 of the tests likewise), because two devices of one
+      person rarely open in the same millisecond. A real tie stays
+      unhealed by the late probe.
+    - **Clock skew.** The order reads the clocks of A's own devices. Skew
+      between A1 and A2 can invert it for a pair opened within the skew;
+      then the earlier tuple carries the later anchor on that pair, which
+      is the behaviour before this rule. The counterpart cannot check
+      `openedAt`; the ordering is A's own disclosure rule and its skew is
+      A's problem.
+    - **Arrival tuple and re-production.** The probing tuple is the later
+      one, so the counterpart's mapping arrives on the counterpart tuple
+      of that later tuple (6960 arrival tuple), and the side maps back on
+      the tuple the mapping arrived on, unchanged. Where a mapping is
+      produced again without an intent (`resumeDuties`, K0 state copy),
+      the device now picks the later-opened tuple of the pair (record
+      anchor only to break a tie), the same direction as the late probe;
+      before it picked the larger record anchor. The receiver resolves
+      the entry against every own tuple under the symmetric pair key, so
+      this is a convention, not a condition of verification.
 
 ## Results (18 October, K1a against X1–X18 and X21)
 
@@ -219,8 +250,8 @@ X14 do).
   tuple was taken on its own device, so no probe tested the pair and each
   device kept two entries to B. Sharing the facts is not merging them.
   With the late probe (step 2) the device that holds both tuples probes
-  the one with the larger record anchor with the other's counterpart
-  anchor (not necessarily the newer one, see 6750 above); B, whose devices
+  on the tuple opened later with the earlier tuple's counterpart anchor
+  (opening time, see "Late candidates and opening time" above); B, whose devices
   share both of B's tuples, hits and maps, and both persons unite through
   verified mappings. Without the late probe K1a still fails X7
   (counter-run in the tests).
@@ -350,8 +381,8 @@ initial probes already show:
   anchor; no hit tells it that the person holds at least one further
   tuple whose counterpart anchor is none of the anchors it tested. Each
   late probe is one more such equality test that the initial probe did
-  not offer, and with B1 (6750) the tested anchor can be one that did not
-  exist when the probed tuple opened.
+  not offer; the tested anchor is always one that existed when the
+  probed tuple opened (up to A's clock skew, see above).
 
 ## Limits of steps 1 and 2
 
@@ -372,8 +403,9 @@ initial probes already show:
   (X20). Each concurrent pair costs a probe, also when the two tuples
   belong to different people (no hit then); what that adds for the
   carrier, M and the counterpart is listed below.
-- The tuple that probes is chosen by record anchor, not by opening time;
-  the earlier tuple can carry a later anchor (6750, see above).
+- The tuple that probes is chosen by opening time on the device clocks;
+  a tie gives no late probe, and skew between A's devices can invert the
+  order on one pair (see above).
 - Concurrent unions with own stock on the united relationship would each
   produce a revision (6987.5, 6987.14) under the same number; that is
   the open production question of X17, not exercised by X7 or X14.

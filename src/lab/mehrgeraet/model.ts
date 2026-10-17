@@ -560,7 +560,8 @@ function applyBody(s: HolderState, op: Op): void {
       // 2300: „A party's prior-candidate set of a fresh tuple MUST be the snapshot, taken when the fresh tuple was created,
       // of the active heads of its relationships then“. Mit mehreren Geräten ist „its relationships then“ die Person, nicht
       // das Gerät: ein Tupel, das ein Schwestergerät nebenläufig geöffnet hat, fehlt dem Schnappschuss des Geräts. Annahme
-      // (nicht im Inventar): es wird nachgetragen, sobald das Gerät es kennt; eine Menge, also reihenfolgefrei und idempotent.
+      // (nicht im Inventar): es wird nachgetragen, sobald das Gerät es kennt, und nur beim später geöffneten Tupel (6750; die
+      // Richtung wählt der Holder nach `openedAt`); eine Menge, also reihenfolgefrei und idempotent.
       const t = tuple(s, op.tuple)
       t.candidates = [...new Set([...t.candidates, ...op.add])].sort()
       return

@@ -425,8 +425,10 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
     title: 'A1 trifft B1, A2 trifft B2 in derselben Runde, kein Gerät hat gemeinsame Kandidaten: Kontinuität über Geräte (I-6, 2300)',
     async run(c, serial) {
       const s = await setup(c, serial)
-      // Beide Begegnungen vor jeder Runde: kein Journal kann die erste vor der zweiten übertragen.
+      // Beide Begegnungen vor jeder Runde: kein Journal kann die erste vor der zweiten übertragen. Zwei Geräte, zwei
+      // Begegnungen: eine Sekunde dazwischen auf der Uhr (gleiche Millisekunde = Gleichstand, keine späte Probe, NOTES).
       await s.w.encounter(s.A, s.B)
+      s.w.clock.advance(1000)
       await s.w.encounter(s.A2, s.B2)
       const n = await untilStable(s.w, 'A')
       // Soll (B5, je Gerät): jedes Gerät hält genau einen Eintrag zu der anderen Person, und der trägt beide Tupel (nichts gelöscht).
@@ -632,7 +634,7 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
         const conformance = [...s.w.of('B'), C].flatMap((d) => d.state.findings).filter((f) => f.includes('8640.12')).length
         return { outcome: 'nicht bestanden', detail: `offline ausgestellt ${offline} von 2; bei B und C angekommen: ${known} von 2; doppelt benannte Schlüssel bei A: ${fa.doubleConsumption}; Konformitätsfehler bei B/C: ${conformance}`, measures: { actsIssued: acts.length, issuedOffline: offline, actsArrived: known, doubleFinalEffects: fa.doubleConsumption, mediatorConformanceFailures: conformance } }
       }
-      // Zwei Geräte: B1 stimmt dem ersten Akt zu, B2 zugleich dem zweiten. Seriell: B nacheinander, der zweite nach der ersten Verbindung.
+      // Zwei Geräte: B1 stimmt dem ersten Akt zu, B2 getrennt davon (Journal zurückgehalten) dem zweiten. Seriell: B nacheinander, der zweite nach der ersten Verbindung.
       const connected = (a: string) => [...s.w.of('B'), C].every((d) => M.act(d.state, a).state === 'connected')
       if (serial) {
         for (const a of acts) {
@@ -645,11 +647,15 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
         // so entscheidet nicht der Zufall der Reihenfolge, ob ein Gerät eine Probe mit dem ganzen Wissen der Person prüft.
         const selfB = (await s.B.cand.keys.pair('self/B')).rkid
         for (const d of s.w.of('B')) s.w.carrier.faults.withhold(d.name, (f) => f.address === selfB)
+        // Die beiden Verbindungen entstehen nacheinander, eine Sekunde auseinander (B1 öffnet sein Tupel früher als B2):
+        // in derselben Millisekunde wäre keines später, und keines trüge nach (Gleichstand, NOTES).
         await s.B.consent(acts[0]!)
-        await s.B2.consent(acts[1]!)
         await C.consent(acts[0]!)
+        await s.w.until(() => M.act(s.B.state, acts[0]!).state === 'connected' && M.act(C.state, acts[0]!).state === 'connected', 15)
+        s.w.clock.advance(1000)
+        await s.B2.consent(acts[1]!)
         await C.consent(acts[1]!)
-        await s.w.until(() => M.act(s.B.state, acts[0]!).state === 'connected' && M.act(s.B2.state, acts[1]!).state === 'connected' && acts.every((a) => M.act(C.state, a).state === 'connected'), 15)
+        await s.w.until(() => M.act(s.B2.state, acts[1]!).state === 'connected' && M.act(C.state, acts[1]!).state === 'connected', 15)
         await s.w.rounds(4)
         s.w.carrier.faults.reset()
       }

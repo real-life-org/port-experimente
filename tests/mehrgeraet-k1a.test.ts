@@ -487,8 +487,8 @@ describe('K1a breite Matrix', () => {
 
 // K1a Schritt 2 (Anton 18.10.): Vereinigung eigener Tupel. Zwei Geräte derselben Person öffnen nebenläufig je ein Tupel
 // zur selben Gegenperson; das Journal teilt die Tupel, aber keine Probe hat das andere Tupel geprüft (2300 ist je Gerät
-// eingefroren). Das Gerät, das zwei nebenläufige eigene Tupel hält, ergänzt die Kandidatenliste des Tupels mit dem
-// größeren Record-Anker um das andere und probt nach; die Gegenseite trifft, mappt, und die Vereinigung entsteht wie
+// eingefroren). Das Gerät, das zwei nebenläufige eigene Tupel hält, ergänzt die Kandidatenliste des später geöffneten
+// Tupels (`openedAt`) um das frühere und probt nach; die Gegenseite trifft, mappt, und die Vereinigung entsteht wie
 // immer aus einem verifizierten Mapping (6975.1, 6975.2), als Operation im Journal.
 //   1. X7 besteht mit zwei Geräten.
 //   2. X14 besteht mit zwei Geräten.
@@ -499,7 +499,9 @@ describe('K1a breite Matrix', () => {
 //   Tor-Review 13:
 //   7. B2: eine einseitige späte Probe, die über die Aufgabegrenze verloren geht, wird mit denselben Bytes wiederholt;
 //      danach ein Eintrag je Gerät.
-//   8. B1: Gegenlauf, misst den Ist-Zustand: das früher geöffnete Tupel probt den Anker eines später geöffneten (6750).
+//   8. B1 (Anton 18.10. Option (i')): nur das später geöffnete Tupel trägt nach und probt, das frühere nie (6750), auch wenn
+//      die Record-Anker umgekehrt liegen.
+//   8b. Gleichstand (gleiches `openedAt`): kein Nachtrag, keine späte Probe (Prüfstandsannahme, NOTES).
 
 async function twoByTwo() {
   const w = new Welt15(k1a())
@@ -575,6 +577,7 @@ describe('K1a Schritt 2: Vereinigung eigener Tupel', () => {
     const { w, A, A2, B, B2 } = await twoByTwo()
     const selfA = (await A.cand.keys.pair('self/A')).rkid
     await w.encounter(A, B)
+    w.clock.advance(1000) // zwei Begegnungen, nicht in derselben Millisekunde (Gleichstand: Test 8b)
     await w.encounter(A2, B2)
     // Sobald beide A-Geräte beide Tupel zu B kennen, sind sie voneinander getrennt: jedes vereinigt für sich.
     let separated = false
@@ -613,6 +616,7 @@ describe('K1a Schritt 2: Vereinigung eigener Tupel', () => {
     w.carrier.faults.duplicate(true)
     w.carrier.faults.reverse(true)
     await w.encounter(A, B)
+    w.clock.advance(1000)
     await w.encounter(A2, B2)
     let stable = 0
     for (let i = 0; i < 40 && stable < 3; i++) {
@@ -655,6 +659,7 @@ describe('K1a Schritt 2: Vereinigung eigener Tupel', () => {
     const selfA = (await A.cand.keys.pair('self/A')).rkid
     for (const d of w.of('A')) w.carrier.faults.withhold(d.name, (f) => f.address === selfA)
     await w.encounter(A, B)
+    w.clock.advance(1000)
     await w.encounter(A2, B)
     await w.rounds(3)
     expect(relsTo(w, B, 'A').length, 'B1s ursprüngliche Probe hat bei A2 nichts getroffen').toBe(2)
@@ -691,12 +696,11 @@ describe('K1a Schritt 2: Vereinigung eigener Tupel', () => {
     expect(Math.max(...[...byHash.values()].map((e) => e.n)), 'nach der Aufgabe erneut eingeliefert').toBeGreaterThan(1)
   }, 180_000)
 
-  it('8. Tor-Review 13 B1 (Gegenlauf): das früher geöffnete Tupel probt den Anker eines später geöffneten Tupels', async () => {
-    // Tor-Review 13 B1: dokumentiert den Ist-Zustand; die Regel entscheidet Anton (Plan 6j, Optionen i–iii).
-    // A1 öffnet `z-first` zu B; eine Sekunde später öffnet A2 ohne Journalaustausch `a-second` zu C. Der Record-Anker
-    // ordnet keine Öffnungszeiten: `z-first:…` ist größer als `a-second:…`, also bekommt das FRÜHERE Tupel den späten
-    // Kandidaten (Cs Anker, bei der Öffnung von `z-first` gab es ihn noch nicht) und probt ihn bei B. 6750 („no prior
-    // candidate may be added after creation“ für Anker, die bei der Öffnung nicht gehalten wurden) ist damit verletzt.
+  it('8. Tor-Review 13 B1 (Gegenlauf): nur das später geöffnete Tupel erhält den späten Kandidaten und probt; das frühere nie', async () => {
+    // Tor-Review 13 B1, Anton 18.10. Option (i'): A1 öffnet `z-first` zu B; eine Sekunde später öffnet A2 ohne
+    // Journalaustausch `a-second` zu C. Der Record-Anker ist umgekehrt zur Öffnungszeit (`z-first:…` > `a-second:…`), die
+    // Richtung folgt aber `openedAt`: das spätere Tupel `a-second` hätte `z-first` im Schnappschuss gehabt, wäre das
+    // Journal da gewesen (2300 über Geräte), und erhält Bs Anker; das frühere erhält Cs Anker nie (6750).
     const w = new Welt15(k1a())
     const A = await w.person('A', 'A1')
     const B = await w.person('B', 'B1')
@@ -717,15 +721,40 @@ describe('K1a Schritt 2: Vereinigung eigener Tupel', () => {
     w.carrier.faults.reset()
     await w.rounds(10)
     for (const d of [A, A2]) {
-      const early = M.tuple(d.state, first.x.id)
-      expect(early.candidates, `${d.name}: das frühere Tupel trägt Cs Anker`).toContain(second.x.peer)
-      expect(M.tuple(d.state, second.x.id).candidates, `${d.name}: das spätere Tupel bleibt ohne Bs Anker`).not.toContain(first.x.peer)
+      expect(M.tuple(d.state, first.x.id).candidates, `${d.name}: das frühere Tupel bleibt ohne Cs Anker`).not.toContain(second.x.peer)
+      expect(M.tuple(d.state, second.x.id).candidates, `${d.name}: das spätere Tupel trägt Bs Anker nach`).toContain(first.x.peer)
     }
-    // Die späte Probe geht auf dem früheren Tupel an B hinaus.
-    const toB = w.carrier.carried.slice(from).filter((f) => f.address === first.x.peerKeyAgreement && w.frameOrigin(f.bytes)?.kind === 'continuity-probe')
-    expect(toB.length, 'späte Probe an B auf `z-first`').toBeGreaterThan(0)
-    // Kein Treffer: B und C sind verschiedene Personen, nichts wird vereinigt.
+    const probesTo = (address: string) => w.carrier.carried.slice(from).filter((f) => f.address === address && w.frameOrigin(f.bytes)?.kind === 'continuity-probe')
+    expect(probesTo(first.x.peerKeyAgreement).length, 'keine späte Probe an B auf `z-first`').toBe(0)
+    expect(probesTo(second.x.peerKeyAgreement).length, 'späte Probe an C auf `a-second`').toBeGreaterThan(0)
+    // Kein Treffer: B und C sind verschiedene Personen, nichts wird vereinigt; beide A-Geräte sind sich einig.
     for (const d of [A, A2]) expect(relsTo(w, d, 'B').length + relsTo(w, d, 'C').length, d.name).toBe(2)
+    expect(w.agree('A')).toEqual({ agree: true, diff: '' })
+  }, 120_000)
+
+  it('8b. Gleichstand: zwei nebenläufige Tupel mit gleichem `openedAt` erhalten keinen späten Kandidaten, keine späte Probe', async () => {
+    // Prüfstandsannahme (NOTES): bei gleicher Öffnungszeit ist keines der beiden Tupel später; strikt nach 6750 trägt keines
+    // nach. Die Vereinigung bleibt dann aus (wie ohne späte Probe), bis eine neue Begegnung sie trägt.
+    const { w, A, A2, B, B2 } = await twoByTwo()
+    const selfA = (await A.cand.keys.pair('self/A')).rkid
+    const selfB = (await B.cand.keys.pair('self/B')).rkid
+    for (const d of [...w.of('A'), ...w.of('B')]) w.carrier.faults.withhold(d.name, (f) => f.address === selfA || f.address === selfB)
+    const x = await w.encounter(A, B)
+    const y = await w.encounter(A2, B2)
+    expect(x.x.openedAt).toBe(y.x.openedAt)
+    await w.rounds(3)
+    w.carrier.faults.reset()
+    await w.rounds(10)
+    for (const d of [A, A2]) {
+      expect(M.tuple(d.state, x.x.id).candidates, d.name).not.toContain(y.x.peer)
+      expect(M.tuple(d.state, y.x.id).candidates, d.name).not.toContain(x.x.peer)
+    }
+    for (const d of [B, B2]) {
+      expect(M.tuple(d.state, x.y.id).candidates, d.name).not.toContain(y.y.peer)
+      expect(M.tuple(d.state, y.y.id).candidates, d.name).not.toContain(x.y.peer)
+    }
+    for (const d of [A, A2, B, B2]) expect(d.state.effects.filter((e) => e.id.startsWith('union:')), d.name).toEqual([])
+    for (const d of [A, A2]) expect(relsTo(w, d, 'B').length, d.name).toBe(2)
   }, 120_000)
 
   it('6. Eichung: K0 verfehlt X7 mit zwei Geräten weiter', async () => {
