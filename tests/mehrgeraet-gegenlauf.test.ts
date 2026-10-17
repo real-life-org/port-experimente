@@ -30,6 +30,8 @@ import * as M from '../src/lab/mehrgeraet/model'
 //      Gerät nach, ohne neue Alterung (B6).
 //  12. Eine gepufferte Karte wird bei der Ticketannahme mit demselben Prüfsatz bewertet wie
 //      bei direkter Ankunft: Akt-Id, Absender, Ablauf (B7).
+//  13. Abgang: eine schon eingereichte Sendung bleibt bei Delivery und wird weiter wiederholt
+//      (6845.7, Delivery 6.1); nur Neues geht nicht mehr hinaus (8475.S6) (Tor-Review 4, B4).
 
 const enc = new TextEncoder()
 const byId = (rs: Awaited<ReturnType<typeof runX15>>) => Object.fromEntries(rs.map((r) => [r.scenario, r]))
@@ -468,5 +470,27 @@ describe('E15 Gegenläufe: Rollback-Tiefe, fällige Arbeit, Kartenpuffer', () =>
     expect(A.state.acts.map((a) => a.id)).toEqual([act2])
     expect(A.state.findings.some((f) => f.includes('8640.12'))).toBe(true)
     expect(A.state.acts.every((a) => a.pending === null)).toBe(true)
+  }, 60_000)
+
+  it('Abgang: eine eingereichte, unquittierte Revision an M bleibt bei Delivery und wird wiederholt; der Abgang erzeugt nichts Neues', async () => {
+    const w = new Welt15(k0())
+    const A = await w.person('A', 'A1')
+    const Mm = await w.person('M', 'M1')
+    const am = await w.encounter(A, Mm)
+    await w.rounds(2)
+    Mm.online = false
+    await A.setClass(am.x.id, true)
+    const sub = [...A.zusteller.submissions.values()].find((s) => s.address === am.x.peerKeyAgreement)!
+    expect(sub.report?.state).toBe('accepted')
+    const carried = w.carrier.carried.length
+    expect(await A.depart(am.x.id)).toBe('ok')
+    expect(w.carrier.carried.length).toBe(carried) // der Abgang sendet nichts (8475.S6)
+    await w.rounds(4)
+    expect(A.zusteller.report(sub.digest)?.state).toBe('accepted') // nicht zurückgezogen (6845.7)
+    expect(A.zusteller.submissions.get(sub.digest)!.deposits).toBeGreaterThanOrEqual(2) // wiederholt
+    // Alles, was nach dem Abgang an M ging, sind Wiederholungen derselben Bytes.
+    const after = w.carrier.carried.slice(carried).filter((f) => f.address === am.x.peerKeyAgreement)
+    expect(after.length).toBeGreaterThanOrEqual(1)
+    expect(after.every((f) => Buffer.compare(f.bytes, sub.frame) === 0)).toBe(true)
   }, 60_000)
 })

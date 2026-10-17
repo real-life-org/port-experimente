@@ -50,6 +50,30 @@ describe('B1: ganz oder gar nicht', () => {
   })
 })
 
+describe('B1 (Review 4): Vereinigung und Kante ohne Vorgänger', () => {
+  it('union auf unbekannte Beziehungen wirft Missing und gilt nicht als angewandt; nach beiden open-tuple vereinigt dieselbe Operation', () => {
+    const s = M.emptyState('A')
+    const u = op({ kind: 'union', a: 'A:e1', b: 'A:e2', edge: ['A:e1', 'A:e2'] })
+    expect(() => M.apply(s, u)).toThrow(M.Missing)
+    expect(s.edges).toEqual([])
+    expect(s.applied).toEqual([])
+    M.apply(s, op({ kind: 'open-tuple', rel: null, tuple: tuple('A:e1', 'a1', 'b1'), provenance: 'encounter', vouchedBy: null, act: null }))
+    expect(() => M.apply(s, u)).toThrow(M.Missing)
+    M.apply(s, op({ kind: 'open-tuple', rel: null, tuple: tuple('A:e2', 'a2', 'b2'), provenance: 'encounter', vouchedBy: null, act: null }))
+    M.apply(s, u)
+    expect(s.relationships.length).toBe(1)
+    expect(s.edges).toEqual([['A:e1', 'A:e2']])
+    // Wiederholung unter neuer Operations-ID: schon vereinigt, kein Fehler, nichts Neues.
+    M.apply(s, op({ kind: 'union', a: 'A:e1', b: 'A:e2', edge: ['A:e1', 'A:e2'] }, 'other'))
+    expect(s.relationships.length).toBe(1)
+  })
+  it('edge auf ein unbekanntes Tupel wirft Missing', () => {
+    const s = M.emptyState('A')
+    expect(() => M.apply(s, op({ kind: 'edge', edge: ['A:x', 'A:y'] }))).toThrow(M.Missing)
+    expect(s.edges).toEqual([])
+  })
+})
+
 describe('B2: Reihenfolge und Konflikte', () => {
   const views = (order: number[]) => {
     const s = withRel()
@@ -75,6 +99,22 @@ describe('B2: Reihenfolge und Konflikte', () => {
     const y = run([2, 1])
     expect(x.findings.some((f) => f.includes('6270'))).toBe(true)
     expect(M.canonical(M.rel(x, 'A:e1').view)).toBe(M.canonical(M.rel(y, 'A:e1').view))
+  })
+
+  it('Sicht: die Schlüsselmenge wird kanonisch gehalten, die Ankunftsreihenfolge der Schlüssel ist nicht handlungswirksam', () => {
+    const run = (anchors: string[]) => {
+      const s = withRel()
+      M.apply(s, op({ kind: 'view', rel: 'A:e1', scope: 'A:e1', revision: 1, keys: anchors.map((a) => ({ anchor: a, keyAgreement: `r${a}`, expiresAt: t0 })) }))
+      return M.rel(s, 'A:e1').view!
+    }
+    expect(run(['kb', 'ka']).keys.map((k) => k.anchor)).toEqual(['ka', 'kb'])
+    expect(M.canonical(run(['kb', 'ka']))).toBe(M.canonical(run(['ka', 'kb'])))
+  })
+  it('Sicht: gleiche Anker, anderer Ablauf ist eine andere Sicht (Equivokation, nicht Wiederholung)', () => {
+    const s = withRel()
+    M.apply(s, op({ kind: 'view', rel: 'A:e1', scope: 'A:e1', revision: 1, keys: [{ anchor: 'ka', keyAgreement: 'ra', expiresAt: '2026-10-18T08:00:00.000Z' }] }))
+    M.apply(s, op({ kind: 'view', rel: 'A:e1', scope: 'A:e1', revision: 1, keys: [{ anchor: 'ka', keyAgreement: 'ra', expiresAt: '2027-01-01T08:00:00.000Z' }] }))
+    expect(s.findings.some((f) => f.includes('6270'))).toBe(true)
   })
 
   it('Budgetbestätigung trägt die bestätigten Akt-Ids: eine spätere Annahme zählt in jeder Reihenfolge (8515)', () => {
@@ -151,6 +191,15 @@ describe('B5: Projektion', () => {
     const b = withRel()
     M.apply(a, op({ kind: 'view', rel: 'A:e1', scope: 'A:e1', revision: 1, keys: [{ anchor: 'ka', keyAgreement: 'ra', expiresAt: t0 }] }))
     M.apply(b, op({ kind: 'view', rel: 'A:e1', scope: 'A:e1', revision: 1, keys: [{ anchor: 'kb', keyAgreement: 'rb', expiresAt: t0 }] }))
+    expect(M.canonical(M.project(a, t0))).not.toBe(M.canonical(M.project(b, t0)))
+  })
+  it('zwei Sichten mit gleichen Ankern, aber anderem Ablauf, sind verschieden (nutzbar heute: nein/ja)', () => {
+    const a = withRel()
+    const b = withRel()
+    M.apply(a, op({ kind: 'view', rel: 'A:e1', scope: 'A:e1', revision: 1, keys: [{ anchor: 'ka', keyAgreement: 'ra', expiresAt: '2026-10-18T08:00:00.000Z' }] }))
+    M.apply(b, op({ kind: 'view', rel: 'A:e1', scope: 'A:e1', revision: 1, keys: [{ anchor: 'ka', keyAgreement: 'ra', expiresAt: '2027-01-01T08:00:00.000Z' }] }))
+    expect(M.usable('2026-10-18T08:00:00.000Z', t0)).toBe(false)
+    expect(M.usable('2027-01-01T08:00:00.000Z', t0)).toBe(true)
     expect(M.canonical(M.project(a, t0))).not.toBe(M.canonical(M.project(b, t0)))
   })
   it('Nonce, Nummernstand, Annahmen und Bestätigungen sind Teil der Projektion', () => {

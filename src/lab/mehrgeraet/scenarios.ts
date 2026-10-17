@@ -9,8 +9,7 @@
 // Szenario nicht erhebt, fehlt im Ergebnis (nie 0).
 
 import type { Outcome } from '../types'
-import { MemoryStore } from '../zustellung'
-import { HolderDevice, type DeviceState, type MultiDeviceCandidate } from './holder'
+import { HolderDevice, type MultiDeviceCandidate } from './holder'
 import * as M from './model'
 import { Welt15 } from './welt'
 
@@ -187,13 +186,8 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       await s.w.rounds(2)
       let overrun = 0
       const sample = () => (overrun = Math.max(overrun, acceptedActs(s.w, 'A').size - M.PARAM.budget))
-      // Maximum nach jedem Übergang (S2): jede Runde einzeln abtasten.
-      const rounds = async (n: number) => {
-        for (let i = 0; i < n; i++) {
-          await s.w.rounds(1)
-          sample()
-        }
-      }
+      // Maximum nach jedem Geräteübergang (S2).
+      const rounds = (n: number) => s.w.rounds(n, sample)
       for (let i = 0; i < 9; i++) {
         await s.Mm.introduce(s.ma, cs[i]!)
         await rounds(3)
@@ -315,11 +309,15 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       // Wiederbelebt (6845.7, 6845.9): eine Mapping-Wirkung nach dem Abgang; `united` als Endzustand einer vor dem Abgang erledigten Pflicht zählt nicht.
       const mappingsAfter = [...ledger(s.w, 'A').keys()].filter((id) => id.startsWith('mapping:')).length
       const revived = mappingsAfter - mappingsBefore
-      // S1: auch ein Wiederversand derselben Bytes nach dem Abgang ist Versand an B (Rahmen von A-Geräten an Bs Adressen).
-      const sentAfter = s.w.carrier.carried.slice(mark0).filter((f) => toB.has(f.address)).length
+      // S1 (Review 4 B4): eine vor dem Abgang eingereichte Sendung bleibt bei Delivery, ihre Wiederholung ist erlaubt (6845.7);
+      // neue Bytes an B nach dem Abgang sind Wiederbelebung oder Neuproduktion (8475.S6) und verboten.
+      const before = new Set(s.w.carrier.carried.slice(0, mark0).filter((f) => toB.has(f.address)).map((f) => Buffer.from(f.bytes).toString('base64')))
+      const after = s.w.carrier.carried.slice(mark0).filter((f) => toB.has(f.address))
+      const repeats = after.filter((f) => before.has(Buffer.from(f.bytes).toString('base64'))).length
+      const fresh = after.length - repeats
       const departedEverywhere = s.w.of('A').every((d) => d.state.relationships.filter((r) => r.tuples.some((t) => s.w.personOf(t.peer) === 'B')).every((r) => r.departed))
-      const ok = n > 0 && departedEverywhere && revived === 0 && sentAfter === 0
-      return { outcome: mark(ok), detail: `Pflicht sent nach ${n} Runden; Mapping-Wirkungen nach dem Abgang: ${revived}, Rahmen an B nach dem Abgang: ${sentAfter}; B überall abgegangen: ${departedEverywhere ? 'ja' : 'nein'}`, measures: { revivedDuties: revived, framesToPeerAfterDeparture: sentAfter, departedEverywhere: departedEverywhere ? 1 : 0 } }
+      const ok = n > 0 && departedEverywhere && revived === 0 && fresh === 0
+      return { outcome: mark(ok), detail: `Pflicht sent nach ${n} Runden; Mapping-Wirkungen nach dem Abgang: ${revived}; Rahmen an B nach dem Abgang: ${fresh} neue, ${repeats} Wiederholungen; B überall abgegangen: ${departedEverywhere ? 'ja' : 'nein'}`, measures: { revivedDuties: revived, newFramesToPeerAfterDeparture: fresh, repeatedFramesToPeerAfterDeparture: repeats, departedEverywhere: departedEverywhere ? 1 : 0 } }
     },
   },
   {
@@ -380,13 +378,13 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       if (!('act' in r)) return fail(r.refused)
       await s.w.until(() => s.A.state.acts.length === 1 && s.B.state.acts.length === 1)
       const A2 = await s.w.enrol(s.A, 'A2')
-      const bytes = JSON.stringify(A2.state).length
+      const bytes = Buffer.byteLength(JSON.stringify(A2.state), 'utf8') // Größe der Zustandskopie; K0 kennt keinen Enrollment-Verkehr
       const same = M.canonical(A2.projection()) === M.canonical(s.A.projection())
       await A2.consent(r.act)
       await s.B.consent(r.act)
       const n = await s.w.until(() => M.act(A2.state, r.act).state === 'connected' && M.act(s.B.state, r.act).state === 'connected')
       const ok = same && n > 0
-      return { outcome: mark(ok), detail: `Projektion nach Enrollment gleich: ${same ? 'ja' : 'nein'}; A2 verbunden nach ${n} Runden; Zustandskopie ${bytes} B (K0: Kopie, kein gemessener Enrollment-Verkehr)`, measures: { enrolBytes: bytes, rounds: n } }
+      return { outcome: mark(ok), detail: `Projektion nach Enrollment gleich: ${same ? 'ja' : 'nein'}; A2 verbunden nach ${n} Runden; Zustandskopie ${bytes} B UTF-8 (K0: Kopie, kein gemessener Enrollment-Verkehr)`, measures: { stateCopyBytes: bytes, rounds: n } }
     },
   },
   {
@@ -398,15 +396,10 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const { mc } = s.thirds.C!
       const ab = await s.w.encounter(s.A, s.B)
       await s.w.rounds(3)
-      // Was der Dieb hat: das Store-Abbild von A2 vor dem Widerruf (S1: kein lebender Verweis, den der Widerruf verändern könnte) und A2s Kandidatenteil.
-      const image = s.w.stores.get('A2')!.snapshot()
-      const stolenStore = new MemoryStore<DeviceState>()
-      stolenStore.restore(image)
-      const stolenCand = s.A2.cand
+      // Was der Dieb hat: das Store-Abbild von A2 vor dem Widerruf, als unabhängige Instanz (Review 4 S1: kein lebender Verweis auf A2).
+      const thief = await s.w.steal(s.A2, 'A2-dieb')
       await s.w.revoke(s.A, s.A2)
       await s.w.rounds(2)
-      const thief = new HolderDevice('A2-dieb', 'A', stolenCand, s.w.carrier, s.w.clock, stolenStore)
-      await thief.reload()
       s.w.devices.push(thief)
       const before = s.A.state.acts.length
       const r = await s.Mm.introduce(s.ma, mc) // M → A

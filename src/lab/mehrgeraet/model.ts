@@ -379,16 +379,17 @@ function applyBody(s: HolderState, op: Op): void {
       // Equivokation, das Ergebnis ist in jeder Reihenfolge dasselbe (kanonisch kleinere Schlüsselmenge).
       const r = rel(s, op.rel)
       const v = r.view
+      const keys = sortKeys(op.keys) // kanonisch gehalten: die Ankunftsreihenfolge ist nicht handlungswirksam (Review 4 B2)
       if (v && v.scope === op.scope) {
         if (op.revision < v.revision) return
         if (op.revision === v.revision) {
-          const same = canonical(sortedKeys(op.keys)) === canonical(sortedKeys(v.keys))
+          const same = canonical(keys) === canonical(v.keys) // der ganze Schlüsselwert zählt (Anker, Vereinbarung, Ablauf)
           if (same) return
           s.findings.push(`view auf ${r.id}: Revision ${op.revision} zweimal mit anderen Schlüsseln: Equivokation (6270)`)
-          if (canonical(sortedKeys(op.keys)) > canonical(sortedKeys(v.keys))) return
+          if (canonical(keys) > canonical(v.keys)) return
         }
       }
-      r.view = { scope: op.scope, revision: op.revision, keys: op.keys }
+      r.view = { scope: op.scope, revision: op.revision, keys }
       return
     }
     case 'introduce': {
@@ -505,10 +506,10 @@ function applyBody(s: HolderState, op: Op): void {
     }
     case 'union': {
       // 6975.2: Mengenvereinigung; die Identität folgt dem Kopfteil; der andere Teil bleibt als Alias.
-      const ra = findRel(s, op.a)
-      const rb = findRel(s, op.b)
+      const ra = rel(s, op.a) // unbekannt = Missing (Review 4 B1): „noch nicht bekannt“ ist nie „schon vereinigt“
+      const rb = rel(s, op.b)
       if (!s.edges.some((e) => e[0] === op.edge[0] && e[1] === op.edge[1])) s.edges.push(op.edge)
-      if (!ra || !rb || ra === rb || ra.departed || rb.departed) return // keine Vereinigung über einen Abgang
+      if (ra === rb || ra.departed || rb.departed) return // schon vereinigt, oder keine Vereinigung über einen Abgang
       const headA = head(ra)
       const headB = head(rb)
       const [keep, other] = headA.record > headB.record ? [ra, rb] : [rb, ra]
@@ -537,10 +538,9 @@ function applyBody(s: HolderState, op: Op): void {
     case 'edge': {
       if (!s.edges.some((e) => e[0] === op.edge[0] && e[1] === op.edge[1])) s.edges.push(op.edge)
       const r = relOfTuple(s, op.edge[0])
-      if (r) {
-        const h = head(r)
-        for (const t of r.tuples) t.deactivated = t.id !== h.id
-      }
+      if (!r) throw new Missing('tuple', op.edge[0], s.person)
+      const h = head(r)
+      for (const t of r.tuples) t.deactivated = t.id !== h.id
       return
     }
   }
@@ -549,17 +549,17 @@ function applyBody(s: HolderState, op: Op): void {
 // ── Fachliche Projektion (Messgröße, Plan Abschnitt 5; kanonisch, B5) ──────
 
 export interface Projection {
-  /** Kontakte: je Beziehung alles, was eine spätere Entscheidung trägt (B5): Gegenanker, Kopf, Klasse, Abgang, Ms Sicht mit Schlüsseln, Vorrat je Schlüssel, Nonce und Nummernstand, Revision, Annahmen und Bestätigungen, Budget. */
-  contacts: Array<{ peers: string[]; head: string; classOn: boolean; departed: boolean; view: { scope: string; revision: number; keys: string[] } | null; stock: Record<string, { n: number; nonce: string; state: StockState }>; nonce: string | null; nextN: number; revision: number; accepted: string[]; confirmed: string[]; budget: number }>
-  /** Akte: Id → Hauptzustand, Nebenzustände P, V, K, O, eigene Karte und Übergabedigest, geöffnete Beziehung. */
-  acts: Record<string, { state: ActState; pending: string | null; v: string | null; k: boolean; o: HandOver; ownCard: string | null; ownCardDigest: string | null; opened: string | null }>
+  /** Kontakte: je Beziehung alles, was eine spätere Entscheidung trägt (B5, Review 4 B3: ganze Schlüsselwerte mit Ablauf): Gegenanker, Kopf, Klasse, Abgang, Ms Sicht, Vorrat je Schlüssel, Nonce und Nummernstand, Revision, Annahmen mit Zeit, Bestätigungen, Budget. */
+  contacts: Array<{ peers: string[]; head: string; classOn: boolean; departed: boolean; view: StockView | null; stock: Record<string, { n: number; nonce: string; state: StockState; keyAgreement: string; expiresAt: string }>; nonce: string | null; nextN: number; revision: number; accepted: Array<{ act: string; at: string }>; confirmed: string[]; budget: number }>
+  /** Akte: Id → Hauptzustand, Nebenzustände P, V, K, O mit Kartenwerten, eigene Karte und Übergabedigest, Ablauf, geöffnete Beziehung. */
+  acts: Record<string, { state: ActState; pending: Card | null; v: string | null; k: boolean; o: HandOver; ownCard: Card | null; ownCardDigest: string | null; expiresAt: string; opened: string | null }>
   /** Marken des Mediators. */
   consumed: string[]
   /** Pflichten je Paar mit Mapping-Digest. */
   duties: Record<string, { state: string; mappingDigest: string | null }>
 }
 
-const sortedKeys = (keys: StockView['keys']) => keys.map((k) => k.anchor).sort()
+const sortKeys = (keys: StockView['keys']) => [...keys].sort((a, b) => a.anchor.localeCompare(b.anchor))
 
 export function project(s: HolderState, now: string): Projection {
   const contacts = s.relationships
@@ -568,18 +568,18 @@ export function project(s: HolderState, now: string): Projection {
       head: head(r).id,
       classOn: r.classOn,
       departed: r.departed,
-      view: r.view ? { scope: r.view.scope, revision: r.view.revision, keys: sortedKeys(r.view.keys) } : null,
-      stock: Object.fromEntries(r.stock.map((k) => [k.anchor, { n: k.n, nonce: k.nonce, state: k.state }]).sort(([a], [b]) => (a as string).localeCompare(b as string))),
+      view: r.view ? { scope: r.view.scope, revision: r.view.revision, keys: sortKeys(r.view.keys) } : null,
+      stock: Object.fromEntries(r.stock.map((k) => [k.anchor, { n: k.n, nonce: k.nonce, state: k.state, keyAgreement: k.keyAgreement, expiresAt: k.expiresAt }]).sort(([a], [b]) => (a as string).localeCompare(b as string))),
       nonce: r.nonce,
       nextN: r.nextN,
       revision: r.revision,
-      accepted: r.accepted.map((e) => e.act).sort(),
+      accepted: [...r.accepted].sort((x, y) => x.act.localeCompare(y.act)),
       confirmed: [...r.confirmed].sort(),
       budget: budgetUsed(r, now),
     }))
     .sort((a, b) => a.peers.join().localeCompare(b.peers.join()))
   const acts: Projection['acts'] = {}
-  for (const a of [...s.acts].sort((x, y) => x.id.localeCompare(y.id))) acts[a.id] = { state: a.state, pending: a.pending?.anchor ?? null, v: a.v, k: a.k, o: a.o, ownCard: a.ownCard?.anchor ?? null, ownCardDigest: a.ownCardDigest, opened: a.opened }
+  for (const a of [...s.acts].sort((x, y) => x.id.localeCompare(y.id))) acts[a.id] = { state: a.state, pending: a.pending, v: a.v, k: a.k, o: a.o, ownCard: a.ownCard, ownCardDigest: a.ownCardDigest, expiresAt: a.expiresAt, opened: a.opened }
   const duties: Projection['duties'] = {}
   for (const d of [...s.duties].sort((x, y) => x.pair.join().localeCompare(y.pair.join()))) duties[d.pair.join('|')] = { state: d.state, mappingDigest: d.mappingDigest }
   return { contacts, acts, consumed: [...s.consumed].sort(), duties }

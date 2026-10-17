@@ -478,9 +478,10 @@ export class HolderDevice {
     return this.action(async () => {
       const peers = new Set(M.rel(this.state, relId).tuples.map((t) => t.peerKeyAgreement))
       this.emit({ kind: 'depart', rel: relId })
-      // 8475.S6, 6845.7: nichts geht mehr an diesen Kontakt, auch keine Wiederholung einer offenen Submission.
-      for (const sub of this.zusteller.submissions.values()) if (peers.has(sub.address)) this.zusteller.withdraw(sub.digest)
-      this.held = this.held.filter((d) => !peers.has(this.zusteller.submissions.get(d)?.address ?? ''))
+      // 8475.S6: Neues geht nicht mehr an diesen Kontakt; was nie freigegeben war, entfällt. Eine eingereichte Sendung
+      // bleibt bei Delivery und wird weiter wiederholt (6845.7, Delivery 6.1; Tor-Review 4 B4).
+      for (const d of this.held.filter((d) => peers.has(this.zusteller.submissions.get(d)?.address ?? ''))) this.zusteller.discard(d)
+      this.held = this.held.filter((d) => this.zusteller.submissions.has(d))
     })
   }
 
@@ -529,7 +530,8 @@ export class HolderDevice {
     const pick = (relId: string) => {
       const r = M.rel(this.state, relId)
       if (!r.view) return null
-      return r.view.keys.find((k) => M.usable(k.expiresAt, now) && !this.state.consumed.includes(k.anchor)) ?? null // 8570.4
+      // 8570.4; kanonische Wahl (kleinster Anker), damit die Ankunftsreihenfolge nicht entscheidet (Review 4 B2).
+      return [...r.view.keys].sort((a, b) => a.anchor.localeCompare(b.anchor)).find((k) => M.usable(k.expiresAt, now) && !this.state.consumed.includes(k.anchor)) ?? null
     }
     const ka = pick(relA)
     const kb = pick(relB)

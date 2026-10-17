@@ -83,8 +83,12 @@ read out of a cell the bench cannot support.
   the stored bytes. Limit: a duty taken over by a sibling device cannot
   be measured for HSC-120 here; this goes away with K1a step 1 (the
   production intent carries its bytes).
-- Departure: no document to the counterpart (8475.S6: nothing is sent);
-  tuples of departed relationships take part in no hit, mapping or union.
+- Departure: no document to the counterpart (8475.S6: nothing new is
+  sent, what was recorded but never released is discarded); a submission
+  already handed to delivery stays there and is repeated until its own
+  outcome (6845.7, Delivery 6.1). Tuples of departed relationships take
+  part in no hit, mapping or union. X5 therefore counts new frames to
+  the departed peer as revival and repeats of earlier bytes as allowed.
 - Time: acts expire at `expiresAt − consent-reserve` (offered) or
   `expiresAt` (consented); keys age by 8470; no tombstones. Limit: no
   claim about old backups replayed after retention, about journal
