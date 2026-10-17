@@ -703,6 +703,40 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
     },
   },
   {
+    id: 'X16',
+    title: 'A1 widerruft die Klasse, A2 hält getrennt den alten Vorrat; ein Mediatorgerät mit alter Sicht stellt noch vor, A2 nimmt das Ticket an (alter Vorrat nach Klassenwiderruf, 8535, 8475.S6, 8640.6)',
+    async run(c, serial) {
+      const s = await setup(c, serial)
+      // Die Mediatorgeräte sind weg, bevor die leere Revision ankommt: sie halten die alte Sicht. A2 ist von A1 getrennt (kein Journal).
+      for (const d of s.w.of('M')) d.online = false
+      const selfA = (await s.A.cand.keys.pair('self/A')).rkid
+      if (!serial) for (const d of s.w.of('A')) s.w.carrier.faults.withhold(d.name, (f) => f.address === selfA)
+      await s.A.setClass(s.am, false)
+      await s.w.rounds(2)
+      const stale = s.w.of('A').map((d) => M.rel(d.state, s.am).stock.filter((k) => k.state === 'active').length)
+      // Vorstellung mit alter Sicht (offline): zuerst M2, dann M1 (K1a: jedes Gerät benennt nur seine Schlüssel).
+      let r = await s.M2.introduce(s.ma, s.mb)
+      if (!('act' in r)) r = await s.Mm.introduce(s.ma, s.mb)
+      if (!('act' in r)) return fail(`keine Vorstellung mit alter Sicht: ${r.refused}`)
+      const act = r.act
+      const named = s.w.of('M').flatMap((d) => d.state.mediatorActs).find((a) => a.id === act)!.a.key
+      for (const d of s.w.of('M')) d.online = true
+      await s.w.rounds(4)
+      const accepted = s.w.of('A').filter((d) => d.state.acts.some((a) => a.id === act)).map((d) => d.name)
+      s.w.carrier.faults.reset()
+      const n = await untilStable(s.w, 'A')
+      const after = s.w.of('A').filter((d) => d.state.acts.some((a) => a.id === act)).length
+      const keyState = s.w.of('A').map((d) => `${d.name}: ${M.rel(d.state, s.am).stock.find((k) => k.anchor === named)?.state ?? '–'}`)
+      const viewKeys = s.w.of('M').map((d) => M.rel(d.state, s.ma).view?.keys.length ?? 0)
+      const equivocation = s.w.of('M').flatMap((d) => d.state.findings).filter((f) => f.includes('Equivokation')).length
+      const classOn = s.w.of('A').filter((d) => M.rel(d.state, s.am).classOn).length
+      const agree = s.w.agree('A')
+      const acceptedAfterRevocation = accepted.length || after ? 1 : 0
+      const ok = acceptedAfterRevocation === 0 && viewKeys.every((k) => k === 0) && equivocation === 0 && classOn === 0 && agree.agree && n > 0
+      return { outcome: mark(ok), detail: `aktive Schlüssel nach dem Widerruf je Gerät ${stale.join('/')}; Ticket auf alten Schlüssel angenommen von ${accepted.join(', ') || 'keinem Gerät'}, nach der Heilung auf ${after} Gerät(en); Schlüssel ${keyState.join(', ')}; Ms Sicht (Schlüssel) ${viewKeys.join('/')}; Klasse an auf ${classOn} Gerät(en); Equivokationen ${equivocation}; Projektion gleich nach ${n} Runden: ${agree.agree ? 'ja' : 'nein'}`, measures: { acceptedAfterRevocation, devicesWithAct: after, mediatorViewKeys: Math.max(...viewKeys), equivocations: equivocation, devicesWithClassOn: classOn, projectionAgrees: agree.agree ? 1 : 0, roundsToConverge: n } }
+    },
+  },
+  {
     id: 'X21',
     title: 'Journal doppelt, umgeordnet, unvollständig: abgeschlossene Batches nach altem und doppeltem Restore, gleichzeitige Anfragen, Absturz vor dem Commit; Verlust von Anfrage, Antwort und Quittung je über 12 Runden (HSC-440, Review 9)',
     async run(c, serial) {

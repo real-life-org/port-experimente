@@ -395,4 +395,15 @@ describe('K1a breite Matrix', () => {
     expect(one.crashed, one.detail).toBeFalsy()
     expect(one.outcome, one.detail).toBe('bestanden')
   }, 600_000)
+
+  it('X16: A1 widerruft die Klasse, A2 hält getrennt den alten Vorrat und nimmt noch ein Ticket an (der Widerruf ist in K1a kein Recht)', async () => {
+    const two = byId(await runX15(k1a(), false, ['X16'])).X16!
+    expect(two.crashed, two.detail).toBeFalsy()
+    expect(two.outcome, two.detail).toBe('nicht bestanden')
+    expect(two.measures.acceptedAfterRevocation).toBe(1)
+    const one = byId(await runX15(k1a({ devices: 1 }), true, ['X16'])).X16!
+    expect(one.crashed, one.detail).toBeFalsy()
+    expect(one.outcome, one.detail).toBe('bestanden')
+    expect(one.measures.acceptedAfterRevocation).toBe(0)
+  }, 600_000)
 })

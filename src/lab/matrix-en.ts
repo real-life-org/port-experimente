@@ -247,8 +247,8 @@ export const promiseEn: Record<string, { title: string; ref: string; gap: string
     "gap": null
   },
   "MG4": {
-    "title": "Class revocation next to a send: the running act continues, M's view becomes empty, no equivocation",
-    "ref": "§8 8232.2, 8535, 6270 (X4, later X16)",
+    "title": "Class revocation next to a send and old stock: the running act continues, M's view becomes empty, no equivocation, no ticket on a withdrawn key is accepted",
+    "ref": "§8 8232.2, 8535, 8475.S6, 6270 (X4, X16)",
     "gap": null
   },
   "MG5": {
@@ -343,6 +343,7 @@ export const scenarioEn: Record<string, string> = {
   "X13": "M1 and M2 each issue an introduction to A while separated, A's shared budget per mediator relationship stands at 9; A1 sees only one, A2 only the other (mediator devices against the shared budget, 8510, 8640.10)",
   "X14": "A1 and A2 separately introduce the same person C to B (two acts, one purpose): double introduction, union of the acts at B and C (6975, I-6)",
   "X15": "Union of two relationships with M (6975) while an act runs on one (consented, card in transit): A1 consents, A2, separated from A1, meets M again and unites (6987.5/.6/.10/.12/.14)",
+  "X16": "A1 revokes the class, A2, separated, holds the old stock; a mediator device with the old view still introduces, A2 accepts the ticket (old stock after class revocation, 8535, 8475.S6, 8640.6)",
   "X21": "Journal duplicated, reordered, incomplete: completed batches after an old and a double restore, concurrent requests, a crash before commit; loss of request, answer and receipt, each for more than 12 rounds (HSC-440, review 9)"
 }
 
