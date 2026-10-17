@@ -75,7 +75,7 @@ export const promises: Promise[] = [
   { id: 'DV4', port: 'replikation', title: 'Pseudonym je Gruppe: der Träger verbindet Gruppen nicht über Identitäten', ref: 'Delivery-Hypothesen DV4/DV6', scenarios: ['T11'] },
   { id: 'DV2', port: 'replikation', title: 'Zustellung: Quittungsverlust und unerreichbarer Träger enden nie still', ref: 'Delivery 6.1, 6.3 (E11: T9, T10)', scenarios: [], gap: 'braucht einen Zustellungs-Adapter (E11, nach IIW)' },
   // ── Mehrgeräte-Port (E15; Szenarien X in src/lab/mehrgeraet/scenarios.ts) ──
-  { id: 'MG1', port: 'mehrgerät', title: 'Einmalverbrauch beim Mediator: ein Vorrats-Schlüssel wird in höchstens einem Akt benannt, auch von zwei Geräten', ref: 'Trust 0.32 §8 8570.1 (E15 X1, später X13)', scenarios: ['X1'] },
+  { id: 'MG1', port: 'mehrgerät', title: 'Mediatorgeräte: ein Vorrats-Schlüssel wird in höchstens einem Akt benannt, und zwei getrennte Mediatorgeräte überschreiten das gemeinsame Annahmebudget der Seite nicht', ref: 'Trust 0.32 §8 8570.1, 8510 (E15 X1, X13)', scenarios: ['X1', 'X13'] },
   { id: 'MG2', port: 'mehrgerät', title: 'Harte Annahmegrenze: zehn Annahmen je Mediatorbeziehung über alle Geräte der Person', ref: '§8 8510, 8640.10 (X2)', scenarios: ['X2'] },
   { id: 'MG3', port: 'mehrgerät', title: 'Ein Zustand je Person: Consent und Ablehnung sind terminal, die Gegenseite sieht nichts, was die Person als Ganzes nicht trägt', ref: '§8 8325.A3/A4, 8765 (X3, später X18)', scenarios: ['X3'] },
   { id: 'MG4', port: 'mehrgerät', title: 'Klassenwiderruf neben Versand: der laufende Akt läuft weiter, Ms Sicht wird leer, keine Equivokation', ref: '§8 8232.2, 8535, 6270 (X4, später X16)', scenarios: ['X4'] },

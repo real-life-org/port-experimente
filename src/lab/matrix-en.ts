@@ -232,8 +232,8 @@ export const promiseEn: Record<string, { title: string; ref: string; gap: string
     "gap": "covered by the separate delivery bench (E11, T9/T10 pass on four wires), not yet mapped into this matrix"
   },
   "MG1": {
-    "title": "Single use at the mediator: a stock key is named in at most one act, even by two devices",
-    "ref": "Trust 0.32 §8 8570.1 (E15 X1, later X13)",
+    "title": "Mediator devices: a stock key is named in at most one act, and two separated mediator devices do not exceed the side's shared acceptance budget",
+    "ref": "Trust 0.32 §8 8570.1, 8510 (E15 X1, X13)",
     "gap": null
   },
   "MG2": {
@@ -340,6 +340,7 @@ export const scenarioEn: Record<string, string> = {
   "X10": "A second app of A as a further device with a restricted right (read only)",
   "X11": "Long separation (30 rounds), both devices act, then union: stable convergence, journal size",
   "X12": "Lost receipt and unreachable carrier per device (T9/T10 with several devices): effect once, both devices equal afterwards",
+  "X13": "M1 and M2 each issue an introduction to A while separated, A's shared budget per mediator relationship stands at 9; A1 sees only one, A2 only the other (mediator devices against the shared budget, 8510, 8640.10)",
   "X21": "Journal duplicated, reordered, incomplete: completed batches after an old and a double restore, concurrent requests, a crash before commit; loss of request, answer and receipt, each for more than 12 rounds (HSC-440, review 9)"
 }
 

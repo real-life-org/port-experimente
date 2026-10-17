@@ -332,6 +332,8 @@ describe('K1a Schritt 1: Abnahmelauf', () => {
 })
 
 // Breite K1a-Matrix (Plan Abschnitt 4, Review-9-Schluss): X13–X18 und X21, je mit zwei Geräten und seriell.
+// Seriell heißt für K1a ein Gerät je Person mit ungeteilten Rechten (`devices: 1`); mit der festen Zahl 2 hätte das
+// einzige Gerät nur die Hälfte des Budgets und der Schlüssel, der Kontrolllauf prüfte dann die Aufteilung, nicht den Prüfstand.
 describe('K1a breite Matrix', () => {
   it('X21: Journal nach altem und doppeltem Restore unter Umordnung, Duplikaten, gleichzeitigen Anfragen; Verlust von Anfrage, Antwort, Quittung je über 12 Runden', async () => {
     const r = byId(await runX15(k1a(), false, ['X21']))
@@ -353,5 +355,17 @@ describe('K1a breite Matrix', () => {
     expect(x.measures.repeatedDeposits as number).toBeGreaterThan(0)
     expect(x.measures.journalBatchesAfter).toBe(x.measures.journalBatchesBefore) // keine neue Fachoperation: das Journal wächst nicht
     expect(byId(await runX15(k1a(), true, ['X21'])).X21!.outcome).toBe('nicht abbildbar')
+  }, 600_000)
+
+  it('X13: M1 und M2 stellen getrennt je eine Vorstellung gegen As gemeinsames Budget bei 9 aus: zehn Annahmen, keine Überschreitung', async () => {
+    for (const serial of [false, true]) {
+      const x = byId(await runX15(serial ? k1a({ devices: 1 }) : k1a(), serial, ['X13'])).X13!
+      expect(x.crashed, x.detail).toBeFalsy()
+      expect(x.outcome, `${serial ? 'seriell' : 'zwei Geräte'}: ${x.detail}`).toBe('bestanden')
+      expect(x.measures.budgetOverrun).toBe(0)
+      expect(x.measures.acceptedActs).toBe(10)
+      expect(x.measures.doubleFinalEffects).toBe(0)
+      expect(x.measures.issuedOffline).toBe(2)
+    }
   }, 600_000)
 })

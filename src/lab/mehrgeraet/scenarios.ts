@@ -9,7 +9,7 @@
 // Szenario nicht erhebt, fehlt im Ergebnis (nie 0).
 
 import type { Outcome } from '../types'
-import { EnrolmentRefused, HolderDevice, type MultiDeviceCandidate } from './holder'
+import { EnrolmentRefused, frameHash, HolderDevice, type MultiDeviceCandidate } from './holder'
 import * as M from './model'
 import { Welt15 } from './welt'
 
@@ -525,6 +525,57 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const dup = s.B.dispositions.filter((d) => d === 'duplicate-known').length
       const ok = n > 0 && connectsAtB === 1 && dup >= 1 && m > 0
       return { outcome: mark(ok), detail: `A1: Karte ${M.act(s.A.state, r.act).o} nach ${n} Runden; B: Verbindung ${connectsAtB}×, ${dup}× duplicate-known; A-Geräte gleich nach ${m} Runden`, measures: { rounds: n, duplicateKnownAtB: dup, doubleFinalEffects: Math.max(0, connectsAtB - 1), roundsToConverge: m } }
+    },
+  },
+  {
+    id: 'X13',
+    title: 'M1 und M2 stellen getrennt je eine Vorstellung an A aus, As gemeinsames Budget je Mediatorbeziehung steht bei 9; A1 sieht nur die eine, A2 nur die andere (Mediatorgeräte gegen das gemeinsame Budget, 8510, 8640.10)',
+    async run(c, serial) {
+      // Die Gegenpersonen vor dem Enrollment: auch ein Mediatorgerät ohne Journal (K0) kennt jede Beziehung.
+      const names = Array.from({ length: 11 }, (_, i) => `C${i}`)
+      const s = await setup(c, serial, names)
+      const cs = names.map((n) => s.thirds[n]!.mc)
+      let overrun = 0
+      const sample = () => (overrun = Math.max(overrun, acceptedActs(s.w, 'A').size - M.PARAM.budget))
+      const rounds = (n: number) => s.w.rounds(n, sample)
+      for (let i = 0; i < 9; i++) {
+        await introduceAny(s, s.ma, cs[i]!, serial)
+        await rounds(3)
+      }
+      const before = acceptedActs(s.w, 'A').size
+      // Die Rahmen einer Vorstellung: was die Mediatorgeräte dabei erzeugt haben (versiegelt; zugeordnet über `produced`).
+      const framesOf = async (f: () => Promise<{ act: string } | { refused: string }>) => {
+        const known = new Set(s.w.of('M').flatMap((d) => [...d.produced.keys()]))
+        const r = await f()
+        return { r, frames: new Set(s.w.of('M').flatMap((d) => [...d.produced.keys()]).filter((h) => !known.has(h))) }
+      }
+      // Beide Mediatorgeräte getrennt: jedes stellt A eine weitere Person vor (zehnte und elfte Vorstellung).
+      s.Mm.online = false
+      s.M2.online = false
+      const x1 = await framesOf(() => s.Mm.introduce(s.ma, cs[9]!))
+      const x2 = await framesOf(() => s.M2.introduce(s.ma, cs[10]!))
+      const offline = [x1, x2].filter((x) => 'act' in x.r).length
+      s.Mm.online = true
+      s.M2.online = true
+      // Ein Mediatorgerät ohne benennbaren Schlüssel (K1a) wird nach der Heilung vom anderen vertreten (autorisierter Pfad, B6).
+      const xs = [x1, x2]
+      for (let i = 0; i < 2; i++) if (!('act' in xs[i]!.r)) xs[i] = await framesOf(() => introduceAny(s, s.ma, cs[9 + i]!, serial))
+      const issued = xs.filter((x) => 'act' in x.r).length
+      // Die Seite ist getrennt: die zehnte erreicht nur A1, die elfte nur A2; danach sehen beide alles.
+      const hash = (f: { bytes: Uint8Array }) => frameHash(f.bytes)
+      if (!serial) {
+        s.w.carrier.faults.withhold(s.A2.name, (f) => xs[0]!.frames.has(hash(f)))
+        s.w.carrier.faults.withhold(s.A.name, (f) => xs[1]!.frames.has(hash(f)))
+      }
+      await rounds(6)
+      s.w.carrier.faults.reset()
+      await rounds(6)
+      const accepted = acceptedActs(s.w, 'A').size
+      const fe = finalEffects(s.w, 'M')
+      const agree = s.w.agree('A')
+      const perDevice = s.w.of('A').map((d) => `${d.name}: ${M.budgetUsed(M.rel(d.state, s.am), s.w.clock.now())}`)
+      const ok = overrun === 0 && before === 9 && issued === 2 && accepted === M.PARAM.budget && fe.doubleConsumption === 0 && agree.agree
+      return { outcome: mark(ok), detail: `vorher ${before}; offline ausgestellt ${offline} von 2, insgesamt ${issued}; angenommene Akte der Person: ${accepted} (Budget ${M.PARAM.budget}), Überschreitung im Verlauf höchstens ${overrun}; je Gerät ${perDevice.join(', ')}; blockiert: ${blocked(s.w, 'A')}; doppelt benannte Schlüssel bei M: ${fe.doubleConsumption}; A-Geräte gleich: ${agree.agree ? 'ja' : 'nein'}`, measures: { budgetOverrun: overrun, acceptedActs: accepted, issuedOffline: offline, issued, blockedOperations: blocked(s.w, 'A'), doubleFinalEffects: fe.doubleConsumption, projectionAgrees: agree.agree ? 1 : 0 } }
     },
   },
   {
