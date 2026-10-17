@@ -9,10 +9,10 @@ import { k0 } from '../src/candidates/mehrgeraet-k0'
 const byId = (rs: Awaited<ReturnType<typeof runX15>>) => Object.fromEntries(rs.map((r) => [r.scenario, r]))
 
 describe('E15 K0 one-seed: Eichung', () => {
-  it('seriell bestehen X1–X5, X7, X12, X13; X6, X8–X11, X21 sind seriell nicht abbildbar', async () => {
+  it('seriell bestehen X1–X5, X7, X12, X13, X14; X6, X8–X11, X21 sind seriell nicht abbildbar', async () => {
     const r = byId(await runX15(k0(), true))
     for (const x of Object.values(r)) expect(x.crashed, x.detail).toBeFalsy()
-    for (const id of ['X1', 'X2', 'X3', 'X4', 'X5', 'X7', 'X12', 'X13']) expect(r[id]!.outcome, `${id}: ${r[id]!.detail}`).toBe('bestanden')
+    for (const id of ['X1', 'X2', 'X3', 'X4', 'X5', 'X7', 'X12', 'X13', 'X14']) expect(r[id]!.outcome, `${id}: ${r[id]!.detail}`).toBe('bestanden')
     for (const id of ['X6', 'X8', 'X9', 'X10', 'X11', 'X21']) expect(r[id]!.outcome, `${id}: ${r[id]!.detail}`).toBe('nicht abbildbar')
   }, 600_000)
 

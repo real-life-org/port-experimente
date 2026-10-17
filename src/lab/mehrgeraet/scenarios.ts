@@ -47,9 +47,9 @@ interface Setup {
  * Gemeinsame Welt: A, B, M mit je zwei Geräten; Begegnungen A–M und B–M,
  * Klasse an, Vorrat bei M; weitere Gegenpersonen; dann Enrollment der
  * zweiten Geräte (sie starten mit dem Stand des ersten). Im seriellen Lauf
- * gibt es die zweiten Geräte nicht.
+ * gibt es die zweiten Geräte nicht. `pre` läuft vor dem Enrollment.
  */
-async function setup(candidate: MultiDeviceCandidate, serial: boolean, thirds: string[] = []): Promise<Setup> {
+async function setup(candidate: MultiDeviceCandidate, serial: boolean, thirds: string[] = [], pre?: (base: Setup) => Promise<void>): Promise<Setup> {
   const w = new Welt15(candidate)
   const A = await w.person('A', 'A1')
   const B = await w.person('B', 'B1')
@@ -62,6 +62,7 @@ async function setup(candidate: MultiDeviceCandidate, serial: boolean, thirds: s
   await w.rounds(3)
   const base: Setup = { w, A, A2: A, B, B2: B, Mm, M2: Mm, am: am.x.id, ma: am.y.id, bm: bm.x.id, mb: bm.y.id, thirds: {} }
   for (const name of thirds) base.thirds[name] = await third(base, name)
+  await pre?.(base) // weitere Begegnungen vor dem Enrollment: auch ein Gerät ohne Journal (K0) kennt sie
   const A2 = serial ? A : await w.enrol(A, 'A2')
   const B2 = serial ? B : await w.enrol(B, 'B2')
   const M2 = serial ? Mm : await w.enrol(Mm, 'M2')
@@ -576,6 +577,74 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const perDevice = s.w.of('A').map((d) => `${d.name}: ${M.budgetUsed(M.rel(d.state, s.am), s.w.clock.now())}`)
       const ok = overrun === 0 && before === 9 && issued === 2 && accepted === M.PARAM.budget && fe.doubleConsumption === 0 && agree.agree
       return { outcome: mark(ok), detail: `vorher ${before}; offline ausgestellt ${offline} von 2, insgesamt ${issued}; angenommene Akte der Person: ${accepted} (Budget ${M.PARAM.budget}), Überschreitung im Verlauf höchstens ${overrun}; je Gerät ${perDevice.join(', ')}; blockiert: ${blocked(s.w, 'A')}; doppelt benannte Schlüssel bei M: ${fe.doubleConsumption}; A-Geräte gleich: ${agree.agree ? 'ja' : 'nein'}`, measures: { budgetOverrun: overrun, acceptedActs: accepted, issuedOffline: offline, issued, blockedOperations: blocked(s.w, 'A'), doubleFinalEffects: fe.doubleConsumption, projectionAgrees: agree.agree ? 1 : 0 } }
+    },
+  },
+  {
+    id: 'X14',
+    title: 'A1 und A2 stellen B getrennt dieselbe Person C vor (zwei Akte, ein Zweck): doppelte Vorstellung, Vereinigung der Akte bei B und C (6975, I-6)',
+    async run(c, serial) {
+      // A ist hier der Mediator: B und C erlauben A, sie vorzustellen (Klasse an, Vorrat bei A). C hat ein Gerät.
+      let C!: HolderDevice
+      let ab!: { x: M.Tuple; y: M.Tuple }
+      let ac!: { x: M.Tuple; y: M.Tuple }
+      const s = await setup(c, serial, [], async (b) => {
+        C = await b.w.person('C', 'C1')
+        ab = await b.w.encounter(b.A, b.B)
+        ac = await b.w.encounter(b.A, C)
+        await b.w.rounds(3)
+        await b.B.setClass(ab.y.id, true)
+        await C.setClass(ac.y.id, true)
+        await b.w.rounds(4)
+      })
+      s.A.online = false
+      s.A2.online = false
+      const r1 = await s.A.introduce(ab.x.id, ac.x.id, 'B', 'C')
+      const r2 = await s.A2.introduce(ab.x.id, ac.x.id, 'B', 'C')
+      const offline = [r1, r2].filter((r) => 'act' in r).length
+      s.A.online = true
+      s.A2.online = true
+      // Ein Gerät ohne benennbaren Schlüssel (K1a) wird nach der Heilung vom anderen vertreten (B6): der Nutzer stellt dennoch zweimal vor.
+      const rs = [r1, r2]
+      for (let i = 0; i < 2; i++) if (!('act' in rs[i]!)) {
+        await s.w.rounds(2)
+        rs[i] = await s.A.introduce(ab.x.id, ac.x.id, 'B', 'C')
+        if (!('act' in rs[i]!) && !serial) rs[i] = await s.A2.introduce(ab.x.id, ac.x.id, 'B', 'C')
+      }
+      const acts = rs.filter((r): r is { act: string } => 'act' in r).map((r) => r.act)
+      if (acts.length !== 2) return fail(`nur ${acts.length} Vorstellung(en) ausgestellt: ${rs.map((r) => ('refused' in r ? r.refused : 'ok')).join(', ')}`)
+      if ((await s.w.until(() => acts.every((a) => knowsAct(s.w, 'B', a) && knowsAct(s.w, 'C', a)), 15)) < 0) {
+        // Gemessen, was ankam: ein doppelt benannter Schlüssel wird bei B oder C abgewiesen (8640.12).
+        const fa = finalEffects(s.w, 'A')
+        const known = acts.filter((a) => knowsAct(s.w, 'B', a) && knowsAct(s.w, 'C', a)).length
+        const conformance = [...s.w.of('B'), C].flatMap((d) => d.state.findings).filter((f) => f.includes('8640.12')).length
+        return { outcome: 'nicht bestanden', detail: `offline ausgestellt ${offline} von 2; bei B und C angekommen: ${known} von 2; doppelt benannte Schlüssel bei A: ${fa.doubleConsumption}; Konformitätsfehler bei B/C: ${conformance}`, measures: { actsIssued: acts.length, issuedOffline: offline, actsArrived: known, doubleFinalEffects: fa.doubleConsumption, mediatorConformanceFailures: conformance } }
+      }
+      // Zwei Geräte: B1 stimmt dem ersten Akt zu, B2 zugleich dem zweiten. Seriell: B nacheinander, der zweite nach der ersten Verbindung.
+      const connected = (a: string) => [...s.w.of('B'), C].every((d) => M.act(d.state, a).state === 'connected')
+      if (serial) {
+        for (const a of acts) {
+          await s.B.consent(a)
+          await C.consent(a)
+          await s.w.until(() => connected(a), 15)
+        }
+      } else {
+        await s.B.consent(acts[0]!)
+        await s.B2.consent(acts[1]!)
+        await C.consent(acts[0]!)
+        await C.consent(acts[1]!)
+      }
+      await s.w.until(() => acts.every(connected), 15)
+      const n = Math.max(await untilStable(s.w, 'B'), await untilStable(s.w, 'C'))
+      const per = [...s.w.of('B').map((d) => ({ d, r: relationshipsTo(s.w, d, 'C') })), { d: C, r: relationshipsTo(s.w, C, 'B') }]
+      const duplicates = Math.max(0, entriesAcross(s.w, 'B', 'C') - 1) + Math.max(0, entriesAcross(s.w, 'C', 'B') - 1)
+      const issued = new Set(s.w.of('A').flatMap((d) => d.state.mediatorActs.map((a) => a.id))).size
+      const feA = finalEffects(s.w, 'A')
+      const feB = finalEffects(s.w, 'B')
+      const feC = finalEffects(s.w, 'C')
+      const doubles = feA.doubleConsumption + feB.doubles + feC.doubles
+      const states = acts.map((a) => s.w.of('B').map((d) => M.act(d.state, a).state).join('/'))
+      const ok = n > 0 && duplicates === 0 && doubles === 0 && acts.every(connected) && per.every(({ r }) => r.entries === 1)
+      return { outcome: mark(ok), detail: `offline ausgestellt ${offline} von 2, Akte bei A ${issued}; B: Akte ${states.join(', ')}; ${per.map(({ d, r }) => `${d.name}: ${r.entries} Eintrag/Einträge mit ${r.tuples} Tupel(n)`).join('; ')}; Doppel in der Liste ${duplicates}; doppelte Wirkungen ${doubles}; stabil nach ${n} Runden`, measures: { actsIssued: issued, issuedOffline: offline, duplicates, doubleFinalEffects: doubles, devicesWithoutUnion: per.filter(({ r }) => r.entries !== 1).length, roundsToConverge: n } }
     },
   },
   {

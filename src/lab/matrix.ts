@@ -81,7 +81,7 @@ export const promises: Promise[] = [
   { id: 'MG4', port: 'mehrgerät', title: 'Klassenwiderruf neben Versand: der laufende Akt läuft weiter, Ms Sicht wird leer, keine Equivokation', ref: '§8 8232.2, 8535, 6270 (X4, später X16)', scenarios: ['X4'] },
   { id: 'MG5', port: 'mehrgerät', title: 'Abgang beendet Pflichten; ein Replay von einem anderen Gerät belebt nichts', ref: '§6a 6845.7, 6845.10 (X5)', scenarios: ['X5'] },
   { id: 'MG6', port: 'mehrgerät', title: 'Wiederherstellung aus Backup: keine Nummernwiederverwendung, kein veralteter Vorrat, keine verlorenen Akte', ref: '§8 8500, 8315–8318 (X6, später X19)', scenarios: ['X6'] },
-  { id: 'MG7', port: 'mehrgerät', title: 'Kontinuität über Geräte: zwei Begegnungen derselben Personen auf verschiedenen Geräten werden eine Beziehung, keine Doppel', ref: '§6a 2300, 6975; I-6 (X7, später X14, X15)', scenarios: ['X7'] },
+  { id: 'MG7', port: 'mehrgerät', title: 'Kontinuität über Geräte: zwei Begegnungen derselben Personen auf verschiedenen Geräten werden eine Beziehung, keine Doppel', ref: '§6a 2300, 6975; I-6 (X7, X14, X15)', scenarios: ['X7', 'X14'] },
   { id: 'MG8', port: 'mehrgerät', title: 'Enrollment: ein neues Gerät sieht alles und handelt sofort', ref: 'HSC-020 Ersatz, Identity Enrollment (X8)', scenarios: ['X8'] },
   { id: 'MG9', port: 'mehrgerät', title: 'Gerätewiderruf: ein widerrufenes Gerät liest nichts Neues, auch nicht mit dem alten Zustand', ref: 'Identity Widerruf; K7 (X9, später X20)', scenarios: ['X9'] },
   { id: 'MG10', port: 'mehrgerät', title: 'Rechte je Gerät oder App: eine eingeschränkte App kann nur, was ihr Recht erlaubt', ref: 'Delegationsprofil K2 (X10, später X22)', scenarios: ['X10'] },
