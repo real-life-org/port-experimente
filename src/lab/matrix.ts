@@ -94,8 +94,8 @@ export type CellStatus = Outcome | 'teilweise' | 'nicht geprüft'
 
 export interface Cell {
   readonly status: CellStatus
-  /** Jedes zugeordnete Szenario mit seinem Ergebnis; `nicht gelaufen`, wenn der Lauf es nicht enthielt. */
-  readonly evidence: ReadonlyArray<{ scenario: string; outcome: Outcome | 'nicht gelaufen' }>
+  /** Jedes zugeordnete Szenario mit seinem Ergebnis; `nicht gelaufen`, wenn der Lauf es nicht enthielt; Marken für Absturz und geänderte Zusage bleiben erhalten (S2). */
+  readonly evidence: ReadonlyArray<{ scenario: string; outcome: Outcome | 'nicht gelaufen'; crashed?: boolean; promiseChanged?: boolean }>
 }
 
 export interface CandidateRun {
@@ -122,8 +122,13 @@ export interface Matrix {
  * ein Teil, der Rest ist nicht abbildbar oder nicht gelaufen: teilweise.
  * Alles nicht abbildbar: nicht abbildbar. Ohne Szenario: nicht geprüft.
  */
-export function cell(p: Promise, results: ReadonlyMap<string, Outcome>): Cell {
-  const evidence = [...p.scenarios].sort().map((s) => ({ scenario: s, outcome: results.get(s) ?? ('nicht gelaufen' as const) }))
+export type CellResult = { outcome: Outcome; crashed?: boolean; promiseChanged?: boolean }
+
+export function cell(p: Promise, results: ReadonlyMap<string, CellResult>): Cell {
+  const evidence = [...p.scenarios].sort().map((s) => {
+    const r = results.get(s)
+    return r ? { scenario: s, outcome: r.outcome, crashed: r.crashed, promiseChanged: r.promiseChanged } : { scenario: s, outcome: 'nicht gelaufen' as const }
+  })
   const outcomes = evidence.map((e) => e.outcome)
   let status: CellStatus
   if (!p.scenarios.length) status = 'nicht geprüft'
@@ -136,7 +141,7 @@ export function cell(p: Promise, results: ReadonlyMap<string, Outcome>): Cell {
 }
 
 export function buildMatrix(runs: readonly CandidateRun[]): Matrix {
-  const byCandidate = new Map(runs.map((r) => [r.id, new Map([...r.scenarios, ...r.carrier].map((x) => [x.scenario, x.outcome] as const))] as const))
+  const byCandidate = new Map(runs.map((r) => [r.id, new Map([...r.scenarios, ...r.carrier].map((x) => [x.scenario, { outcome: x.outcome, crashed: x.crashed, promiseChanged: x.promiseChanged }] as const))] as const))
   // Zwei Familien: Gruppen-Kandidaten (S/T/Z-Szenarien) stehen in den drei Gruppen-Ports, Mehrgeräte-Kandidaten (X) im Mehrgeräte-Port.
   const family = (r: CandidateRun) => ([...r.scenarios, ...r.carrier].some((x) => x.scenario.startsWith('X')) ? 'X' : 'ST')
   const ports = (['autorität', 'schlüssel', 'replikation', 'mehrgerät'] as Port[]).map((port) => {
@@ -156,13 +161,13 @@ const mark: Record<Outcome | 'nicht gelaufen', string> = { bestanden: '✓', 'ni
 
 export function cellText(c: Cell): string {
   if (!c.evidence.length) return 'nicht geprüft'
-  const marks = c.evidence.map((e) => `${mark[e.outcome]} ${e.scenario}`).join(' ')
+  const marks = c.evidence.map((e) => `${e.crashed ? '⚠' : e.promiseChanged ? '≈' : mark[e.outcome]} ${e.scenario}`).join(' ')
   return c.status === 'teilweise' ? `teilweise: ${marks}` : c.status === 'nicht geprüft' ? `nicht gelaufen: ${marks}` : marks
 }
 
 /** Markdown: eine Tabelle je Port, Kandidaten als Spalten. */
 export function toMarkdown(m: Matrix, at = new Date().toISOString().slice(0, 10)): string {
-  const lines: string[] = ['# Konformitätsmatrix', '', `Stand ${at}. Eine Zusage gilt nur, wenn jedes zugeordnete Szenario besteht: ✓ bestanden, ✗ nicht bestanden, – nicht abbildbar, ? nicht gelaufen. „teilweise“ heißt: ein Teil besteht, der Rest ist nicht abbildbar oder nicht gelaufen. „nicht geprüft“ heißt: es gibt noch kein Szenario dafür; „nicht gelaufen“: es gibt eines, der Lauf enthielt es nicht.`, '']
+  const lines: string[] = ['# Konformitätsmatrix', '', `Stand ${at}. Eine Zusage gilt nur, wenn jedes zugeordnete Szenario besteht: ✓ bestanden, ✗ nicht bestanden, – nicht abbildbar, ? nicht gelaufen, ⚠ Lauf abgebrochen (kein gemessener Verstoß), ≈ Zusage geändert (ein ✓ unter einer Ersatzregel, nie Erfüllung der alten). „teilweise“ heißt: ein Teil besteht, der Rest ist nicht abbildbar oder nicht gelaufen. „nicht geprüft“ heißt: es gibt noch kein Szenario dafür; „nicht gelaufen“: es gibt eines, der Lauf enthielt es nicht.`, '']
   for (const p of m.ports) {
     if (!p.candidates.length) continue
     lines.push(`## ${p.title}`, '', `| Zusage | ${p.candidates.join(' | ')} |`, `|---|${p.candidates.map(() => '---').join('|')}|`)

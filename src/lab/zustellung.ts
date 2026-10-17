@@ -255,7 +255,7 @@ export type Report =
   | { state: 'awaiting-transport'; reason: 'offline' | 'transport-unreachable' }
   | { state: 'accepted' }
   | { state: 'delivered'; late: boolean }
-  | { state: 'failed'; reason: 'expired-by-adapter-policy' }
+  | { state: 'failed'; reason: 'expired-by-adapter-policy' | 'withdrawn' }
 
 /** Horizonte in Runden: Bericht spätestens nach einer Runde; erneut senden nach ACK_WAIT; aufgeben nach GIVE_UP. */
 export const HORIZON = { status: 1, ackWait: 3, giveUp: 12 } as const
@@ -359,6 +359,12 @@ export class Zusteller {
       // Mindestens einmal: ohne Quittung noch einmal dieselben Bytes (der Empfänger dedupliziert, §6.3).
       if (s.sinceDeposit >= HORIZON.ackWait) this.tryDeposit(s)
     }
+  }
+  /** Zurückziehen (E15, Abgang 8475.S6): nichts geht mehr hinaus; eine schon zugestellte Submission bleibt zugestellt. */
+  withdraw(digest: string): void {
+    const s = this.submissions.get(digest)
+    if (!s || s.report?.state === 'delivered') return
+    s.report = { state: 'failed', reason: 'withdrawn' }
   }
   transport(digest: string) {
     return this.submissions.get(digest)?.transport

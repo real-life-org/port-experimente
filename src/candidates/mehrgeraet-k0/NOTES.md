@@ -57,31 +57,78 @@ applicable.
   everything at enrollment (X8) and diverges from the first action on
   (X3, X11).
 
-## Simplifications of the target model (for the gate review)
+## Simplifications of the target model, and what each one limits
+
+Every simplification narrows what a result can claim (gate review 3,
+should-fix 4). The limit is named so that no HSC or §8 conformance is
+read out of a cell the bench cannot support.
 
 - Stock keys are `active` at allocation; carrier registration and
-  confirmation (8475.S1, S2) are immediate.
+  confirmation (8475.S1, S2) are immediate. Limit: nothing here says how
+  a device behaves when registration fails or crashes between allocation
+  and confirmation; rights and crash cases around 8475.S1/S2 are not
+  measured.
 - The card hand-over state O knows `intent`, `handed`, `taken`,
   `delivered`, `given-up`; the adapter query, demarcation and re-hand-over
-  of 8326 are not modelled.
+  of 8326 are not modelled. Limit: no claim about a hand-over that the
+  adapter reports differently from what the device assumed.
 - Continuity: a probe carries blinded counterpart anchors (the frozen
   candidate list of the tuple), a mapping carries one blinded entry; a
   verified mapping unites (6975), a hit only creates the duty (6845.1).
-  Pair keys for blinding are derived from the two anchors, not from an ECDH.
+  Pair keys for blinding are derived from the two anchors, not from an
+  ECDH, so the blinding is publicly derivable. Limit: a functional
+  abstraction only; no claim about proof of possession or about the
+  confidentiality of the probe.
 - A resumed duty (6845.10) re-produces the mapping instead of resuming
-  the stored bytes.
+  the stored bytes. Limit: a duty taken over by a sibling device cannot
+  be measured for HSC-120 here; this goes away with K1a step 1 (the
+  production intent carries its bytes).
 - Departure: no document to the counterpart (8475.S6: nothing is sent);
   tuples of departed relationships take part in no hit, mapping or union.
 - Time: acts expire at `expiresAt − consent-reserve` (offered) or
-  `expiresAt` (consented); keys age by 8470; no tombstones yet.
+  `expiresAt` (consented); keys age by 8470; no tombstones. Limit: no
+  claim about old backups replayed after retention, about journal
+  cleanup, or about long replays.
+- One shared self address and one self signer for the journal, derived
+  from the one seed. Limit: K2 (keys per device) needs device addressing
+  and a delegation check instead; `OwnFrame { body }` is not a contract
+  for that. On the shared address every device also reads the receipts
+  meant for its sibling; they stay unbound and are counted
+  (`unboundAcks`).
 - Blocked is all or nothing: when the candidate refuses an operation, the
-  device takes back everything the step did so far (state, submissions,
-  receipts, journal entries) and does not acknowledge the frame; the
-  counterpart repeats it. Key derivations and address registrations at
-  the carrier are not taken back, they carry no state.
+  device takes back everything the step did so far (state, submissions
+  and their delivery reports, receipts, journal entries) and does not
+  acknowledge the frame; the counterpart repeats it. A frame whose
+  precondition is missing in the state is deferred the same way. Key
+  derivations and address registrations at the carrier are not taken
+  back, they carry no state. The candidate contract that makes this
+  sound: `authorize` and `receiveOwnFrame` are pure, consumption happens
+  in `record` after the step succeeded.
 - Receipts: every submission records the anchor it expects the receipt
   from (the document's recipient); a receipt from anyone else, or for a
   submission the device does not know, has no effect. A journal frame
   expects the person's own self anchor, which under one seed is the same
   on every device; a candidate with keys per device (K2) has to name the
   expected signer differently.
+- Due work (refilling a stock) is derived from the state in every time
+  step, not from the event that made it due; a refusal is retried the
+  next step and counts as blocked each time.
+
+## Fold rules the bench decided (gate review 3, B2; Anton, 17 October)
+
+Where two devices change the same place, the target model applies an
+explicit rule instead of "last applied wins". These four are candidates
+for follow-up points in Trust 0.32 and the Holder State Contract:
+
+- The mediator's view of a stock is monotone in the revision (8500); the
+  same revision with other keys is an equivocation (6270), recorded as a
+  finding, and both devices end with the same view (canonically smaller
+  key set).
+- A budget confirmation names the accepted acts the user saw (8515), not
+  a point in time or a counter; a later acceptance counts in any order.
+- A stock key is identified by (nonce, n) (8435, 8445). A second stock
+  under another nonce stays visible and is recorded as a finding; what
+  happens to it is the candidate's decision, not the model's.
+- Consent against decline keeps the first terminal state (8325.A3/A4);
+  the losing decision is recorded as an effect and a finding, never
+  silently dropped. The X3 oracle reads this as a contradiction.

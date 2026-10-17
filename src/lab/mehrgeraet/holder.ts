@@ -20,7 +20,12 @@
 // vom Zeitübergang nichts zurück (Zustand, Submissions, Quittungen,
 // Journal); der Rahmen wird nicht quittiert, die Gegenseite wiederholt ihn.
 // Nicht zurückgenommen werden Schlüsselableitungen und Adressanmeldungen
-// am Träger (`listen`): sie tragen keinen Zustand.
+// am Träger (`listen`): sie tragen keinen Zustand. Der Checkpoint ist tief
+// (auch die Zustellerberichte, B3). Fehlt einem empfangenen Rahmen eine
+// Voraussetzung im Zustand (`Missing`), wird er zurückgestellt, nicht
+// quittiert; die Gegenseite wiederholt ihn. Fällige Arbeit (Nachfüllen)
+// wird aus dem Zustand abgeleitet und in jedem Zeitübergang erneut
+// geprüft, nicht nur beim Ereignis, das sie fällig machte (B6).
 
 import { seal, receive, edFromSeed, xFromSeed, anchorOfEd, mkOfX, diSign, diVerify, jcs, digestBytes } from '@real-life/trust-protocol'
 import type { Json, KeyPair } from '@real-life/trust-protocol'
@@ -77,18 +82,24 @@ export interface OwnFrame {
 /** Der Kandidat verweigert eine Operation (fehlendes Recht, K1a): die Nutzeraktion ist blockiert, nicht fehlerhaft. */
 export class Blocked extends Error {}
 
-/** Was ein Kandidat je Gerät beisteuert. Der Holder-Zustand gehört dem Gerät; der Kandidat sagt, was erlaubt ist und wie Operationen geteilt werden. */
+/**
+ * Was ein Kandidat je Gerät beisteuert. Der Holder-Zustand gehört dem Gerät; der Kandidat sagt, was erlaubt ist und wie
+ * Operationen geteilt werden. Vertrag zum Alles-oder-nichts des Geräts (Tor-Review 3, B3): `authorize` und
+ * `receiveOwnFrame` sind rein (prüfen, dekodieren; kein Verbrauch, kein Journalwissen); Verbrauch von Rechten und
+ * Journalwissen ändern sich nur in `record`, das das Gerät erst nach dem Gelingen eines Schritts aufruft. Ein
+ * Kandidat, der in `authorize` reserviert, wird bei einem Rollback nicht zurückgesetzt.
+ */
 export interface CandidateDevice {
   readonly keys: KeyScheme
   /** Schreiberinkarnation für Operations-IDs (wechselt bei Enrollment und Restore, Befund 5). */
   readonly writer: string
-  /** Rechteprüfung VOR der Anwendung (B3): false = blockiert. Ohne Methode ist alles erlaubt. */
+  /** Rechteprüfung VOR der Anwendung (B3): false = blockiert. Rein: ohne Nebenwirkung. Ohne Methode ist alles erlaubt. */
   authorize?(op: M.Op, state: M.HolderState): boolean
-  /** Eine lokal entschiedene Operation ist angewandt; der Kandidat verbreitet sie (oder nicht). */
+  /** Eine lokal entschiedene Operation ist angewandt und der Schritt gelungen; der Kandidat verbreitet sie (oder nicht) und verbraucht hier, was sie kostet. */
   record(op: M.Op): void
   /** Rahmen an die eigenen Geräte (Journal), an die eigene Adresse der Person (Plan Runde 3). */
   takeOwnFrames(): OwnFrame[]
-  /** Ein Rahmen eines eigenen Geräts: liefert die Operationen, die das Gerät anwenden soll. */
+  /** Ein Rahmen eines eigenen Geräts: liefert die Operationen, die das Gerät anwenden soll. Rein: nur dekodieren. */
   receiveOwnFrame(body: Uint8Array): M.Op[]
   /** Was der Kandidat dauerhaft hält (Journal); Teil des Store-Abbilds. */
   persist(): unknown
@@ -143,6 +154,14 @@ interface Sent {
   address: string
 }
 
+interface Buffered {
+  act: string
+  from: string
+  expiresAt: string
+  card: M.Card
+  v: string
+}
+
 export interface DeviceState {
   holder: M.HolderState
   submissions: Submission[]
@@ -152,7 +171,8 @@ export interface DeviceState {
   counter: number
   candidate: unknown
   sent: Array<[string, Sent]>
-  buffer: Array<[string, { card: M.Card; v: string }]>
+  /** Karten vor dem Ticket (8910.1–.3), mit der ganzen Nutzlast für den Prüfsatz bei der Zuordnung (B7). */
+  buffer: Array<[string, Buffered]>
   /** Digest → erwarteter Signierer der Quittung, für jede quittierbare Submission (#55). */
   expected: Array<[string, string]>
 }
@@ -164,6 +184,8 @@ export interface Measures {
   ownBytesOut: number
   /** Vom Kandidaten blockierte Operationen (B1). */
   blocked: number
+  /** Quittungen ohne eigene Submission: auf einer geteilten Adresse (one-seed) die Quittungen für das Schwestergerät (Tor-Review 3, Nebenbefund a). */
+  unboundAcks: number
 }
 
 export type ActionResult = 'ok' | 'blocked' | 'crashed'
@@ -179,11 +201,11 @@ export class HolderDevice {
   online = true
   crashAt: CrashPoint | null = null
   readonly crashes: CrashPoint[] = []
-  measures: Measures = { framesOut: 0, bytesOut: 0, ownFramesOut: 0, ownBytesOut: 0, blocked: 0 }
+  measures: Measures = { framesOut: 0, bytesOut: 0, ownFramesOut: 0, ownBytesOut: 0, blocked: 0, unboundAcks: 0 }
   private down = false
   private counter = 0
   private sent = new Map<string, Sent>()
-  private buffer = new Map<string, { card: M.Card; v: string }>()
+  private buffer = new Map<string, Buffered>()
   /** Digest → erwarteter Quittungs-Signierer je eigener Submission (#55); lesbar für Messungen. */
   expected = new Map<string, string>()
   /** Innerhalb eines `guarded`-Rahmens: Operationen, die der Kandidat erst nach dem Gelingen aufzeichnet. */
@@ -272,7 +294,7 @@ export class HolderDevice {
   private checkpoint() {
     return {
       holder: structuredClone(this.state),
-      submissions: [...this.zusteller.submissions.values()],
+      submissions: structuredClone([...this.zusteller.submissions.values()]), // tief: auch die Berichte (B3)
       completed: new Set(this.completed),
       acks: new Map(this.acks),
       counter: this.counter,
@@ -298,11 +320,13 @@ export class HolderDevice {
     this.measures.bytesOut = c.bytesOut
   }
   /**
-   * Ein Schritt ganz oder gar nicht: verweigert der Kandidat eine Operation (`Blocked`), wird alles seit dem
-   * Beginn zurückgenommen, der Kandidat hat nichts aufgezeichnet, die Disposition `blocked(<op>)` bleibt.
-   * Liefert false, wenn blockiert. Absturz und andere Fehler gehen durch.
+   * Ein Schritt ganz oder gar nicht: scheitert er, wird alles seit dem Beginn zurückgenommen und der Kandidat hat
+   * nichts aufgezeichnet. Verweigert der Kandidat eine Operation (`Blocked`): Disposition `blocked(<op>)`, false.
+   * Fehlt einem empfangenen Rahmen eine Voraussetzung (`Missing`, nur mit `defer`): `deferred(<was>)`, false; die
+   * Gegenseite wiederholt den Rahmen. Absturz und andere Fehler gehen nach dem Rollback durch (das Szenario ist
+   * dann `crashed`; ein Prüfstandfehler wird nie als Eingangsfehler verbucht, B1).
    */
-  private async guarded(f: () => Promise<void>): Promise<boolean> {
+  private async guarded(f: () => Promise<void>, defer = false): Promise<boolean> {
     const c = this.checkpoint()
     const outer = this.pending
     this.pending = []
@@ -315,10 +339,16 @@ export class HolderDevice {
       return true
     } catch (e) {
       this.pending = outer
-      if (!(e instanceof Blocked)) throw e
       this.rollback(c)
-      this.dispositions.push(`blocked(${e.message})`)
-      return false
+      if (e instanceof Blocked) {
+        this.dispositions.push(`blocked(${e.message})`)
+        return false
+      }
+      if (defer && e instanceof M.Missing) {
+        this.dispositions.push(`deferred(${e.what}:${e.ref})`)
+        return false
+      }
+      throw e
     }
   }
 
@@ -446,14 +476,18 @@ export class HolderDevice {
   /** Abgang einer Beziehung (Section 2): Vorrat withdrawn, nichts gesendet, Pflichten moot. */
   async depart(relId: string): Promise<ActionResult> {
     return this.action(async () => {
+      const peers = new Set(M.rel(this.state, relId).tuples.map((t) => t.peerKeyAgreement))
       this.emit({ kind: 'depart', rel: relId })
+      // 8475.S6, 6845.7: nichts geht mehr an diesen Kontakt, auch keine Wiederholung einer offenen Submission.
+      for (const sub of this.zusteller.submissions.values()) if (peers.has(sub.address)) this.zusteller.withdraw(sub.digest)
+      this.held = this.held.filter((d) => !peers.has(this.zusteller.submissions.get(d)?.address ?? ''))
     })
   }
 
-  /** 8515: der Nutzer bestätigt ein neues Budget. */
+  /** 8515: der Nutzer bestätigt die Annahmen, die er sieht (benannt, nicht gezählt: reihenfolgeunabhängig, B2). */
   async confirmBudget(relId: string): Promise<ActionResult> {
     return this.action(async () => {
-      this.emit({ kind: 'budget-confirm', rel: relId })
+      this.emit({ kind: 'budget-confirm', rel: relId, acts: M.rel(this.state, relId).accepted.map((e) => e.act) })
       await this.refill(relId)
     })
   }
@@ -469,7 +503,7 @@ export class HolderDevice {
     for (let n = r.nextN; keys.length < M.PARAM.refillTo - active.length; n++) {
       const ctx = `introduction/${nonce}/${n}`
       const k = await this.listen(ctx)
-      keys.push({ n, anchor: k.anchor, keyAgreement: k.rkid, key: ctx, expiresAt: new Date(Date.parse(this.clock.now()) + M.PARAM.prekeyLifetimeMs).toISOString(), state: 'active' })
+      keys.push({ n, nonce, anchor: k.anchor, keyAgreement: k.rkid, key: ctx, expiresAt: new Date(Date.parse(this.clock.now()) + M.PARAM.prekeyLifetimeMs).toISOString(), state: 'active' })
     }
     this.emit({ kind: 'allocate', rel: r.id, nonce, keys })
     await this.sendRevision(r.id)
@@ -608,14 +642,7 @@ export class HolderDevice {
     try {
       if (this.online) {
         const frames = this.carrier.collect(this.name)
-        for (const f of frames) {
-          try {
-            await this.guarded(() => this.handle(f.bytes, f.address))
-          } catch (e) {
-            if (e instanceof Crashed) throw e
-            this.dispositions.push(`failed(malformed): ${(e as Error).message}`)
-          }
-        }
+        for (const f of frames) await this.guarded(() => this.handle(f.bytes, f.address), true)
         await this.journalOut()
         this.crash('before-commit')
         this.commit()
@@ -657,11 +684,10 @@ export class HolderDevice {
     }
     for (const r of this.state.relationships.slice()) {
       const aging = r.stock.filter((k) => k.state === 'active' && !M.usable(k.expiresAt, now)).map((k) => k.anchor)
-      if (aging.length) {
-        await this.guarded(async () => void this.emit({ kind: 'age', rel: r.id, anchors: aging })) // 8475.S5
-        await this.guarded(() => this.refill(r.id))
-      }
+      if (aging.length) await this.guarded(async () => void this.emit({ kind: 'age', rel: r.id, anchors: aging })) // 8475.S5
     }
+    // B6: fällige Arbeit folgt aus dem Zustand, nicht aus dem Ereignis; `refill` ist leer, wenn nichts fehlt.
+    await this.refillAll()
   }
 
   /** Zustellerberichte in Fachwirkung: Karte taken/given-up (8326), Mapping sent, Wiederholung nach `failed` (6845.4). */
@@ -705,7 +731,13 @@ export class HolderDevice {
     }
     const ctx = this.ctxOfRkid.get(address)
     if (ctx) await this.keysFor(ctx)
-    const v = await receive(env, this.resolve, this.completed)
+    let v: Awaited<ReturnType<typeof receive>>
+    try {
+      v = await receive(env, this.resolve, this.completed)
+    } catch (e) {
+      this.dispositions.push(`failed(malformed): ${(e as Error).message}`)
+      return
+    }
     this.dispositions.push(v.disposition)
     if (v.disposition === 'duplicate-known') {
       const ack = this.acks.get(v.digest!)
@@ -734,6 +766,7 @@ export class HolderDevice {
       const want = this.expected.get(p.ref)
       if (!want) {
         this.dispositions.push('failed(ack-unbound)')
+        this.measures.unboundAcks++
         return
       }
       if (want !== doc.issuer) {
@@ -855,10 +888,12 @@ export class HolderDevice {
         }
         const a: M.Act = { id: p.act, mediator: r.id, own: own.anchor, voucher: p.voucher, issuedAt: p.issuedAt, expiresAt: p.expiresAt, state: 'offered', pending: null, v: null, k: false, ownCard: null, ownCardKey: null, o: 'none', ownCardDigest: null, opened: null }
         this.emit({ kind: 'ticket-accept', act: a }) // 8640.14; K1a ohne Annahmerecht: Blocked, der Rahmen wird ganz zurückgenommen und nicht quittiert
-        const buffered = this.buffer.get(`${own.anchor}|${p.voucher.anchor}`)
-        if (buffered) {
-          this.buffer.delete(`${own.anchor}|${p.voucher.anchor}`)
-          this.emit({ kind: 'card-pending', act: a.id, card: buffered.card, v: buffered.v }) // 8640.15
+        // 8640.15 mit demselben Prüfsatz wie bei direkter Ankunft (8850.6, B7): Akt, Absender, Ablauf müssen passen.
+        const bkey = `${own.anchor}|${p.voucher.anchor}|${p.act}`
+        const buffered = this.buffer.get(bkey)
+        if (buffered && buffered.from === a.voucher.anchor && buffered.expiresAt === a.expiresAt) {
+          this.buffer.delete(bkey)
+          this.emit({ kind: 'card-pending', act: a.id, card: buffered.card, v: buffered.v })
         }
         await this.refill(r.id)
         return true
@@ -873,10 +908,10 @@ export class HolderDevice {
         const v = await digestBytes(enc.encode(jcs({ act: p.act, card: p.card })))
         const a = this.state.acts.find((x) => x.own === own.anchor)
         if (!a) {
-          // Pufferzweig (8910.1–.3)
-          const key = `${own.anchor}|${p.from}`
+          // Pufferzweig (8910.1–.3): die ganze Nutzlast, geprüft wird bei der Zuordnung (B7).
+          const key = `${own.anchor}|${p.from}|${p.act}`
           const b = this.buffer.get(key)
-          if (!b) this.buffer.set(key, { card: p.card, v })
+          if (!b) this.buffer.set(key, { act: p.act, from: p.from, expiresAt: p.expiresAt, card: p.card, v })
           else if (b.v !== v) return false
           return true
         }

@@ -24,7 +24,7 @@ it.runIf(process.env.REPORT)('Bericht', async () => {
   for (const c of multiDeviceCandidates) {
     const xs = await runX15(c.make())
     for (const r of xs) process.stdout.write([c.id, 'mehrgerät', r.scenario, r.outcome, r.detail, JSON.stringify(r.measures)].join(' | ') + '\n')
-    runs.push({ id: c.id, scenarios: [], carrier: xs.map((r) => ({ scenario: r.scenario, title: r.title, outcome: r.outcome, authority: r.detail, keys: JSON.stringify(r.measures), ms: 0 })) })
+    runs.push({ id: c.id, scenarios: [], carrier: xs.map((r) => ({ scenario: r.scenario, title: r.title, outcome: r.outcome, crashed: r.crashed, promiseChanged: r.promiseChanged, authority: r.detail, keys: JSON.stringify(r.measures), ms: 0 })) })
   }
   const md = toMarkdown(buildMatrix(runs))
   writeFileSync(process.env.MATRIX_OUT ?? 'matrix.md', md)
