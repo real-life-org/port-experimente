@@ -354,7 +354,42 @@ describe('K1a breite Matrix', () => {
     for (const k of ['ownFrames', 'ownBytes', 'journalFrames', 'journalBytes', 'syncRequestFrames', 'syncReplyFrames', 'ackFrames', 'repeatedDeposits', 'syncRequests', 'journalBatchesBefore', 'journalBatchesAfter']) expect(typeof x.measures[k], k).toBe('number')
     expect(x.measures.repeatedDeposits as number).toBeGreaterThan(0)
     expect(x.measures.journalBatchesAfter).toBe(x.measures.journalBatchesBefore) // keine neue Fachoperation: das Journal wächst nicht
+    // Review 11 S1: Wiederholungen nach Zielseite getrennt; die Summe ist die Gesamtzahl.
+    expect(typeof x.measures.repeatedDepositsOwn).toBe('number')
+    expect(typeof x.measures.repeatedDepositsToCounterpart).toBe('number')
+    expect((x.measures.repeatedDepositsOwn as number) + (x.measures.repeatedDepositsToCounterpart as number)).toBe(x.measures.repeatedDeposits)
+    expect(x.measures.repeatedDepositsOwn as number).toBeLessThanOrEqual(x.measures.ownFrames as number)
+    // Review 11 S2: nur die benötigten Journal-Batches gehen verloren, Antwortkopf und Quittungen passieren.
+    expect(x.measures.behindAfterJournalLoss).toBe(1)
+    expect(x.measures.repairRoundsJournalLoss as number).toBeGreaterThan(0)
+    // Je Phase nach der Reparatur: alle Batch-Schlüssel da, Referenzprojektion auf jedem Gerät.
+    for (const k of ['Restore', 'RequestLoss', 'AnswerLoss', 'JournalLoss', 'ReceiptLoss']) {
+      expect(x.measures[`missingBatchesAfter${k}`], k).toBe(0)
+      expect(x.measures[`lostStateAfter${k}`], k).toBe(0)
+    }
+    // Review 11 B2: Reparaturende = kein Gerät mit ausstehendem Nachholen und ein Ruhefenster über dem größten Wiederanfrageabstand.
+    expect(x.measures.devicesPendingSync).toBe(0)
+    expect(x.measures.quietWindow as number).toBeGreaterThan(16)
     expect(byId(await runX15(k1a(), true, ['X21'])).X21!.outcome).toBe('nicht abbildbar')
+  }, 600_000)
+
+  it('X21 Gegenlauf (Review 11 B2): beantwortet A2s Kopfvergleich nach jedem Restore immer mit „nicht gedeckt“, endet die Reparatur nie; X21 besteht nicht', async () => {
+    const proto = HolderDevice.prototype as unknown as { reload: () => Promise<void> }
+    const reload = proto.reload
+    const spy = vi.spyOn(proto, 'reload').mockImplementation(async function (this: HolderDevice) {
+      await reload.call(this)
+      if (this.name === 'A2') (this as unknown as { covers: () => boolean }).covers = () => false
+    })
+    try {
+      const x = byId(await runX15(k1a(), false, ['X21'])).X21!
+      expect(x.crashed, x.detail).toBeFalsy()
+      expect(x.outcome, x.detail).toBe('nicht bestanden')
+      expect(x.measures.devicesPendingSync as number, x.detail).toBeGreaterThan(0)
+      expect(x.detail).toMatch(/A2/)
+      expect(x.detail).toMatch(/ausstehend/)
+    } finally {
+      spy.mockRestore()
+    }
   }, 600_000)
 
   it('X13: M1 und M2 stellen getrennt je eine Vorstellung gegen As gemeinsames Budget bei 9 aus: zehn Annahmen, keine Überschreitung', async () => {
@@ -428,19 +463,17 @@ describe('K1a breite Matrix', () => {
     // Die Faltung hat keine Regel für zwei Übergaben eines Akts: jedes Gerät behält eine andere (Digest, O), die Projektionen bleiben verschieden.
     expect(two.measures.handOverDigestsOnA).toBe(2)
     expect(two.measures.projectionAgrees).toBe(0)
-    expect(two.outcome, two.detail).toBe('nicht bestanden')
-    const one = byId(await runX15(k1a({ devices: 1 }), true, ['X18'])).X18!
-    expect(one.crashed, one.detail).toBeFalsy()
-    expect(one.outcome, one.detail).toBe('bestanden')
-    expect(one.measures.cardsProducedByA).toBe(1)
-  }, 600_000)
-})
     // Review 11 B1: das Ledger-Orakel zählt die Endwirkungen beider Personen; A hat Zustimmung und Verbindung je aus zwei Operationen.
     expect(two.measures.doubleFinalEffectsA).toBe(2)
     expect(two.measures.doubleFinalEffectsB).toBe(0)
     expect(two.measures.doubleFinalEffects).toBe(2)
     expect(two.measures.doubleEffectKindsA).toBe('connect, consent')
     expect(two.detail).toMatch(/doppelte Endwirkungen bei A: 2/)
+    expect(two.outcome, two.detail).toBe('nicht bestanden')
+    const one = byId(await runX15(k1a({ devices: 1 }), true, ['X18'])).X18!
+    expect(one.crashed, one.detail).toBeFalsy()
+    expect(one.outcome, one.detail).toBe('bestanden')
+    expect(one.measures.cardsProducedByA).toBe(1)
     expect(one.measures.doubleFinalEffects).toBe(0)
   }, 600_000)
 
@@ -461,3 +494,5 @@ describe('K1a breite Matrix', () => {
     } finally {
       spy.mockRestore()
     }
+  }, 600_000)
+})

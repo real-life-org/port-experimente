@@ -262,6 +262,10 @@ export class HolderDevice {
   private sync: { pending: boolean; wait: number; backoff: number } = { pending: false, wait: 0, backoff: 1 }
   /** Anzahl gesendeter Nachhol-Anfragen (Messgröße des Reparaturverkehrs). */
   syncRequests = 0
+  /** Steht noch Nachholarbeit aus (Messung, Review 11 B2)? Erst ohne sie ist eine Reparatur beendet, nicht schon, wenn das Gerät im Backoff schweigt. */
+  get syncPending(): boolean {
+    return this.sync.pending
+  }
   /**
    * Messung (X21, Plan Abschnitt 5): Art jedes Rahmens, den dieses Gerät erzeugt hat, je SHA-256 der versiegelten
    * Bytes; so ordnet die Welt jede Einlieferung am Träger samt Wiederholung einem Gerät und einer Art zu. Nur Messung:

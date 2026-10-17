@@ -183,16 +183,28 @@ function missingBatches(w: Welt15, person: string): number | null {
   return n
 }
 
-/** Runden, bis über `quiet` Runden nichts mehr an der Self-Adresse eingeliefert wird (die Reparatur endet); −1 bei Grenze. */
-async function untilQuiet(w: Welt15, self: string, quiet = 3, max = 30): Promise<number> {
+/** Größter Abstand zwischen zwei Nachhol-Anfragen eines Geräts (Backoff 1, 2, 4, … 16 Runden). */
+const MAX_REREQUEST = 16
+
+/**
+ * Reparaturende (Review 11 B2): kein Gerät der Person hat noch Nachholarbeit (`syncPending`) UND über ein Fenster,
+ * das länger ist als der größte Wiederanfrageabstand, wird nichts an der Self-Adresse eingeliefert. Ein Gerät, das im
+ * Backoff schweigt, aber noch wartet, ist nicht fertig. Ergebnis: erste Runde des Ruhefensters (−1 bei Grenze), die
+ * am Ende noch wartenden Geräte und die Self-Rahmen während des Wartens.
+ */
+async function untilRepaired(w: Welt15, person: string, self: string, quiet = MAX_REREQUEST + 1, max = 60): Promise<{ rounds: number; window: number; pending: string[]; selfFrames: number }> {
   let still = 0
+  let selfFrames = 0
+  const pending = () => w.of(person).filter((d) => d.syncPending).map((d) => d.name)
   for (let i = 1; i <= max; i++) {
     const mark = w.carrier.carried.length
     await w.rounds(1)
-    still = w.carrier.carried.slice(mark).some((f) => f.address === self) ? 0 : still + 1
-    if (still >= quiet) return i - quiet
+    const n = w.carrier.carried.slice(mark).filter((f) => f.address === self).length
+    selfFrames += n
+    still = n === 0 && pending().length === 0 ? still + 1 : 0
+    if (still >= quiet) return { rounds: i - quiet, window: still, pending: [], selfFrames }
   }
-  return -1
+  return { rounds: -1, window: still, pending: pending(), selfFrames }
 }
 
 // ── Szenarien ────────────────────────────────────────────────────────────────
@@ -821,7 +833,7 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
   },
   {
     id: 'X21',
-    title: 'Journal doppelt, umgeordnet, unvollständig: abgeschlossene Batches nach altem und doppeltem Restore, gleichzeitige Anfragen, Absturz vor und nach dem Commit; Verlust von Anfrage, Antwort und Quittung je über 12 Runden (HSC-440, Review 9)',
+    title: 'Journal doppelt, umgeordnet, unvollständig: abgeschlossene Batches nach altem und doppeltem Restore, gleichzeitige Anfragen, Absturz vor und nach dem Commit; Verlust von Anfrage, Antwort, Batches allein (Antwortkopf zugestellt) und Quittung je über 12 Runden; Ende erst ohne ausstehendes Nachholen (HSC-440, Reviews 9 und 11)',
     async run(c, serial) {
       if (serial) return na('ein Gerät: kein Journal zwischen Geräten')
       const s = await setup(c, serial, ['C'])
@@ -863,9 +875,12 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const crashed = s.A2.crashes.length + s.A.crashes.length
       if (s.A2.crashes.length) await s.A2.reload()
       if (s.A.crashes.length) await s.A.reload()
+      // Je Phase nach der Reparatur (Review 11 S2): fehlende Batch-Schlüssel und Geräte, deren Projektion nicht die Referenz ist.
+      const settled = () => ({ missing: missingBatches(s.w, 'A') ?? -1, lost: s.w.of('A').filter((d) => M.canonical(d.projection()) !== ref).length })
       const restore = await untilStable(s.w, 'A', 40)
+      const afterRestore = settled()
       s.w.carrier.faults.reset()
-      // Phasen 2–4: je ein frischer Restore von A2, dann 15 Runden Verlust einer Art auf der Self-Adresse, dann ohne Fachoperation weiter.
+      // Phasen 2–5: je ein frischer Restore von A2, dann 15 Runden Verlust einer Art auf der Self-Adresse, dann ohne Fachoperation weiter.
       const loss = async (match: (o: { device: string; kind: string }) => boolean) => {
         await restoreA2()
         s.w.carrier.faults.drop((f) => {
@@ -875,12 +890,16 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
         await s.w.rounds(15)
         const b = behind()
         s.w.carrier.faults.reset()
-        return { behind: b, rounds: await untilStable(s.w, 'A', 40) }
+        const rounds = await untilStable(s.w, 'A', 40)
+        return { behind: b, rounds, ...settled() }
       }
       const requests = await loss((o) => o.device === 'A2' && o.kind === 'journal-sync')
       const answers = await loss((o) => o.device !== 'A2' && (o.kind === 'journal' || o.kind === 'journal-sync-reply'))
+      // Nur die benötigten Batches gehen verloren (A1s Journalrahmen an A2); Antwortkopf und Quittungen passieren (Review 11 S2).
+      const batches = await loss((o) => o.device !== 'A2' && o.kind === 'journal')
       const receipts = await loss((o) => o.kind === 'delivery-ack')
-      const quiet = await untilQuiet(s.w, self)
+      const repair = await untilRepaired(s.w, 'A', self)
+      const quiet = repair.rounds
       // Messung: Endstand und der ganze Reparaturverkehr seit dem ersten Restore.
       const missing = missingBatches(s.w, 'A')
       const lostState = s.w.of('A').filter((d) => M.canonical(d.projection()) !== ref).length
@@ -890,16 +909,22 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const k = (kind: string) => t.byKind[`own:${kind}`] ?? { frames: 0, bytes: 0 }
       const answersBy = (d: string) => (t.byDevice[d]?.['journal'] ?? 0) + (t.byDevice[d]?.['journal-sync-reply'] ?? 0)
       const after = s.w.of('A').map(journalOf)
-      const phases = [restore, requests.rounds, answers.rounds, receipts.rounds]
+      const phases = [restore, requests.rounds, answers.rounds, batches.rounds, receipts.rounds]
+      const perPhase = { Restore: afterRestore, RequestLoss: requests, AnswerLoss: answers, JournalLoss: batches, ReceiptLoss: receipts }
       const measures: Record<string, number> = {
         repairRoundsRestore: restore,
         repairRoundsRequestLoss: requests.rounds,
         repairRoundsAnswerLoss: answers.rounds,
+        repairRoundsJournalLoss: batches.rounds,
         repairRoundsReceiptLoss: receipts.rounds,
         behindAfterRequestLoss: requests.behind,
         behindAfterAnswerLoss: answers.behind,
+        behindAfterJournalLoss: batches.behind,
         behindAfterReceiptLoss: receipts.behind,
         roundsUntilQuiet: quiet,
+        quietWindow: repair.window,
+        devicesPendingSync: repair.pending.length,
+        selfFramesUntilQuiet: repair.selfFrames,
         devicesWithLostState: lostState,
         doubleFinalEffects: fe.doubles + fe.doubleConsumption,
         remainingConflicts: fe.contradictions + journalConflicts,
@@ -911,6 +936,8 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
         syncReplyFrames: k('journal-sync-reply').frames,
         ackFrames: k('delivery-ack').frames,
         repeatedDeposits: t.repeats,
+        repeatedDepositsOwn: t.repeatsOwn,
+        repeatedDepositsToCounterpart: t.repeatsToPeer,
         answersA1: answersBy('A1'),
         answersA2: answersBy('A2'),
         framesToCounterpart: t.toPeer.frames,
@@ -919,16 +946,25 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
         crashes: crashed,
       }
       if (missing !== null) measures.missingBatches = missing
+      for (const [k, v] of Object.entries(perPhase)) {
+        measures[`missingBatchesAfter${k}`] = v.missing
+        measures[`lostStateAfter${k}`] = v.lost
+      }
+      const phasesClean = Object.values(perPhase).every((v) => v.missing === 0 && v.lost === 0)
       if (before.every(Boolean) && after.every(Boolean)) {
         measures.journalBatchesBefore = Math.max(...before.map((j) => j!.batches))
         measures.journalBatchesAfter = Math.max(...after.map((j) => j!.batches))
         measures.journalBytesBefore = Math.max(...before.map((j) => j!.bytes))
         measures.journalBytesAfter = Math.max(...after.map((j) => j!.bytes))
       }
-      const ok = missing === 0 && phases.every((n) => n > 0) && requests.behind === 1 && answers.behind === 1 && lostState === 0 && measures.doubleFinalEffects === 0 && measures.remainingConflicts === 0 && quiet >= 0
+      const repaired = quiet >= 0 && repair.pending.length === 0 && repair.window > MAX_REREQUEST
+      const ok = missing === 0 && phasesClean && phases.every((n) => n > 0) && requests.behind === 1 && answers.behind === 1 && batches.behind === 1 && lostState === 0 && measures.doubleFinalEffects === 0 && measures.remainingConflicts === 0 && repaired
+      const end = repaired
+        ? `Reparatur beendet: kein Gerät mit ausstehendem Nachholen, still ab Runde ${quiet} über ${repair.window} Runden (größter Wiederanfrageabstand ${MAX_REREQUEST})`
+        : `Reparatur nicht beendet: nach 60 Runden Nachholen ausstehend auf ${repair.pending.join(', ') || 'keinem Gerät'}, ${repair.selfFrames} Self-Rahmen in dieser Zeit, zuletzt still über ${repair.window} Runden`
       return {
         outcome: mark(ok),
-        detail: `Reparatur in Runden: Restore ${restore}, Anfrageverlust ${requests.rounds}, Antwortverlust ${answers.rounds}, Quittungsverlust ${receipts.rounds} (zurück nach dem Verlust: ${[requests.behind, answers.behind, receipts.behind].join('/')}); still nach ${quiet} Runden; fehlende Batches ${missing ?? 'nicht messbar (kein Nachholen)'}; Geräte mit anderem Stand als vorher ${lostState}; doppelte Wirkungen ${measures.doubleFinalEffects}, Konflikte ${measures.remainingConflicts}; Self-Adresse ${t.own.frames} Rahmen / ${t.own.bytes} B (Journal ${k('journal').frames}/${k('journal').bytes} B, Anfragen ${k('journal-sync').frames}, Antworten ${k('journal-sync-reply').frames}, Quittungen ${k('delivery-ack').frames}, Wiederholungen ${t.repeats}; Antworten A1 ${answersBy('A1')}, A2 ${answersBy('A2')}); an Gegenseiten ${t.toPeer.frames} Rahmen; Journal ${measures.journalBatchesBefore ?? '–'} → ${measures.journalBatchesAfter ?? '–'} Batches`,
+        detail: `Reparatur in Runden: Restore ${restore}, Anfrageverlust ${requests.rounds}, Antwortverlust ${answers.rounds}, Batchverlust bei zugestelltem Antwortkopf ${batches.rounds}, Quittungsverlust ${receipts.rounds} (zurück nach dem Verlust: ${[requests.behind, answers.behind, batches.behind, receipts.behind].join('/')}); je Phase danach fehlende Batches ${Object.values(perPhase).map((v) => v.missing).join('/')}, Geräte nicht auf der Referenz ${Object.values(perPhase).map((v) => v.lost).join('/')}; ${end}; fehlende Batches ${missing ?? 'nicht messbar (kein Nachholen)'}; Geräte mit anderem Stand als vorher ${lostState}; doppelte Wirkungen ${measures.doubleFinalEffects}, Konflikte ${measures.remainingConflicts}; Self-Adresse ${t.own.frames} Rahmen / ${t.own.bytes} B (Journal ${k('journal').frames}/${k('journal').bytes} B, Anfragen ${k('journal-sync').frames}, Antworten ${k('journal-sync-reply').frames}, Quittungen ${k('delivery-ack').frames}); Wiederholungen ${t.repeats}: ${t.repeatsOwn} auf der Self-Adresse, ${t.repeatsToPeer} an Gegenseiten; Antworten A1 ${answersBy('A1')}, A2 ${answersBy('A2')}; an Gegenseiten ${t.toPeer.frames} Rahmen; Journal ${measures.journalBatchesBefore ?? '–'} → ${measures.journalBatchesAfter ?? '–'} Batches`,
         measures,
       }
     },

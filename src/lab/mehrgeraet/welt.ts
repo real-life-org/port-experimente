@@ -167,23 +167,29 @@ export class Welt15 {
    * Tatsächliche Einlieferungen am Träger ab `from` (Index in `carrier.carried`), einschließlich jeder Wiederholung
    * (Plan Abschnitt 5, Tor-Review 9 zu X21): Rahmen und Bytes der Geräte einer Person, getrennt „zwischen eigenen
    * Geräten“ (Self-Adresse) und „zu Gegenseite/M“, je Art (`own:<art>` / `peer:<art>`) und je erzeugendem Gerät; `repeats` sind Einlieferungen
-   * derselben Bytes, die schon einmal eingeliefert waren (auch vor `from`). Zugeordnet wird über `produced` der Geräte.
+   * derselben Bytes, die schon einmal eingeliefert waren (auch vor `from`), getrennt nach Zielseite in `repeatsOwn` und
+   * `repeatsToPeer` (Review 11 S1). Zugeordnet wird über `produced` der Geräte.
    */
   deposits(person: string, selfRkid: string, from = 0) {
     const origin = new Map<string, { device: string; kind: string }>()
     for (const d of this.devices) if (d.person === person) for (const [h, kind] of d.produced) origin.set(h, { device: d.name, kind })
     const seen = new Set<string>()
-    const out = { own: { frames: 0, bytes: 0 }, toPeer: { frames: 0, bytes: 0 }, repeats: 0, byKind: {} as Record<string, { frames: number; bytes: number }>, byDevice: {} as Record<string, Record<string, number>> }
+    const out = { own: { frames: 0, bytes: 0 }, toPeer: { frames: 0, bytes: 0 }, repeats: 0, repeatsOwn: 0, repeatsToPeer: 0, byKind: {} as Record<string, { frames: number; bytes: number }>, byDevice: {} as Record<string, Record<string, number>> }
     this.carrier.carried.forEach((f, i) => {
       const h = frameHash(f.bytes)
       const o = origin.get(h)
       const repeat = seen.has(h)
       seen.add(h)
       if (i < from || !o) return
-      const side = f.address === selfRkid ? out.own : out.toPeer
+      const isOwn = f.address === selfRkid
+      const side = isOwn ? out.own : out.toPeer
       side.frames++
       side.bytes += f.bytes.length
-      if (repeat) out.repeats++
+      if (repeat) {
+        out.repeats++
+        if (isOwn) out.repeatsOwn++
+        else out.repeatsToPeer++
+      }
       const k = (out.byKind[`${f.address === selfRkid ? 'own' : 'peer'}:${o.kind}`] ??= { frames: 0, bytes: 0 })
       k.frames++
       k.bytes += f.bytes.length
