@@ -122,6 +122,7 @@ const snapshot = (log: AuthorityLog) =>
   JSON.stringify({ members: [...log.members()].sort(), policy: log.policy(), version: log.policyVersion(), forked: log.forked(), valid: log.ops().map((o) => [o.id, log.isValid(o.id)]).sort() })
 
 describe('E9 Eigenschaften (seeded, 60 Graphen)', () => {
+  // 60 Graphen je Eigenschaft: unter Last mehr als die 5 s Standard-Timeout (lokal gesehen 6,5 s), daher 60 s.
   const seeds = Array.from({ length: 60 }, (_, i) => 1000 + i)
 
   it('I1: gleicher Evidenzbestand ergibt gleichen Zustand, unabhängig von Reihenfolge und Verteilung der Beweise', () => {
@@ -135,7 +136,7 @@ describe('E9 Eigenschaften (seeded, 60 Graphen)', () => {
         expect(snapshot(b), `seed ${seed}, Reihenfolge ${k}`).toBe(want)
       }
     }
-  })
+  }, 60_000)
 
   it('I2: keine Rechte aus gescheiterten Aufnahmen; Schlüsselbindung stammt aus der gültigen Aufnahme', () => {
     for (const seed of seeds) {
@@ -153,7 +154,7 @@ describe('E9 Eigenschaften (seeded, 60 Graphen)', () => {
         expect(admitted.some((o) => o.key === log.keyOf(m)), `seed ${seed}: Schlüssel von ${m} stammt nicht aus einer gültigen Aufnahme`).toBe(true)
       }
     }
-  })
+  }, 60_000)
 
   it('I5: der schnelle Pfad liefert denselben Zustand wie die volle Faltung, nach jeder Operation', () => {
     for (const seed of seeds) {
@@ -178,7 +179,7 @@ describe('E9 Eigenschaften (seeded, 60 Graphen)', () => {
       }
       expect(fast.stats.fast, `seed ${seed}: schneller Pfad nie genutzt`).toBeGreaterThan(0)
     }
-  })
+  }, 60_000)
 
   it('I3: widersprüchliche Schlüssel gewinnen nie, auch nicht durch zusätzliche Kopien', () => {
     for (const seed of seeds) {
@@ -194,5 +195,5 @@ describe('E9 Eigenschaften (seeded, 60 Graphen)', () => {
       const extra = [...copies, ...shuffle(copies, rnd).slice(0, 5).map((o) => ({ ...o, sigs: o.sigs.slice(0, 1) }))]
       expect(snapshot(build(extra, shuffle(extra, rnd)))).toBe(snapshot(log))
     }
-  })
+  }, 60_000)
 })
