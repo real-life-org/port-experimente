@@ -232,8 +232,8 @@ export const promiseEn: Record<string, { title: string; ref: string; gap: string
     "gap": "covered by the separate delivery bench (E11, T9/T10 pass on four wires), not yet mapped into this matrix"
   },
   "MG1": {
-    "title": "Single use at the mediator: a stock key is named in at most one act, even by two devices",
-    "ref": "Trust 0.32 §8 8570.1 (E15 X1, later X13)",
+    "title": "Mediator devices: a stock key is named in at most one act, and two separated mediator devices do not exceed the side's shared acceptance budget",
+    "ref": "Trust 0.32 §8 8570.1, 8510 (E15 X1, X13)",
     "gap": null
   },
   "MG2": {
@@ -243,12 +243,12 @@ export const promiseEn: Record<string, { title: string; ref: string; gap: string
   },
   "MG3": {
     "title": "One state per person: consent and decline are terminal, the counterpart sees nothing the person as a whole does not carry",
-    "ref": "§8 8325.A3/A4, 8765 (X3, later X18)",
+    "ref": "§8 8325.A3/A4, 8765, 8910.7/.8 (X3, X18)",
     "gap": null
   },
   "MG4": {
-    "title": "Class revocation next to a send: the running act continues, M's view becomes empty, no equivocation",
-    "ref": "§8 8232.2, 8535, 6270 (X4, later X16)",
+    "title": "Class revocation next to a send and old stock: the running act continues, M's view becomes empty, no equivocation, no ticket on a withdrawn key is accepted",
+    "ref": "§8 8232.2, 8535, 8475.S6, 6270 (X4, X16)",
     "gap": null
   },
   "MG5": {
@@ -257,13 +257,13 @@ export const promiseEn: Record<string, { title: string; ref: string; gap: string
     "gap": null
   },
   "MG6": {
-    "title": "Restore from backup: no number reuse, no stale stock, no lost acts",
-    "ref": "§8 8500, 8315–8318 (X6, later X19)",
+    "title": "Numbers across devices: neither a restore from backup nor parallel production on two devices reuses a number; no stale stock, no lost acts",
+    "ref": "§8 8500, 8315–8318, 6270; §6a 6680 (X6, X17, later X19)",
     "gap": null
   },
   "MG7": {
     "title": "Continuity across devices: two encounters of the same persons on different devices become one relationship, no doubles",
-    "ref": "§6a 2300, 6975; I-6 (X7, later X14, X15)",
+    "ref": "§6a 2300, 6975, 6987; I-6 (X7, X14, X15)",
     "gap": null
   },
   "MG8": {
@@ -282,8 +282,8 @@ export const promiseEn: Record<string, { title: string; ref: string; gap: string
     "gap": null
   },
   "MG11": {
-    "title": "Convergence after a long separation: the same projection on all devices",
-    "ref": "HSC-440; E15 plan section 5 (X11, later X21)",
+    "title": "Convergence after a long separation and journal repair: the same projection on all devices, no missing batch, the repair ends",
+    "ref": "HSC-440; E15 plan section 5 (X11, X21)",
     "gap": null
   },
   "MG12": {
@@ -339,7 +339,14 @@ export const scenarioEn: Record<string, string> = {
   "X9": "A loses A2 and revokes it: B and M must not reach A2 any more, A1 still",
   "X10": "A second app of A as a further device with a restricted right (read only)",
   "X11": "Long separation (30 rounds), both devices act, then union: stable convergence, journal size",
-  "X12": "Lost receipt and unreachable carrier per device (T9/T10 with several devices): effect once, both devices equal afterwards"
+  "X12": "Lost receipt and unreachable carrier per device (T9/T10 with several devices): effect once, both devices equal afterwards",
+  "X13": "M1 and M2 each issue an introduction to A while separated, A's shared budget per mediator relationship stands at 9; A1 sees only one, A2 only the other (mediator devices against the shared budget, 8510, 8640.10)",
+  "X14": "A1 and A2 separately introduce the same person C to B (two acts, one purpose): double introduction, union of the acts at B and C (6975, I-6)",
+  "X15": "Union of two relationships with M (6975) while an act runs on one (consented, card in transit): A1 consents, A2, separated from A1, meets M again and unites (6987.5/.6/.10/.12/.14)",
+  "X16": "A1 revokes the class, A2, separated, holds the old stock; a mediator device with the old view still introduces, A2 accepts the ticket (old stock after class revocation, 8535, 8475.S6, 8640.6)",
+  "X17": "A1 and A2, separated, each produce a revision with the same previous number (each accepts another ticket and refills): parallel production, 8500, 6270; probe sequence 6680 not modelled",
+  "X18": "A1 and A2, separated, consent to the same act and each produce a card: two cards of one act, what B sees (8325.A4, 8910.7, 8910.8)",
+  "X21": "Journal duplicated, reordered, incomplete: completed batches after an old and a double restore, concurrent requests, crashes before and after commit; loss of request, answer, batches alone (reply head delivered) and receipt, each for more than 12 rounds; repair ends only with no pending catch-up (HSC-440, reviews 9 and 11)"
 }
 
 /** Candidate id → name and one line. */

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { Welt15 } from '../src/lab/mehrgeraet/welt'
 import { HolderDevice } from '../src/lab/mehrgeraet/holder'
 import { runX15 } from '../src/lab/mehrgeraet/scenarios'
@@ -329,4 +329,170 @@ describe('K1a Schritt 1: Abnahmelauf', () => {
     expect(r.X6!.crashed).toBeFalsy()
     expect(r.X6!.outcome, r.X6!.detail).toBe('bestanden')
   }, 300_000)
+})
+
+// Breite K1a-Matrix (Plan Abschnitt 4, Review-9-Schluss): X13–X18 und X21, je mit zwei Geräten und seriell.
+// Seriell heißt für K1a ein Gerät je Person mit ungeteilten Rechten (`devices: 1`); mit der festen Zahl 2 hätte das
+// einzige Gerät nur die Hälfte des Budgets und der Schlüssel, der Kontrolllauf prüfte dann die Aufteilung, nicht den Prüfstand.
+describe('K1a breite Matrix', () => {
+  it('X21: Journal nach altem und doppeltem Restore unter Umordnung, Duplikaten, gleichzeitigen Anfragen; Verlust von Anfrage, Antwort, Quittung je über 12 Runden', async () => {
+    const r = byId(await runX15(k1a(), false, ['X21']))
+    const x = r.X21!
+    expect(x.crashed, x.detail).toBeFalsy()
+    expect(x.outcome, x.detail).toBe('bestanden')
+    expect(x.measures.missingBatches).toBe(0)
+    expect(x.measures.doubleFinalEffects).toBe(0)
+    expect(x.measures.remainingConflicts).toBe(0)
+    // Jede Verlustphase hat das Gerät wirklich hinter sich gelassen (sonst prüft sie nichts), und danach konvergiert es.
+    for (const k of ['RequestLoss', 'AnswerLoss']) {
+      expect(x.measures[`behindAfter${k}`], k).toBe(1)
+      expect(x.measures[`repairRounds${k}`] as number, k).toBeGreaterThan(0)
+    }
+    expect(x.measures.repairRoundsRestore as number).toBeGreaterThan(0)
+    expect(x.measures.repairRoundsReceiptLoss as number).toBeGreaterThan(0)
+    // Voller Reparaturverkehr gemessen, nicht erfunden: Einlieferungen samt Wiederholungen, Antworten, Quittungen, Bytes.
+    for (const k of ['ownFrames', 'ownBytes', 'journalFrames', 'journalBytes', 'syncRequestFrames', 'syncReplyFrames', 'ackFrames', 'repeatedDeposits', 'syncRequests', 'journalBatchesBefore', 'journalBatchesAfter']) expect(typeof x.measures[k], k).toBe('number')
+    expect(x.measures.repeatedDeposits as number).toBeGreaterThan(0)
+    expect(x.measures.journalBatchesAfter).toBe(x.measures.journalBatchesBefore) // keine neue Fachoperation: das Journal wächst nicht
+    // Review 11 S1: Wiederholungen nach Zielseite getrennt; die Summe ist die Gesamtzahl.
+    expect(typeof x.measures.repeatedDepositsOwn).toBe('number')
+    expect(typeof x.measures.repeatedDepositsToCounterpart).toBe('number')
+    expect((x.measures.repeatedDepositsOwn as number) + (x.measures.repeatedDepositsToCounterpart as number)).toBe(x.measures.repeatedDeposits)
+    expect(x.measures.repeatedDepositsOwn as number).toBeLessThanOrEqual(x.measures.ownFrames as number)
+    // Review 11 S2: nur die benötigten Journal-Batches gehen verloren, Antwortkopf und Quittungen passieren.
+    expect(x.measures.behindAfterJournalLoss).toBe(1)
+    expect(x.measures.repairRoundsJournalLoss as number).toBeGreaterThan(0)
+    // Je Phase nach der Reparatur: alle Batch-Schlüssel da, Referenzprojektion auf jedem Gerät.
+    for (const k of ['Restore', 'RequestLoss', 'AnswerLoss', 'JournalLoss', 'ReceiptLoss']) {
+      expect(x.measures[`missingBatchesAfter${k}`], k).toBe(0)
+      expect(x.measures[`lostStateAfter${k}`], k).toBe(0)
+    }
+    // Review 11 B2: Reparaturende = kein Gerät mit ausstehendem Nachholen und ein Ruhefenster über dem größten Wiederanfrageabstand.
+    expect(x.measures.devicesPendingSync).toBe(0)
+    expect(x.measures.quietWindow as number).toBeGreaterThan(16)
+    expect(byId(await runX15(k1a(), true, ['X21'])).X21!.outcome).toBe('nicht abbildbar')
+  }, 600_000)
+
+  it('X21 Gegenlauf (Review 11 B2): beantwortet A2s Kopfvergleich nach jedem Restore immer mit „nicht gedeckt“, endet die Reparatur nie; X21 besteht nicht', async () => {
+    const proto = HolderDevice.prototype as unknown as { reload: () => Promise<void> }
+    const reload = proto.reload
+    const spy = vi.spyOn(proto, 'reload').mockImplementation(async function (this: HolderDevice) {
+      await reload.call(this)
+      if (this.name === 'A2') (this as unknown as { covers: () => boolean }).covers = () => false
+    })
+    try {
+      const x = byId(await runX15(k1a(), false, ['X21'])).X21!
+      expect(x.crashed, x.detail).toBeFalsy()
+      expect(x.outcome, x.detail).toBe('nicht bestanden')
+      expect(x.measures.devicesPendingSync as number, x.detail).toBeGreaterThan(0)
+      expect(x.detail).toMatch(/A2/)
+      expect(x.detail).toMatch(/ausstehend/)
+    } finally {
+      spy.mockRestore()
+    }
+  }, 600_000)
+
+  it('X13: M1 und M2 stellen getrennt je eine Vorstellung gegen As gemeinsames Budget bei 9 aus: zehn Annahmen, keine Überschreitung', async () => {
+    for (const serial of [false, true]) {
+      const x = byId(await runX15(serial ? k1a({ devices: 1 }) : k1a(), serial, ['X13'])).X13!
+      expect(x.crashed, x.detail).toBeFalsy()
+      expect(x.outcome, `${serial ? 'seriell' : 'zwei Geräte'}: ${x.detail}`).toBe('bestanden')
+      expect(x.measures.budgetOverrun).toBe(0)
+      expect(x.measures.acceptedActs).toBe(10)
+      expect(x.measures.doubleFinalEffects).toBe(0)
+      expect(x.measures.issuedOffline).toBe(2)
+    }
+  }, 600_000)
+
+  it('X14: A1 und A2 stellen B dieselbe Person C vor; B1 und B2 stimmen getrennt je einem zu: beide verbunden, aber nie vereinigt (kein Vereinigungsschritt über eigene Tupel)', async () => {
+    const two = byId(await runX15(k1a(), false, ['X14'])).X14!
+    expect(two.crashed, two.detail).toBeFalsy()
+    expect(two.measures.actsIssued, two.detail).toBe(2)
+    expect(two.measures.doubleFinalEffects).toBe(0)
+    // Jede Probe prüft ein Gerät, das das andere Tupel nicht kennt; nach der Heilung des Journals prüft niemand neu.
+    expect(two.measures.duplicates as number, two.detail).toBeGreaterThan(0)
+    expect(two.outcome, two.detail).toBe('nicht bestanden')
+    const one = byId(await runX15(k1a({ devices: 1 }), true, ['X14'])).X14!
+    expect(one.crashed, one.detail).toBeFalsy()
+    expect(one.outcome, one.detail).toBe('bestanden')
+  }, 600_000)
+
+  it('X15: Vereinigung zweier Beziehungen zu M auf A2, während auf A1 ein Akt läuft (consented, Karte unterwegs): die Vereinigung trägt die Gegenseite M', async () => {
+    const two = byId(await runX15(k1a(), false, ['X15'])).X15!
+    expect(two.crashed, two.detail).toBeFalsy()
+    // Die Vereinigung entsteht aus Ms Mapping auf A2s neuem Tupel und wandert als Operation durchs Journal; kein Schritt über eigene Tupel nötig.
+    expect(two.outcome, two.detail).toBe('bestanden')
+    expect(two.measures.entriesToMediator).toBe(1)
+    expect(two.measures.actsConnected).toBe(2)
+    expect(two.measures.mediatorResolved).toBe(2)
+    expect(two.measures.doubleFinalEffects).toBe(0)
+    const one = byId(await runX15(k1a({ devices: 1 }), true, ['X15'])).X15!
+    expect(one.crashed, one.detail).toBeFalsy()
+    expect(one.outcome, one.detail).toBe('bestanden')
+  }, 600_000)
+
+  it('X16: A1 widerruft die Klasse, A2 hält getrennt den alten Vorrat und nimmt noch ein Ticket an (der Widerruf ist in K1a kein Recht)', async () => {
+    const two = byId(await runX15(k1a(), false, ['X16'])).X16!
+    expect(two.crashed, two.detail).toBeFalsy()
+    expect(two.outcome, two.detail).toBe('nicht bestanden')
+    expect(two.measures.acceptedAfterRevocation).toBe(1)
+    const one = byId(await runX15(k1a({ devices: 1 }), true, ['X16'])).X16!
+    expect(one.crashed, one.detail).toBeFalsy()
+    expect(one.outcome, one.detail).toBe('bestanden')
+    expect(one.measures.acceptedAfterRevocation).toBe(0)
+  }, 600_000)
+
+  it('X17: A1 und A2 füllen getrennt nach und senden je eine Revision mit derselben Nummer: Equivokation bei M (8500, 6270)', async () => {
+    const two = byId(await runX15(k1a(), false, ['X17'])).X17!
+    expect(two.crashed, two.detail).toBeFalsy()
+    expect(two.outcome, two.detail).toBe('nicht bestanden')
+    expect(two.measures.revisionNumbersReused as number).toBeGreaterThan(0)
+    const one = byId(await runX15(k1a({ devices: 1 }), true, ['X17'])).X17!
+    expect(one.crashed, one.detail).toBeFalsy()
+    expect(one.outcome, one.detail).toBe('bestanden')
+    expect(one.measures.revisionNumbersReused).toBe(0)
+  }, 600_000)
+
+  it('X18: A1 und A2 stimmen getrennt demselben Akt zu und produzieren je eine Karte: B sieht eine Verbindung, A bleibt uneins über die Übergabe', async () => {
+    const two = byId(await runX15(k1a(), false, ['X18'])).X18!
+    expect(two.crashed, two.detail).toBeFalsy()
+    expect(two.measures.cardsProducedByA).toBe(2) // zwei Karten-Dokumente eines Akts
+    expect(two.measures.connectsAtB).toBe(1)
+    // Ein Seed: beide Karten tragen denselben Kartenschlüssel, B sieht eine Wiederholung (8910.7), keinen Konflikt (8910.8).
+    expect(two.measures.cardConflictsAtB).toBe(0)
+    // Die Faltung hat keine Regel für zwei Übergaben eines Akts: jedes Gerät behält eine andere (Digest, O), die Projektionen bleiben verschieden.
+    expect(two.measures.handOverDigestsOnA).toBe(2)
+    expect(two.measures.projectionAgrees).toBe(0)
+    // Review 11 B1: das Ledger-Orakel zählt die Endwirkungen beider Personen; A hat Zustimmung und Verbindung je aus zwei Operationen.
+    expect(two.measures.doubleFinalEffectsA).toBe(2)
+    expect(two.measures.doubleFinalEffectsB).toBe(0)
+    expect(two.measures.doubleFinalEffects).toBe(2)
+    expect(two.measures.doubleEffectKindsA).toBe('connect, consent')
+    expect(two.detail).toMatch(/doppelte Endwirkungen bei A: 2/)
+    expect(two.outcome, two.detail).toBe('nicht bestanden')
+    const one = byId(await runX15(k1a({ devices: 1 }), true, ['X18'])).X18!
+    expect(one.crashed, one.detail).toBeFalsy()
+    expect(one.outcome, one.detail).toBe('bestanden')
+    expect(one.measures.cardsProducedByA).toBe(1)
+    expect(one.measures.doubleFinalEffects).toBe(0)
+  }, 600_000)
+
+  it('X18 Gegenlauf (Review 11 B1): ohne den Übergabe-Digest in der Projektion sind As Geräte gleich; das Orakel fängt As doppelte Endwirkungen trotzdem', async () => {
+    const proto = HolderDevice.prototype as unknown as { projection: () => M.Projection }
+    const projection = proto.projection
+    const spy = vi.spyOn(proto, 'projection').mockImplementation(function (this: HolderDevice) {
+      const p = projection.call(this)
+      for (const a of Object.values(p.acts)) a.ownCardDigest = null
+      return p
+    })
+    try {
+      const x = byId(await runX15(k1a(), false, ['X18'])).X18!
+      expect(x.crashed, x.detail).toBeFalsy()
+      expect(x.measures.projectionAgrees, x.detail).toBe(1) // die Digest-Divergenz ist ausgeblendet
+      expect(x.measures.doubleFinalEffectsA, x.detail).toBe(2)
+      expect(x.outcome, x.detail).toBe('nicht bestanden')
+    } finally {
+      spy.mockRestore()
+    }
+  }, 600_000)
 })

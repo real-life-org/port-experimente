@@ -75,17 +75,17 @@ export const promises: Promise[] = [
   { id: 'DV4', port: 'replikation', title: 'Pseudonym je Gruppe: der Träger verbindet Gruppen nicht über Identitäten', ref: 'Delivery-Hypothesen DV4/DV6', scenarios: ['T11'] },
   { id: 'DV2', port: 'replikation', title: 'Zustellung: Quittungsverlust und unerreichbarer Träger enden nie still', ref: 'Delivery 6.1, 6.3 (E11: T9, T10)', scenarios: [], gap: 'braucht einen Zustellungs-Adapter (E11, nach IIW)' },
   // ── Mehrgeräte-Port (E15; Szenarien X in src/lab/mehrgeraet/scenarios.ts) ──
-  { id: 'MG1', port: 'mehrgerät', title: 'Einmalverbrauch beim Mediator: ein Vorrats-Schlüssel wird in höchstens einem Akt benannt, auch von zwei Geräten', ref: 'Trust 0.32 §8 8570.1 (E15 X1, später X13)', scenarios: ['X1'] },
+  { id: 'MG1', port: 'mehrgerät', title: 'Mediatorgeräte: ein Vorrats-Schlüssel wird in höchstens einem Akt benannt, und zwei getrennte Mediatorgeräte überschreiten das gemeinsame Annahmebudget der Seite nicht', ref: 'Trust 0.32 §8 8570.1, 8510 (E15 X1, X13)', scenarios: ['X1', 'X13'] },
   { id: 'MG2', port: 'mehrgerät', title: 'Harte Annahmegrenze: zehn Annahmen je Mediatorbeziehung über alle Geräte der Person', ref: '§8 8510, 8640.10 (X2)', scenarios: ['X2'] },
-  { id: 'MG3', port: 'mehrgerät', title: 'Ein Zustand je Person: Consent und Ablehnung sind terminal, die Gegenseite sieht nichts, was die Person als Ganzes nicht trägt', ref: '§8 8325.A3/A4, 8765 (X3, später X18)', scenarios: ['X3'] },
-  { id: 'MG4', port: 'mehrgerät', title: 'Klassenwiderruf neben Versand: der laufende Akt läuft weiter, Ms Sicht wird leer, keine Equivokation', ref: '§8 8232.2, 8535, 6270 (X4, später X16)', scenarios: ['X4'] },
+  { id: 'MG3', port: 'mehrgerät', title: 'Ein Zustand je Person: Consent und Ablehnung sind terminal, die Gegenseite sieht nichts, was die Person als Ganzes nicht trägt', ref: '§8 8325.A3/A4, 8765, 8910.7/.8 (X3, X18)', scenarios: ['X3', 'X18'] },
+  { id: 'MG4', port: 'mehrgerät', title: 'Klassenwiderruf neben Versand und altem Vorrat: der laufende Akt läuft weiter, Ms Sicht wird leer, keine Equivokation, kein Ticket auf einen zurückgezogenen Schlüssel wird angenommen', ref: '§8 8232.2, 8535, 8475.S6, 6270 (X4, X16)', scenarios: ['X4', 'X16'] },
   { id: 'MG5', port: 'mehrgerät', title: 'Abgang beendet Pflichten; ein Replay von einem anderen Gerät belebt nichts', ref: '§6a 6845.7, 6845.10 (X5)', scenarios: ['X5'] },
-  { id: 'MG6', port: 'mehrgerät', title: 'Wiederherstellung aus Backup: keine Nummernwiederverwendung, kein veralteter Vorrat, keine verlorenen Akte', ref: '§8 8500, 8315–8318 (X6, später X19)', scenarios: ['X6'] },
-  { id: 'MG7', port: 'mehrgerät', title: 'Kontinuität über Geräte: zwei Begegnungen derselben Personen auf verschiedenen Geräten werden eine Beziehung, keine Doppel', ref: '§6a 2300, 6975; I-6 (X7, später X14, X15)', scenarios: ['X7'] },
+  { id: 'MG6', port: 'mehrgerät', title: 'Nummern über Geräte: weder ein Restore aus dem Backup noch parallele Produktion zweier Geräte verwendet eine Nummer wieder; kein veralteter Vorrat, keine verlorenen Akte', ref: '§8 8500, 8315–8318, 6270; §6a 6680 (X6, X17, später X19)', scenarios: ['X6', 'X17'] },
+  { id: 'MG7', port: 'mehrgerät', title: 'Kontinuität über Geräte: zwei Begegnungen derselben Personen auf verschiedenen Geräten werden eine Beziehung, keine Doppel', ref: '§6a 2300, 6975, 6987; I-6 (X7, X14, X15)', scenarios: ['X7', 'X14', 'X15'] },
   { id: 'MG8', port: 'mehrgerät', title: 'Enrollment: ein neues Gerät sieht alles und handelt sofort', ref: 'HSC-020 Ersatz, Identity Enrollment (X8)', scenarios: ['X8'] },
   { id: 'MG9', port: 'mehrgerät', title: 'Gerätewiderruf: ein widerrufenes Gerät liest nichts Neues, auch nicht mit dem alten Zustand', ref: 'Identity Widerruf; K7 (X9, später X20)', scenarios: ['X9'] },
   { id: 'MG10', port: 'mehrgerät', title: 'Rechte je Gerät oder App: eine eingeschränkte App kann nur, was ihr Recht erlaubt', ref: 'Delegationsprofil K2 (X10, später X22)', scenarios: ['X10'] },
-  { id: 'MG11', port: 'mehrgerät', title: 'Konvergenz nach langer Trennung: gleiche fachliche Projektion aller Geräte', ref: 'HSC-440; Plan E15 Abschnitt 5 (X11, später X21)', scenarios: ['X11'] },
+  { id: 'MG11', port: 'mehrgerät', title: 'Konvergenz nach langer Trennung und Journalreparatur: gleiche fachliche Projektion aller Geräte, kein fehlender Batch, die Reparatur endet', ref: 'HSC-440; Plan E15 Abschnitt 5 (X11, X21)', scenarios: ['X11', 'X21'] },
   { id: 'MG12', port: 'mehrgerät', title: 'Zustellung bei Mehrgerät: Quittungsverlust und unerreichbarer Träger je Gerät enden nie still, Wirkung einmal', ref: 'Delivery 6.1, 6.3 (X12)', scenarios: ['X12'] },
 ]
 
