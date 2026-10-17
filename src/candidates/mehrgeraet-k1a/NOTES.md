@@ -98,6 +98,25 @@ limit are assigned to one device in advance.
     the duty already in `hit` and sends no second mapping, while two
     counterpart devices checking at once may each send one (covered by the
     rules below).
+  - **A late probe is a duty with retry (gate review 13 B2).** The
+    `candidates` entry is not the only record that the probe went out:
+    the producing device keeps the probe with its bytes, like a mapping
+    duty, until the counterpart acknowledges it, the two tuples end in one
+    entry, or one of the relationships departs. When the delivery attempts
+    run out (`failed` after the give-up horizon), the same bytes go into a
+    new hand-over (as 6845.4 for mappings); nothing is produced again. The
+    duty stays with the device that produced the probe; a sibling that
+    folded the `candidates` operation does not take it over (X20). An
+    acknowledgement ends the duty whether or not the counterpart hit:
+    the counterpart decides, and a miss is not repeated. Counter-run from
+    the review (permanent test): A1 and A2 each open a tuple to B1 while
+    A's journal is held, B1 opens serially and its probe misses at A2; then
+    A's journal heals and all of A's probes are dropped for 20 rounds. B1
+    never produces a late probe, so the union depends on A's alone. Before
+    the fix A1, A2 and B1 each kept two entries after 40 clean rounds; now
+    each holds one entry with both tuples, A's projections agree, no
+    double effect, and each late probe is one set of bytes per device,
+    deposited again after the give-up.
   - **Concurrent unions.** With one seed both devices listen on every
     tuple address, so a counterpart mapping reaches both and both may
     unite over the same edge, each with its own mapping back. Two fold
@@ -111,10 +130,21 @@ limit are assigned to one device in advance.
   - **Assumption beyond the inventory.** 2300 freezes the snapshot of
     "the active heads of its relationships then". The candidate reads
     "its relationships" as the person's, so a tuple a sibling device
-    opened concurrently is added once the device knows it; 6750 (no entry
-    for a tuple that was not an active head when the probed tuple opened)
-    is otherwise kept. Whether a concurrent opening on another device
-    counts as "then" is not decided by the inventory.
+    opened concurrently is added once the device knows it. Whether a
+    concurrent opening on another device counts as "then" is not decided
+    by the inventory.
+  - **6750 is not kept (gate review 13 B1).** The tuple that receives the
+    late candidate is chosen by the larger record anchor, and record
+    anchors do not order opening times. Counter-run (permanent test,
+    measuring the current behaviour): A1 opens `z-first` to B; one second
+    later A2 opens `a-second` to C, with no journal exchange between them.
+    After the sync both A devices hold C's anchor in the candidate list of
+    the earlier tuple `z-first`, and a late probe with it goes to B. C's
+    anchor did not exist when `z-first` was opened, so the earlier tuple
+    carries an entry from after its creation, which 6750 excludes even
+    under the person-wide reading of 2300. The rule is open: late
+    candidates only for causally concurrent openings, the late candidate
+    as a changed promise, or no late candidates (X7 and X14 fail again).
 
 ## Results (18 October, K1a against X1–X18 and X21)
 
@@ -189,7 +219,8 @@ X14 do).
   tuple was taken on its own device, so no probe tested the pair and each
   device kept two entries to B. Sharing the facts is not merging them.
   With the late probe (step 2) the device that holds both tuples probes
-  the newer one with the other's counterpart anchor; B, whose devices
+  the one with the larger record anchor with the other's counterpart
+  anchor (not necessarily the newer one, see 6750 above); B, whose devices
   share both of B's tuples, hits and maps, and both persons unite through
   verified mappings. Without the late probe K1a still fails X7
   (counter-run in the tests).
@@ -280,6 +311,48 @@ X14 do).
   for the repeat. X13 does not use that count; X1, which counts 8640.12,
   has no budget refusal.
 
+## What a late probe adds (plan section 5: carrier, M, counterpart)
+
+A late probe is an extra continuity probe on an existing tuple, sent
+after the device folded a sibling's batch; it carries one blinded entry
+per late candidate. It goes out for every concurrent pair, also when the
+two tuples belong to different people. Blinding hides the anchor in the
+entry; it does not make the probe unlinkable. Per party, beyond what the
+initial probes already show:
+
+- **Carrier.** One more sealed frame to the counterpart's tuple address,
+  and the counterpart's acknowledgement back. The carrier sees address,
+  size and time, not the content. The probe leaves in the round in which
+  the device folded a journal batch from its sibling, so its time follows
+  the person's own journal traffic on the self address; an observer of
+  both addresses can relate the self address to that tuple address by
+  timing. The frame size grows with the number of entries, one per late
+  candidate. With the retry (B2) an unacknowledged late probe
+  is deposited again with identical bytes after each give-up, visible as
+  a repeated frame. With two devices that detect the pair in the same
+  round, two different late probes go to the same address.
+- **Mediator M.** As mediator, nothing: the late probe travels between
+  the two tuple ends and does not pass through M. When M is the
+  counterpart of the probed tuple (A1 meets M while A2 opens another
+  tuple), M receives it as a counterpart and learns what the counterpart
+  learns.
+- **Counterpart.** A second probe on a tuple that already had its probe.
+  That alone tells the counterpart that the person opened another tuple
+  around the same time, which this tuple's snapshot did not hold, and
+  that the person's devices exchanged their journal at that time; in K1a
+  that happens only with more than one device, so it shows that the
+  person uses at least two devices. The entry is an HMAC of the other
+  tuple's counterpart anchor under a key derived from the two anchors of
+  the probed tuple (bench rule), so the counterpart can test it for
+  equality against every anchor it knows, not only its own: a hit on
+  one of its own anchors starts the mapping (intended); a hit on a third
+  party's anchor it knows tells it that the person holds a tuple to that
+  anchor; no hit tells it that the person holds at least one further
+  tuple whose counterpart anchor is none of the anchors it tested. Each
+  late probe is one more such equality test that the initial probe did
+  not offer, and with B1 (6750) the tested anchor can be one that did not
+  exist when the probed tuple opened.
+
 ## Limits of steps 1 and 2
 
 - The device count is fixed; a third device is refused. Transferring or
@@ -291,10 +364,16 @@ X14 do).
   added once known. The device recognises no counterpart person; it only
   finds own tuples never tested against each other, and the counterpart's
   hit decides. Pairs are found by scanning all own tuples (quadratic).
-- A late probe goes out once per pair; if it is lost to a counterpart
-  that does not yet know both of its tuples, the pair relies on the
-  counterpart's own late probe. Each concurrent pair costs a probe, also
-  when the two tuples belong to different people (no hit then).
+- A late probe is produced once per pair and device and repeated with
+  the same bytes until acknowledged, united or departed. If it is
+  acknowledged by a counterpart device that does not yet know both of
+  its tuples (a miss), the pair relies on the counterpart's own late
+  probe. A late probe whose producing device is lost is not taken over
+  (X20). Each concurrent pair costs a probe, also when the two tuples
+  belong to different people (no hit then); what that adds for the
+  carrier, M and the counterpart is listed below.
+- The tuple that probes is chosen by record anchor, not by opening time;
+  the earlier tuple can carry a later anchor (6750, see above).
 - Concurrent unions with own stock on the united relationship would each
   produce a revision (6987.5, 6987.14) under the same number; that is
   the open production question of X17, not exercised by X7 or X14.
