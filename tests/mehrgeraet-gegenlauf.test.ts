@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { seal, diSign, jcs, edFromSeed, rand, anchorOfEd } from '@real-life/trust-protocol'
 import type { Json } from '@real-life/trust-protocol'
 import { Welt15 } from '../src/lab/mehrgeraet/welt'
-import { HolderDevice, TYPES, seedScheme, type CandidateDevice, type MultiDeviceCandidate } from '../src/lab/mehrgeraet/holder'
+import { HolderDevice, TYPES, seedScheme, type CandidateDevice, type MultiDeviceCandidate, type Transaction } from '../src/lab/mehrgeraet/holder'
 import { runX15 } from '../src/lab/mehrgeraet/scenarios'
 import { k0 } from '../src/candidates/mehrgeraet-k0'
 import * as M from '../src/lab/mehrgeraet/model'
@@ -57,27 +57,24 @@ function k0With(authorize: (device: string, op: M.Op, state: M.HolderState) => b
   }
 }
 
-/** Ein minimales Journal (K1-Skelett): die Operationen einer Runde reisen als ein Rahmen an die eigene Adresse; `deny` verweigert einzelne Operationen je Gerät. */
+/** Ein minimales Journal (Testskelett): jeder committete Schritt reist als ein Rahmen an die eigene Adresse; `deny` verweigert einzelne Operationen je Gerät. */
 function journal(hack?: (op: M.Op, state: M.HolderState) => void, deny?: (device: string, op: M.Op) => boolean): MultiDeviceCandidate {
   const seeds = new Map<string, Uint8Array>()
   const device = (person: string, name: string, seed: Uint8Array): CandidateDevice => {
-    const out: M.Op[] = []
+    const out: Transaction[] = []
     const log: M.Op[] = []
     return {
       keys: seedScheme(seed),
       writer: `${name}@1`,
-      record(op) {
-        log.push(op)
-        out.push(op)
+      commit(tx) {
+        log.push(...tx.ops)
+        out.push(tx)
       },
-      takeOwnFrames: () => {
-        const ops = out.splice(0)
-        return ops.length ? [{ body: enc.encode(JSON.stringify(ops)) }] : []
-      },
+      takeOwnFrames: () => out.splice(0).map((tx) => ({ body: enc.encode(JSON.stringify({ ops: tx.ops, intents: tx.intents.map((i) => ({ ...i, bytes: Buffer.from(i.bytes).toString('base64') })) })) })),
       receiveOwnFrame(body) {
-        const ops = JSON.parse(new TextDecoder().decode(body)) as M.Op[]
-        log.push(...ops)
-        return ops
+        const raw = JSON.parse(new TextDecoder().decode(body)) as { ops: M.Op[]; intents: Array<Omit<Transaction['intents'][number], 'bytes'> & { bytes: string }> }
+        log.push(...raw.ops)
+        return { ops: raw.ops, intents: raw.intents.map((i) => ({ ...i, bytes: new Uint8Array(Buffer.from(i.bytes, 'base64')) })) }
       },
       persist: () => log,
       restore() {},

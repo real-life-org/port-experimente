@@ -48,8 +48,9 @@ export class Welt15 {
 
   /** Weiteres Gerät: Enrollment aus einem bestehenden (X8). */
   async enrol(from: HolderDevice, device: string): Promise<HolderDevice> {
-    const { cand, state } = await this.candidate.enrol(from, device)
+    const { cand, state, intents } = await this.candidate.enrol(from, device)
     const d = new HolderDevice(device, from.person, cand, this.carrier, this.clock, this.store(device), state)
+    for (const i of intents ?? []) d.intents.set(i.digest, i)
     await d.relisten()
     d.commit()
     this.devices.push(d)

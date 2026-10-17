@@ -189,7 +189,9 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       // Maximum nach jedem Geräteübergang (S2).
       const rounds = (n: number) => s.w.rounds(n, sample)
       for (let i = 0; i < 9; i++) {
-        await s.Mm.introduce(s.ma, cs[i]!)
+        // Autorisierter Pfad (B6): darf M1 keinen Schlüssel benennen (K1a teilt sie), stellt M2 vor.
+        const r = await s.Mm.introduce(s.ma, cs[i]!)
+        if (!('act' in r) && !serial) await s.M2.introduce(s.ma, cs[i]!)
         await rounds(3)
       }
       const before = acceptedActs(s.w, 'A').size

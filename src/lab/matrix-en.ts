@@ -399,5 +399,9 @@ export const candidateEn: Record<string, { name: string; desc: string }> = {
   "k0-one-seed": {
     "name": "K0: one seed, no merge",
     "desc": "every device derives all keys from one seed and keeps its own holder state, nothing is merged; the baseline that has to fail"
+  },
+  "k1a-static": {
+    "name": "K1a: journal, static rights",
+    "desc": "one seed; every committed step travels as a journal batch with its production intents; acceptance budget and nameable stock keys split statically across devices"
   }
 }
