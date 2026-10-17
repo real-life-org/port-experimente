@@ -360,6 +360,14 @@ export class Zusteller {
       if (s.sinceDeposit >= HORIZON.ackWait) this.tryDeposit(s)
     }
   }
+  /**
+   * Verwerfen, was nie freigegeben wurde (E15, Abgang 8475.S6): eine vorgemerkte Submission ist noch nicht bei
+   * Delivery und darf entfallen. Eine eingereichte bleibt bei Delivery, mit Wiederholung und Bericht (6845.7, §6.1).
+   */
+  discard(digest: string): void {
+    const s = this.submissions.get(digest)
+    if (s && s.report === null) this.submissions.delete(digest)
+  }
   transport(digest: string) {
     return this.submissions.get(digest)?.transport
   }

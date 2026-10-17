@@ -83,8 +83,27 @@ export class Welt15 {
     return { x: tx, y: ty }
   }
 
-  async rounds(n: number): Promise<void> {
-    for (let i = 0; i < n; i++) for (const d of this.devices) await d.round()
+  /** `after` läuft nach jedem Geräteübergang (Abtastung je Übergang, nicht je Weltrunde; Review 4 S2). */
+  async rounds(n: number, after?: (d: HolderDevice) => void): Promise<void> {
+    for (let i = 0; i < n; i++) {
+      for (const d of this.devices) {
+        await d.round()
+        after?.(d)
+      }
+    }
+  }
+  /**
+   * Was ein Dieb hat (X9, Review 4 S1): das Store-Abbild des Geräts und, was der Kandidat je Gerät daraus wiederherstellt,
+   * als unabhängige Instanz (eigene Schlüssel-Closures, eigener Kandidatenzustand); kein lebender Verweis auf das Opfer.
+   */
+  async steal(victim: HolderDevice, name: string): Promise<HolderDevice> {
+    const image = this.stores.get(victim.name)!.snapshot()
+    const store = new MemoryStore<DeviceState>()
+    store.restore(image)
+    const cand = await this.candidate.first(victim.person, name, this.seeds.get(victim.person)!)
+    const d = new HolderDevice(name, victim.person, cand, this.carrier, this.clock, store)
+    await d.reload()
+    return d
   }
   async until(pred: () => boolean, max = 30): Promise<number> {
     for (let i = 1; i <= max; i++) {

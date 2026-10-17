@@ -120,30 +120,34 @@ function acceptedActs(w: Welt15, person: string): Set<string> {
 
 const blocked = (w: Welt15, person: string) => w.of(person).reduce((n, d) => n + d.measures.blocked, 0)
 
-/** Runden, bis die Projektionen einer Person drei Runden lang gleich bleiben (stabile Konvergenz); −1 bei Grenze. */
+/**
+ * Runden, bis die Geräte einer Person gleich UND die Projektion drei Runden lang unverändert ist (stabile
+ * Konvergenz, B5: gegenseitige Gleichheit allein ist keine Stabilität); Ergebnis = erste Runde der stabilen
+ * Strecke, −1 bei Grenze.
+ */
 async function untilStable(w: Welt15, person: string, max = 20): Promise<number> {
   let stable = 0
+  let last: string | null = null
   for (let i = 1; i <= max; i++) {
     await w.rounds(1)
-    stable = w.agree(person).agree ? stable + 1 : 0
-    if (stable >= 3) return i - 2
+    const cur = M.canonical(w.of(person)[0]?.projection() ?? null)
+    stable = w.agree(person).agree && cur === last ? stable + 1 : 0
+    last = cur
+    if (stable >= 2) return i - 2
   }
   return -1
 }
 
-/** Beziehungen einer Person zu einer Gegenperson über alle Geräte, als verschiedene Einträge (Tupelmenge). */
-function relationshipsTo(w: Welt15, person: string, other: string): { entries: number; tuples: number } {
+/** Beziehungen eines Geräts zu einer Gegenperson: Einträge und Tupel je Eintrag (B5: je Gerät geprüft). */
+function relationshipsTo(w: Welt15, d: HolderDevice, other: string): { entries: number; tuples: number } {
+  const rs = d.state.relationships.filter((r) => !r.departed && r.tuples.some((t) => w.personOf(t.peer) === other))
+  return { entries: rs.length, tuples: Math.max(0, ...rs.map((r) => r.tuples.length)) }
+}
+/** Verschiedene Einträge einer Person zu einer Gegenperson über alle Geräte (Tupelmenge): mehr als einer ist ein Doppel (I-6). */
+function entriesAcross(w: Welt15, person: string, other: string): number {
   const keys = new Set<string>()
-  let tuples = 0
-  for (const d of w.of(person)) for (const r of d.state.relationships) {
-    if (r.departed || !r.tuples.some((t) => w.personOf(t.peer) === other)) continue
-    const key = r.tuples.map((t) => t.id).sort().join('+')
-    if (!keys.has(key)) {
-      keys.add(key)
-      tuples = Math.max(tuples, r.tuples.length)
-    }
-  }
-  return { entries: keys.size, tuples }
+  for (const d of w.of(person)) for (const r of d.state.relationships) if (!r.departed && r.tuples.some((t) => w.personOf(t.peer) === other)) keys.add(r.tuples.map((t) => t.id).sort().join('+'))
+  return keys.size
 }
 
 // ── Szenarien ────────────────────────────────────────────────────────────────
@@ -182,10 +186,11 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       await s.w.rounds(2)
       let overrun = 0
       const sample = () => (overrun = Math.max(overrun, acceptedActs(s.w, 'A').size - M.PARAM.budget))
+      // Maximum nach jedem Geräteübergang (S2).
+      const rounds = (n: number) => s.w.rounds(n, sample)
       for (let i = 0; i < 9; i++) {
         await s.Mm.introduce(s.ma, cs[i]!)
-        await s.w.rounds(3)
-        sample()
+        await rounds(3)
       }
       const before = acceptedActs(s.w, 'A').size
       const rkidA = (await s.A.cand.keys.pair(M.head(M.rel(s.A.state, s.am)).ownKey)).rkid
@@ -195,20 +200,15 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       await s.Mm.introduce(s.ma, cs[9]!)
       const t10 = s.w.carrier.carried.slice(mark10).filter((f) => f.address === rkidA).map((f) => f.id)
       if (!serial) s.w.carrier.faults.withhold(s.A2.name, (f) => t10.includes(f.id))
-      await s.w.rounds(3)
-      sample()
+      await rounds(3)
       if (!serial) {
         s.A.online = false
         s.A2.online = true
       }
       await s.Mm.introduce(s.ma, cs[10]!)
-      await s.w.rounds(3)
-      sample()
+      await rounds(3)
       s.A.online = true
-      for (let i = 0; i < 6; i++) {
-        await s.w.rounds(1)
-        sample()
-      }
+      await rounds(6)
       const accepted = acceptedActs(s.w, 'A').size
       const perDevice = s.w.of('A').map((d) => `${d.name}: ${M.budgetUsed(M.rel(d.state, s.am), s.w.clock.now())}`)
       const ok = overrun === 0 && before === 9 && accepted === M.PARAM.budget
@@ -264,11 +264,13 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       s.M2.online = false
       await s.A.setClass(s.am, false) // A1: Klasse aus, leere Revision an M1
       await s.w.rounds(3)
-      await s.A2.consent(lastAct) // A2 getrennt: Karte versandfertig, Klasse bei A2 noch an
+      const offline = await s.A2.consent(lastAct) // A2 getrennt: Karte versandfertig, Klasse bei A2 noch an
       await C.consent(lastAct)
       const r4 = await s.M2.introduce(s.ma, mc) // M2 hält die alte Sicht und benennt einen Schlüssel, den A1 zurückgezogen hat
       s.A2.online = true
       s.M2.online = true
+      // B6: korrektes Begrenzen wird nicht bestraft; nach der Heilung handelt das Gerät mit dem Recht.
+      if (offline === 'blocked') await s.w.rounds(1), await s.A.consent(lastAct)
       const n = await untilStable(s.w, 'A')
       const equivocation = s.w.of('M').flatMap((d) => d.state.findings).filter((f) => f.includes('Equivokation')).length
       const viewKeys = s.w.of('M').map((d) => `${d.name}: ${M.rel(d.state, s.ma).view?.keys.length ?? 0}`)
@@ -276,7 +278,7 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const cont = s.w.of('A').map((d) => M.act(d.state, lastAct).state)
       const agree = s.w.agree('A')
       const ok = equivocation === 0 && agree.agree && s.w.of('M').every((d) => (M.rel(d.state, s.ma).view?.keys.length ?? 0) === 0) && cont.every((x) => x === 'connected') // 8232.2, 8925: der laufende Akt läuft weiter
-      return { outcome: mark(ok), detail: `Equivokationen bei M: ${equivocation}; Ms Sicht auf A (Schlüssel): ${viewKeys.join(', ')}; vierte Vorstellung: ${act4.join(', ')}; Akt mit Karte: ${cont.join('/')}; Projektion gleich nach ${n} Runden: ${agree.agree ? 'ja' : 'nein'}`, measures: { equivocations: equivocation, projectionAgrees: agree.agree ? 1 : 0, roundsToConverge: n } }
+      return { outcome: mark(ok), detail: `Equivokationen bei M: ${equivocation}; Ms Sicht auf A (Schlüssel): ${viewKeys.join(', ')}; vierte Vorstellung: ${act4.join(', ')}; Akt mit Karte: ${cont.join('/')}; Zustimmung offline ${offline}; Projektion gleich nach ${n} Runden: ${agree.agree ? 'ja' : 'nein'}`, measures: { equivocations: equivocation, projectionAgrees: agree.agree ? 1 : 0, roundsToConverge: n, offlineBlocked: offline === 'blocked' ? 1 : 0 } }
     },
   },
   {
@@ -299,15 +301,23 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       // Der Nutzer beendet den Kontakt B: jeden Eintrag, den A1 zu B hält (vor der Vereinigung können es zwei sein).
       for (const r of s.A.state.relationships.filter((r) => r.tuples.some((t) => t.peer === e1.x.peer || t.peer === e2.x.peer))) await s.A.depart(r.id)
       s.w.carrier.faults.reset()
+      const toB = new Set([e1.x.peerKeyAgreement, e2.x.peerKeyAgreement])
+      const mark0 = s.w.carrier.carried.length
       await s.w.rounds(2)
       A2.online = true
       await s.w.rounds(8)
       // Wiederbelebt (6845.7, 6845.9): eine Mapping-Wirkung nach dem Abgang; `united` als Endzustand einer vor dem Abgang erledigten Pflicht zählt nicht.
       const mappingsAfter = [...ledger(s.w, 'A').keys()].filter((id) => id.startsWith('mapping:')).length
       const revived = mappingsAfter - mappingsBefore
+      // S1 (Review 4 B4): eine vor dem Abgang eingereichte Sendung bleibt bei Delivery, ihre Wiederholung ist erlaubt (6845.7);
+      // neue Bytes an B nach dem Abgang sind Wiederbelebung oder Neuproduktion (8475.S6) und verboten.
+      const before = new Set(s.w.carrier.carried.slice(0, mark0).filter((f) => toB.has(f.address)).map((f) => Buffer.from(f.bytes).toString('base64')))
+      const after = s.w.carrier.carried.slice(mark0).filter((f) => toB.has(f.address))
+      const repeats = after.filter((f) => before.has(Buffer.from(f.bytes).toString('base64'))).length
+      const fresh = after.length - repeats
       const departedEverywhere = s.w.of('A').every((d) => d.state.relationships.filter((r) => r.tuples.some((t) => s.w.personOf(t.peer) === 'B')).every((r) => r.departed))
-      const ok = n > 0 && departedEverywhere && revived === 0
-      return { outcome: mark(ok), detail: `Pflicht sent nach ${n} Runden; Mapping-Wirkungen nach dem Abgang: ${revived}; B überall abgegangen: ${departedEverywhere ? 'ja' : 'nein'}`, measures: { revivedDuties: revived, departedEverywhere: departedEverywhere ? 1 : 0 } }
+      const ok = n > 0 && departedEverywhere && revived === 0 && fresh === 0
+      return { outcome: mark(ok), detail: `Pflicht sent nach ${n} Runden; Mapping-Wirkungen nach dem Abgang: ${revived}; Rahmen an B nach dem Abgang: ${fresh} neue, ${repeats} Wiederholungen; B überall abgegangen: ${departedEverywhere ? 'ja' : 'nein'}`, measures: { revivedDuties: revived, newFramesToPeerAfterDeparture: fresh, repeatedFramesToPeerAfterDeparture: repeats, departedEverywhere: departedEverywhere ? 1 : 0 } }
     },
   },
   {
@@ -337,7 +347,7 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       await s.w.rounds(4)
       const unknownOwn = s.A2.state.findings.filter((f) => f.includes('8640.5')).length
       const reuse = s.w.of('M').flatMap((d) => d.state.findings).filter((f) => f.includes('6270')).length
-      const ok = behind === 0 && stale === 0 && lostActs === 0 && unknownOwn === 0 && reuse === 0 && incarnationChanged
+      const ok = n > 0 && behind === 0 && stale === 0 && lostActs === 0 && unknownOwn === 0 && reuse === 0 && incarnationChanged
       return { outcome: mark(ok), detail: `Konvergenz nach ${n} Runden; A2 Revision ${M.rel(s.A2.state, s.am).revision}, M hält ${mView.revision}; bei A2 aktive Schlüssel, die M als verbraucht markiert: ${stale}; A2 fehlen ${lostActs} Akte; Ticket ${'act' in r ? 'ausgegeben' : 'verweigert'}, bei A2 unbekannter eigener Schlüssel: ${unknownOwn}; Nummernkonflikte bei M: ${reuse}; Inkarnation gewechselt: ${incarnationChanged ? 'ja' : 'nein'}`, measures: { roundsToConverge: n, revisionBehind: behind, staleActiveKeys: stale, lostActs, unknownOwnKey: unknownOwn, numberReuse: reuse, incarnationChanged: incarnationChanged ? 1 : 0 } }
     },
   },
@@ -350,11 +360,12 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       await s.w.encounter(s.A, s.B)
       await s.w.encounter(s.A2, s.B2)
       const n = await untilStable(s.w, 'A')
-      const ra = relationshipsTo(s.w, 'A', 'B')
-      const rb = relationshipsTo(s.w, 'B', 'A')
-      // Soll: je Person genau ein Eintrag zu der anderen, und der trägt beide Tupel (nichts gelöscht).
-      const ok = ra.entries === 1 && rb.entries === 1 && ra.tuples === 2 && rb.tuples === 2
-      return { outcome: mark(ok), detail: `A: ${ra.entries} Eintrag/Einträge zu B mit ${ra.tuples} Tupel(n); B: ${rb.entries} zu A mit ${rb.tuples}; Konvergenz nach ${n} Runden`, measures: { duplicates: Math.max(0, ra.entries - 1) + Math.max(0, rb.entries - 1), roundsToConverge: n } }
+      // Soll (B5, je Gerät): jedes Gerät hält genau einen Eintrag zu der anderen Person, und der trägt beide Tupel (nichts gelöscht).
+      const per = [...s.w.of('A').map((d) => ({ d, r: relationshipsTo(s.w, d, 'B') })), ...s.w.of('B').map((d) => ({ d, r: relationshipsTo(s.w, d, 'A') }))]
+      const duplicates = Math.max(0, entriesAcross(s.w, 'A', 'B') - 1) + Math.max(0, entriesAcross(s.w, 'B', 'A') - 1)
+      const missing = per.filter(({ r }) => r.entries === 0).length
+      const ok = n > 0 && duplicates === 0 && per.every(({ r }) => r.entries === 1 && r.tuples === 2)
+      return { outcome: mark(ok), detail: `${per.map(({ d, r }) => `${d.name}: ${r.entries} Eintrag/Einträge mit ${r.tuples} Tupel(n)`).join('; ')}; stabil nach ${n} Runden`, measures: { duplicates, devicesWithoutContact: missing, roundsToConverge: n } }
     },
   },
   {
@@ -367,13 +378,13 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       if (!('act' in r)) return fail(r.refused)
       await s.w.until(() => s.A.state.acts.length === 1 && s.B.state.acts.length === 1)
       const A2 = await s.w.enrol(s.A, 'A2')
-      const bytes = JSON.stringify(A2.state).length
+      const bytes = Buffer.byteLength(JSON.stringify(A2.state), 'utf8') // Größe der Zustandskopie; K0 kennt keinen Enrollment-Verkehr
       const same = M.canonical(A2.projection()) === M.canonical(s.A.projection())
       await A2.consent(r.act)
       await s.B.consent(r.act)
       const n = await s.w.until(() => M.act(A2.state, r.act).state === 'connected' && M.act(s.B.state, r.act).state === 'connected')
       const ok = same && n > 0
-      return { outcome: mark(ok), detail: `Projektion nach Enrollment gleich: ${same ? 'ja' : 'nein'}; A2 verbunden nach ${n} Runden; Zustandskopie ${bytes} B (K0: Kopie, kein gemessener Enrollment-Verkehr)`, measures: { enrolBytes: bytes, rounds: n } }
+      return { outcome: mark(ok), detail: `Projektion nach Enrollment gleich: ${same ? 'ja' : 'nein'}; A2 verbunden nach ${n} Runden; Zustandskopie ${bytes} B UTF-8 (K0: Kopie, kein gemessener Enrollment-Verkehr)`, measures: { stateCopyBytes: bytes, rounds: n } }
     },
   },
   {
@@ -383,20 +394,22 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       if (serial) return na('ein Gerät: kein zweites, das widerrufen würde')
       const s = await setup(c, serial, ['C'])
       const { mc } = s.thirds.C!
-      const stolen = { cand: s.A2.cand, state: structuredClone(s.A2.state) }
+      const ab = await s.w.encounter(s.A, s.B)
+      await s.w.rounds(3)
+      // Was der Dieb hat: das Store-Abbild von A2 vor dem Widerruf, als unabhängige Instanz (Review 4 S1: kein lebender Verweis auf A2).
+      const thief = await s.w.steal(s.A2, 'A2-dieb')
       await s.w.revoke(s.A, s.A2)
       await s.w.rounds(2)
-      // Der Dieb meldet sich mit A2s Schlüsseln und Zustand wieder am Träger an.
-      const thief = new HolderDevice('A2-dieb', 'A', stolen.cand, s.w.carrier, s.w.clock, undefined, stolen.state)
-      await thief.relisten()
       s.w.devices.push(thief)
       const before = s.A.state.acts.length
-      const r = await s.Mm.introduce(s.ma, mc)
+      const r = await s.Mm.introduce(s.ma, mc) // M → A
+      await s.B.setClass(ab.y.id, true) // B → A: Revision an As Adresse des A–B-Tupels
       await s.w.rounds(4)
       const reads = thief.log.filter((e) => e.type !== 'delivery-ack').length
       const legit = s.A.state.acts.length - before
-      const ok = 'act' in r && legit === 1 && reads === 0
-      return { outcome: mark(ok), detail: `Vorstellung ${'act' in r ? 'ausgegeben' : 'verweigert'}; A1 erhält ${legit} Ticket(s); der Dieb liest ${reads} Dokument(e) und hält ${thief.state.acts.length} Akt(e)`, measures: { thiefReads: reads, legitimateDelivery: legit } }
+      const legitFromB = M.rel(s.A.state, ab.x.id).view ? 1 : 0
+      const ok = 'act' in r && legit === 1 && legitFromB === 1 && reads === 0
+      return { outcome: mark(ok), detail: `Vorstellung ${'act' in r ? 'ausgegeben' : 'verweigert'}; A1 erhält ${legit} Ticket(s) und ${legitFromB} Revision(en) von B; der Dieb liest ${reads} Dokument(e) und hält ${thief.state.acts.length} Akt(e)`, measures: { thiefReads: reads, legitimateDelivery: legit, legitimateDeliveryFromPeer: legitFromB } }
     },
   },
   {
@@ -423,17 +436,18 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       if (acts.length !== 2) return fail('keine zwei Vorstellungen')
       s.A2.online = false
       await s.A.consent(acts[0]!) // A1 handelt auf dem ersten Akt
-      await s.A2.consent(acts[1]!) // A2 handelt getrennt auf dem zweiten
+      const offline = await s.A2.consent(acts[1]!) // A2 handelt getrennt auf dem zweiten
       await s.B.consent(acts[0]!)
       await C.consent(acts[1]!)
       await s.w.rounds(30)
       const a1 = acts.map((a) => M.act(s.A.state, a).state)
       s.A2.online = true
+      if (offline === 'blocked') await s.w.rounds(1), await s.A.consent(acts[1]!) // B6: nach der Heilung mit dem Recht
       const n = await untilStable(s.w, 'A')
       const journal = JSON.stringify(s.A2.cand.persist() ?? null).length
       const a2 = acts.map((a) => s.A2.state.acts.find((x) => x.id === a)?.state ?? '–')
       const fe = finalEffects(s.w, 'A')
-      return { outcome: mark(n > 0 && fe.total === 0), detail: `A1: ${a1.join('/')}; A2 nach Wiederverbindung: ${a2.join('/')}; stabile Konvergenz nach ${n} Runden; doppelte Wirkungen ${fe.total}; Journal ${journal} B`, measures: { roundsToConverge: n, journalBytes: journal, doubleFinalEffects: fe.total } }
+      return { outcome: mark(n > 0 && fe.total === 0), detail: `A1: ${a1.join('/')}; A2 nach Wiederverbindung: ${a2.join('/')}; Zustimmung offline ${offline}; stabile Konvergenz nach ${n} Runden; doppelte Wirkungen ${fe.total}; Journal ${journal} B`, measures: { roundsToConverge: n, journalBytes: journal, doubleFinalEffects: fe.total, offlineBlocked: offline === 'blocked' ? 1 : 0 } }
     },
   },
   {

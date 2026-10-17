@@ -174,6 +174,10 @@ export interface ScenarioResult {
   readonly scenario: string
   readonly title: string
   readonly outcome: Outcome
+  /** Der Lauf ist mit einer Ausnahme abgebrochen (E15): kein gemessener Verstoß. */
+  readonly crashed?: boolean
+  /** Ein ✓ unter einer Ersatzregel (E15, K3): „Zusage geändert“, nie Erfüllung der alten. */
+  readonly promiseChanged?: boolean
   /** Ebene Autorität: wer ist Mitglied, was gilt. */
   readonly authority: string
   /** Ebene Schlüssel: wer liest was. */

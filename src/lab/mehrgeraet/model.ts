@@ -11,11 +11,19 @@
 // Operationen lokal anwenden und K1 sie über ein Journal vereinigen; der
 // Zustand ist in beiden Fällen die Faltung der Operationen.
 //
-// Faltungsregeln (Tor-Review 2, B4): eine Operation wird beim Anwenden
-// geklont, nie verändert; eine Operation gilt erst nach erfolgreicher
-// Anwendung als angewandt; Effekte haben eine fachliche Identität (Akt-Id,
-// (Beziehung, n), Paar), nicht nur eine Operations-ID; eine vereinigte
-// Beziehung bleibt über einen Alias erreichbar.
+// Faltungsregeln (Tor-Review 2 B4, Tor-Review 3 B1/B2): eine Operation
+// wird beim Anwenden geklont, nie verändert; sie wirkt ganz oder gar nicht
+// (Anwendung auf einem Entwurf, Übernahme nur bei Erfolg); eine fehlende
+// Voraussetzung (Beziehung, Akt, Tupel) ist `Missing`, nie eine
+// Teilwirkung; Effekte haben eine fachliche Identität (Akt-Id, (Nonce, n),
+// Paar), nicht nur eine Operations-ID; eine vereinigte Beziehung bleibt
+// über einen Alias erreichbar. Wo zwei Geräte dieselbe Stelle ändern, gilt
+// eine ausdrückliche Regel: die Sicht ist monoton in der Revision (8500,
+// gleiche Revision mit anderen Schlüsseln = Equivokation 6270), die
+// Budgetbestätigung benennt die bestätigten Akte (8515), ein Vorrats-
+// Schlüssel heißt (Nonce, n) und ein zweiter Vorrat bleibt sichtbar
+// (8435), Zustimmung gegen Ablehnung bleibt beim ersten terminalen
+// Zustand und steht als Widerspruch im Ledger (8325.A3/A4).
 
 // ── Parameter (Profil, vereinfacht) ──────────────────────────────────────────
 
@@ -70,9 +78,10 @@ export interface Tuple {
 
 export type StockState = 'allocated' | 'registered' | 'active' | 'aging' | 'consumed' | 'withdrawn' | 'tombstoned'
 
-/** 8475: eigener Vorrats-Schlüssel (Aussteller). */
+/** 8475: eigener Vorrats-Schlüssel (Aussteller); Identität (Nonce, n) (8435, 8445). */
 export interface StockKey {
   n: number
+  nonce: string
   anchor: Anchor
   keyAgreement: string // rkid
   key: string // Kontextname (Ableitung beim Kandidaten)
@@ -99,9 +108,9 @@ export interface Relationship {
   nonce: string | null // Einführungs-Nonce (8430), base64
   nextN: number // 8445
   revision: number // 8500: höchste Revisionsnummer im Zustand
-  /** 8510: Annahmen (Akt-Id, Zeit); die Bestätigung merkt sich den Zähler (8515). */
+  /** 8510: Annahmen (Akt-Id, Zeit); die Bestätigung benennt die bestätigten Akte (8515). */
   accepted: Array<{ act: string; at: string }>
-  confirmedIndex: number
+  confirmed: string[]
   confirmedAt: string | null
   departed: boolean
   /** Ms Sicht auf den Vorrat dieser Seite (8550 ff.); Marken 8570 holderweit in `consumed`. */
@@ -218,7 +227,7 @@ export type Op = { id: OpId; at: string } & (
   | { kind: 'card-refused'; act: string; v: string; k: boolean } // 8910.6, 8910.8
   | { kind: 'connect'; act: string; rel: string; tuple: Tuple } // 8905
   | { kind: 'expire'; act: string } // 8325.A7/A8
-  | { kind: 'budget-confirm'; rel: string } // 8515
+  | { kind: 'budget-confirm'; rel: string; acts: string[] } // 8515: die bestätigten Annahmen
   | { kind: 'duty'; pair: [string, string]; state: PairDuty['state']; mappingDigest: string | null } // 6845
   | { kind: 'union'; a: string; b: string; edge: [string, string] } // 6975.2
   | { kind: 'edge'; edge: [string, string] } // 6975.3
@@ -240,15 +249,26 @@ export function findRel(s: HolderState, id: string): Relationship | undefined {
   return s.relationships.find((x) => x.id === rid)
 }
 
+/** Eine Voraussetzung fehlt im Zustand (Beziehung, Akt, Tupel): ein Journal stellt die Operation zurück, ein Empfang quittiert nicht. */
+export class Missing extends Error {
+  constructor(
+    readonly what: 'relationship' | 'act' | 'tuple',
+    readonly ref: string,
+    person: string,
+  ) {
+    super(`${person}: ${what === 'relationship' ? 'unbekannte Beziehung' : what === 'act' ? 'unbekannter Akt' : 'unbekanntes Tupel'} ${ref}`)
+  }
+}
+
 export function rel(s: HolderState, id: string): Relationship {
   const r = findRel(s, id)
-  if (!r) throw new Error(`${s.person}: unbekannte Beziehung ${id}`)
+  if (!r) throw new Missing('relationship', id, s.person)
   return r
 }
 
 export function act(s: HolderState, id: string): Act {
   const a = s.acts.find((x) => x.id === id)
-  if (!a) throw new Error(`${s.person}: unbekannter Akt ${id}`)
+  if (!a) throw new Missing('act', id, s.person)
   return a
 }
 
@@ -265,16 +285,16 @@ export function relOfTuple(s: HolderState, tupleId: string): Relationship | unde
 
 export function tuple(s: HolderState, tupleId: string): Tuple {
   for (const r of s.relationships) for (const t of r.tuples) if (t.id === tupleId) return t
-  throw new Error(`${s.person}: unbekanntes Tupel ${tupleId}`)
+  throw new Missing('tuple', tupleId, s.person)
 }
 
 /** 8470: nutzbar, solange now + act-lifetime + act-skew ≤ expiresAt. */
 export const usable = (expiresAt: string, now: string) => Date.parse(now) + PARAM.actLifetimeMs + PARAM.actSkewMs <= Date.parse(expiresAt)
 
-/** 8510: Annahmen im Fenster nach der letzten Bestätigung (die Bestätigung merkt sich den Zähler: Ereignisordnung statt Zeitvergleich). */
+/** 8510: unbestätigte Annahmen im Fenster (die Bestätigung benennt Akte, nicht einen Zeitpunkt oder Zähler: reihenfolgeunabhängig). */
 export function budgetUsed(r: Relationship, now: string): number {
   const since = Date.parse(now) - PARAM.budgetWindowMs
-  return r.accepted.slice(r.confirmedIndex).filter((e) => Date.parse(e.at) > since).length
+  return r.accepted.filter((e) => !r.confirmed.includes(e.act) && Date.parse(e.at) > since).length
 }
 export const budgetExhausted = (r: Relationship, now: string) => budgetUsed(r, now) >= PARAM.budget
 
@@ -288,21 +308,23 @@ export function apply(s: HolderState, original: Op): void {
   const key = opKey(original.id)
   if (s.applied.includes(key)) return
   const op = structuredClone(original)
-  applyBody(s, op)
-  s.applied.push(key) // erst nach erfolgreicher Anwendung
+  // Ganz oder gar nicht (B1): auf einem Entwurf anwenden, erst bei Erfolg übernehmen. `s` behält seine Identität.
+  const draft = structuredClone(s)
+  applyBody(draft, op)
+  draft.applied.push(key)
+  Object.assign(s, draft)
 }
+
+const emptyRel = (id: string, t: Tuple, provenance: Relationship['provenance'], vouchedBy: string[]): Relationship => ({ id, tuples: [t], provenance, vouchedBy, classOn: false, stock: [], nonce: null, nextN: 1, revision: 0, accepted: [], confirmed: [], confirmedAt: null, departed: false, view: null })
 
 function applyBody(s: HolderState, op: Op): void {
   switch (op.kind) {
     case 'open-tuple': {
       if (s.relationships.some((r) => r.tuples.some((t) => t.id === op.tuple.id))) return // Effekt-Identität: das Tupel
-      if (op.rel) {
-        rel(s, op.rel).tuples.push(op.tuple)
-      } else {
-        s.relationships.push({ id: op.tuple.id, tuples: [op.tuple], provenance: op.provenance, vouchedBy: op.vouchedBy ? [op.vouchedBy] : [], classOn: false, stock: [], nonce: null, nextN: 1, revision: 0, accepted: [], confirmedIndex: 0, confirmedAt: null, departed: false, view: null })
-      }
-      if (op.act) {
-        const a = act(s, op.act)
+      const a = op.act ? act(s, op.act) : null
+      if (op.rel) rel(s, op.rel).tuples.push(op.tuple)
+      else s.relationships.push(emptyRel(op.tuple.id, op.tuple, op.provenance, op.vouchedBy ? [op.vouchedBy] : []))
+      if (a) {
         a.state = 'connected'
         a.opened = op.rel ?? op.tuple.id
         a.pending = null
@@ -327,10 +349,11 @@ function applyBody(s: HolderState, op: Op): void {
     }
     case 'allocate': {
       const r = rel(s, op.rel)
-      if (!r.nonce) r.nonce = op.nonce // 8435
+      if (!r.nonce) r.nonce = op.nonce // 8435: die erste Nonce der Beziehung
+      else if (r.nonce !== op.nonce && !r.stock.some((x) => x.nonce === op.nonce)) s.findings.push(`allocate auf ${r.id}: zweiter Vorrat unter Nonce ${op.nonce.slice(0, 8)} neben ${r.nonce.slice(0, 8)} (8435): zwei Geräte haben getrennt zugeteilt`)
       for (const k of op.keys) {
-        if (r.stock.some((x) => x.n === k.n || x.anchor === k.anchor)) continue // Effekt-Identität: (Beziehung, n)
-        r.stock.push({ ...k, state: 'active' }) // Vorbereitung sofort bestätigt (Prüfstand); 8475.S3 mit der Revision
+        if (r.stock.some((x) => (x.nonce === k.nonce && x.n === k.n) || x.anchor === k.anchor)) continue // Effekt-Identität: (Nonce, n)
+        r.stock.push({ ...k, nonce: k.nonce ?? op.nonce, state: 'active' }) // Vorbereitung sofort bestätigt (Prüfstand); 8475.S3 mit der Revision
         r.nextN = Math.max(r.nextN, k.n + 1)
       }
       return
@@ -352,8 +375,21 @@ function applyBody(s: HolderState, op: Op): void {
       return
     }
     case 'view': {
+      // 8500/6270: in einem Scope ist die Sicht monoton in der Revision; gleiche Revision mit anderen Schlüsseln ist eine
+      // Equivokation, das Ergebnis ist in jeder Reihenfolge dasselbe (kanonisch kleinere Schlüsselmenge).
       const r = rel(s, op.rel)
-      r.view = { scope: op.scope, revision: op.revision, keys: op.keys }
+      const v = r.view
+      const keys = sortKeys(op.keys) // kanonisch gehalten: die Ankunftsreihenfolge ist nicht handlungswirksam (Review 4 B2)
+      if (v && v.scope === op.scope) {
+        if (op.revision < v.revision) return
+        if (op.revision === v.revision) {
+          const same = canonical(keys) === canonical(v.keys) // der ganze Schlüsselwert zählt (Anker, Vereinbarung, Ablauf)
+          if (same) return
+          s.findings.push(`view auf ${r.id}: Revision ${op.revision} zweimal mit anderen Schlüsseln: Equivokation (6270)`)
+          if (canonical(keys) > canonical(v.keys)) return
+        }
+      }
+      r.view = { scope: op.scope, revision: op.revision, keys }
       return
     }
     case 'introduce': {
@@ -386,6 +422,12 @@ function applyBody(s: HolderState, op: Op): void {
       return
     case 'consent': {
       const a = act(s, op.act)
+      if (a.state === 'declined') {
+        // 8325.A3/A4: der erste terminale Zustand bleibt; der Widerspruch ist sichtbar, nie still verworfen.
+        s.findings.push(`consent auf ${a.id} nach decline: Widerspruch (8325.A3)`)
+        effect(s, op, `consent:${a.id}`)
+        return
+      }
       if (a.state !== 'offered') return // 8325.A4 nur aus offered; eine Journal-Wiederholung ändert nichts
       a.state = 'consented'
       a.ownCard = op.card
@@ -396,6 +438,11 @@ function applyBody(s: HolderState, op: Op): void {
     }
     case 'decline': {
       const a = act(s, op.act)
+      if (a.state === 'consented' || a.state === 'connected') {
+        s.findings.push(`decline auf ${a.id} nach consent: Widerspruch (8325.A4)`)
+        effect(s, op, `decline:${a.id}`)
+        return
+      }
       if (a.state !== 'offered') return // 8325.A3 nur aus offered
       a.state = 'declined'
       a.pending = null
@@ -425,7 +472,7 @@ function applyBody(s: HolderState, op: Op): void {
       // 8905: Tupel öffnen als neue Beziehung, Akt connected.
       const a = act(s, op.act)
       if (a.opened || s.relationships.some((r) => r.tuples.some((t) => t.id === op.tuple.id))) return // Effekt-Identität: der Akt
-      s.relationships.push({ id: op.rel, tuples: [op.tuple], provenance: 'introduction', vouchedBy: [a.mediator], classOn: false, stock: [], nonce: null, nextN: 1, revision: 0, accepted: [], confirmedIndex: 0, confirmedAt: null, departed: false, view: null })
+      s.relationships.push(emptyRel(op.rel, op.tuple, 'introduction', [a.mediator]))
       a.state = 'connected'
       a.opened = op.rel
       a.pending = null
@@ -441,9 +488,10 @@ function applyBody(s: HolderState, op: Op): void {
       return
     }
     case 'budget-confirm': {
+      // 8515: die Bestätigung benennt die Akte, die der Nutzer gesehen hat; reihenfolgeunabhängig gegen spätere Annahmen.
       const r = rel(s, op.rel)
-      r.confirmedAt = op.at
-      r.confirmedIndex = r.accepted.length // 8515: Ereignisordnung, nicht Zeitvergleich
+      r.confirmedAt = [r.confirmedAt, op.at].filter(Boolean).sort().pop() ?? op.at
+      for (const id of op.acts) if (!r.confirmed.includes(id)) r.confirmed.push(id)
       return
     }
     case 'duty': {
@@ -458,10 +506,10 @@ function applyBody(s: HolderState, op: Op): void {
     }
     case 'union': {
       // 6975.2: Mengenvereinigung; die Identität folgt dem Kopfteil; der andere Teil bleibt als Alias.
-      const ra = findRel(s, op.a)
-      const rb = findRel(s, op.b)
+      const ra = rel(s, op.a) // unbekannt = Missing (Review 4 B1): „noch nicht bekannt“ ist nie „schon vereinigt“
+      const rb = rel(s, op.b)
       if (!s.edges.some((e) => e[0] === op.edge[0] && e[1] === op.edge[1])) s.edges.push(op.edge)
-      if (!ra || !rb || ra === rb || ra.departed || rb.departed) return // keine Vereinigung über einen Abgang
+      if (ra === rb || ra.departed || rb.departed) return // schon vereinigt, oder keine Vereinigung über einen Abgang
       const headA = head(ra)
       const headB = head(rb)
       const [keep, other] = headA.record > headB.record ? [ra, rb] : [rb, ra]
@@ -475,6 +523,7 @@ function applyBody(s: HolderState, op: Op): void {
       keep.nextN = Math.max(keep.nextN, other.nextN)
       keep.revision = Math.max(keep.revision, other.revision) // 6987.4
       for (const e of other.accepted) if (!keep.accepted.some((x) => x.act === e.act)) keep.accepted.push(e) // 6987.6
+      for (const id of other.confirmed) if (!keep.confirmed.includes(id)) keep.confirmed.push(id)
       keep.confirmedAt = [keep.confirmedAt, other.confirmedAt].filter(Boolean).sort().pop() ?? null
       keep.classOn = keep.classOn && other.classOn // 2160: aus gewinnt
       // 6987.8: Ms Sicht ist die des Kopfteils, sonst keine.
@@ -489,10 +538,10 @@ function applyBody(s: HolderState, op: Op): void {
     case 'edge': {
       if (!s.edges.some((e) => e[0] === op.edge[0] && e[1] === op.edge[1])) s.edges.push(op.edge)
       const r = relOfTuple(s, op.edge[0])
-      if (r) {
-        const h = head(r)
-        for (const t of r.tuples) t.deactivated = t.id !== h.id
-      }
+      if (!r) throw new Missing('tuple', op.edge[0], s.person)
+      tuple(s, op.edge[1]) // beide Enden müssen bekannt sein (Review 5)
+      const h = head(r)
+      for (const t of r.tuples) t.deactivated = t.id !== h.id
       return
     }
   }
@@ -501,15 +550,17 @@ function applyBody(s: HolderState, op: Op): void {
 // ── Fachliche Projektion (Messgröße, Plan Abschnitt 5; kanonisch, B5) ──────
 
 export interface Projection {
-  /** Kontakte: je Beziehung Gegenanker (sortiert), Kopf, Klasse, Abgang, Ms Sicht (Scope, Revision, Schlüsselzahl). */
-  contacts: Array<{ peers: string[]; head: string; classOn: boolean; departed: boolean; view: string | null; stock: Record<string, StockState>; budget: number }>
-  /** Akte: Id → Hauptzustand und Nebenzustände P, V, K, O. */
-  acts: Record<string, { state: ActState; pending: string | null; v: string | null; k: boolean; o: HandOver }>
+  /** Kontakte: je Beziehung alles, was eine spätere Entscheidung trägt (B5, Review 4 B3: ganze Schlüsselwerte mit Ablauf): Gegenanker, Kopf, Klasse, Abgang, Ms Sicht, Vorrat je Schlüssel, Nonce und Nummernstand, Revision, Annahmen mit Zeit, Bestätigungen, Budget. */
+  contacts: Array<{ peers: string[]; head: string; classOn: boolean; departed: boolean; view: StockView | null; stock: Record<string, { n: number; nonce: string; state: StockState; keyAgreement: string; expiresAt: string }>; nonce: string | null; nextN: number; revision: number; accepted: Array<{ act: string; at: string }>; confirmed: string[]; budget: number }>
+  /** Akte: Id → Hauptzustand, Nebenzustände P, V, K, O mit Kartenwerten, eigene Karte und Übergabedigest, Ablauf, geöffnete Beziehung. */
+  acts: Record<string, { state: ActState; pending: Card | null; v: string | null; k: boolean; o: HandOver; ownCard: Card | null; ownCardDigest: string | null; expiresAt: string; opened: string | null }>
   /** Marken des Mediators. */
   consumed: string[]
-  /** Pflichten je Paar. */
-  duties: Record<string, string>
+  /** Pflichten je Paar mit Mapping-Digest. */
+  duties: Record<string, { state: string; mappingDigest: string | null }>
 }
+
+const sortKeys = (keys: StockView['keys']) => [...keys].sort((a, b) => a.anchor.localeCompare(b.anchor))
 
 export function project(s: HolderState, now: string): Projection {
   const contacts = s.relationships
@@ -518,15 +569,20 @@ export function project(s: HolderState, now: string): Projection {
       head: head(r).id,
       classOn: r.classOn,
       departed: r.departed,
-      view: r.view ? `${r.view.scope}@${r.view.revision}:${r.view.keys.length}` : null,
-      stock: Object.fromEntries(r.stock.map((k) => [k.anchor, k.state]).sort()),
+      view: r.view ? { scope: r.view.scope, revision: r.view.revision, keys: sortKeys(r.view.keys) } : null,
+      stock: Object.fromEntries(r.stock.map((k) => [k.anchor, { n: k.n, nonce: k.nonce, state: k.state, keyAgreement: k.keyAgreement, expiresAt: k.expiresAt }]).sort(([a], [b]) => (a as string).localeCompare(b as string))),
+      nonce: r.nonce,
+      nextN: r.nextN,
+      revision: r.revision,
+      accepted: [...r.accepted].sort((x, y) => x.act.localeCompare(y.act)),
+      confirmed: [...r.confirmed].sort(),
       budget: budgetUsed(r, now),
     }))
     .sort((a, b) => a.peers.join().localeCompare(b.peers.join()))
   const acts: Projection['acts'] = {}
-  for (const a of [...s.acts].sort((x, y) => x.id.localeCompare(y.id))) acts[a.id] = { state: a.state, pending: a.pending?.anchor ?? null, v: a.v, k: a.k, o: a.o }
-  const duties: Record<string, string> = {}
-  for (const d of [...s.duties].sort((x, y) => x.pair.join().localeCompare(y.pair.join()))) duties[d.pair.join('|')] = d.state
+  for (const a of [...s.acts].sort((x, y) => x.id.localeCompare(y.id))) acts[a.id] = { state: a.state, pending: a.pending, v: a.v, k: a.k, o: a.o, ownCard: a.ownCard, ownCardDigest: a.ownCardDigest, expiresAt: a.expiresAt, opened: a.opened }
+  const duties: Projection['duties'] = {}
+  for (const d of [...s.duties].sort((x, y) => x.pair.join().localeCompare(y.pair.join()))) duties[d.pair.join('|')] = { state: d.state, mappingDigest: d.mappingDigest }
   return { contacts, acts, consumed: [...s.consumed].sort(), duties }
 }
 

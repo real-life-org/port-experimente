@@ -24,6 +24,18 @@ import * as M from '../src/lab/mehrgeraet/model'
 //   8. Journalrahmen: an den Self-Anker gebunden, vom anderen Gerät quittiert, eigene
 //      Rahmen auf der gemeinsamen Adresse übersprungen.
 //   9. Ein Szenario, das mit einer Ausnahme abbricht, ist `crashed`, kein gemessener Verstoß.
+//  10. Der Rollback stellt auch den Zustellerbericht wieder her: eine Quittung, deren
+//      Wirkung blockiert wird, lässt die Submission nicht `delivered` (Tor-Review 3, B3).
+//  11. Blockierte fällige Arbeit wird nicht vergessen: nach erneuter Freigabe füllt das
+//      Gerät nach, ohne neue Alterung (B6).
+//  12. Eine gepufferte Karte wird bei der Ticketannahme mit demselben Prüfsatz bewertet wie
+//      bei direkter Ankunft: Akt-Id, Absender, Ablauf (B7).
+//  13. Abgang: eine schon eingereichte Sendung bleibt bei Delivery und wird weiter wiederholt
+//      (6845.7, Delivery 6.1); nur Neues geht nicht mehr hinaus (8475.S6) (Tor-Review 4, B4).
+//  14. Empfang: eine zweite Revision gleicher Nummer mit gleichen Ankern, aber anderem Ablauf,
+//      ist eine Equivokation (6270), keine Wiederholung (Tor-Review 5, R4-B2).
+//  15. Nach dem Abgang quittiert das Gerät keinen neuen Rahmen des abgegangenen Kontakts mehr
+//      (8475.S6); die Wiederholung einer schon gesendeten Quittung bleibt erlaubt (CodeRabbit auf #59).
 
 const enc = new TextEncoder()
 const byId = (rs: Awaited<ReturnType<typeof runX15>>) => Object.fromEntries(rs.map((r) => [r.scenario, r]))
@@ -306,6 +318,14 @@ describe('E15 Gegenläufe: Blockieren, Journal, Absturz', () => {
     expect(rel.stock.length).toBe(5)
     expect(rel.revision).toBe(1)
     expect(w.carrier.carried.length).toBe(carried)
+    // B6: die fällige Arbeit bleibt fällig; mit dem Recht füllt das Gerät nach, ohne neue Alterung.
+    deny = false
+    await w.rounds(2)
+    const after = M.rel(A.state, am.x.id)
+    expect(after.stock.filter((k) => k.state === 'active').length).toBe(5)
+    expect(after.revision).toBe(2)
+    await w.rounds(3)
+    expect(M.rel(Mm.state, am.y.id).view?.revision).toBe(2)
   }, 60_000)
 
   it('Blocked beim Empfang: ein verweigertes view wirkt nicht und wird nicht quittiert; mit Recht wirkt die Wiederholung', async () => {
@@ -374,5 +394,165 @@ describe('E15 Gegenläufe: Blockieren, Journal, Absturz', () => {
     expect(r.X1!.outcome).toBe('nicht bestanden')
     expect(r.X1!.crashed).toBe(true)
     expect(r.X1!.detail).toContain('boom')
+  }, 60_000)
+})
+
+describe('E15 Gegenläufe: Rollback-Tiefe, fällige Arbeit, Kartenpuffer', () => {
+  it('B3: eine Quittung, deren Wirkung blockiert wird, lässt die Submission nicht delivered; mit Recht wirkt die Wiederholung', async () => {
+    let deny = false
+    const w = new Welt15(k0With((device, op) => !(deny && device === 'A1' && op.kind === 'hand-over' && op.o === 'delivered')))
+    const A = await w.person('A', 'A1')
+    const B = await w.person('B', 'B1')
+    const Mm = await w.person('M', 'M1')
+    const am = await w.encounter(A, Mm)
+    const bm = await w.encounter(B, Mm)
+    await w.rounds(2)
+    await A.setClass(am.x.id, true)
+    await B.setClass(bm.x.id, true)
+    await w.rounds(3)
+    const r = await Mm.introduce(am.y.id, bm.y.id)
+    const actId = (r as { act: string }).act
+    await w.until(() => A.state.acts.length === 1 && B.state.acts.length === 1)
+    B.online = false
+    await A.consent(actId)
+    await w.rounds(1)
+    expect(M.act(A.state, actId).o).toBe('taken')
+    const digest = M.act(A.state, actId).ownCardDigest!
+    deny = true
+    B.online = true
+    await w.rounds(2)
+    expect(A.dispositions).toContain('blocked(hand-over)')
+    expect(M.act(A.state, actId).o).toBe('taken')
+    expect(A.zusteller.report(digest)?.state).toBe('accepted')
+    deny = false
+    const n = await w.until(() => M.act(A.state, actId).o === 'delivered')
+    expect(n).toBeGreaterThan(0)
+    expect(A.zusteller.report(digest)?.state).toBe('delivered')
+  }, 60_000)
+
+  it('B7: eine vor dem Ticket gepufferte Karte wird bei der Zuordnung geprüft wie bei direkter Ankunft (Akt-Id, Absender, Ablauf)', async () => {
+    const w = new Welt15(k0())
+    const A = await w.person('A', 'A1')
+    const B = await w.person('B', 'B1')
+    const Mm = await w.person('M', 'M1')
+    const am = await w.encounter(A, Mm)
+    const bm = await w.encounter(B, Mm)
+    await w.rounds(2)
+    await A.setClass(am.x.id, true)
+    await B.setClass(bm.x.id, true)
+    await w.rounds(3)
+    const rkidA = (await A.cand.keys.pair(M.head(M.rel(A.state, am.x.id)).ownKey)).rkid
+    // M benennt denselben Schlüssel von A in zwei Akten (Fehlverhalten des Mediators, 8570); A bekommt das erste Ticket erst später.
+    const mark = w.carrier.carried.length
+    const r1 = await Mm.introduce(am.y.id, bm.y.id)
+    const act1 = (r1 as { act: string }).act
+    // Zurückgehalten wird nach Inhalt: Ms Zusteller wiederholt dieselben Bytes als neuen Rahmen.
+    const same = (xs: Uint8Array[]) => (f: { bytes: Uint8Array }) => xs.some((b) => Buffer.compare(b, f.bytes) === 0)
+    const t1 = w.carrier.carried.slice(mark).filter((f) => f.address === rkidA).map((f) => f.bytes)
+    const key1 = Mm.state.mediatorActs.find((a) => a.id === act1)!.a.key
+    Mm.state.consumed = Mm.state.consumed.filter((k) => k !== key1)
+    const mark2 = w.carrier.carried.length
+    const r2 = await Mm.introduce(am.y.id, bm.y.id)
+    const act2 = (r2 as { act: string }).act
+    const t2 = w.carrier.carried.slice(mark2).filter((f) => f.address === rkidA).map((f) => f.bytes)
+    expect(Mm.state.mediatorActs.find((a) => a.id === act2)!.a.key).toBe(key1)
+    w.carrier.faults.withhold('A1', same([...t1, ...t2]))
+    await w.until(() => B.state.acts.length === 2)
+    await B.consent(act1) // Bs Karte für act1 geht an As Schlüssel, bevor A ein Ticket dazu hat: A puffert (8910.1)
+    await w.rounds(3)
+    expect(A.state.acts.length).toBe(0)
+    // Ticket 2 (anderer Akt, gleicher Schlüssel, gleicher Absender) kommt zuerst: die gepufferte Karte gehört nicht dazu.
+    w.carrier.faults.reset()
+    w.carrier.faults.withhold('A1', same(t1))
+    await w.until(() => A.state.acts.length === 1)
+    expect(A.state.acts[0]!.id).toBe(act2)
+    await w.rounds(2)
+    expect(M.act(A.state, act2).pending).toBeNull()
+    w.carrier.faults.reset()
+    await w.rounds(3)
+    // Ticket 1 benennt einen bei A schon verbrauchten Schlüssel: Konformitätsfehler des Mediators (8640.12); act1 entsteht nicht, die Karte bleibt ohne Akt.
+    expect(A.state.acts.map((a) => a.id)).toEqual([act2])
+    expect(A.state.findings.some((f) => f.includes('8640.12'))).toBe(true)
+    expect(A.state.acts.every((a) => a.pending === null)).toBe(true)
+  }, 60_000)
+
+  it('Abgang: eine eingereichte, unquittierte Revision an M bleibt bei Delivery und wird wiederholt; der Abgang erzeugt nichts Neues', async () => {
+    const w = new Welt15(k0())
+    const A = await w.person('A', 'A1')
+    const Mm = await w.person('M', 'M1')
+    const am = await w.encounter(A, Mm)
+    await w.rounds(2)
+    Mm.online = false
+    await A.setClass(am.x.id, true)
+    const sub = [...A.zusteller.submissions.values()].find((s) => s.address === am.x.peerKeyAgreement)!
+    expect(sub.report?.state).toBe('accepted')
+    const carried = w.carrier.carried.length
+    expect(await A.depart(am.x.id)).toBe('ok')
+    expect(w.carrier.carried.length).toBe(carried) // der Abgang sendet nichts (8475.S6)
+    await w.rounds(4)
+    expect(A.zusteller.report(sub.digest)?.state).toBe('accepted') // nicht zurückgezogen (6845.7)
+    expect(A.zusteller.submissions.get(sub.digest)!.deposits).toBeGreaterThanOrEqual(2) // wiederholt
+    // Alles, was nach dem Abgang an M ging, sind Wiederholungen derselben Bytes.
+    const after = w.carrier.carried.slice(carried).filter((f) => f.address === am.x.peerKeyAgreement)
+    expect(after.length).toBeGreaterThanOrEqual(1)
+    expect(after.every((f) => Buffer.compare(f.bytes, sub.frame) === 0)).toBe(true)
+  }, 60_000)
+
+  it('Empfang: Revision 1 noch einmal mit gleichen Ankern und anderem Ablauf: M weist ab und hält ein 6270-Finding', async () => {
+    const w = new Welt15(k0())
+    const A = await w.person('A', 'A1')
+    const Mm = await w.person('M', 'M1')
+    const am = await w.encounter(A, Mm)
+    await w.rounds(2)
+    await A.setClass(am.x.id, true)
+    await w.rounds(3)
+    const view = M.rel(Mm.state, am.y.id).view!
+    expect(view.revision).toBe(1)
+    // A1 selbst (mit seinem Schlüssel) sendet Revision 1 erneut, gleiche Anker, Ablauf ein Jahr später.
+    const h = M.head(M.rel(A.state, am.x.id))
+    const k = await A.cand.keys.pair(h.ownKey)
+    const keys = view.keys.map((x) => ({ ...x, expiresAt: '2028-01-01T00:00:00.000Z' }))
+    const doc = await diSign({ anchor: k.anchor, ed: { priv: k.ed.priv } }, { id: crypto.randomUUID(), type: TYPES.revision, issuer: k.anchor, recipient: h.peer, replyTo: k.rkid, issuedAt: w.clock.now(), payload: { revision: 1, keys } }, w.clock.now())
+    w.carrier.deposit(h.peerKeyAgreement, enc.encode(jcs(await seal(doc as unknown as Json, h.peerKeyAgreement))))
+    await w.rounds(2)
+    expect(M.rel(Mm.state, am.y.id).view).toEqual(view)
+    expect(Mm.state.findings.some((f) => f.includes('6270'))).toBe(true)
+    expect(Mm.dispositions).toContain('failed(validation-failed)')
+  }, 60_000)
+
+  it('Abgang: eine neue Probe von B auf dem abgegangenen Tupel wird nicht quittiert; die Wiederholung einer alten Quittung schon', async () => {
+    const w = new Welt15(k0())
+    const A = await w.person('A', 'A1')
+    const B = await w.person('B', 'B1')
+    const Mm = await w.person('M', 'M1')
+    await w.encounter(A, Mm)
+    const ab = await w.encounter(A, B)
+    await w.rounds(3)
+    // B schickt A etwas, das A quittiert (eine Revision auf dem A–B-Tupel), damit es eine gespeicherte Quittung gibt.
+    await B.setClass(ab.y.id, true)
+    await w.rounds(3)
+    // Bs eigenes Dokument an A (nicht Bs Quittung auf As Probe: Quittungen werden nie quittiert).
+    const revB = [...B.zusteller.submissions.values()].find((s) => s.address === ab.y.peerKeyAgreement && B.expected.has(s.digest))!
+    expect(revB.report?.state).toBe('delivered')
+    expect(await A.depart(ab.x.id)).toBe('ok')
+    const mark = w.carrier.carried.length
+    const toB = ab.x.peerKeyAgreement
+    // (1) Wiederholung: B liefert dieselbe Revision noch einmal ein; A antwortet mit der aufbewahrten Quittung (gleiche Bytes wie zuvor).
+    const ackBefore = w.carrier.carried.filter((f) => f.address === toB).map((f) => Buffer.from(f.bytes).toString('base64'))
+    w.carrier.deposit(revB.address, revB.frame)
+    await w.rounds(2)
+    const repeats = w.carrier.carried.slice(mark).filter((f) => f.address === toB)
+    expect(repeats.length).toBe(1)
+    expect(ackBefore).toContain(Buffer.from(repeats[0]!.bytes).toString('base64'))
+    // (2) Neu: eine Probe von B auf dem abgegangenen Tupel; A quittiert nicht.
+    const mark2 = w.carrier.carried.length
+    const kb = await B.cand.keys.pair(ab.y.ownKey)
+    const doc = await diSign({ anchor: kb.anchor, ed: { priv: kb.ed.priv } }, { id: crypto.randomUUID(), type: TYPES.probe, issuer: kb.anchor, recipient: ab.y.peer, replyTo: kb.rkid, issuedAt: w.clock.now(), payload: { entries: ['x'] } }, w.clock.now())
+    w.carrier.deposit((await A.cand.keys.pair(ab.x.ownKey)).rkid, enc.encode(jcs(await seal(doc as unknown as Json, (await A.cand.keys.pair(ab.x.ownKey)).rkid))))
+    await w.rounds(2)
+    expect(A.dispositions).toContain('failed(validation-failed)')
+    // Nichts Neues an B: alles, was noch hinausgeht, sind Wiederholungen früherer Bytes (die Quittung aus (1) nach ACK_WAIT).
+    const known = new Set(w.carrier.carried.slice(0, mark2).filter((f) => f.address === toB).map((f) => Buffer.from(f.bytes).toString('base64')))
+    expect(w.carrier.carried.slice(mark2).filter((f) => f.address === toB && !known.has(Buffer.from(f.bytes).toString('base64')))).toEqual([])
   }, 60_000)
 })
