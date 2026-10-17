@@ -11,12 +11,14 @@ const byId = (rs: Awaited<ReturnType<typeof runX15>>) => Object.fromEntries(rs.m
 describe('E15 K0 one-seed: Eichung', () => {
   it('seriell bestehen X1–X5, X7, X12; X6, X8–X11 sind seriell nicht abbildbar', async () => {
     const r = byId(await runX15(k0(), true))
+    for (const x of Object.values(r)) expect(x.crashed, x.detail).toBeFalsy()
     for (const id of ['X1', 'X2', 'X3', 'X4', 'X5', 'X7', 'X12']) expect(r[id]!.outcome, `${id}: ${r[id]!.detail}`).toBe('bestanden')
     for (const id of ['X6', 'X8', 'X9', 'X10', 'X11']) expect(r[id]!.outcome, `${id}: ${r[id]!.detail}`).toBe('nicht abbildbar')
   }, 600_000)
 
   it('mit zwei Geräten verletzt K0 X1 (Doppelverbrauch), X2 (Budget 11), X3 (Consent ∥ Ablehnung), X7 (Doppel in der Liste)', async () => {
     const r = byId(await runX15(k0(), false, ['X1', 'X2', 'X3', 'X7']))
+    for (const x of Object.values(r)) expect(x.crashed, x.detail).toBeFalsy()
     expect(r.X1!.outcome, r.X1!.detail).toBe('nicht bestanden')
     expect(r.X1!.measures.doubleFinalEffects).toBe(1)
     expect(r.X2!.outcome, r.X2!.detail).toBe('nicht bestanden')
@@ -28,6 +30,7 @@ describe('E15 K0 one-seed: Eichung', () => {
 
   it('X4–X6, X8–X12 mit zwei Geräten: K0 verfehlt X4, X5, X6, X9, X11, X12 (A2 bleibt zurück); besteht X8 (Kopie); X10 nicht abbildbar', async () => {
     const r = byId(await runX15(k0(), false, ['X4', 'X5', 'X6', 'X8', 'X9', 'X10', 'X11', 'X12']))
+    for (const x of Object.values(r)) expect(x.crashed, x.detail).toBeFalsy()
     for (const id of ['X4', 'X5', 'X6', 'X9', 'X11', 'X12']) expect(r[id]!.outcome, `${id}: ${r[id]!.detail}`).toBe('nicht bestanden')
     expect(r.X8!.outcome, r.X8!.detail).toBe('bestanden')
     expect(r.X10!.outcome).toBe('nicht abbildbar')

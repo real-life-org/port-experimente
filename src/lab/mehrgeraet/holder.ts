@@ -14,6 +14,13 @@
 // was ein Neuaufbau braucht, steht im Store-Abbild (#57). Jede
 // quittierbare Submission kennt ihren erwarteten Quittungs-Signierer;
 // andere Quittungen wirken nicht (#55).
+//
+// Blockiert heißt nicht fehlerhaft, und zwar ganz: verweigert der Kandidat
+// eine Operation, bleibt von der Nutzeraktion, vom empfangenen Rahmen oder
+// vom Zeitübergang nichts zurück (Zustand, Submissions, Quittungen,
+// Journal); der Rahmen wird nicht quittiert, die Gegenseite wiederholt ihn.
+// Nicht zurückgenommen werden Schlüsselableitungen und Adressanmeldungen
+// am Träger (`listen`): sie tragen keinen Zustand.
 
 import { seal, receive, edFromSeed, xFromSeed, anchorOfEd, mkOfX, diSign, diVerify, jcs, digestBytes } from '@real-life/trust-protocol'
 import type { Json, KeyPair } from '@real-life/trust-protocol'
@@ -177,7 +184,10 @@ export class HolderDevice {
   private counter = 0
   private sent = new Map<string, Sent>()
   private buffer = new Map<string, { card: M.Card; v: string }>()
-  private expected = new Map<string, string>()
+  /** Digest → erwarteter Quittungs-Signierer je eigener Submission (#55); lesbar für Messungen. */
+  expected = new Map<string, string>()
+  /** Innerhalb eines `guarded`-Rahmens: Operationen, die der Kandidat erst nach dem Gelingen aufzeichnet. */
+  private pending: M.Op[] | null = null
   /** Aufgezeichnet, noch nicht eingeliefert: geht nach dem nächsten Commit hinaus. */
   private held: string[] = []
   private readonly ctxOfRkid = new Map<string, string>()
@@ -247,7 +257,8 @@ export class HolderDevice {
       throw new Blocked(op.kind)
     }
     M.apply(this.state, op)
-    this.cand.record(op)
+    if (this.pending) this.pending.push(op)
+    else this.cand.record(op)
     return op
   }
   /** Operationen eines eigenen Geräts (Journal) anwenden. */
@@ -255,6 +266,60 @@ export class HolderDevice {
     for (const op of ops) M.apply(this.state, op)
     await this.relisten()
     await this.refillAll()
+  }
+
+  // ── Alles oder nichts ──
+  private checkpoint() {
+    return {
+      holder: structuredClone(this.state),
+      submissions: [...this.zusteller.submissions.values()],
+      completed: new Set(this.completed),
+      acks: new Map(this.acks),
+      counter: this.counter,
+      sent: new Map(this.sent),
+      buffer: new Map(this.buffer),
+      expected: new Map(this.expected),
+      held: this.held.slice(),
+      framesOut: this.measures.framesOut,
+      bytesOut: this.measures.bytesOut,
+    }
+  }
+  private rollback(c: ReturnType<HolderDevice['checkpoint']>) {
+    this.state = c.holder
+    this.zusteller.restore(c.submissions)
+    this.completed = c.completed
+    this.acks = c.acks
+    this.counter = c.counter
+    this.sent = c.sent
+    this.buffer = c.buffer
+    this.expected = c.expected
+    this.held = c.held
+    this.measures.framesOut = c.framesOut
+    this.measures.bytesOut = c.bytesOut
+  }
+  /**
+   * Ein Schritt ganz oder gar nicht: verweigert der Kandidat eine Operation (`Blocked`), wird alles seit dem
+   * Beginn zurückgenommen, der Kandidat hat nichts aufgezeichnet, die Disposition `blocked(<op>)` bleibt.
+   * Liefert false, wenn blockiert. Absturz und andere Fehler gehen durch.
+   */
+  private async guarded(f: () => Promise<void>): Promise<boolean> {
+    const c = this.checkpoint()
+    const outer = this.pending
+    this.pending = []
+    try {
+      await f()
+      const ops = this.pending
+      this.pending = outer
+      if (outer) outer.push(...ops)
+      else for (const op of ops) this.cand.record(op)
+      return true
+    } catch (e) {
+      this.pending = outer
+      if (!(e instanceof Blocked)) throw e
+      this.rollback(c)
+      this.dispositions.push(`blocked(${e.message})`)
+      return false
+    }
   }
 
   // ── Store, Commit-Grenze, Absturz ──
@@ -312,15 +377,14 @@ export class HolderDevice {
     this.crash('before-send')
     for (const d of this.held.splice(0)) this.zusteller.deposit(d)
   }
-  /** Eine Nutzeraktion: blockiert oder abgestürzt heißt nicht fehlerhaft. */
+  /** Eine Nutzeraktion: blockiert (ganz zurückgenommen) oder abgestürzt heißt nicht fehlerhaft. */
   private async action(f: () => Promise<void>): Promise<ActionResult> {
     if (this.down) return 'crashed'
     try {
-      await f()
+      if (!(await this.guarded(f))) return 'blocked'
       await this.flush()
       return 'ok'
     } catch (e) {
-      if (e instanceof Blocked) return 'blocked'
       if (e instanceof Crashed) return 'crashed'
       throw e
     }
@@ -411,7 +475,7 @@ export class HolderDevice {
     await this.sendRevision(r.id)
   }
   private async refillAll(): Promise<void> {
-    for (const r of this.state.relationships) if (r.classOn && !r.departed) await this.refill(r.id)
+    for (const r of this.state.relationships) if (r.classOn && !r.departed) await this.guarded(() => this.refill(r.id))
   }
 
   /** 8495/8500: Revision des aktuellen Zustands auf dem Kopf an den Mediator. */
@@ -534,7 +598,7 @@ export class HolderDevice {
       if (!ta || !tb) continue
       if (M.relOfTuple(this.state, ta.id)?.departed) continue // 6845.7
       const [arrival, other] = ta.record > tb.record ? [ta, tb] : [tb, ta]
-      await this.sendMapping(arrival, other)
+      await this.guarded(() => this.sendMapping(arrival, other))
     }
   }
 
@@ -546,7 +610,7 @@ export class HolderDevice {
         const frames = this.carrier.collect(this.name)
         for (const f of frames) {
           try {
-            await this.handle(f.bytes, f.address)
+            await this.guarded(() => this.handle(f.bytes, f.address))
           } catch (e) {
             if (e instanceof Crashed) throw e
             this.dispositions.push(`failed(malformed): ${(e as Error).message}`)
@@ -587,27 +651,30 @@ export class HolderDevice {
   /** 8110.7: Zeitübergänge. */
   private async tick(): Promise<void> {
     const now = this.clock.now()
-    for (const a of this.state.acts) {
-      if (a.state === 'offered' && Date.parse(now) > Date.parse(a.expiresAt) - M.PARAM.consentReserveMs) this.emit({ kind: 'expire', act: a.id }) // 8325.A7
-      else if (a.state === 'consented' && Date.parse(now) > Date.parse(a.expiresAt)) this.emit({ kind: 'expire', act: a.id }) // 8325.A8
+    for (const a of this.state.acts.slice()) {
+      if (a.state === 'offered' && Date.parse(now) > Date.parse(a.expiresAt) - M.PARAM.consentReserveMs) await this.guarded(async () => void this.emit({ kind: 'expire', act: a.id })) // 8325.A7
+      else if (a.state === 'consented' && Date.parse(now) > Date.parse(a.expiresAt)) await this.guarded(async () => void this.emit({ kind: 'expire', act: a.id })) // 8325.A8
     }
-    for (const r of this.state.relationships) {
+    for (const r of this.state.relationships.slice()) {
       const aging = r.stock.filter((k) => k.state === 'active' && !M.usable(k.expiresAt, now)).map((k) => k.anchor)
       if (aging.length) {
-        this.emit({ kind: 'age', rel: r.id, anchors: aging }) // 8475.S5
-        await this.refill(r.id)
+        await this.guarded(async () => void this.emit({ kind: 'age', rel: r.id, anchors: aging })) // 8475.S5
+        await this.guarded(() => this.refill(r.id))
       }
     }
   }
 
   /** Zustellerberichte in Fachwirkung: Karte taken/given-up (8326), Mapping sent, Wiederholung nach `failed` (6845.4). */
   private async reports(): Promise<void> {
-    for (const [d, x] of this.sent) {
+    for (const [d, x] of [...this.sent]) await this.guarded(() => this.reportOne(d, x))
+  }
+  private async reportOne(d: string, x: Sent): Promise<void> {
+    {
       const r = this.zusteller.report(d)
-      if (!r) continue
+      if (!r) return
       if (x.kind === 'card' && x.act) {
         const a = this.state.acts.find((y) => y.id === x.act)
-        if (!a) continue
+        if (!a) return
         if (a.o === 'handed' && r.state === 'accepted') {
           this.emit({ kind: 'hand-over', act: x.act, o: 'taken', digest: d })
           await this.evaluatePending(x.act)
@@ -615,7 +682,7 @@ export class HolderDevice {
       }
       if (x.kind === 'mapping' && x.pair) {
         const duty = this.state.duties.find((y) => y.pair[0] === x.pair![0] && y.pair[1] === x.pair![1])
-        if (!duty) continue
+        if (!duty) return
         if (duty.state === 'hit' && r.state === 'accepted') this.emit({ kind: 'duty', pair: x.pair, state: 'sent', mappingDigest: d })
         if ((duty.state === 'sent' || duty.state === 'hit') && r.state === 'failed') {
           // 6845.4: dieselben Bytes in einer neuen Übergabe.
@@ -649,6 +716,11 @@ export class HolderDevice {
       return
     }
     if (v.disposition !== 'unique') return
+    if (this.zusteller.submissions.has(v.digest!)) {
+      // Auf der gemeinsamen Adresse der Person liest jedes Gerät auch, was es selbst eingeliefert hat.
+      this.dispositions.push('skipped(own-frame)')
+      return
+    }
     const doc = v.document as unknown as Doc & { proof: unknown }
     if (!(await diVerify(doc, doc.issuer))) {
       this.dispositions.push('failed(proof-invalid)')
@@ -673,14 +745,18 @@ export class HolderDevice {
       await this.onAck(p.ref)
       return
     }
+    let effect: boolean
     if (doc.type === TYPES.journal) {
+      // Journalrahmen: nur auf der eigenen Adresse und nur vom eigenen Self-Anker (one-seed: auf allen Geräten derselbe).
       if (address !== this.ownRkid) return
-      this.completed.add(v.digest!)
+      if (doc.issuer !== (await this.keysFor(`self/${this.person}`)).anchor) {
+        this.dispositions.push('failed(journal-from-unexpected-signer)')
+        return
+      }
       const b = (doc.payload as { b?: string }).b
       if (typeof b === 'string') await this.applyRemote(this.cand.receiveOwnFrame(new Uint8Array(Buffer.from(b, 'base64'))))
-      return
-    }
-    const effect = await this.dispatch(doc, address)
+      effect = true
+    } else effect = await this.dispatch(doc, address)
     if (!effect) {
       this.dispositions.push('failed(validation-failed)')
       return
@@ -778,12 +854,7 @@ export class HolderDevice {
           return false
         }
         const a: M.Act = { id: p.act, mediator: r.id, own: own.anchor, voucher: p.voucher, issuedAt: p.issuedAt, expiresAt: p.expiresAt, state: 'offered', pending: null, v: null, k: false, ownCard: null, ownCardKey: null, o: 'none', ownCardDigest: null, opened: null }
-        try {
-          this.emit({ kind: 'ticket-accept', act: a }) // 8640.14
-        } catch (e) {
-          if (e instanceof Blocked) return false // K1a: kein Annahmerecht auf diesem Gerät
-          throw e
-        }
+        this.emit({ kind: 'ticket-accept', act: a }) // 8640.14; K1a ohne Annahmerecht: Blocked, der Rahmen wird ganz zurückgenommen und nicht quittiert
         const buffered = this.buffer.get(`${own.anchor}|${p.voucher.anchor}`)
         if (buffered) {
           this.buffer.delete(`${own.anchor}|${p.voucher.anchor}`)

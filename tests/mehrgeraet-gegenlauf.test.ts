@@ -18,6 +18,12 @@ import * as M from '../src/lab/mehrgeraet/model'
 //      erst, wenn der Zustand dazu im Store steht (#56, Loop-Review 3).
 //   6. Eine Quittung gilt nur vom erwarteten Empfänger der konkreten Submission, für
 //      jede quittierbare Submission, nicht nur Karte und Mapping (#55, Loop-Review 3).
+//   7. Blockiert heißt nicht fehlerhaft, und zwar ganz: eine verweigerte Operation lässt
+//      von der Nutzeraktion, vom Zeitübergang oder vom Empfang nichts zurück; die Runde
+//      läuft weiter (CodeRabbit auf d9a1669).
+//   8. Journalrahmen: an den Self-Anker gebunden, vom anderen Gerät quittiert, eigene
+//      Rahmen auf der gemeinsamen Adresse übersprungen.
+//   9. Ein Szenario, das mit einer Ausnahme abbricht, ist `crashed`, kein gemessener Verstoß.
 
 const enc = new TextEncoder()
 const byId = (rs: Awaited<ReturnType<typeof runX15>>) => Object.fromEntries(rs.map((r) => [r.scenario, r]))
@@ -39,8 +45,8 @@ function k0With(authorize: (device: string, op: M.Op, state: M.HolderState) => b
   }
 }
 
-/** Ein minimales Journal (K1-Skelett, ohne Rechte): jede Operation reist als Rahmen an die eigene Adresse. */
-function journal(hack?: (op: M.Op, state: M.HolderState) => void): MultiDeviceCandidate {
+/** Ein minimales Journal (K1-Skelett): die Operationen einer Runde reisen als ein Rahmen an die eigene Adresse; `deny` verweigert einzelne Operationen je Gerät. */
+function journal(hack?: (op: M.Op, state: M.HolderState) => void, deny?: (device: string, op: M.Op) => boolean): MultiDeviceCandidate {
   const seeds = new Map<string, Uint8Array>()
   const device = (person: string, name: string, seed: Uint8Array): CandidateDevice => {
     const out: M.Op[] = []
@@ -52,17 +58,20 @@ function journal(hack?: (op: M.Op, state: M.HolderState) => void): MultiDeviceCa
         log.push(op)
         out.push(op)
       },
-      takeOwnFrames: () => out.splice(0).map((op) => ({ body: enc.encode(JSON.stringify(op)) })),
+      takeOwnFrames: () => {
+        const ops = out.splice(0)
+        return ops.length ? [{ body: enc.encode(JSON.stringify(ops)) }] : []
+      },
       receiveOwnFrame(body) {
-        const op = JSON.parse(new TextDecoder().decode(body)) as M.Op
-        log.push(op)
-        return [op]
+        const ops = JSON.parse(new TextDecoder().decode(body)) as M.Op[]
+        log.push(...ops)
+        return ops
       },
       persist: () => log,
       restore() {},
       authorize(op, state) {
         hack?.(op, state)
-        return true
+        return !deny?.(name, op)
       },
     }
   }
@@ -219,6 +228,7 @@ describe('E15 Gegenläufe: Orakel', () => {
     const c = k0With((_, op, state) => !(op.kind === 'ticket-accept' && state.relationships.some((r) => r.accepted.length >= 9)))
     const r = byId(await runX15(c, false, ['X2']))
     expect(r.X2!.outcome, r.X2!.detail).toBe('nicht bestanden')
+    expect(r.X2!.crashed, r.X2!.detail).toBeFalsy()
     expect(r.X2!.measures.acceptedActs).toBe(9)
     expect(r.X2!.measures.budgetOverrun).toBe(0)
   }, 300_000)
@@ -239,6 +249,130 @@ describe('E15 Gegenläufe: Orakel', () => {
     })
     const r = byId(await runX15(c, false, ['X3']))
     expect(r.X3!.outcome, r.X3!.detail).toBe('nicht bestanden')
+    expect(r.X3!.crashed, r.X3!.detail).toBeFalsy()
     expect(r.X3!.measures.leftTerminal).toBe(1)
   }, 300_000)
+})
+
+describe('E15 Gegenläufe: Blockieren, Journal, Absturz', () => {
+  it('Blocked ist atomar: ein verweigertes hand-over lässt Zustand, Versand und Journal der Nutzeraktion unberührt', async () => {
+    const w = new Welt15(journal(undefined, (device, op) => device === 'A1' && op.kind === 'hand-over'))
+    const A = await w.person('A', 'A1')
+    const B = await w.person('B', 'B1')
+    const Mm = await w.person('M', 'M1')
+    const am = await w.encounter(A, Mm)
+    const bm = await w.encounter(B, Mm)
+    await w.rounds(2)
+    await A.setClass(am.x.id, true)
+    await B.setClass(bm.x.id, true)
+    await w.rounds(3)
+    const r = await Mm.introduce(am.y.id, bm.y.id)
+    const actId = (r as { act: string }).act
+    await w.until(() => A.state.acts.length === 1)
+    await w.rounds(1) // Journalrahmen der Annahme sind hinaus
+    expect(A.cand.takeOwnFrames()).toEqual([])
+    const before = structuredClone(A.state)
+    const subs = A.zusteller.submissions.size
+    const carried = w.carrier.carried.length
+    expect(await A.consent(actId)).toBe('blocked')
+    expect(A.state).toEqual(before)
+    expect(M.act(A.state, actId).state).toBe('offered')
+    expect(A.zusteller.submissions.size).toBe(subs)
+    expect(A.cand.takeOwnFrames()).toEqual([])
+    expect(A.measures.blocked).toBe(1)
+    await w.rounds(2)
+    // Keine Karte an Bs Adresse; der übrige Verkehr (Quittungen, Journal) läuft weiter.
+    expect(w.carrier.carried.slice(carried).filter((f) => f.address === M.act(A.state, actId).voucher.keyAgreement)).toEqual([])
+    expect(B.state.acts.find((a) => a.id === actId)?.pending).toBeNull()
+  }, 60_000)
+
+  it('Blocked im Zeitübergang: ein verweigertes allocate beim Nachfüllen bricht die Runde nicht ab; die Alterung bleibt, nichts geht hinaus', async () => {
+    let deny = false
+    const w = new Welt15(k0With((device, op) => !(deny && device === 'A1' && op.kind === 'allocate')))
+    const A = await w.person('A', 'A1')
+    const Mm = await w.person('M', 'M1')
+    const am = await w.encounter(A, Mm)
+    await w.rounds(2)
+    await A.setClass(am.x.id, true)
+    await w.rounds(3)
+    deny = true
+    w.clock.advance(174 * 24 * 3600 * 1000)
+    const carried = w.carrier.carried.length
+    await A.round()
+    expect(A.dispositions).toContain('blocked(allocate)')
+    expect(A.measures.blocked).toBe(1)
+    const rel = M.rel(A.state, am.x.id)
+    expect(rel.stock.filter((k) => k.state === 'aging').length).toBe(5)
+    expect(rel.stock.length).toBe(5)
+    expect(rel.revision).toBe(1)
+    expect(w.carrier.carried.length).toBe(carried)
+  }, 60_000)
+
+  it('Blocked beim Empfang: ein verweigertes view wirkt nicht und wird nicht quittiert; mit Recht wirkt die Wiederholung', async () => {
+    let deny = true
+    const w = new Welt15(k0With((device, op) => !(deny && device === 'M1' && op.kind === 'view')))
+    const A = await w.person('A', 'A1')
+    const Mm = await w.person('M', 'M1')
+    const am = await w.encounter(A, Mm)
+    await w.rounds(2)
+    await A.setClass(am.x.id, true)
+    const sub = [...A.zusteller.submissions.values()].find((s) => s.address === am.x.peerKeyAgreement)!
+    await w.rounds(2)
+    expect(Mm.dispositions).toContain('blocked(view)')
+    expect(Mm.dispositions).not.toContain('failed(malformed): view')
+    expect(M.rel(Mm.state, am.y.id).view).toBeNull()
+    expect(A.zusteller.report(sub.digest)?.state).toBe('accepted')
+    deny = false
+    const n = await w.until(() => M.rel(Mm.state, am.y.id).view !== null)
+    expect(n).toBeGreaterThan(0)
+    await w.rounds(2)
+    expect(A.zusteller.report(sub.digest)?.state).toBe('delivered')
+  }, 60_000)
+
+  it('Journal: das andere Gerät bindet den Rahmen an den Self-Anker und quittiert; eigene Rahmen werden übersprungen; fremde wirken nicht', async () => {
+    const w = new Welt15(journal())
+    const A1 = await w.person('A', 'A1')
+    const A2 = await w.enrol(A1, 'A2')
+    const Mm = await w.person('M', 'M1')
+    const am = await w.encounter(A1, Mm)
+    await w.rounds(2)
+    await A1.setClass(am.x.id, true)
+    await w.rounds(4)
+    const self = await A1.cand.keys.pair('self/A')
+    // Eigene Dokumente an die Self-Adresse (nicht die Quittungen, die A1 selbst dorthin schickt: Quittungen werden nie quittiert).
+    const journalSubs = [...A1.zusteller.submissions.values()].filter((s) => s.address === self.rkid && A1.expected.has(s.digest))
+    expect(journalSubs.length).toBeGreaterThan(0)
+    for (const s of journalSubs) expect(s.report?.state, s.digest).toBe('delivered')
+    expect(M.rel(A2.state, am.x.id).classOn).toBe(true)
+    expect(M.rel(A2.state, am.x.id).stock.length).toBe(5)
+    expect(A2.expected.size).toBe(0) // A2 hat nichts selbst gesendet: keine zweite Nachfüllung, keine zweite Revision
+    // Auf geteilten Adressen liest jedes Gerät auch Ms Quittungen für das andere Gerät; die bleiben ungebunden, sonst nichts.
+    for (const d of [A1, A2]) expect(d.dispositions.filter((x) => x.startsWith('failed') && x !== 'failed(ack-unbound)')).toEqual([])
+    // E signiert einen Journalrahmen und versiegelt ihn an die Self-Adresse.
+    const e = await edFromSeed(rand(32))
+    const anchor = anchorOfEd(e.pubRaw)
+    const op: M.Op = { id: { writer: 'E@1', n: 1 }, at: w.clock.now(), kind: 'class', rel: am.x.id, on: false } as M.Op
+    const doc = await diSign({ anchor, ed: { priv: e.priv } }, { id: crypto.randomUUID(), type: TYPES.journal, issuer: anchor, recipient: self.anchor, replyTo: self.rkid, issuedAt: w.clock.now(), payload: { b: Buffer.from(JSON.stringify(op)).toString('base64') } }, w.clock.now())
+    w.carrier.deposit(self.rkid, enc.encode(jcs(await seal(doc as unknown as Json, self.rkid))))
+    await w.rounds(2)
+    for (const d of [A1, A2]) {
+      expect(d.dispositions).toContain('failed(journal-from-unexpected-signer)')
+      expect(M.rel(d.state, am.x.id).classOn).toBe(true)
+    }
+  }, 60_000)
+
+  it('crashed: ein Szenario, das mit einer Ausnahme abbricht, ist markiert und kein gemessener Verstoß', async () => {
+    const base = k0()
+    const c: MultiDeviceCandidate = {
+      ...base,
+      async first(person, device, seed) {
+        const d = await base.first(person, device, seed)
+        return { ...d, authorize: () => { throw new Error('boom') } }
+      },
+    }
+    const r = byId(await runX15(c, false, ['X1']))
+    expect(r.X1!.outcome).toBe('nicht bestanden')
+    expect(r.X1!.crashed).toBe(true)
+    expect(r.X1!.detail).toContain('boom')
+  }, 60_000)
 })

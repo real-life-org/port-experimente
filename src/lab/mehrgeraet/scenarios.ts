@@ -21,6 +21,8 @@ export interface X15Result {
   measures: Record<string, number | string>
   /** Plan Abschnitt 4: ein ✓ unter einer Ersatzregel (K3) ist „Zusage geändert“, nie Erfüllung der alten. */
   promiseChanged?: boolean
+  /** Das Szenario ist mit einer Ausnahme abgebrochen: kein gemessener Verstoß, ein Fehler im Prüfstand oder Kandidaten. */
+  crashed?: boolean
 }
 
 type Body = Omit<X15Result, 'scenario' | 'title'>
@@ -471,7 +473,7 @@ export async function runX15(candidate: MultiDeviceCandidate, serial = false, on
     try {
       out.push({ scenario: s.id, title: s.title, ...(await s.run(candidate, serial)) })
     } catch (e) {
-      out.push({ scenario: s.id, title: s.title, outcome: 'nicht bestanden', detail: `Fehler: ${(e as Error).stack ?? (e as Error).message}`, measures: {} })
+      out.push({ scenario: s.id, title: s.title, outcome: 'nicht bestanden', crashed: true, detail: `Fehler: ${(e as Error).stack ?? (e as Error).message}`, measures: {} })
     }
   }
   return out

@@ -9,8 +9,10 @@ workshop repository (`rltp/design/port-experimente-2026-10.md`).
 
 ## Results
 
-- **The conformance matrix**, interactive: 41 promises across three ports,
-  13 candidates, every cell with its scenarios and the recorded result:
+- **The conformance matrix**, interactive: 52 promises across four ports
+  (group candidates in the authority, key and replication ports, multi-device
+  candidates in the multi-device port), every cell with its scenarios and
+  the recorded result:
   https://real-life.org/port-experimente/matrix.html (source `public/matrix.html`).
   Snapshot of the run of 16 October 2026. The same matrix as Markdown comes from
   `REPORT=1 pnpm vitest run report` (file `matrix.md`); the browser page

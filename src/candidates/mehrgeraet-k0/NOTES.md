@@ -74,6 +74,11 @@ applicable.
   tuples of departed relationships take part in no hit, mapping or union.
 - Time: acts expire at `expiresAt − consent-reserve` (offered) or
   `expiresAt` (consented); keys age by 8470; no tombstones yet.
+- Blocked is all or nothing: when the candidate refuses an operation, the
+  device takes back everything the step did so far (state, submissions,
+  receipts, journal entries) and does not acknowledge the frame; the
+  counterpart repeats it. Key derivations and address registrations at
+  the carrier are not taken back, they carry no state.
 - Receipts: every submission records the anchor it expects the receipt
   from (the document's recipient); a receipt from anyone else, or for a
   submission the device does not know, has no effect. A journal frame
