@@ -31,9 +31,9 @@ must pass for K0, and it does.
 | X9 device revocation | failed | n/a | a thief with A2's seed and state re-registers and reads the next ticket |
 | X10 restricted app | n/a | n/a | K0 has no rights per device |
 | X11 long separation | failed | n/a | A1 connected two acts; A2, back after 30 rounds, holds them as offered; the projections never agree |
-| X12 delivery per device | passed | passed | lost receipt and unreachable carrier end as in T9/T10; B's effect once |
+| X12 delivery per device | failed | passed | lost receipt and unreachable carrier end as in T9/T10; B's effect once; A2 never catches up with A1's delivered card |
 
-Counts over X1 to X12 with two devices: 2 kept, 9 not kept, 1 not
+Counts over X1 to X12 with two devices: 1 kept, 10 not kept, 1 not
 applicable.
 
 ## Findings
