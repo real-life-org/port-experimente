@@ -237,7 +237,7 @@ describe('E15 Gegenläufe: Orakel', () => {
     const r = byId(await runX15(c, false, ['X1']))
     expect(r.X1!.outcome, r.X1!.detail).toBe('bestanden')
     expect(r.X1!.measures.blockedOperations).toBeGreaterThanOrEqual(1)
-    expect(r.X1!.measures.progressAfterHeal).toBe(1)
+    expect(r.X1!.measures.progressAfterHeal).toBe(2) // nach der Heilung über das Gerät mit dem Recht (M1)
   }, 300_000)
 
   it('X2: „nach neun alles verweigern“ fällt, weil die Person nur neun statt zehn annimmt', async () => {

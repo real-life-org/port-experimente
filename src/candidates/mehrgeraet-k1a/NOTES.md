@@ -16,18 +16,31 @@ limit are assigned to one device in advance.
   the previous batch of the same device is the predecessor. A device
   applies a batch only after its predecessor (otherwise the frame is
   deferred and the sender's dispatcher repeats it), and exactly once.
-- **Incarnation.** A restore from the store gives the device a new
-  incarnation (`A1@2`); the batches before the crash stay under the old
-  one, the next steps under the new one. Enrollment copies state, journal
-  and intents to the new device.
+- **Incarnation.** A restore from the store gives the device a fresh
+  random incarnation (`A1@3f9a1c20`), never a counter from the backup, so
+  two restores of the same backup never collide; a batch key seen twice
+  with other content is recorded as a journal conflict. The batches
+  before the crash stay under the old incarnation, the next steps under
+  the new one. Enrollment copies state, journal and intents to the new
+  device.
+- **Candidate state is part of the step.** The device's checkpoint
+  includes the candidate's volatile state (journal, outbox, counter);
+  when a step is taken back after a journal frame was applied, the
+  candidate forgets the batch too, the sender repeats the frame and the
+  devices converge (gate review 7, B1).
 - **Intents instead of re-production.** A device resumes only intents it
   produced itself, with the same bytes (HSC-120); an intent of a sibling
   device stays with that device. K0 re-produced an open mapping on the
   enrolled device (X5); K1a does not.
-- **Static rights at enrollment.** The acceptance budget per mediator
-  relationship (8510, ten) is split evenly across the person's devices
-  (five each for two); a device without quota blocks a ticket, the frame
-  is not acknowledged and the sibling device accepts it. The stock keys a
+- **Static rights, fixed device count.** The number of devices per
+  person is fixed from the first device on (two by default); enrollment
+  beyond it is refused, so rights are never redistributed (versioned
+  rights are K1b). The acceptance budget per mediator relationship
+  (8510, ten) is split evenly across the devices (five each for two) and
+  counted from the device's own acceptance operations in the journal,
+  unconfirmed and inside the 28-day window; a device without quota blocks
+  a ticket, the frame is not acknowledged and the sibling device accepts
+  it. The stock keys a
   mediator may name (8570) are split by key number modulo the number of
   devices (8445: the revision lists the numbers), so the devices take
   turns; a mediator device without a nameable key refuses, the other
@@ -69,7 +82,8 @@ applicable (K0: 1 kept, 10 not kept, 1 not applicable).
   A1 consents, A2 declines; the fold keeps the first terminal state on
   each device (A1 connected, A2 declined), records the contradiction, and
   the devices never agree. A connect from the other device must not
-  override a decline either (model fix in this step). Making consent and
+  override a decline either; the refused attempt is recorded as a
+  conflict, not as an executed connect (model fix in this step). Making consent and
   decline a device right is the open question for the multi-writer
   contract, not something a journal solves.
 - **No catch-up after a backup (X6).** A2 restored from an old backup gets
@@ -96,9 +110,8 @@ applicable (K0: 1 kept, 10 not kept, 1 not applicable).
 
 ## Limits of step 1
 
-- Rights are split only at enrollment and only between the enrolling
-  device and the new one; a third device changes the shares of the first
-  two without telling them (fine for two devices, not beyond).
+- The device count is fixed; a third device is refused. Transferring or
+  re-splitting rights is K1b.
 - No transfer of quota between devices (that is K1b); no takeover of a
   sibling's intent when the sibling is lost (X20, K2).
 - The journal is a plain list of batches in the device's store; no

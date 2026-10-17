@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { Welt15 } from '../src/lab/mehrgeraet/welt'
 import { HolderDevice } from '../src/lab/mehrgeraet/holder'
 import { runX15 } from '../src/lab/mehrgeraet/scenarios'
-import { k1a, type K1aDevice } from '../src/candidates/mehrgeraet-k1a'
+import { k1a, K1aDevice } from '../src/candidates/mehrgeraet-k1a'
 import * as M from '../src/lab/mehrgeraet/model'
 
 // E15 K1a Schritt 1: der Abnahmelauf aus Tor-Review 6 (Plan 6e).
@@ -12,6 +12,12 @@ import * as M from '../src/lab/mehrgeraet/model'
 //   3. Absturz vor Versand → neue Instanz mit neuer Inkarnation → dieselben Bytes gehen hinaus.
 //   4. Dupliziertes, umgeordnetes, unvollständiges Journal → genau eine Wirkung, gleiche vollständige Projektion.
 //   5. Eine Absicht des anderen Geräts wird nicht neu produziert (X5 besteht).
+//   Schritt 1b (Tor-Review 7):
+//   6. Journal und Holder bleiben zusammen: scheitert der Schritt nach dem Anwenden eines Rahmens, kennt der
+//      Kandidat den Batch nicht, der Rahmen wird wiederholt, die Geräte konvergieren (B1).
+//   7. Zweimal dasselbe Backup wiederhergestellt ergibt zwei verschiedene Inkarnationen (B2).
+//   8. Die Gerätezahl ist fest: ein weiteres Enrollment wird verweigert (B4).
+//   9. Das Annahmekontingent zählt im 28-Tage-Fenster (S1).
 
 const byId = (rs: Awaited<ReturnType<typeof runX15>>) => Object.fromEntries(rs.map((r) => [r.scenario, r]))
 
@@ -157,4 +163,71 @@ describe('K1a Schritt 1: Abnahmelauf', () => {
     expect(r.X2!.outcome, r.X2!.detail).toBe('bestanden')
     expect(r.X2!.measures.blockedOperations).toBeGreaterThanOrEqual(1)
   }, 600_000)
+
+  it('6. B1: scheitert ein Schritt nach dem Anwenden eines Journalrahmens, bleibt der Batch dem Kandidaten unbekannt; Wiederholung heilt', async () => {
+    const { w, A, am } = await pair()
+    const A2 = await w.enrol(A, 'A2')
+    await w.rounds(2)
+    // Einmal scheitert bei A2 die Quittungsbildung nach dem Anwenden (fehlende Voraussetzung → zurückgestellt).
+    const inner = A2.cand.keys
+    let fail = 1
+    ;(A2.cand as { keys: typeof inner }).keys = { pair: async (ctx) => { if (fail && ctx === 'self/A') { fail = 0; throw new M.Missing('tuple', 'injected', 'A') } return inner.pair(ctx) } }
+    const before = (A2.cand as K1aDevice).persist().batches.length
+    await A.setClass(am.x.id, false)
+    await w.rounds(1)
+    expect(A2.dispositions.some((d) => d.startsWith('deferred(tuple:injected'))).toBe(true)
+    expect(M.rel(A2.state, am.x.id).classOn).toBe(true) // zurückgenommen
+    expect((A2.cand as K1aDevice).persist().batches.length).toBe(before) // Journal ebenfalls
+    const n = await w.until(() => w.agree('A').agree && !M.rel(A2.state, am.x.id).classOn, 12)
+    expect(n).toBeGreaterThan(0)
+    expect((A2.cand as K1aDevice).persist().batches.length).toBe(before + 1)
+  }, 60_000)
+
+  it('7. B2: zweimal dasselbe Backup wiederhergestellt ergibt verschiedene Inkarnationen; beide Schritte kommen beim Schwestergerät an', async () => {
+    const { w, A, am } = await pair()
+    const A2 = await w.enrol(A, 'A2')
+    await w.rounds(2)
+    const backup = w.stores.get('A1')!.snapshot()
+    const w1 = A.cand.writer
+    w.stores.get('A1')!.restore(backup)
+    await A.reload()
+    const w2 = A.cand.writer
+    await A.setClass(am.x.id, false)
+    await w.rounds(2)
+    w.stores.get('A1')!.restore(backup)
+    await A.reload()
+    const w3 = A.cand.writer
+    await A.setClass(am.x.id, true) // anderer Schritt unter der dritten Inkarnation
+    await w.rounds(3)
+    expect(new Set([w1, w2, w3]).size).toBe(3)
+    const seen = (A2.cand as K1aDevice).persist().batches.map((b) => b.writer)
+    expect(seen).toContain(w2)
+    expect(seen).toContain(w3)
+  }, 60_000)
+
+  it('8. B4: die Gerätezahl ist fest; ein drittes Gerät wird verweigert, die Plätze der ersten beiden bleiben', async () => {
+    const { w, A } = await pair()
+    const A2 = await w.enrol(A, 'A2')
+    expect((A.cand as K1aDevice).slots).toBe(2)
+    expect((A2.cand as K1aDevice).slots).toBe(2)
+    await expect(w.enrol(A, 'A3')).rejects.toThrow(/fest|fixed/)
+    expect((A.cand as K1aDevice).slots).toBe(2)
+  }, 60_000)
+
+  it('9. S1: eine eigene Annahme außerhalb des 28-Tage-Fensters zählt nicht mehr gegen das Kontingent', async () => {
+    const d = new K1aDevice('A', 'A1', new Uint8Array(32), 0, 1, 1)
+    const s = M.emptyState('A')
+    const t = (iso: string) => iso
+    const tuple: M.Tuple = { id: 'A:e1', own: 'a', ownKey: 'k/a', peer: 'm', peerKeyAgreement: 'rk/m', record: 'r', openedAt: t('2026-08-01T00:00:00.000Z'), candidates: [], deactivated: false }
+    M.apply(s, { id: { writer: 'A1@1', n: 1 }, at: t('2026-08-01T00:00:00.000Z'), kind: 'open-tuple', rel: null, tuple, provenance: 'encounter', vouchedBy: null, act: null })
+    const actOf = (id: string, own: string): M.Act => ({ id, mediator: 'A:e1', own, voucher: { anchor: 'V', keyAgreement: 'rk/V', name: 'B' }, issuedAt: t('2026-08-01T00:00:00.000Z'), expiresAt: t('2026-08-08T00:00:00.000Z'), state: 'offered', pending: null, v: null, k: false, ownCard: null, ownCardKey: null, o: 'none', ownCardDigest: null, opened: null })
+    const old: M.Op = { id: { writer: 'A1@1', n: 2 }, at: t('2026-08-01T00:00:00.000Z'), kind: 'ticket-accept', act: actOf('old', 'k1') }
+    expect(d.authorize(old, s)).toBe(true)
+    M.apply(s, old)
+    d.commit({ ops: [old], intents: [] })
+    const fresh: M.Op = { id: { writer: 'A1@1', n: 3 }, at: t('2026-10-17T00:00:00.000Z'), kind: 'ticket-accept', act: actOf('new', 'k2') }
+    expect(d.authorize(fresh, s)).toBe(true) // die alte Annahme liegt außerhalb des Fensters
+    const soon: M.Op = { ...fresh, at: t('2026-08-10T00:00:00.000Z') }
+    expect(d.authorize(soon, s)).toBe(false) // innerhalb des Fensters zählt sie
+  })
 })

@@ -9,10 +9,14 @@
 // never re-produces an intent of another device. Rights are assigned
 // statically at enrollment to the writer that consumes them: acceptance
 // budget split evenly across the devices of a person, the stock keys a
-// mediator may name split by anchor hash. Decisions (consent, decline) are
-// allowed on every device; a conflict stays visible in the fold.
+// mediator may name split by key number. Decisions (consent, decline) are
+// allowed on every device; a conflict stays visible in the fold. The number
+// of devices is fixed at the first enrollment (rights are never
+// redistributed in step 1); a restore gives a fresh random incarnation; the
+// candidate's volatile state is part of the device's checkpoint.
 
-import { seedScheme, type CandidateDevice, type HolderDevice, type Intent, type MultiDeviceCandidate, type Transaction } from '../../lab/mehrgeraet/holder'
+import { randomBytes } from 'node:crypto'
+import { EnrolmentRefused, seedScheme, type CandidateDevice, type HolderDevice, type Intent, type MultiDeviceCandidate, type Transaction } from '../../lab/mehrgeraet/holder'
 import * as M from '../../lab/mehrgeraet/model'
 
 const enc = new TextEncoder()
@@ -30,7 +34,7 @@ interface Batch {
 interface Persisted {
   index: number
   slots: number
-  inc: number
+  inc: string
   batches: Batch[]
   out: Batch[]
 }
@@ -38,14 +42,19 @@ interface Persisted {
 export interface K1aOptions {
   /** Acceptance budget per mediator relationship for the whole person (8510); split evenly across devices. */
   budget?: number
+  /** Devices per person, fixed (B4): rights are split by this number from the first device on; enrollment beyond it is refused. */
+  devices?: number
 }
+
+const fresh = () => randomBytes(4).toString('hex')
 
 export class K1aDevice implements CandidateDevice {
   readonly keys
   /** Position among the person's devices (0 = first) and how many devices share the rights, fixed at enrollment. */
   index: number
   slots: number
-  private inc = 1
+  /** Inkarnation: frische Zufallskennung je Instanz und je Restore (B2), nie aus dem Backup gezählt. */
+  private inc = fresh()
   private batches: Batch[] = []
   private out: Batch[] = []
   private n = 0
@@ -67,13 +76,14 @@ export class K1aDevice implements CandidateDevice {
   private get share() {
     return Math.floor(this.budget / this.slots)
   }
-  /** Own acceptance ops across incarnations (the journal is the source of what this device consumed). */
-  private ownAccepted(rel: string, state: M.HolderState): number {
+  /** Own acceptance ops across incarnations (the journal is the source of what this device consumed), unconfirmed and inside the 8510 window of `now` (S1). */
+  private ownAccepted(rel: string, state: M.HolderState, now: string): number {
     const r = M.findRel(state, rel)
     if (!r) return 0
     const own = new Set<string>()
     for (const b of this.batches) if (b.writer.startsWith(`${this.name}@`)) for (const op of b.ops) if (op.kind === 'ticket-accept') own.add(op.act.id)
-    return r.accepted.filter((e) => own.has(e.act) && !r.confirmed.includes(e.act)).length
+    const since = Date.parse(now) - M.PARAM.budgetWindowMs
+    return r.accepted.filter((e) => own.has(e.act) && !r.confirmed.includes(e.act) && Date.parse(e.at) > since).length
   }
   /** Ein fremder Vorrats-Schlüssel gehört dem Gerät, dessen Platz seine Nummer trifft (8445: n mod Geräte); so wechseln sich die Geräte ab. */
   mayName(anchor: string, rel: string, state: M.HolderState): boolean {
@@ -83,7 +93,7 @@ export class K1aDevice implements CandidateDevice {
     return k.n % this.slots === this.index
   }
   authorize(op: M.Op, state: M.HolderState): boolean {
-    if (op.kind === 'ticket-accept') return this.ownAccepted(op.act.mediator, state) < this.share
+    if (op.kind === 'ticket-accept') return this.ownAccepted(op.act.mediator, state, op.at) < this.share
     if (op.kind === 'introduce') return this.mayName(op.act.a.key, op.act.a.rel, state) && this.mayName(op.act.b.key, op.act.b.rel, state)
     return true
   }
@@ -98,11 +108,15 @@ export class K1aDevice implements CandidateDevice {
   }
   receiveOwnFrame(body: Uint8Array): Transaction {
     const b = JSON.parse(dec.decode(body)) as Batch
-    const key = `${b.writer}#${b.n}`
-    if (this.batches.some((x) => `${x.writer}#${x.n}` === key)) return { ops: [], intents: [] } // schon bekannt: nichts Neues
+    const known = this.batches.find((x) => x.writer === b.writer && x.n === b.n)
+    if (known) {
+      if (JSON.stringify(known.ops) === JSON.stringify(b.ops) && JSON.stringify(known.intents) === JSON.stringify(b.intents)) return { ops: [], intents: [] } // schon bekannt: nichts Neues
+      // Gleicher Schlüssel, anderer Inhalt: zwei Inkarnationen mit derselben Kennung (B2); sichtbar machen, nicht still verwerfen.
+      return { ops: [{ id: { writer: `${b.writer}#conflict`, n: b.n }, at: b.ops[0]?.at ?? new Date(0).toISOString(), kind: 'finding', text: `Journal-Konflikt: Batch ${b.writer}#${b.n} zweimal mit anderem Inhalt` }], intents: [] }
+    }
     // Vorgänger: jede Operation des vorigen Batches dieses Geräts muss bekannt sein, sonst zurückstellen.
-    const known = new Set(this.batches.flatMap((x) => x.ops.map((o) => M.opKey(o.id))))
-    const missing = b.deps.find((d) => !known.has(d))
+    const knownOps = new Set(this.batches.flatMap((x) => x.ops.map((o) => M.opKey(o.id))))
+    const missing = b.deps.find((d) => !knownOps.has(d))
     if (missing) throw new M.Missing('batch', missing, this.person)
     return { ops: b.ops, intents: b.intents.map((i) => ({ ...i, bytes: new Uint8Array(Buffer.from(i.bytes, 'base64')) })) }
   }
@@ -110,6 +124,16 @@ export class K1aDevice implements CandidateDevice {
   applied(body: Uint8Array): void {
     const b = JSON.parse(dec.decode(body)) as Batch
     if (!this.batches.some((x) => x.writer === b.writer && x.n === b.n)) this.batches.push(b)
+  }
+  /** Flüchtiger Stand für die Rücknahme eines Schritts (B1): Journal, Ausgangsqueue, Zähler; die Inkarnation bleibt. */
+  snapshot(): unknown {
+    return { batches: structuredClone(this.batches), out: structuredClone(this.out), n: this.n }
+  }
+  rollback(s: unknown): void {
+    const d = s as { batches: Batch[]; out: Batch[]; n: number }
+    this.batches = d.batches
+    this.out = d.out
+    this.n = d.n
   }
   persist(): Persisted {
     return { index: this.index, slots: this.slots, inc: this.inc, batches: this.batches, out: this.out }
@@ -121,7 +145,7 @@ export class K1aDevice implements CandidateDevice {
     this.slots = d.slots
     this.batches = d.batches
     this.out = d.out
-    this.inc = d.inc + 1 // neue Inkarnation (Befund 5)
+    this.inc = fresh() // neue Inkarnation (Befund 5), unabhängig vom Backup (B2)
     this.n = 0
   }
   /** Journal für ein neues Gerät: alles, was dieses Gerät kennt. */
@@ -135,6 +159,7 @@ export class K1aDevice implements CandidateDevice {
 
 export function k1a(opts: K1aOptions = {}): MultiDeviceCandidate {
   const budget = opts.budget ?? M.PARAM.budget
+  const slots = opts.devices ?? 2
   const seeds = new Map<string, Uint8Array>()
   const devices = new Map<string, K1aDevice[]>() // person → Geräte in Enrollment-Reihenfolge
   return {
@@ -143,16 +168,15 @@ export function k1a(opts: K1aOptions = {}): MultiDeviceCandidate {
     capabilities: new Set(['journal', 'rights']),
     async first(person, name, seed) {
       seeds.set(person, seed)
-      const d = new K1aDevice(person, name, seed, 0, 1, budget)
+      const d = new K1aDevice(person, name, seed, 0, slots, budget)
       devices.set(person, [d])
       return d
     },
     async enrol(from: HolderDevice, name) {
       const list = devices.get(from.person) ?? []
-      const slots = list.length + 1
-      // Statisch beim Enrollment: alle bisherigen Geräte teilen neu; das neue Gerät erhält den letzten Platz, den Zustand und das Journal.
-      for (const d of list) d.slots = slots
-      const d = new K1aDevice(from.person, name, seeds.get(from.person)!, slots - 1, slots, budget)
+      // Feste Gerätezahl (B4): die Plätze stehen von Anfang an fest, nichts wird umverteilt; darüber hinaus wird verweigert (versionierte Rechte = K1b).
+      if (list.length >= slots) throw new EnrolmentRefused(`K1a: Gerätezahl fest auf ${slots}; Enrollment von ${name} verweigert`)
+      const d = new K1aDevice(from.person, name, seeds.get(from.person)!, list.length, slots, budget)
       d.adopt((from.cand as K1aDevice).journal())
       list.push(d)
       devices.set(from.person, list)

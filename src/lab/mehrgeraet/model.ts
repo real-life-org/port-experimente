@@ -474,9 +474,9 @@ function applyBody(s: HolderState, op: Op): void {
       const a = act(s, op.act)
       if (a.opened || s.relationships.some((r) => r.tuples.some((t) => t.id === op.tuple.id))) return // Effekt-Identität: der Akt
       if (a.state === 'declined') {
-        // 8325.A3: eine Ablehnung ist terminal, auch gegen eine Verbindung vom anderen Gerät; der Widerspruch bleibt sichtbar (K1a X3).
+        // 8325.A3: eine Ablehnung ist terminal, auch gegen eine Verbindung vom anderen Gerät; der abgewiesene Versuch ist ein Konflikt, keine ausgeführte Verbindung (Review 7 S3).
         s.findings.push(`connect auf ${a.id} nach decline: Widerspruch (8325.A3)`)
-        effect(s, op, `connect:${a.id}`)
+        effect(s, op, `conflict:connect:${a.id}`)
         return
       }
       s.relationships.push(emptyRel(op.rel, op.tuple, 'introduction', [a.mediator]))

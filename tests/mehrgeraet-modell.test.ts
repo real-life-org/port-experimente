@@ -179,7 +179,8 @@ describe('B2: Reihenfolge und Konflikte', () => {
     M.apply(s, op({ kind: 'connect', act: 'act1', rel: 'A:act:act1', tuple: tuple('A:act:act1', 'c', 'v') }, 'A1@1'))
     expect(M.act(s, 'act1').state).toBe('declined')
     expect(s.relationships.length).toBe(1)
-    expect(s.effects.some((e) => e.id === 'connect:act1')).toBe(true)
+    expect(s.effects.some((e) => e.id === 'conflict:connect:act1')).toBe(true)
+    expect(s.effects.some((e) => e.id === 'connect:act1')).toBe(false)
     expect(s.findings.some((f) => f.includes('8325.A3'))).toBe(true)
   })
 

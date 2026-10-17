@@ -104,6 +104,8 @@ export interface Transaction {
 
 /** Der Kandidat verweigert eine Operation (fehlendes Recht, K1a): die Nutzeraktion ist blockiert, nicht fehlerhaft. */
 export class Blocked extends Error {}
+/** Der Kandidat verweigert ein weiteres Gerät (feste Gerätezahl, K1a): das Szenario weicht auf ein vorhandenes aus. */
+export class EnrolmentRefused extends Error {}
 
 /**
  * Was ein Kandidat je Gerät beisteuert. Der Holder-Zustand gehört dem Gerät; der Kandidat sagt, was erlaubt ist und wie
@@ -128,6 +130,9 @@ export interface CandidateDevice {
   receiveOwnFrame(body: Uint8Array): Transaction
   /** Der Schritt aus diesem Rahmen ist angewandt: der Kandidat merkt ihn sich (Dedupe, Vorgänger). Nach dem Gelingen gerufen. */
   applied?(body: Uint8Array): void
+  /** Flüchtiger Stand des Kandidaten für die Rücknahme eines Schritts (Tor-Review 7 B1): ohne Inkarnationswechsel, anders als `restore`. Ohne Methoden hält der Kandidat nichts Rücknehmbares. */
+  snapshot?(): unknown
+  rollback?(snapshot: unknown): void
   /** Was der Kandidat dauerhaft hält (Journal); Teil des Store-Abbilds. */
   persist(): unknown
   /** Neuaufbau aus dem Store; ein Kandidat mit Inkarnationen wechselt hier die Inkarnation. */
@@ -334,6 +339,7 @@ export class HolderDevice {
       buffer: new Map(this.buffer),
       expected: new Map(this.expected),
       intents: new Map(this.intents),
+      cand: this.cand.snapshot?.(),
       held: this.held.slice(),
       framesOut: this.measures.framesOut,
       bytesOut: this.measures.bytesOut,
@@ -349,6 +355,7 @@ export class HolderDevice {
     this.buffer = c.buffer
     this.expected = c.expected
     this.intents = c.intents
+    this.cand.rollback?.(c.cand)
     this.held = c.held
     this.measures.framesOut = c.framesOut
     this.measures.bytesOut = c.bytesOut
