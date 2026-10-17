@@ -9,7 +9,7 @@
 // Szenario nicht erhebt, fehlt im Ergebnis (nie 0).
 
 import type { Outcome } from '../types'
-import { HolderDevice, type MultiDeviceCandidate } from './holder'
+import { EnrolmentRefused, HolderDevice, type MultiDeviceCandidate } from './holder'
 import * as M from './model'
 import { Welt15 } from './welt'
 
@@ -166,14 +166,22 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       s.Mm.online = true
       s.M2.online = true
       await s.w.rounds(6)
-      // Fortschritt nach der Heilung: eine offline blockierte Vorstellung darf jetzt gelingen (B1).
-      const retry = 'act' in r2 ? r2 : await s.M2.introduce(s.ma, mc)
+      // Fortschritt nach der Heilung: eine offline blockierte Vorstellung darf jetzt gelingen (B1); hat M2 das Recht nicht, stellt M1 vor (autorisierter Pfad, B6).
+      const attempts = [r1, r2]
+      let retry = 'act' in r2 ? r2 : await s.M2.introduce(s.ma, mc)
+      if (!('act' in r2)) attempts.push(retry)
+      if (!('act' in retry)) {
+        retry = await s.Mm.introduce(s.ma, mc)
+        attempts.push(retry)
+      }
       await s.w.rounds(4)
       const fe = finalEffects(s.w, 'M')
       const conformance = s.w.of('A').flatMap((d) => d.state.findings).filter((f) => f.includes('8640.12')).length
       const progress = ['act' in r1, 'act' in retry].filter(Boolean).length
-      const ok = fe.doubleConsumption === 0 && conformance === 0
-      return { outcome: mark(ok), detail: `offline ausgestellt: ${['act' in r1, 'act' in r2].filter(Boolean).length} von 2, blockiert: ${blocked(s.w, 'M')}; nach der Heilung gelungen: ${progress} von 2; doppelt benannte Schlüssel bei M: ${fe.doubleConsumption}; Konformitätsfehler bei A: ${conformance}`, measures: { doubleFinalEffects: fe.doubleConsumption, mediatorConformanceFailures: conformance, blockedOperations: blocked(s.w, 'M'), progressAfterHeal: progress } }
+      // Rechtebedingte Verweigerung vor der Operation (kein benennbarer Schlüssel) zählt eigens (Review 7 S3); Fortschritt nach der Heilung gehört zur Zusage.
+      const keyRefusals = attempts.filter((r) => 'refused' in r).length // jede Verweigerung zählt, auch die vor dem Ausweichen auf M1 (Review 8)
+      const ok = fe.doubleConsumption === 0 && conformance === 0 && progress === 2
+      return { outcome: mark(ok), detail: `offline ausgestellt: ${['act' in r1, 'act' in r2].filter(Boolean).length} von 2, blockiert: ${blocked(s.w, 'M')}, verweigert (Schlüssel): ${keyRefusals}; nach der Heilung gelungen: ${progress} von 2; doppelt benannte Schlüssel bei M: ${fe.doubleConsumption}; Konformitätsfehler bei A: ${conformance}`, measures: { doubleFinalEffects: fe.doubleConsumption, mediatorConformanceFailures: conformance, blockedOperations: blocked(s.w, 'M'), keyRefusals, progressAfterHeal: progress } }
     },
   },
   {
@@ -189,7 +197,9 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       // Maximum nach jedem Geräteübergang (S2).
       const rounds = (n: number) => s.w.rounds(n, sample)
       for (let i = 0; i < 9; i++) {
-        await s.Mm.introduce(s.ma, cs[i]!)
+        // Autorisierter Pfad (B6): darf M1 keinen Schlüssel benennen (K1a teilt sie), stellt M2 vor.
+        const r = await s.Mm.introduce(s.ma, cs[i]!)
+        if (!('act' in r) && !serial) await s.M2.introduce(s.ma, cs[i]!)
         await rounds(3)
       }
       const before = acceptedActs(s.w, 'A').size
@@ -236,8 +246,9 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const states = s.w.of('A').map((d) => M.act(d.state, r.act).state)
       const bState = M.act(s.B.state, r.act).state
       const agree = s.w.agree('A')
-      // Terminalität (8325.A3): ein Gerät, das abgelehnt hat, verlässt `declined` nie; wird es dennoch connected, ist die Zusage geändert.
-      const leftTerminal = s.w.of('A').some((d) => d.state.effects.some((e) => e.id === `decline:${r.act}`) && M.act(d.state, r.act).state !== 'declined')
+      // Terminalität (8325.A3): das Gerät, das selbst abgelehnt hat, verlässt `declined` nie; wird es dennoch connected, ist die Zusage geändert.
+      // (Mit Journal trägt jedes Gerät beide Effekte im Ledger; es zählt die eigene Entscheidung, erkennbar am Schreiber der Operation.)
+      const leftTerminal = s.w.of('A').some((d) => d.state.effects.some((e) => e.id === `decline:${r.act}` && e.op.startsWith(`${d.name}@`)) && M.act(d.state, r.act).state !== 'declined')
       // Widerspruch: B hält eine Karte oder ist verbunden, während A als Ganzes abgelehnt hat.
       const contradiction = states.some((x) => x === 'declined') && (bState === 'connected' || M.act(s.B.state, r.act).v !== null)
       const progress = states.every((x) => x !== 'offered')
@@ -295,7 +306,8 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const rkid1 = (await s.A.cand.keys.pair(e1.x.ownKey)).rkid
       for (const d of s.w.of('A')) s.w.carrier.faults.withhold(d.name, (f) => f.address === rkid2 || f.address === rkid1)
       await s.w.rounds(3)
-      const A2 = serial ? s.A : await s.w.enrol(s.A, 'A2b') // Enrollment mit der offenen Pflicht im Zustand
+      // Ein Gerät, das die offene Pflicht kennt: frisch aufgenommen (Zustandskopie) oder, wenn der Kandidat die Gerätezahl festhält, das vorhandene zweite (es kennt die Pflicht über das Journal).
+      const A2 = serial ? s.A : await s.w.enrol(s.A, 'A2b').catch((e: unknown) => { if (e instanceof EnrolmentRefused) return s.A2; throw e })
       if (!serial) A2.online = false
       const mappingsBefore = [...ledger(s.w, 'A').keys()].filter((id) => id.startsWith('mapping:')).length
       // Der Nutzer beendet den Kontakt B: jeden Eintrag, den A1 zu B hält (vor der Vereinigung können es zwei sein).

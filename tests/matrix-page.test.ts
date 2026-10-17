@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildMatrix, promises, type CandidateRun } from '../src/lab/matrix'
-import { pageData, renderPage } from '../src/lab/matrix-page'
+import { pageData, renderPage, updateFindingsSummary } from '../src/lab/matrix-page'
 import { candidateEn, promiseEn, scenarioEn } from '../src/lab/matrix-en'
 import { candidates } from '../src/candidates/index'
 import { nodeCandidates } from '../src/candidates/node-only'
@@ -66,5 +66,21 @@ describe('Matrixseite aus dem Report', () => {
     expect(() => pageData(buildMatrix(runs), runs, '2026-10-17T12:00:00.000Z')).toThrow(/candidate neu/)
     const runs2: CandidateRun[] = [{ id: 'klartext', scenarios: [r('S99', 'bestanden')], carrier: [] }]
     expect(() => pageData(buildMatrix(runs2), runs2, '2026-10-17T12:00:00.000Z')).toThrow(/scenario S99/)
+  })
+
+  it('die Zusammenfassung der Befunde-Seite kommt aus demselben Lauf; Kandidaten mit verschiedenen Zahlen bekommen eigene Zeilen', () => {
+    const runs: CandidateRun[] = [
+      { id: 'consensual-mls-any-staged', scenarios: [r('S1', 'bestanden'), r('S4f', 'bestanden')], carrier: [] },
+      { id: 'consensual-mls-owner', scenarios: [r('S1', 'bestanden'), r('S4f', 'nicht bestanden')], carrier: [] },
+      { id: 'klartext', scenarios: [r('S1', 'bestanden')], carrier: [] },
+    ]
+    const d = pageData(buildMatrix(runs), runs, '2026-10-17T12:00:00.000Z')
+    const html = '<table>\n  <tr data-cand="consensual-mls-any-staged consensual-mls-owner"><td>MLS room (two modes)</td><td class="num ok">14</td><td class="num part">0</td><td class="num no">9</td><td class="num na">8</td></tr>\n  <tr data-cand="klartext"><td>Plaintext</td><td class="num ok">0</td><td class="num part">0</td><td class="num no">0</td><td class="num na">0</td></tr>\n</table>'
+    const out = updateFindingsSummary(html, d)
+    expect(out).toContain('<tr data-cand="consensual-mls-any-staged"><td>MLS room, any-staged</td>')
+    expect(out).toContain('<tr data-cand="consensual-mls-owner"><td>MLS room, owner</td>')
+    expect(out).not.toContain('MLS room (two modes)')
+    const kl = /<tr data-cand="klartext"><td>Plaintext<\/td><td class="num ok">(\d+)<\/td><td class="num part">(\d+)<\/td><td class="num no">(\d+)<\/td><td class="num na">(\d+)<\/td>/.exec(out)!
+    expect(kl.slice(1).map(Number)).toEqual([1, 0, 0, 30]) // S1 → A1 kept; 30 Zusagen mit Szenario nicht gelaufen, die 10 ohne Szenario zählen nicht
   })
 })

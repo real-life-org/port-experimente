@@ -92,7 +92,8 @@ export interface StockKey {
 export interface StockView {
   scope: string
   revision: number
-  keys: Array<{ anchor: Anchor; keyAgreement: string; expiresAt: string }>
+  /** Die gelisteten Schlüssel mit ihrer Nummer (8445): M teilt sie unter seinen Geräten nach der Nummer auf (K1a). */
+  keys: Array<{ n: number; anchor: Anchor; keyAgreement: string; expiresAt: string }>
 }
 
 /** Beziehung je Holder (eine je Gegenüber, 6975.5: Zusammenhangskomponente der Herkunftskanten). */
@@ -212,10 +213,10 @@ export type Op = { id: OpId; at: string } & (
   | { kind: 'class'; rel: string; on: boolean }
   | { kind: 'depart'; rel: string }
   | { kind: 'allocate'; rel: string; nonce: string; keys: StockKey[] } // 8445, 8475.S1–S3 in einem Schritt (Registrierung im Prüfstand sofort)
-  | { kind: 'revision'; rel: string; revision: number; keys: Array<{ anchor: Anchor; keyAgreement: string; expiresAt: string }> } // 8500
+  | { kind: 'revision'; rel: string; revision: number; keys: Array<{ n: number; anchor: Anchor; keyAgreement: string; expiresAt: string }> } // 8500
   | { kind: 'withdraw'; rel: string; anchors: Anchor[] } // 8475.S6
   | { kind: 'age'; rel: string; anchors: Anchor[] } // 8475.S5
-  | { kind: 'view'; rel: string; scope: string; revision: number; keys: Array<{ anchor: Anchor; keyAgreement: string; expiresAt: string }> } // M: 8557/6270
+  | { kind: 'view'; rel: string; scope: string; revision: number; keys: Array<{ n: number; anchor: Anchor; keyAgreement: string; expiresAt: string }> } // M: 8557/6270
   | { kind: 'introduce'; act: MediatorAct } // M: 8605, 8570.2
   | { kind: 'ticket-accept'; act: Act } // 8640.14
   | { kind: 'ticket-refuse-budget'; rel: string; own: Anchor } // 8640.13
@@ -252,11 +253,11 @@ export function findRel(s: HolderState, id: string): Relationship | undefined {
 /** Eine Voraussetzung fehlt im Zustand (Beziehung, Akt, Tupel): ein Journal stellt die Operation zurück, ein Empfang quittiert nicht. */
 export class Missing extends Error {
   constructor(
-    readonly what: 'relationship' | 'act' | 'tuple',
+    readonly what: 'relationship' | 'act' | 'tuple' | 'batch',
     readonly ref: string,
     person: string,
   ) {
-    super(`${person}: ${what === 'relationship' ? 'unbekannte Beziehung' : what === 'act' ? 'unbekannter Akt' : 'unbekanntes Tupel'} ${ref}`)
+    super(`${person}: ${what === 'relationship' ? 'unbekannte Beziehung' : what === 'act' ? 'unbekannter Akt' : what === 'batch' ? 'unbekannter Journal-Vorgänger' : 'unbekanntes Tupel'} ${ref}`)
   }
 }
 
@@ -472,6 +473,12 @@ function applyBody(s: HolderState, op: Op): void {
       // 8905: Tupel öffnen als neue Beziehung, Akt connected.
       const a = act(s, op.act)
       if (a.opened || s.relationships.some((r) => r.tuples.some((t) => t.id === op.tuple.id))) return // Effekt-Identität: der Akt
+      if (a.state === 'declined') {
+        // 8325.A3: eine Ablehnung ist terminal, auch gegen eine Verbindung vom anderen Gerät; der abgewiesene Versuch ist ein Konflikt, keine ausgeführte Verbindung (Review 7 S3).
+        s.findings.push(`connect auf ${a.id} nach decline: Widerspruch (8325.A3)`)
+        effect(s, op, `conflict:connect:${a.id}`)
+        return
+      }
       s.relationships.push(emptyRel(op.rel, op.tuple, 'introduction', [a.mediator]))
       a.state = 'connected'
       a.opened = op.rel

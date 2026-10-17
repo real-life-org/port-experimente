@@ -48,10 +48,16 @@ export class Welt15 {
 
   /** Weiteres Gerät: Enrollment aus einem bestehenden (X8). */
   async enrol(from: HolderDevice, device: string): Promise<HolderDevice> {
-    const { cand, state } = await this.candidate.enrol(from, device)
+    const { cand, state, intents } = await this.candidate.enrol(from, device)
     const d = new HolderDevice(device, from.person, cand, this.carrier, this.clock, this.store(device), state)
-    await d.relisten()
-    d.commit()
+    for (const i of intents ?? []) d.intents.set(i.digest, i)
+    try {
+      await d.relisten()
+      d.commit()
+    } catch (e) {
+      this.candidate.release?.(from.person, device) // der Platz bleibt nicht belegt, wenn das Gerät nie entstand
+      throw e
+    }
     this.devices.push(d)
     return d
   }
@@ -100,7 +106,8 @@ export class Welt15 {
     const image = this.stores.get(victim.name)!.snapshot()
     const store = new MemoryStore<DeviceState>()
     store.restore(image)
-    const cand = await this.candidate.first(victim.person, name, this.seeds.get(victim.person)!)
+    const seed = this.seeds.get(victim.person)!
+    const cand = await (this.candidate.instance ?? this.candidate.first).call(this.candidate, victim.person, name, seed)
     const d = new HolderDevice(name, victim.person, cand, this.carrier, this.clock, store)
     await d.reload()
     return d

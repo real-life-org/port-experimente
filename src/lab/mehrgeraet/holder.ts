@@ -79,15 +79,40 @@ export interface OwnFrame {
   body: Uint8Array
 }
 
+/**
+ * Produktionsabsicht (HSC-130, Tor-Review 3 B4): ein eigenes Dokument, das das Gerät eingeliefert hat oder einliefern
+ * wird, mit allem, was ein Wiederanlauf oder ein anderes Gerät braucht, um dieselben Bytes fortzusetzen: Digest (die
+ * Kennung bei Delivery), die versiegelten Bytes, Zieladresse, erwarteter Quittungs-Signierer, Antwortadresse, Art, und
+ * das Gerät samt Inkarnation, das sie erzeugt hat (Ausführungszuständigkeit).
+ */
+export interface Intent {
+  digest: string
+  kind: string
+  bytes: Uint8Array
+  address: string
+  expected: string
+  replyTo: string
+  device: string
+  writer: string
+}
+
+/** Ein gelungener Schritt des Geräts als Einheit: die Operationen und die Absichten, die er erzeugt hat (Review 6: Batch statt einzelner `record`). */
+export interface Transaction {
+  ops: M.Op[]
+  intents: Intent[]
+}
+
 /** Der Kandidat verweigert eine Operation (fehlendes Recht, K1a): die Nutzeraktion ist blockiert, nicht fehlerhaft. */
 export class Blocked extends Error {}
+/** Der Kandidat verweigert ein weiteres Gerät (feste Gerätezahl, K1a): das Szenario weicht auf ein vorhandenes aus. */
+export class EnrolmentRefused extends Error {}
 
 /**
  * Was ein Kandidat je Gerät beisteuert. Der Holder-Zustand gehört dem Gerät; der Kandidat sagt, was erlaubt ist und wie
- * Operationen geteilt werden. Vertrag zum Alles-oder-nichts des Geräts (Tor-Review 3, B3): `authorize` und
+ * Schritte geteilt werden. Vertrag zum Alles-oder-nichts des Geräts (Tor-Review 3 B3, Review 6): `authorize` und
  * `receiveOwnFrame` sind rein (prüfen, dekodieren; kein Verbrauch, kein Journalwissen); Verbrauch von Rechten und
- * Journalwissen ändern sich nur in `record`, das das Gerät erst nach dem Gelingen eines Schritts aufruft. Ein
- * Kandidat, der in `authorize` reserviert, wird bei einem Rollback nicht zurückgesetzt.
+ * Journalwissen ändern sich nur in `commit`, das das Gerät genau einmal je gelungenem Schritt mit allen Operationen und
+ * Absichten des Schritts aufruft. Ein Kandidat, der in `authorize` reserviert, wird bei einem Rollback nicht zurückgesetzt.
  */
 export interface CandidateDevice {
   readonly keys: KeyScheme
@@ -95,12 +120,19 @@ export interface CandidateDevice {
   readonly writer: string
   /** Rechteprüfung VOR der Anwendung (B3): false = blockiert. Rein: ohne Nebenwirkung. Ohne Methode ist alles erlaubt. */
   authorize?(op: M.Op, state: M.HolderState): boolean
-  /** Eine lokal entschiedene Operation ist angewandt und der Schritt gelungen; der Kandidat verbreitet sie (oder nicht) und verbraucht hier, was sie kostet. */
-  record(op: M.Op): void
+  /** Darf dieses Gerät diesen fremden Vorrats-Schlüssel in einer Vorstellung benennen (K1a: vorab verteilte Schlüssel)? Rein. Ohne Methode: alle. */
+  mayName?(anchor: string, rel: string, state: M.HolderState): boolean
+  /** Ein Schritt ist gelungen und committet: der Kandidat zeichnet ihn als Einheit auf, verbreitet ihn (oder nicht) und verbraucht hier, was er kostet. */
+  commit(tx: Transaction): void
   /** Rahmen an die eigenen Geräte (Journal), an die eigene Adresse der Person (Plan Runde 3). */
   takeOwnFrames(): OwnFrame[]
-  /** Ein Rahmen eines eigenen Geräts: liefert die Operationen, die das Gerät anwenden soll. Rein: nur dekodieren. */
-  receiveOwnFrame(body: Uint8Array): M.Op[]
+  /** Ein Rahmen eines eigenen Geräts: liefert den Schritt, den das Gerät anwenden soll. Rein: nur dekodieren; ein fehlender Vorgänger ist `M.Missing` (das Gerät stellt den Rahmen zurück). */
+  receiveOwnFrame(body: Uint8Array): Transaction
+  /** Der Schritt aus diesem Rahmen ist angewandt: der Kandidat merkt ihn sich (Dedupe, Vorgänger). Nach dem Gelingen gerufen. */
+  applied?(body: Uint8Array): void
+  /** Flüchtiger Stand des Kandidaten für die Rücknahme eines Schritts (Tor-Review 7 B1): ohne Inkarnationswechsel, anders als `restore`. Ohne Methoden hält der Kandidat nichts Rücknehmbares. */
+  snapshot?(): unknown
+  rollback?(snapshot: unknown): void
   /** Was der Kandidat dauerhaft hält (Journal); Teil des Store-Abbilds. */
   persist(): unknown
   /** Neuaufbau aus dem Store; ein Kandidat mit Inkarnationen wechselt hier die Inkarnation. */
@@ -113,10 +145,14 @@ export interface MultiDeviceCandidate {
   readonly capabilities: ReadonlySet<'journal' | 'rights' | 'device-keys' | 'restricted-app'>
   /** Erstes Gerät einer Person. */
   first(person: string, device: string, seed: Uint8Array): Promise<CandidateDevice>
-  /** Weiteres Gerät: Enrollment aus einem bestehenden Gerät (X8). Liefert den Kandidatenteil und den Zustand, mit dem das neue Gerät beginnt. */
-  enrol(from: HolderDevice, device: string): Promise<{ cand: CandidateDevice; state: M.HolderState }>
+  /** Eine Instanz, die kein Gerät der Person ist (Dieb aus einem Abbild, X9): unabhängig, ohne Eintrag in der Geräteliste des Kandidaten. Ohne Methode nimmt der Prüfstand `first`. */
+  instance?(person: string, device: string, seed: Uint8Array): Promise<CandidateDevice>
+  /** Weiteres Gerät: Enrollment aus einem bestehenden Gerät (X8). Liefert den Kandidatenteil, den Zustand und die Absichten, mit denen das neue Gerät beginnt (ohne Absichten produziert es offene Pflichten neu, K0). */
+  enrol(from: HolderDevice, device: string): Promise<{ cand: CandidateDevice; state: M.HolderState; intents?: Intent[] }>
   /** Widerruf eines Geräts (X9, K2): was die übrigen Geräte und die Gegenseiten davon erfahren. Ohne Methode geschieht nichts. */
   revoke?(from: HolderDevice, device: string): Promise<void>
+  /** Ein Enrollment ist nach `enrol` am Gerät gescheitert (kein Holder entstanden): der Kandidat gibt den Platz wieder frei. */
+  release?(person: string, device: string): void
 }
 
 // ── Dokumente ────────────────────────────────────────────────────────────────
@@ -173,6 +209,8 @@ export interface DeviceState {
   sent: Array<[string, Sent]>
   /** Karten vor dem Ticket (8910.1–.3), mit der ganzen Nutzlast für den Prüfsatz bei der Zuordnung (B7). */
   buffer: Array<[string, Buffered]>
+  /** Produktionsabsichten, eigene und aus dem Journal der eigenen Geräte (B4). */
+  intents: Array<[string, Intent]>
   /** Digest → erwarteter Signierer der Quittung, für jede quittierbare Submission (#55). */
   expected: Array<[string, string]>
 }
@@ -208,8 +246,10 @@ export class HolderDevice {
   private buffer = new Map<string, Buffered>()
   /** Digest → erwarteter Quittungs-Signierer je eigener Submission (#55); lesbar für Messungen. */
   expected = new Map<string, string>()
-  /** Innerhalb eines `guarded`-Rahmens: Operationen, die der Kandidat erst nach dem Gelingen aufzeichnet. */
-  private pending: M.Op[] | null = null
+  /** Innerhalb eines `guarded`-Rahmens: der Schritt, den der Kandidat erst nach dem Gelingen als Einheit committet. */
+  private pending: Transaction | null = null
+  /** Produktionsabsichten (B4): eigene und die der anderen eigenen Geräte aus dem Journal; lesbar für Messungen. */
+  intents = new Map<string, Intent>()
   /** Aufgezeichnet, noch nicht eingeliefert: geht nach dem nächsten Commit hinaus. */
   private held: string[] = []
   private readonly ctxOfRkid = new Map<string, string>()
@@ -279,13 +319,14 @@ export class HolderDevice {
       throw new Blocked(op.kind)
     }
     M.apply(this.state, op)
-    if (this.pending) this.pending.push(op)
-    else this.cand.record(op)
+    if (this.pending) this.pending.ops.push(op)
+    else this.cand.commit({ ops: [op], intents: [] })
     return op
   }
-  /** Operationen eines eigenen Geräts (Journal) anwenden. */
-  async applyRemote(ops: M.Op[]): Promise<void> {
-    for (const op of ops) M.apply(this.state, op)
+  /** Ein Schritt eines eigenen Geräts (Journal) anwenden: Operationen falten, Absichten merken; die Zuständigkeit bleibt beim erzeugenden Gerät. */
+  async applyRemote(tx: Transaction): Promise<void> {
+    for (const op of tx.ops) M.apply(this.state, op)
+    for (const i of tx.intents) if (!this.intents.has(i.digest)) this.intents.set(i.digest, i)
     await this.relisten()
     await this.refillAll()
   }
@@ -301,6 +342,8 @@ export class HolderDevice {
       sent: new Map(this.sent),
       buffer: new Map(this.buffer),
       expected: new Map(this.expected),
+      intents: new Map(this.intents),
+      cand: this.cand.snapshot?.(),
       held: this.held.slice(),
       framesOut: this.measures.framesOut,
       bytesOut: this.measures.bytesOut,
@@ -315,6 +358,8 @@ export class HolderDevice {
     this.sent = c.sent
     this.buffer = c.buffer
     this.expected = c.expected
+    this.intents = c.intents
+    this.cand.rollback?.(c.cand)
     this.held = c.held
     this.measures.framesOut = c.framesOut
     this.measures.bytesOut = c.bytesOut
@@ -329,13 +374,15 @@ export class HolderDevice {
   private async guarded(f: () => Promise<void>, defer = false): Promise<boolean> {
     const c = this.checkpoint()
     const outer = this.pending
-    this.pending = []
+    this.pending = { ops: [], intents: [] }
     try {
       await f()
-      const ops = this.pending
+      const tx = this.pending
       this.pending = outer
-      if (outer) outer.push(...ops)
-      else for (const op of ops) this.cand.record(op)
+      if (outer) {
+        outer.ops.push(...tx.ops)
+        outer.intents.push(...tx.intents)
+      } else if (tx.ops.length || tx.intents.length) this.cand.commit(tx)
       return true
     } catch (e) {
       this.pending = outer
@@ -365,6 +412,7 @@ export class HolderDevice {
       sent: [...this.sent],
       buffer: [...this.buffer],
       expected: [...this.expected],
+      intents: [...this.intents],
     }
   }
   commit() {
@@ -382,6 +430,7 @@ export class HolderDevice {
     this.sent = new Map(s?.sent ?? [])
     this.buffer = new Map(s?.buffer ?? [])
     this.expected = new Map(s?.expected ?? [])
+    this.intents = new Map(s?.intents ?? [])
     // Was im Store steht, ist committet: vorgemerkte, nie freigegebene Submissions gehen nach dem nächsten Commit hinaus.
     this.held = this.zusteller.unreleased()
     this.cand.restore(s?.candidate ?? null)
@@ -432,6 +481,11 @@ export class HolderDevice {
     this.zusteller.record(digest, bytes, toRkid)
     this.held.push(digest)
     this.expected.set(digest, recipient)
+    if (type !== TYPES.journal) {
+      const intent: Intent = { digest, kind: type, bytes, address: toRkid, expected: recipient, replyTo, device: this.name, writer: this.cand.writer }
+      this.intents.set(digest, intent)
+      this.pending?.intents.push(intent)
+    }
     this.measures.framesOut++
     this.measures.bytesOut += bytes.length
     return { digest, bytes }
@@ -519,7 +573,7 @@ export class HolderDevice {
     if (r.departed) return
     const h = M.head(r)
     const revision = r.revision + 1
-    const keys = r.stock.filter((k) => k.state === 'active').map((k) => ({ anchor: k.anchor, keyAgreement: k.keyAgreement, expiresAt: k.expiresAt }))
+    const keys = r.stock.filter((k) => k.state === 'active').map((k) => ({ n: k.n, anchor: k.anchor, keyAgreement: k.keyAgreement, expiresAt: k.expiresAt }))
     this.emit({ kind: 'revision', rel: r.id, revision, keys })
     await this.sendDoc(TYPES.revision, h.ownKey, h.peer, h.peerKeyAgreement, (await this.keysFor(h.ownKey)).rkid, { revision, keys })
   }
@@ -530,8 +584,8 @@ export class HolderDevice {
     const pick = (relId: string) => {
       const r = M.rel(this.state, relId)
       if (!r.view) return null
-      // 8570.4; kanonische Wahl (kleinster Anker), damit die Ankunftsreihenfolge nicht entscheidet (Review 4 B2).
-      return [...r.view.keys].sort((a, b) => a.anchor.localeCompare(b.anchor)).find((k) => M.usable(k.expiresAt, now) && !this.state.consumed.includes(k.anchor)) ?? null
+      // 8570.4; kanonische Wahl (kleinster Anker), damit die Ankunftsreihenfolge nicht entscheidet (Review 4 B2); nur Schlüssel, die der Kandidat diesem Gerät zuteilt (K1a).
+      return [...r.view.keys].sort((a, b) => a.anchor.localeCompare(b.anchor)).find((k) => M.usable(k.expiresAt, now) && !this.state.consumed.includes(k.anchor) && (this.cand.mayName?.(k.anchor, r.id, this.state) ?? true)) ?? null
     }
     const ka = pick(relA)
     const kb = pick(relB)
@@ -624,11 +678,25 @@ export class HolderDevice {
     this.sent.set(digest, { kind: 'mapping', pair, frame: bytes, address: arrival.peerKeyAgreement })
     this.emit({ kind: 'duty', pair, state: 'hit', mappingDigest: digest })
   }
-  /** 6845.10: offene Mapping-Pflichten (hit, sent) ohne lokale Übergabe werden wieder aufgenommen. Vereinfachung: das Mapping wird neu produziert, nicht aus gespeicherten Bytes fortgesetzt. */
+  /**
+   * 6845.10: offene Mapping-Pflichten (hit, sent) ohne lokale Übergabe werden wieder aufgenommen. Kennt das Gerät die
+   * Absicht dazu (HSC-120, B4): dieselben Bytes, wenn es sie selbst erzeugt hat (Wiederanlauf, neue Inkarnation); eine
+   * Absicht eines anderen eigenen Geräts bleibt bei dem (keine Neuproduktion, keine stille Übernahme). Ohne Absicht
+   * (K0, Zustandskopie) wird das Mapping neu produziert.
+   */
   private async resumeDuties(): Promise<void> {
     for (const d of this.state.duties) {
       if (d.state !== 'hit' && d.state !== 'sent') continue
       if ([...this.sent.values()].some((x) => x.kind === 'mapping' && x.pair && x.pair[0] === d.pair[0] && x.pair[1] === d.pair[1])) continue
+      const intent = d.mappingDigest ? this.intents.get(d.mappingDigest) : undefined
+      if (intent) {
+        if (intent.device !== this.name || this.zusteller.submissions.has(intent.digest)) continue
+        this.zusteller.record(intent.digest, intent.bytes, intent.address)
+        this.expected.set(intent.digest, intent.expected)
+        this.sent.set(intent.digest, { kind: 'mapping', pair: d.pair, frame: intent.bytes, address: intent.address })
+        this.held.push(intent.digest)
+        continue
+      }
       const ta = this.state.relationships.flatMap((r) => r.tuples).find((t) => t.id === d.pair[0])
       const tb = this.state.relationships.flatMap((r) => r.tuples).find((t) => t.id === d.pair[1])
       if (!ta || !tb) continue
@@ -789,7 +857,11 @@ export class HolderDevice {
         return
       }
       const b = (doc.payload as { b?: string }).b
-      if (typeof b === 'string') await this.applyRemote(this.cand.receiveOwnFrame(new Uint8Array(Buffer.from(b, 'base64'))))
+      if (typeof b === 'string') {
+        const body = new Uint8Array(Buffer.from(b, 'base64'))
+        await this.applyRemote(this.cand.receiveOwnFrame(body)) // Missing → zurückgestellt (guarded, defer)
+        this.cand.applied?.(body)
+      }
       effect = true
     } else effect = await this.dispatch(doc, address)
     if (!effect) {
@@ -847,7 +919,7 @@ export class HolderDevice {
         const t = this.tupleOfAddress(address)
         if (!t || doc.issuer !== t.peer) return false
         const r = M.relOfTuple(this.state, t.id)!
-        const p = doc.payload as unknown as { revision: number; keys: Array<{ anchor: string; keyAgreement: string; expiresAt: string }> }
+        const p = doc.payload as unknown as { revision: number; keys: Array<{ n: number; anchor: string; keyAgreement: string; expiresAt: string }> }
         if (r.view && r.view.scope === t.id && p.revision <= r.view.revision) {
           const same = p.revision === r.view.revision
           // Wiederholung nur bei gleichem ganzen Schlüsselwert (Anker, Vereinbarung, Ablauf); sonst Equivokation (6270; Review 5).

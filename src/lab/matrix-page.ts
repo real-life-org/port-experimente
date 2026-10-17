@@ -92,3 +92,40 @@ export function renderPage(d: PageData, template = readFileSync(new URL('./matri
   const data = JSON.stringify(d).replace(/</g, '\\u003c')
   return template.replace('__DATE__', () => date).replace('__LEDE__', () => lede).replace('__DATA__', () => data)
 }
+
+/** Counts per candidate as the findings page shows them: kept, partial, not kept, n/a (n/a includes "not run"; untested promises are not counted). */
+export function summaryCounts(d: PageData): Map<string, { kept: number; partial: number; notKept: number; na: number }> {
+  const out = new Map<string, { kept: number; partial: number; notKept: number; na: number }>()
+  for (const c of d.cands) {
+    const n = { kept: 0, partial: 0, notKept: 0, na: 0 }
+    for (const fam of d.families) for (const port of fam.cands.includes(c.id) ? fam.ports : []) for (const row of port.rows) {
+      const st = row.cells[c.id]?.status
+      if (st === 'kept') n.kept++
+      else if (st === 'partial') n.partial++
+      else if (st === 'not kept') n.notKept++
+      else if (st !== 'untested') n.na++
+    }
+    out.set(c.id, n)
+  }
+  return out
+}
+
+/**
+ * The summary table of the findings page from the same run (its rows carry `data-cand`): the numbers are rewritten;
+ * a row that lists several candidates whose counts differ is split into one row per candidate, so the table never
+ * says something the matrix does not (hash-dependent cells such as S4f of the any-staged room can differ per run).
+ */
+export function updateFindingsSummary(html: string, d: PageData): string {
+  const counts = summaryCounts(d)
+  const esc = (x: string) => x.replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch]!)
+  const row = (ids: string, name: string, n: { kept: number; partial: number; notKept: number; na: number }) =>
+    `<tr data-cand="${esc(ids)}"><td>${esc(name)}</td><td class="num ok">${n.kept}</td><td class="num part">${n.partial}</td><td class="num no">${n.notKept}</td><td class="num na">${n.na}</td></tr>`
+  return html.replace(/<tr data-cand="([^"]+)"><td>(.*?)<\/td>.*?<\/tr>/gs, (whole, ids: string, name: string) => {
+    const list = ids.split(' ').filter((id) => counts.has(id))
+    if (!list.length) return whole
+    const first = counts.get(list[0]!)!
+    const same = list.every((id) => JSON.stringify(counts.get(id)) === JSON.stringify(first))
+    if (same) return row(list.join(' '), name, first)
+    return list.map((id) => row(id, candidateEn[id]?.name ?? id, counts.get(id)!)).join('\n  ')
+  })
+}
