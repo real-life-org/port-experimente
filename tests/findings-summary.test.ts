@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 type Cell = { status: string }
-type Matrix = { cands: { id: string }[]; ports: { rows: { cells: Record<string, Cell> }[] }[] }
+type Matrix = { cands: { id: string }[]; families: { cands: string[]; ports: { rows: { cells: Record<string, Cell> }[] }[] }[] }
 type Counts = { kept: number; partial: number; notKept: number; na: number; untested: number }
 type Row = { cands: string[]; kept: number; partial: number; notKept: number; na: number }
 
@@ -17,7 +17,8 @@ function countsFromMatrix(): Map<string, Counts> {
   const out = new Map<string, Counts>()
   for (const c of D.cands) {
     const n: Counts = { kept: 0, partial: 0, notKept: 0, na: 0, untested: 0 }
-    for (const port of D.ports) for (const row of port.rows) {
+    // Eine Tabelle je Kandidatenfamilie: gezählt werden die Zellen der Familie des Kandidaten.
+    for (const fam of D.families) for (const port of fam.cands.includes(c.id) ? fam.ports : []) for (const row of port.rows) {
       const status = row.cells[c.id]?.status
       if (status === 'kept') n.kept++
       else if (status === 'partial') n.partial++
