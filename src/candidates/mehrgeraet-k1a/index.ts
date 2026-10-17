@@ -169,8 +169,12 @@ export function k1a(opts: K1aOptions = {}): MultiDeviceCandidate {
     async first(person, name, seed) {
       seeds.set(person, seed)
       const d = new K1aDevice(person, name, seed, 0, slots, budget)
-      devices.set(person, [d])
+      devices.set(person, [d]) // eine neue Welt dieser Person: die Liste beginnt mit diesem Gerät
       return d
+    },
+    async instance(person, name, seed) {
+      // Kein Gerät der Person (Dieb aus einem Abbild, X9): unregistriert; Platz und Plätze kommen aus dem Abbild beim `reload`.
+      return new K1aDevice(person, name, seed, 0, slots, budget)
     },
     async enrol(from: HolderDevice, name) {
       const list = devices.get(from.person) ?? []

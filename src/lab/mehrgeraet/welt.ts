@@ -101,7 +101,8 @@ export class Welt15 {
     const image = this.stores.get(victim.name)!.snapshot()
     const store = new MemoryStore<DeviceState>()
     store.restore(image)
-    const cand = await this.candidate.first(victim.person, name, this.seeds.get(victim.person)!)
+    const seed = this.seeds.get(victim.person)!
+    const cand = await (this.candidate.instance ?? this.candidate.first).call(this.candidate, victim.person, name, seed)
     const d = new HolderDevice(name, victim.person, cand, this.carrier, this.clock, store)
     await d.reload()
     return d

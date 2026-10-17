@@ -145,6 +145,8 @@ export interface MultiDeviceCandidate {
   readonly capabilities: ReadonlySet<'journal' | 'rights' | 'device-keys' | 'restricted-app'>
   /** Erstes Gerät einer Person. */
   first(person: string, device: string, seed: Uint8Array): Promise<CandidateDevice>
+  /** Eine Instanz, die kein Gerät der Person ist (Dieb aus einem Abbild, X9): unabhängig, ohne Eintrag in der Geräteliste des Kandidaten. Ohne Methode nimmt der Prüfstand `first`. */
+  instance?(person: string, device: string, seed: Uint8Array): Promise<CandidateDevice>
   /** Weiteres Gerät: Enrollment aus einem bestehenden Gerät (X8). Liefert den Kandidatenteil, den Zustand und die Absichten, mit denen das neue Gerät beginnt (ohne Absichten produziert es offene Pflichten neu, K0). */
   enrol(from: HolderDevice, device: string): Promise<{ cand: CandidateDevice; state: M.HolderState; intents?: Intent[] }>
   /** Widerruf eines Geräts (X9, K2): was die übrigen Geräte und die Gegenseiten davon erfahren. Ohne Methode geschieht nichts. */
