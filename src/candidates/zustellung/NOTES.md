@@ -95,3 +95,40 @@ against the promises the port requires, not against the form of 0.79.
   `forward`: only once an intermediary sits in the bench.
 - Giving up and the late receipt are pinned as regressions (dispatcher),
   not as wire scenarios.
+
+## Harness extensions for E15 (17 October 2026)
+
+The multi-device experiment (E15, plan in the workshop repository)
+reuses this bench: the carrier, the dispatcher and the wire. Four things
+were added to `src/lab/zustellung.ts`; every E11 scenario above runs
+unchanged with the defaults.
+
+- **Clock.** `Device`, `sealDoc` and the receipt take a `Clock`; the
+  default is the real clock, `VirtualClock` advances only on `advance`
+  or `set`, `skewed(ms)` is the view of a device whose clock is off.
+  Rounds and time are now independent.
+- **Fault facade on the carrier.** `carrier.faults` follows the
+  `CarrierFaults` pattern of the group bench: `drop` (carried, never
+  delivered, in `swallowed`), `withhold` per device (the frame stays
+  until the rule falls), `reverse`, `duplicate`, `reset`. The one-shot
+  flags (`unreachable`, `offline`, `dropDeliveryTo`, `dropNextDeposit`)
+  stay. `unregister(device)` revokes a device: it collects nothing more
+  and frames that only waited for it are cleaned up. `pending(address)`
+  counts what still lies at an address.
+- **Store.** `Store<DeviceState>` with `commit`/`load`; `MemoryStore`
+  counts commits and offers `snapshot`/`restore` for backups. A device
+  with a store commits after handling a round's frames (before it
+  confirms them to the carrier) and after dispatching, and before a send
+  leaves (the submission is recorded, committed, then deposited). Crash
+  points for tests: `crashAt = 'before-commit' | 'after-commit' |
+  'before-send'`; a crashed device does nothing until `reload()`, which
+  rebuilds it from the store. Tests show: a crash before the commit
+  loses the effect but not the frame (it is delivered again, effect
+  once); a crash after the commit sees the frame again as
+  `duplicate-known`; a crash before the send dispatches on reload; an
+  old snapshot restored makes the device forget later submissions.
+- **Key resolution per device.** `DeviceOptions.resolve` replaces the
+  one-key rule `rkid === party.rkid`; a device holding several
+  relationship keys opens what is sealed to any of them.
+
+Tests: `tests/zustellung-harness.test.ts`.
