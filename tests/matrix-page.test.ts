@@ -51,6 +51,16 @@ describe('Matrixseite aus dem Report', () => {
     expect(html).toContain('⚠ run crashed')
   })
 
+  it('Messausgaben kommen unverändert in die Seite, auch mit $& und </script> (Issue #62)', () => {
+    const runs: CandidateRun[] = [{ id: 'klartext', scenarios: [r('S1', 'bestanden', { authority: 'Ausgabe mit $& und $1 und $$', keys: 'ein </script><script>alert(1)</script> im Text' })], carrier: [] }]
+    const d = pageData(buildMatrix(runs), runs, '2026-10-17T12:00:00.000Z')
+    const html = renderPage(d)
+    expect(html).toContain('Ausgabe mit $& und $1 und $$')
+    expect(html.split('</script>').length).toBe(2) // genau das eine Skriptende der Seite
+    const embedded = /const D = (.*?);\n/.exec(html)![1]!
+    expect(JSON.parse(embedded)).toEqual(d) // die eingebetteten Daten sind die Daten, nur anders geschrieben
+  })
+
   it('ein Lauf mit einem Kandidaten oder Szenario ohne englischen Text bricht ab, statt eine lückenhafte Seite zu schreiben', () => {
     const runs: CandidateRun[] = [{ id: 'neu', scenarios: [r('S1', 'bestanden')], carrier: [] }]
     expect(() => pageData(buildMatrix(runs), runs, '2026-10-17T12:00:00.000Z')).toThrow(/candidate neu/)

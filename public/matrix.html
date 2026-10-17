@@ -42,7 +42,7 @@ td.cell button.na{background:var(--none-bg);color:var(--none)}
 td.cell button.untested{background:transparent;color:var(--none);border-style:dashed}
 td.cell button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 td.cell button[aria-pressed="true"]{outline:2px solid var(--accent)}
-.tip{position:fixed;z-index:20;width:min(560px,92vw);border:1px solid var(--line);border-radius:6px;background:var(--surface);padding:12px 14px;font-size:14px;box-shadow:0 8px 24px rgba(0,0,0,.14);pointer-events:none}
+.tip{position:fixed;z-index:20;width:min(560px,92vw);max-height:calc(100vh - 16px);overflow:auto;border:1px solid var(--line);border-radius:6px;background:var(--surface);padding:12px 14px;font-size:14px;box-shadow:0 8px 24px rgba(0,0,0,.14);pointer-events:none}
 .tip.pinned{pointer-events:auto;border-color:var(--accent)}
 .tip .hint{font-size:12px;color:var(--muted);margin-top:8px}
 .tip h3{margin:0 0 4px;font-size:15px;font-weight:600}
@@ -89,13 +89,15 @@ for (const fam of D.families) {
     const c = D.cands.find((x) => x.id === id);
     const tr = document.createElement('tr');
     tr.innerHTML = `<td class="n"><b>${esc(c.name)}</b><span>${esc(c.desc)}</span></td>` +
-      allRows.map(({ port, row }) => { const cell = row.cells[c.id]; const txt = cell.ev.length ? cell.ev.map(evMark).join(' ') : '·'; return `<td class="cell"><button class="${cls[cell.status]}" data-port="${port.id}" data-row="${row.id}" data-cand="${c.id}" aria-pressed="false">${esc(txt)}</button></td>`; }).join('');
+      allRows.map(({ port, row }) => { const cell = row.cells[c.id]; const txt = cell.ev.length ? cell.ev.map(evMark).join(' ') : '·'; return `<td class="cell"><button class="${cls[cell.status]}" data-port="${port.id}" data-row="${row.id}" data-cand="${c.id}" aria-label="${esc(c.name)}; ${esc(row.id)} ${esc(row.title)}; ${esc(cell.status)}" aria-pressed="false">${esc(txt)}</button></td>`; }).join('');
     tb.appendChild(tr);
   }
   t.appendChild(tb); wrap.appendChild(t); portsEl.appendChild(wrap);
 }
-const tip = document.createElement('div'); tip.className = 'tip'; tip.hidden = true; tip.setAttribute('role', 'tooltip'); document.body.appendChild(tip);
+const tip = document.createElement('div'); tip.className = 'tip'; tip.hidden = true; tip.id = 'matrix-tooltip'; tip.setAttribute('role', 'tooltip'); document.body.appendChild(tip);
 let pinned = null;
+let described = null;
+function describe(b) { if (described && described !== b) described.removeAttribute('aria-describedby'); described = b; if (b) b.setAttribute('aria-describedby', tip.id); }
 function content(b) {
   const port = D.families.flatMap((f) => f.ports).find((p) => p.id === b.dataset.port); const row = port.rows.find((r) => r.id === b.dataset.row);
   if (!b.dataset.cand) return `<h3>${esc(row.id)} ${esc(row.title)}</h3><div class="ref">${esc(row.ref)} · ${esc(port.title)}${row.scs.length ? ' · scenarios ' + esc(row.scs.join(', ')) : ''}</div>${row.gap ? `<div class="out" style="margin-top:6px;color:var(--part)">Untested: ${esc(row.gap)}</div>` : ''}`;
@@ -112,10 +114,11 @@ function place(b) {
   tip.style.left = left + 'px'; tip.style.top = top + 'px';
 }
 function show(b, pin) {
+  describe(b);
   tip.innerHTML = content(b) + (pin ? '<div class="hint">Pinned. Esc or click elsewhere to close.</div>' : (b.dataset.cand ? '<div class="hint">Click to pin.</div>' : ''));
   tip.classList.toggle('pinned', !!pin); place(b);
 }
-function hide() { tip.hidden = true; }
+function hide() { tip.hidden = true; describe(null); }
 function unpin() { if (pinned) { pinned.setAttribute('aria-pressed', 'false'); pinned = null; } hide(); }
 portsEl.addEventListener('mouseover', (event) => { const b = event.target.closest('[data-row]'); if (!b) return; if (pinned && b.dataset.cand) return; show(b, false); });
 portsEl.addEventListener('mouseout', (event) => { const b = event.target.closest('[data-row]'); if (!b) return; if (pinned) { show(pinned, true); return; } hide(); });

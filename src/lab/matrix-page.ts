@@ -86,5 +86,9 @@ export function renderPage(d: PageData, template = readFileSync(new URL('./matri
   const ports = d.families.reduce((n, f) => n + f.ports.length, 0)
   const lede = `${d.families.length === 1 ? 'One table' : `${word(d.families.length)[0]!.toUpperCase() + word(d.families.length).slice(1)} tables`}: ${word(d.cands.length)} candidate stacks as rows, ${promises} promises across ${word(ports)} ports as columns. Hover over a column header for the promise and its source, over a cell for the scenarios behind it and what the bench recorded; click to pin the hint.`
   const date = new Date(d.at).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
-  return template.replace('__DATE__', date).replace('__LEDE__', lede).replace('__DATA__', JSON.stringify(d))
+  // Die Daten stehen in einem Inline-Skript (Issue #62): `<` als Unicode-Escape, damit kein `</script>` einer Messausgabe das
+  // Skript beendet (JSON bleibt gültig und liest sich unverändert zurück); Ersatz über Funktionen, damit `$&` und andere
+  // Dollarfolgen einer Messausgabe wörtlich bleiben.
+  const data = JSON.stringify(d).replace(/</g, '\\u003c')
+  return template.replace('__DATE__', () => date).replace('__LEDE__', () => lede).replace('__DATA__', () => data)
 }
