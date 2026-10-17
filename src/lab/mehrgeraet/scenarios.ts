@@ -242,7 +242,7 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const mArtifacts = s.w.of('M').flatMap((d) => d.log).filter((e) => e.type === 'introduction-card').length // 8765/8920
       const ok = agree.agree && !contradiction && progress && mArtifacts === 0 && !leftTerminal
       const promiseChanged = agree.agree && !contradiction && progress && leftTerminal
-      return { outcome: mark(ok), promiseChanged, detail: `Entscheidungen: ${decisions.join('+') || 'keine'}; A: ${s.w.of('A').map((d, i) => `${d.name}: ${states[i]}`).join(', ')}; B: ${bState}; Projektion gleich nach ${n} Runden: ${agree.agree ? 'ja' : 'nein (' + agree.diff + ')'}; terminaler Zustand verlassen: ${leftTerminal ? 'ja' : 'nein'}; Widerspruch bei B: ${contradiction ? 'ja' : 'nein'}`, measures: { doubleFinalEffects: finalEffects(s.w, 'A').contradictions, projectionAgrees: agree.agree ? 1 : 0, roundsToConverge: n, promiseChanged: promiseChanged ? 1 : 0 } }
+      return { outcome: mark(ok), promiseChanged, detail: `Entscheidungen: ${decisions.join('+') || 'keine'}; A: ${s.w.of('A').map((d, i) => `${d.name}: ${states[i]}`).join(', ')}; B: ${bState}; Projektion gleich nach ${n} Runden: ${agree.agree ? 'ja' : 'nein (' + agree.diff + ')'}; terminaler Zustand verlassen: ${leftTerminal ? 'ja' : 'nein'}; Widerspruch bei B: ${contradiction ? 'ja' : 'nein'}`, measures: { doubleFinalEffects: finalEffects(s.w, 'A').contradictions, projectionAgrees: agree.agree ? 1 : 0, roundsToConverge: n, leftTerminal: leftTerminal ? 1 : 0, contradictionAtB: contradiction ? 1 : 0, promiseChanged: promiseChanged ? 1 : 0 } }
     },
   },
   {
