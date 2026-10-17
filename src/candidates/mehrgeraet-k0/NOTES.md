@@ -74,3 +74,9 @@ applicable.
   tuples of departed relationships take part in no hit, mapping or union.
 - Time: acts expire at `expiresAt − consent-reserve` (offered) or
   `expiresAt` (consented); keys age by 8470; no tombstones yet.
+- Receipts: every submission records the anchor it expects the receipt
+  from (the document's recipient); a receipt from anyone else, or for a
+  submission the device does not know, has no effect. A journal frame
+  expects the person's own self anchor, which under one seed is the same
+  on every device; a candidate with keys per device (K2) has to name the
+  expected signer differently.

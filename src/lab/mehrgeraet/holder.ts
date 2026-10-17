@@ -7,9 +7,13 @@
 //
 // Commit-Grenze (Tor-Review 2 S8, #56): jedes Dokument wird mit dem
 // Zustand aufgezeichnet und committet, bevor es das Gerät verlässt
-// (HSC-110); `before-send` ist die Absturzstelle dazwischen. Quittungen
-// gehen erst nach dem Commit der Wirkung hinaus (#54). Alles, was ein
-// Neuaufbau braucht, steht im Store-Abbild (#57).
+// (HSC-110); `before-send` ist die Absturzstelle dazwischen. Das gilt für
+// Nutzeraktionen, Empfang und Zeitübergänge gleichermaßen: der Zusteller
+// liefert nur ein, was das Gerät nach dem Commit freigegeben hat.
+// Quittungen gehen erst nach dem Commit der Wirkung hinaus (#54). Alles,
+// was ein Neuaufbau braucht, steht im Store-Abbild (#57). Jede
+// quittierbare Submission kennt ihren erwarteten Quittungs-Signierer;
+// andere Quittungen wirken nicht (#55).
 
 import { seal, receive, edFromSeed, xFromSeed, anchorOfEd, mkOfX, diSign, diVerify, jcs, digestBytes } from '@real-life/trust-protocol'
 import type { Json, KeyPair } from '@real-life/trust-protocol'
@@ -130,8 +134,6 @@ interface Sent {
   pair?: [string, string]
   frame: Uint8Array
   address: string
-  /** Erwarteter Signierer der Quittung (#55). */
-  expectAck: string | null
 }
 
 export interface DeviceState {
@@ -144,6 +146,8 @@ export interface DeviceState {
   candidate: unknown
   sent: Array<[string, Sent]>
   buffer: Array<[string, { card: M.Card; v: string }]>
+  /** Digest → erwarteter Signierer der Quittung, für jede quittierbare Submission (#55). */
+  expected: Array<[string, string]>
 }
 
 export interface Measures {
@@ -173,6 +177,7 @@ export class HolderDevice {
   private counter = 0
   private sent = new Map<string, Sent>()
   private buffer = new Map<string, { card: M.Card; v: string }>()
+  private expected = new Map<string, string>()
   /** Aufgezeichnet, noch nicht eingeliefert: geht nach dem nächsten Commit hinaus. */
   private held: string[] = []
   private readonly ctxOfRkid = new Map<string, string>()
@@ -264,6 +269,7 @@ export class HolderDevice {
       candidate: this.cand.persist(),
       sent: [...this.sent],
       buffer: [...this.buffer],
+      expected: [...this.expected],
     }
   }
   commit() {
@@ -280,7 +286,9 @@ export class HolderDevice {
     this.counter = s?.counter ?? 0
     this.sent = new Map(s?.sent ?? [])
     this.buffer = new Map(s?.buffer ?? [])
-    this.held = []
+    this.expected = new Map(s?.expected ?? [])
+    // Was im Store steht, ist committet: vorgemerkte, nie freigegebene Submissions gehen nach dem nächsten Commit hinaus.
+    this.held = this.zusteller.unreleased()
     this.cand.restore(s?.candidate ?? null)
     this.down = false
     await this.relisten()
@@ -319,7 +327,7 @@ export class HolderDevice {
   }
 
   // ── Senden ──
-  /** Dokument signieren, versiegeln, aufzeichnen; eingeliefert wird nach dem nächsten Commit (`flush`, Rundenende). */
+  /** Dokument signieren, versiegeln, aufzeichnen; eingeliefert wird nach dem nächsten Commit (`flush`, Rundenende). `recipient` ist der Anker, von dem die Quittung erwartet wird (#55). */
   private async sendDoc(type: string, issuerCtx: string, recipient: string, toRkid: string, replyTo: string, payload: Record<string, Json>): Promise<{ digest: string; bytes: Uint8Array }> {
     const k = await this.keysFor(issuerCtx)
     const unsigned: Doc = { id: crypto.randomUUID(), type, issuer: k.anchor, recipient, replyTo, issuedAt: this.clock.now(), payload }
@@ -329,6 +337,7 @@ export class HolderDevice {
     const digest = await digestBytes(enc.encode(jcs(doc)))
     this.zusteller.record(digest, bytes, toRkid)
     this.held.push(digest)
+    this.expected.set(digest, recipient)
     this.measures.framesOut++
     this.measures.bytesOut += bytes.length
     return { digest, bytes }
@@ -463,7 +472,7 @@ export class HolderDevice {
     if (!ownCtx) return
     const own = await this.keysFor(ownCtx)
     const { digest, bytes } = await this.sendDoc(TYPES.card, ownCtx, a.voucher.anchor, a.voucher.keyAgreement, own.rkid, { act: actId, expiresAt: a.expiresAt, from: a.own, fromKeyAgreement: own.rkid, to: a.voucher.anchor, card: { anchor: a.ownCard.anchor, keyAgreement: a.ownCard.keyAgreement } })
-    this.sent.set(digest, { kind: 'card', act: actId, frame: bytes, address: a.voucher.keyAgreement, expectAck: a.voucher.anchor })
+    this.sent.set(digest, { kind: 'card', act: actId, frame: bytes, address: a.voucher.keyAgreement })
     this.emit({ kind: 'hand-over', act: actId, o: 'handed', digest })
   }
 
@@ -512,7 +521,7 @@ export class HolderDevice {
   private async sendMapping(arrival: M.Tuple, other: M.Tuple): Promise<void> {
     const pair = M.pairKey(arrival.id, other.id)
     const { digest, bytes } = await this.sendDoc(TYPES.mapping, arrival.ownKey, arrival.peer, arrival.peerKeyAgreement, (await this.keysFor(arrival.ownKey)).rkid, { entry: this.blind(arrival, other.own) })
-    this.sent.set(digest, { kind: 'mapping', pair, frame: bytes, address: arrival.peerKeyAgreement, expectAck: arrival.peer })
+    this.sent.set(digest, { kind: 'mapping', pair, frame: bytes, address: arrival.peerKeyAgreement })
     this.emit({ kind: 'duty', pair, state: 'hit', mappingDigest: digest })
   }
   /** 6845.10: offene Mapping-Pflichten (hit, sent) ohne lokale Übergabe werden wieder aufgenommen. Vereinfachung: das Mapping wird neu produziert, nicht aus gespeicherten Bytes fortgesetzt. */
@@ -565,8 +574,9 @@ export class HolderDevice {
     const frames = this.cand.takeOwnFrames()
     if (!frames.length || !this.ownRkid) return
     const ctx = `self/${this.person}`
+    const self = (await this.keysFor(ctx)).anchor // das andere eigene Gerät quittiert unter demselben Anker (one-seed; K2 entscheidet neu)
     for (const f of frames) {
-      const { bytes } = await this.sendDoc(TYPES.journal, ctx, 'self', this.ownRkid, this.ownRkid, { b: Buffer.from(f.body).toString('base64') })
+      const { bytes } = await this.sendDoc(TYPES.journal, ctx, self, this.ownRkid, this.ownRkid, { b: Buffer.from(f.body).toString('base64') })
       this.measures.ownFramesOut++
       this.measures.ownBytesOut += bytes.length
       this.measures.framesOut--
@@ -648,9 +658,13 @@ export class HolderDevice {
     if (doc.type === TYPES.ack) {
       const p = doc.payload as { ref?: string }
       if (typeof p.ref !== 'string') return
-      // #55: die Quittung gilt nur vom erwarteten Empfänger der konkreten Submission.
-      const x = this.sent.get(p.ref)
-      if (x && x.expectAck && x.expectAck !== doc.issuer) {
+      // #55: die Quittung gilt nur vom erwarteten Empfänger der konkreten Submission; ohne Submission gilt sie nicht.
+      const want = this.expected.get(p.ref)
+      if (!want) {
+        this.dispositions.push('failed(ack-unbound)')
+        return
+      }
+      if (want !== doc.issuer) {
         this.dispositions.push('failed(ack-from-unexpected-signer)')
         return
       }

@@ -14,6 +14,10 @@ import * as M from '../src/lab/mehrgeraet/model'
 //   3. Ein echter Neustart (neue Instanz aus dem Store) behält die Zuordnung der Quittungen (#57).
 //   4. Orakel: korrektes Blockieren besteht X1; „nach neun alles verweigern“ fällt bei X2;
 //      eine überschriebene Ablehnung wird bei X3 erkannt.
+//   5. Die Commit-Grenze gilt auch für Zeitübergänge: der Träger sieht ein Dokument
+//      erst, wenn der Zustand dazu im Store steht (#56, Loop-Review 3).
+//   6. Eine Quittung gilt nur vom erwarteten Empfänger der konkreten Submission, für
+//      jede quittierbare Submission, nicht nur Karte und Mapping (#55, Loop-Review 3).
 
 const enc = new TextEncoder()
 const byId = (rs: Awaited<ReturnType<typeof runX15>>) => Object.fromEntries(rs.map((r) => [r.scenario, r]))
@@ -142,6 +146,62 @@ describe('E15 Gegenläufe: Bindung, Commit-Grenze, Neustart', () => {
     w.devices.splice(w.devices.indexOf(A), 1, A1b)
     B.online = true
     const n = await w.until(() => M.act(A1b.state, actId).o === 'delivered')
+    expect(n).toBeGreaterThan(0)
+  }, 60_000)
+
+  it('#56: zeitgesteuertes Nachfüllen: der Träger sieht die Revision erst, wenn sie im Store steht', async () => {
+    const w = new Welt15(k0())
+    const A = await w.person('A', 'A1')
+    const Mm = await w.person('M', 'M1')
+    const am = await w.encounter(A, Mm)
+    await w.rounds(2)
+    await A.setClass(am.x.id, true)
+    await w.rounds(3)
+    expect(M.rel(Mm.state, am.y.id).view?.revision).toBe(1)
+    // Der Vorrat altert (8475.S5): 174 Tage später ist kein Schlüssel mehr benennbar, A füllt nach.
+    w.clock.advance(174 * 24 * 3600 * 1000)
+    const store = w.stores.get('A1')!
+    const seen: Array<{ ram: number; store: number }> = []
+    const deposit = w.carrier.deposit.bind(w.carrier)
+    w.carrier.deposit = (address, bytes) => {
+      if (address === am.x.peerKeyAgreement) seen.push({ ram: M.rel(A.state, am.x.id).revision, store: M.rel(store.load()!.holder, am.x.id).revision })
+      deposit(address, bytes)
+    }
+    await A.round()
+    w.carrier.deposit = deposit
+    expect(seen.length).toBeGreaterThanOrEqual(1)
+    for (const s of seen) expect(s.store, 'Revision im RAM über der im Store beim Deposit').toBe(s.ram)
+    expect(M.rel(A.state, am.x.id).revision).toBe(2)
+    await w.rounds(3)
+    expect(M.rel(Mm.state, am.y.id).view?.revision).toBe(2)
+  }, 60_000)
+
+  it('#55: eine fremde Quittung auf As Revision markiert sie nicht als zugestellt; eine Quittung ohne Submission wird abgewiesen', async () => {
+    const w = new Welt15(k0())
+    const A = await w.person('A', 'A1')
+    const Mm = await w.person('M', 'M1')
+    const am = await w.encounter(A, Mm, 'am1')
+    await w.rounds(2)
+    Mm.online = false
+    await A.setClass(am.x.id, true)
+    const sub = [...A.zusteller.submissions.values()].find((s) => s.address === am.x.peerKeyAgreement)!
+    expect(sub.report?.state).toBe('accepted')
+    // E signiert selbst eine Quittung mit dem Digest von As Revision und versiegelt sie an As Adresse des A–M-Tupels.
+    const e = await edFromSeed(rand(32))
+    const anchor = anchorOfEd(e.pubRaw)
+    const ackOf = async (ref: string) => {
+      const doc = await diSign({ anchor, ed: { priv: e.priv } }, { id: crypto.randomUUID(), type: TYPES.ack, issuer: anchor, recipient: am.x.own, replyTo: '', issuedAt: w.clock.now(), payload: { ref, meaning: 'received' } }, w.clock.now())
+      return enc.encode(jcs(await seal(doc as unknown as Json, (await A.encounterKeys('am1')).rkid)))
+    }
+    w.carrier.deposit((await A.encounterKeys('am1')).rkid, await ackOf(sub.digest))
+    w.carrier.deposit((await A.encounterKeys('am1')).rkid, await ackOf('0'.repeat(64)))
+    await A.round()
+    expect(A.zusteller.report(sub.digest)?.state).toBe('accepted')
+    expect(A.dispositions).toContain('failed(ack-from-unexpected-signer)')
+    expect(A.dispositions).toContain('failed(ack-unbound)')
+    // Die echte Quittung von M gilt.
+    Mm.online = true
+    const n = await w.until(() => A.zusteller.report(sub.digest)?.state === 'delivered')
     expect(n).toBeGreaterThan(0)
   }, 60_000)
 })

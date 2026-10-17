@@ -288,13 +288,21 @@ export class Zusteller {
     this.record(digest, frame, address)
     this.deposit(digest)
   }
-  /** Vormerken ohne Einlieferung (Commit-Grenze vor dem Versand, E15): die nächste Runde liefert ein. */
+  /**
+   * Vormerken ohne Einlieferung (Commit-Grenze vor dem Versand, E15): die Submission ist bis zur Freigabe
+   * (`deposit`) nicht freigegeben; `advance` rührt sie nicht an (#56). Freigeben darf das Gerät erst nach dem Commit.
+   */
   record(digest: string, frame: Uint8Array, address: string): void {
     this.submissions.set(digest, { digest, frame, address, report: null, transport: 'ok', rounds: 0, sinceAccepted: null, sinceDeposit: 0, deposits: 0 })
   }
+  /** Freigabe: ab jetzt liefert der Zusteller ein und wiederholt. */
   deposit(digest: string): void {
     const s = this.submissions.get(digest)
     if (s) this.tryDeposit(s)
+  }
+  /** Vorgemerkt, nie freigegeben. Nach einem Neuaufbau aus dem Store sind das die committeten Absichten, die noch hinaus müssen. */
+  unreleased(): string[] {
+    return [...this.submissions.values()].filter((s) => s.report === null).map((s) => s.digest)
   }
   /** Neuaufbau aus dem Store (E15). */
   restore(subs: Submission[]) {
@@ -334,6 +342,7 @@ export class Zusteller {
    */
   advance() {
     for (const s of this.submissions.values()) {
+      if (s.report === null) continue // vorgemerkt, nicht freigegeben: liegt vor der Commit-Grenze des Geräts (#56)
       s.rounds++
       s.sinceDeposit++
       if (s.sinceAccepted !== null) s.sinceAccepted++
@@ -343,7 +352,7 @@ export class Zusteller {
         this.notes.push(`${s.digest.slice(0, 8)} aufgegeben ${s.sinceAccepted} Runden nach der Annahme (zuletzt ${s.transport})`)
         continue
       }
-      if (s.report === null || s.report.state === 'awaiting-transport') {
+      if (s.report.state === 'awaiting-transport') {
         this.tryDeposit(s)
         continue
       }
@@ -451,7 +460,8 @@ export class Device {
     this.received = s?.received.slice() ?? []
     this.dispositions = s?.dispositions.slice() ?? []
     this.zusteller.restore(s?.submissions ?? [])
-    this.held = []
+    // Was im Store steht, ist committet: vorgemerkte, nie freigegebene Submissions gehen nach dem nächsten Commit hinaus.
+    this.held = this.zusteller.unreleased()
     this.down = false
   }
   /** Quittungen, die mit der Wirkung aufgezeichnet sind und nach dem Commit der Runde eingeliefert werden. */
