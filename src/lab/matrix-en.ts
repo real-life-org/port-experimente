@@ -257,8 +257,8 @@ export const promiseEn: Record<string, { title: string; ref: string; gap: string
     "gap": null
   },
   "MG6": {
-    "title": "Restore from backup: no number reuse, no stale stock, no lost acts",
-    "ref": "§8 8500, 8315–8318 (X6, later X19)",
+    "title": "Numbers across devices: neither a restore from backup nor parallel production on two devices reuses a number; no stale stock, no lost acts",
+    "ref": "§8 8500, 8315–8318, 6270; §6a 6680 (X6, X17, later X19)",
     "gap": null
   },
   "MG7": {
@@ -344,6 +344,7 @@ export const scenarioEn: Record<string, string> = {
   "X14": "A1 and A2 separately introduce the same person C to B (two acts, one purpose): double introduction, union of the acts at B and C (6975, I-6)",
   "X15": "Union of two relationships with M (6975) while an act runs on one (consented, card in transit): A1 consents, A2, separated from A1, meets M again and unites (6987.5/.6/.10/.12/.14)",
   "X16": "A1 revokes the class, A2, separated, holds the old stock; a mediator device with the old view still introduces, A2 accepts the ticket (old stock after class revocation, 8535, 8475.S6, 8640.6)",
+  "X17": "A1 and A2, separated, each produce a revision with the same previous number (each accepts another ticket and refills): parallel production, 8500, 6270; probe sequence 6680 not modelled",
   "X21": "Journal duplicated, reordered, incomplete: completed batches after an old and a double restore, concurrent requests, a crash before commit; loss of request, answer and receipt, each for more than 12 rounds (HSC-440, review 9)"
 }
 

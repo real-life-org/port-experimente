@@ -158,6 +158,13 @@ async function introduceAny(s: Setup, relA: string, relB: string, serial: boolea
   return s.M2.introduce(relA, relB)
 }
 
+/** Die Rahmen einer Vorstellung: was die Mediatorgeräte dabei erzeugt haben (versiegelt; zugeordnet über `produced`). */
+async function framesOf(s: Setup, f: () => Promise<{ act: string } | { refused: string }>) {
+  const known = new Set(s.w.of('M').flatMap((d) => [...d.produced.keys()]))
+  const r = await f()
+  return { r, frames: new Set(s.w.of('M').flatMap((d) => [...d.produced.keys()]).filter((h) => !known.has(h))) }
+}
+
 /** Alle Geräte einer Person kennen den Akt (sonst wäre eine Entscheidung darauf ein Fehler im Szenario, kein Messwert). */
 const knowsAct = (w: Welt15, person: string, act: string) => w.of(person).every((d) => d.state.acts.some((a) => a.id === act))
 
@@ -544,23 +551,17 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
         await rounds(3)
       }
       const before = acceptedActs(s.w, 'A').size
-      // Die Rahmen einer Vorstellung: was die Mediatorgeräte dabei erzeugt haben (versiegelt; zugeordnet über `produced`).
-      const framesOf = async (f: () => Promise<{ act: string } | { refused: string }>) => {
-        const known = new Set(s.w.of('M').flatMap((d) => [...d.produced.keys()]))
-        const r = await f()
-        return { r, frames: new Set(s.w.of('M').flatMap((d) => [...d.produced.keys()]).filter((h) => !known.has(h))) }
-      }
       // Beide Mediatorgeräte getrennt: jedes stellt A eine weitere Person vor (zehnte und elfte Vorstellung).
       s.Mm.online = false
       s.M2.online = false
-      const x1 = await framesOf(() => s.Mm.introduce(s.ma, cs[9]!))
-      const x2 = await framesOf(() => s.M2.introduce(s.ma, cs[10]!))
+      const x1 = await framesOf(s, () => s.Mm.introduce(s.ma, cs[9]!))
+      const x2 = await framesOf(s, () => s.M2.introduce(s.ma, cs[10]!))
       const offline = [x1, x2].filter((x) => 'act' in x.r).length
       s.Mm.online = true
       s.M2.online = true
       // Ein Mediatorgerät ohne benennbaren Schlüssel (K1a) wird nach der Heilung vom anderen vertreten (autorisierter Pfad, B6).
       const xs = [x1, x2]
-      for (let i = 0; i < 2; i++) if (!('act' in xs[i]!.r)) xs[i] = await framesOf(() => introduceAny(s, s.ma, cs[9 + i]!, serial))
+      for (let i = 0; i < 2; i++) if (!('act' in xs[i]!.r)) xs[i] = await framesOf(s, () => introduceAny(s, s.ma, cs[9 + i]!, serial))
       const issued = xs.filter((x) => 'act' in x.r).length
       // Die Seite ist getrennt: die zehnte erreicht nur A1, die elfte nur A2; danach sehen beide alles.
       const hash = (f: { bytes: Uint8Array }) => frameHash(f.bytes)
@@ -734,6 +735,47 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const acceptedAfterRevocation = accepted.length || after ? 1 : 0
       const ok = acceptedAfterRevocation === 0 && viewKeys.every((k) => k === 0) && equivocation === 0 && classOn === 0 && agree.agree && n > 0
       return { outcome: mark(ok), detail: `aktive Schlüssel nach dem Widerruf je Gerät ${stale.join('/')}; Ticket auf alten Schlüssel angenommen von ${accepted.join(', ') || 'keinem Gerät'}, nach der Heilung auf ${after} Gerät(en); Schlüssel ${keyState.join(', ')}; Ms Sicht (Schlüssel) ${viewKeys.join('/')}; Klasse an auf ${classOn} Gerät(en); Equivokationen ${equivocation}; Projektion gleich nach ${n} Runden: ${agree.agree ? 'ja' : 'nein'}`, measures: { acceptedAfterRevocation, devicesWithAct: after, mediatorViewKeys: Math.max(...viewKeys), equivocations: equivocation, devicesWithClassOn: classOn, projectionAgrees: agree.agree ? 1 : 0, roundsToConverge: n } }
+    },
+  },
+  {
+    id: 'X17',
+    title: 'A1 und A2 produzieren getrennt je eine Revision mit derselben bisherigen Nummer (jedes nimmt ein anderes Ticket an und füllt nach): parallele Produktion, 8500, 6270; Probe-Sequenz 6680 nicht modelliert',
+    async run(c, serial) {
+      const s = await setup(c, serial, ['C'])
+      const { mc } = s.thirds.C!
+      // Zwei gemeinsame Vorstellungen: drei aktive Schlüssel, die nächste Annahme löst das Nachfüllen aus (8485).
+      for (let i = 0; i < 2; i++) {
+        await introduceAny(s, s.ma, mc, serial)
+        await s.w.rounds(3)
+      }
+      const rev0 = M.rel(s.A.state, s.am).revision
+      // A1 und A2 getrennt; je eine weitere Vorstellung erreicht nur eines der beiden Geräte (seriell beide A1).
+      const selfA = (await s.A.cand.keys.pair('self/A')).rkid
+      const x1 = await framesOf(s, () => introduceAny(s, s.ma, mc, serial))
+      const x2 = await framesOf(s, () => introduceAny(s, s.ma, mc, serial))
+      if (!('act' in x1.r) || !('act' in x2.r)) return fail('keine zwei weiteren Vorstellungen')
+      const hash = (f: { bytes: Uint8Array }) => frameHash(f.bytes)
+      if (!serial) {
+        for (const d of s.w.of('A')) s.w.carrier.faults.withhold(d.name, (f) => f.address === selfA)
+        s.w.carrier.faults.withhold(s.A2.name, (f) => x1.frames.has(hash(f)))
+        s.w.carrier.faults.withhold(s.A.name, (f) => x2.frames.has(hash(f)))
+      }
+      await s.w.rounds(4)
+      const revs = s.w.of('A').map((d) => M.rel(d.state, s.am).revision)
+      s.w.carrier.faults.reset()
+      const n = await untilStable(s.w, 'A')
+      // Gemessen: eine Revisionsnummer, die mehr als eine Operation der Person erzeugt hat (8500), und was M daraus macht (6270).
+      const reused = [...ledger(s.w, 'A').entries()].filter(([id, ops]) => id.startsWith('revision:') && ops.size > 1).length
+      const equivocation = s.w.of('M').flatMap((d) => d.state.findings).filter((f) => f.includes('Equivokation') || f.includes('6270')).length
+      const secondStock = s.w.of('A').flatMap((d) => d.state.findings).filter((f) => f.includes('8435')).length
+      // Fortschritt danach: eine weitere Vorstellung muss angenommen werden (Ms Sicht darf keinen verbrauchten Schlüssel enthalten).
+      const r = await introduceAny(s, s.ma, mc, serial)
+      await s.w.rounds(4)
+      const progress = 'act' in r && s.w.of('A').every((d) => d.state.acts.some((a) => a.id === r.act)) ? 1 : 0
+      const conformance = s.w.of('A').flatMap((d) => d.state.findings).filter((f) => f.includes('8640.12')).length
+      const agree = s.w.agree('A')
+      const ok = reused === 0 && equivocation === 0 && progress === 1 && conformance === 0 && agree.agree && n > 0
+      return { outcome: mark(ok), detail: `Revision vorher ${rev0}, getrennt je Gerät ${revs.join('/')}; Revisionsnummern mit mehr als einer Operation: ${reused}; Befunde 6270 bei M: ${equivocation}; zweiter Vorrat (8435) bei A: ${secondStock}; nächste Vorstellung ${'act' in r ? (progress ? 'angenommen' : 'nicht angenommen') : 'verweigert'}, Konformitätsfehler bei A: ${conformance}; Projektion gleich nach ${n} Runden: ${agree.agree ? 'ja' : 'nein'}; Probe-Sequenz (6680) und Mapping-Revision sind im Prüfstand nicht modelliert`, measures: { revisionNumbersReused: reused, equivocations: equivocation, secondStockFindings: secondStock, progressAfterHeal: progress, mediatorConformanceFailures: conformance, projectionAgrees: agree.agree ? 1 : 0, roundsToConverge: n } }
     },
   },
   {

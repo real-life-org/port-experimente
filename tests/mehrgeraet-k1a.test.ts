@@ -406,4 +406,15 @@ describe('K1a breite Matrix', () => {
     expect(one.outcome, one.detail).toBe('bestanden')
     expect(one.measures.acceptedAfterRevocation).toBe(0)
   }, 600_000)
+
+  it('X17: A1 und A2 füllen getrennt nach und senden je eine Revision mit derselben Nummer: Equivokation bei M (8500, 6270)', async () => {
+    const two = byId(await runX15(k1a(), false, ['X17'])).X17!
+    expect(two.crashed, two.detail).toBeFalsy()
+    expect(two.outcome, two.detail).toBe('nicht bestanden')
+    expect(two.measures.revisionNumbersReused as number).toBeGreaterThan(0)
+    const one = byId(await runX15(k1a({ devices: 1 }), true, ['X17'])).X17!
+    expect(one.crashed, one.detail).toBeFalsy()
+    expect(one.outcome, one.detail).toBe('bestanden')
+    expect(one.measures.revisionNumbersReused).toBe(0)
+  }, 600_000)
 })
