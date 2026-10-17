@@ -1,9 +1,9 @@
 import { it } from 'vitest'
-import { writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { runAll } from '../src/lab/scenarios'
 import { runCarrier } from '../src/lab/traeger'
 import { buildMatrix, toMarkdown, type CandidateRun } from '../src/lab/matrix'
-import { pageData, renderPage } from '../src/lab/matrix-page'
+import { pageData, renderPage, updateFindingsSummary } from '../src/lab/matrix-page'
 import { allCandidates as candidates } from '../src/candidates/node-only'
 import { multiDeviceCandidates } from '../src/candidates/mehrgeraet'
 import { runX15 } from '../src/lab/mehrgeraet/scenarios'
@@ -31,6 +31,10 @@ it.runIf(process.env.REPORT)('Bericht', async () => {
   const md = toMarkdown(matrix)
   writeFileSync(process.env.MATRIX_OUT ?? 'matrix.md', md)
   // Die Seite aus demselben Lauf (alle Ports, auch Zustellung und Mehrgerät); die englischen Texte in src/lab/matrix-en.ts.
-  writeFileSync(process.env.PAGE_OUT ?? 'public/matrix.html', renderPage(pageData(matrix, runs, new Date().toISOString())))
+  const page = pageData(matrix, runs, new Date().toISOString())
+  writeFileSync(process.env.PAGE_OUT ?? 'public/matrix.html', renderPage(page))
+  // Die Zusammenfassung der Befunde-Seite aus demselben Lauf (hash-abhängige Zellen wechseln von Lauf zu Lauf).
+  const findings = process.env.FINDINGS_OUT ?? 'public/findings.html'
+  writeFileSync(findings, updateFindingsSummary(readFileSync(findings, 'utf8'), page))
   process.stdout.write('\n' + md)
 }, 3_600_000)
