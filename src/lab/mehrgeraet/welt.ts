@@ -53,6 +53,7 @@ export class Welt15 {
     for (const i of intents ?? []) d.intents.set(i.digest, i)
     try {
       await d.relisten()
+      d.requestSync() // was seit der Kopie geschah, holt das neue Gerät nach
       d.commit()
     } catch (e) {
       this.candidate.release?.(from.person, device) // der Platz bleibt nicht belegt, wenn das Gerät nie entstand
