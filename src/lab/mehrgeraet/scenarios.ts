@@ -581,7 +581,7 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
   },
   {
     id: 'X14',
-    title: 'A1 und A2 stellen B getrennt dieselbe Person C vor (zwei Akte, ein Zweck): doppelte Vorstellung, Vereinigung der Akte bei B und C (6975, I-6)',
+    title: 'A1 und A2 stellen B getrennt dieselbe Person C vor (zwei Akte, ein Zweck); B1 und B2 stimmen getrennt je einem zu: doppelte Vorstellung, Vereinigung der Akte bei B und C (6975, I-6)',
     async run(c, serial) {
       // A ist hier der Mediator: B und C erlauben A, sie vorzustellen (Klasse an, Vorrat bei A). C hat ein Gerät.
       let C!: HolderDevice
@@ -628,10 +628,17 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
           await s.w.until(() => connected(a), 15)
         }
       } else {
+        // B1 und B2 sind dabei voneinander getrennt (das Journal zwischen ihnen bleibt aus, bis beide Verbindungen und die Proben durch sind):
+        // so entscheidet nicht der Zufall der Reihenfolge, ob ein Gerät eine Probe mit dem ganzen Wissen der Person prüft.
+        const selfB = (await s.B.cand.keys.pair('self/B')).rkid
+        for (const d of s.w.of('B')) s.w.carrier.faults.withhold(d.name, (f) => f.address === selfB)
         await s.B.consent(acts[0]!)
         await s.B2.consent(acts[1]!)
         await C.consent(acts[0]!)
         await C.consent(acts[1]!)
+        await s.w.until(() => M.act(s.B.state, acts[0]!).state === 'connected' && M.act(s.B2.state, acts[1]!).state === 'connected' && acts.every((a) => M.act(C.state, a).state === 'connected'), 15)
+        await s.w.rounds(4)
+        s.w.carrier.faults.reset()
       }
       await s.w.until(() => acts.every(connected), 15)
       const n = Math.max(await untilStable(s.w, 'B'), await untilStable(s.w, 'C'))

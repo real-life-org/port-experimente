@@ -369,14 +369,14 @@ describe('K1a breite Matrix', () => {
     }
   }, 600_000)
 
-  it('X14: A1 und A2 stellen B dieselbe Person C vor: zwei Akte, beide verbunden, bei B und C je ein Eintrag mit zwei Tupeln', async () => {
+  it('X14: A1 und A2 stellen B dieselbe Person C vor; B1 und B2 stimmen getrennt je einem zu: beide verbunden, aber nie vereinigt (kein Vereinigungsschritt über eigene Tupel)', async () => {
     const two = byId(await runX15(k1a(), false, ['X14'])).X14!
     expect(two.crashed, two.detail).toBeFalsy()
     expect(two.measures.actsIssued, two.detail).toBe(2)
     expect(two.measures.doubleFinalEffects).toBe(0)
-    // Die Vereinigung trägt hier das Kontinuitätsprotokoll zwischen B und C (die Gegenseite C ist ein Gerät), kein Schritt über eigene Tupel.
-    expect(two.measures.duplicates).toBe(0)
-    expect(two.outcome, two.detail).toBe('bestanden')
+    // Jede Probe prüft ein Gerät, das das andere Tupel nicht kennt; nach der Heilung des Journals prüft niemand neu.
+    expect(two.measures.duplicates as number, two.detail).toBeGreaterThan(0)
+    expect(two.outcome, two.detail).toBe('nicht bestanden')
     const one = byId(await runX15(k1a({ devices: 1 }), true, ['X14'])).X14!
     expect(one.crashed, one.detail).toBeFalsy()
     expect(one.outcome, one.detail).toBe('bestanden')
