@@ -25,7 +25,7 @@ const dec = new TextDecoder()
 interface Batch {
   writer: string
   n: number
-  /** Operation ids of the previous batch of this device (any incarnation); every one must be applied before this batch. */
+  /** Batch keys (`writer#n`) of the last batch seen from every writer, including this device's own; every one must be known before this batch (step 1c). */
   deps: string[]
   ops: M.Op[]
   intents: Array<Omit<Intent, 'bytes'> & { bytes: string }>
@@ -97,9 +97,19 @@ export class K1aDevice implements CandidateDevice {
     if (op.kind === 'introduce') return this.mayName(op.act.a.key, op.act.a.rel, state) && this.mayName(op.act.b.key, op.act.b.rel, state)
     return true
   }
+  /** The last batch seen from every writer. */
+  heads(): Record<string, number> {
+    const h: Record<string, number> = {}
+    for (const b of this.batches) if ((h[b.writer] ?? 0) < b.n) h[b.writer] = b.n
+    return h
+  }
+  /** What a device with these heads has not seen yet, oldest first (the sync answer). */
+  batchesAfter(heads: Record<string, number>) {
+    return this.batches.filter((b) => b.n > (heads[b.writer] ?? 0)).map((b) => ({ body: enc.encode(JSON.stringify(b)) }))
+  }
   commit(tx: Transaction): void {
-    const last = [...this.batches].reverse().find((b) => b.writer.startsWith(`${this.name}@`))
-    const b: Batch = { writer: this.writer, n: ++this.n, deps: last ? last.ops.map((o) => M.opKey(o.id)) : [], ops: tx.ops, intents: tx.intents.map((i) => ({ ...i, bytes: Buffer.from(i.bytes).toString('base64') })) }
+    const deps = Object.entries(this.heads()).map(([w, n]) => `${w}#${n}`)
+    const b: Batch = { writer: this.writer, n: ++this.n, deps, ops: tx.ops, intents: tx.intents.map((i) => ({ ...i, bytes: Buffer.from(i.bytes).toString('base64') })) }
     this.batches.push(b)
     this.out.push(b)
   }
@@ -114,9 +124,9 @@ export class K1aDevice implements CandidateDevice {
       // Gleicher Schlüssel, anderer Inhalt: zwei Inkarnationen mit derselben Kennung (B2); sichtbar machen, nicht still verwerfen.
       return { ops: [{ id: { writer: `${b.writer}#conflict`, n: b.n }, at: b.ops[0]?.at ?? new Date(0).toISOString(), kind: 'finding', text: `Journal-Konflikt: Batch ${b.writer}#${b.n} zweimal mit anderem Inhalt` }], intents: [] }
     }
-    // Vorgänger: jede Operation des vorigen Batches dieses Geräts muss bekannt sein, sonst zurückstellen.
-    const knownOps = new Set(this.batches.flatMap((x) => x.ops.map((o) => M.opKey(o.id))))
-    const missing = b.deps.find((d) => !knownOps.has(d))
+    // Vorgänger: jeder Kopf, den der Schreiber beim Commit kannte, muss hier bekannt sein, sonst zurückstellen (und nachholen lassen).
+    const knownKeys = new Set(this.batches.map((x) => `${x.writer}#${x.n}`))
+    const missing = b.deps.find((d) => !knownKeys.has(d))
     if (missing) throw new M.Missing('batch', missing, this.person)
     return { ops: b.ops, intents: b.intents.map((i) => ({ ...i, bytes: new Uint8Array(Buffer.from(i.bytes, 'base64')) })) }
   }

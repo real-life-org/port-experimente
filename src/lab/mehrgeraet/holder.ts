@@ -130,6 +130,9 @@ export interface CandidateDevice {
   receiveOwnFrame(body: Uint8Array): Transaction
   /** Der Schritt aus diesem Rahmen ist angewandt: der Kandidat merkt ihn sich (Dedupe, Vorgänger). Nach dem Gelingen gerufen. */
   applied?(body: Uint8Array): void
+  /** Nachholen (HSC-440, X21): die bekannten Köpfe je Schreiber, und die Rahmen, die ein Gerät mit diesen Köpfen noch nicht hat. Ohne Methoden gibt es kein Nachholen. */
+  heads?(): Record<string, number>
+  batchesAfter?(heads: Record<string, number>): OwnFrame[]
   /** Flüchtiger Stand des Kandidaten für die Rücknahme eines Schritts (Tor-Review 7 B1): ohne Inkarnationswechsel, anders als `restore`. Ohne Methoden hält der Kandidat nichts Rücknehmbares. */
   snapshot?(): unknown
   rollback?(snapshot: unknown): void
@@ -164,6 +167,7 @@ export const TYPES = {
   probe: 'https://real-life.org/rltp/e15/continuity-probe/0.1',
   mapping: 'https://real-life.org/rltp/e15/continuity-mapping/0.1',
   journal: 'https://real-life.org/rltp/e15/journal/0.1',
+  journalSync: 'https://real-life.org/rltp/e15/journal-sync/0.1',
   ack: 'https://real-life.org/trust-tasks/delivery-ack/0.1',
 } as const
 
@@ -248,6 +252,8 @@ export class HolderDevice {
   expected = new Map<string, string>()
   /** Innerhalb eines `guarded`-Rahmens: der Schritt, den der Kandidat erst nach dem Gelingen als Einheit committet. */
   private pending: Transaction | null = null
+  /** Nachholen fällig (nach Neuaufbau, Enrollment, Zurückstellung): die nächste Runde schickt die eigenen Köpfe an die Self-Adresse. */
+  private syncDue = false
   /** Produktionsabsichten (B4): eigene und die der anderen eigenen Geräte aus dem Journal; lesbar für Messungen. */
   intents = new Map<string, Intent>()
   /** Aufgezeichnet, noch nicht eingeliefert: geht nach dem nächsten Commit hinaus. */
@@ -393,6 +399,7 @@ export class HolderDevice {
       }
       if (defer && e instanceof M.Missing) {
         this.dispositions.push(`deferred(${e.what}:${e.ref})`)
+        if (e.what === 'batch') this.syncDue = true // der Vorgänger fehlt: nachholen lassen
         return false
       }
       throw e
@@ -436,6 +443,11 @@ export class HolderDevice {
     this.cand.restore(s?.candidate ?? null)
     this.down = false
     await this.relisten()
+    this.requestSync()
+  }
+  /** Nachholen anstoßen: nach Neuaufbau, Enrollment oder wenn ein Rahmen zurückgestellt wurde (HSC-440). */
+  requestSync() {
+    this.syncDue = true
   }
   private crash(point: CrashPoint) {
     if (this.crashAt !== point) return
@@ -481,7 +493,7 @@ export class HolderDevice {
     this.zusteller.record(digest, bytes, toRkid)
     this.held.push(digest)
     this.expected.set(digest, recipient)
-    if (type !== TYPES.journal) {
+    if (type !== TYPES.journal && type !== TYPES.journalSync) {
       const intent: Intent = { digest, kind: type, bytes, address: toRkid, expected: recipient, replyTo, device: this.name, writer: this.cand.writer }
       this.intents.set(digest, intent)
       this.pending?.intents.push(intent)
@@ -714,6 +726,7 @@ export class HolderDevice {
         const frames = this.carrier.collect(this.name)
         for (const f of frames) await this.guarded(() => this.handle(f.bytes, f.address), true)
         await this.journalOut()
+        await this.syncOut()
         this.crash('before-commit')
         this.commit()
         this.crash('after-commit')
@@ -743,6 +756,19 @@ export class HolderDevice {
       this.measures.framesOut--
       this.measures.bytesOut -= bytes.length
     }
+  }
+
+  /** Nachholen: die eigenen Köpfe an die eigenen Geräte; wer mehr weiß, liefert die fehlenden Batches (HSC-440, X21). */
+  private async syncOut(): Promise<void> {
+    if (!this.syncDue || !this.ownRkid || !this.cand.heads) return
+    this.syncDue = false
+    const ctx = `self/${this.person}`
+    const self = (await this.keysFor(ctx)).anchor
+    const { bytes } = await this.sendDoc(TYPES.journalSync, ctx, self, this.ownRkid, this.ownRkid, { heads: this.cand.heads() })
+    this.measures.ownFramesOut++
+    this.measures.ownBytesOut += bytes.length
+    this.measures.framesOut--
+    this.measures.bytesOut -= bytes.length
   }
 
   /** 8110.7: Zeitübergänge. */
@@ -849,7 +875,24 @@ export class HolderDevice {
       return
     }
     let effect: boolean
-    if (doc.type === TYPES.journal) {
+    if (doc.type === TYPES.journalSync) {
+      // Ein eigenes Gerät nennt seine Köpfe: was es nicht hat, geht ihm als Journalrahmen zu (Nachholen, X21).
+      if (address !== this.ownRkid) return
+      const self = (await this.keysFor(`self/${this.person}`)).anchor
+      if (doc.issuer !== self) {
+        this.dispositions.push('failed(journal-from-unexpected-signer)')
+        return
+      }
+      const heads = (doc.payload as { heads?: Record<string, number> }).heads ?? {}
+      for (const f of this.cand.batchesAfter?.(heads) ?? []) {
+        const { bytes } = await this.sendDoc(TYPES.journal, `self/${this.person}`, self, this.ownRkid, this.ownRkid, { b: Buffer.from(f.body).toString('base64') })
+        this.measures.ownFramesOut++
+        this.measures.ownBytesOut += bytes.length
+        this.measures.framesOut--
+        this.measures.bytesOut -= bytes.length
+      }
+      effect = true
+    } else if (doc.type === TYPES.journal) {
       // Journalrahmen: nur auf der eigenen Adresse und nur vom eigenen Self-Anker (one-seed: auf allen Geräten derselbe).
       if (address !== this.ownRkid) return
       if (doc.issuer !== (await this.keysFor(`self/${this.person}`)).anchor) {

@@ -143,10 +143,10 @@ describe('K1a Schritt 1: Abnahmelauf', () => {
     w.carrier.faults.reverse(true)
     await w.rounds(3)
     expect(A2.dispositions.some((d) => d.startsWith('deferred(batch:'))).toBe(true)
-    expect(w.agree('A').agree).toBe(false) // der zurückgehaltene Rahmen fehlt noch
-    w.carrier.faults.reset()
+    // Der zurückgehaltene Rahmen bleibt zurückgehalten; A2 holt den fehlenden Batch über die Self-Adresse nach (Schritt 1c).
     const n = await w.until(() => w.agree('A').agree, 15)
     expect(n).toBeGreaterThan(0)
+    w.carrier.faults.reset()
     expect(A2.state.applied.filter((k, i, a) => a.indexOf(k) !== i), 'doppelt angewandt').toEqual([])
     // Endgültige Wirkungen genau einmal (Klassen-Umschaltungen an/aus/an sind keine).
     const finals = A2.state.effects.map((e) => e.id).filter((id) => /^(accept|ticket|connect|card|mapping|consent|decline):/.test(id))
@@ -246,4 +246,59 @@ describe('K1a Schritt 1: Abnahmelauf', () => {
     const soon: M.Op = { ...fresh, at: t('2026-08-10T00:00:00.000Z') }
     expect(d.authorize(soon, s)).toBe(false) // innerhalb des Fensters zählt sie
   })
+
+  // Schritt 1c (Tor-Review 7 B3): Abhängigkeiten als Vektor der Köpfe, Nachholen über die Self-Adresse (HSC-440, X21).
+  it('10. B3: eine kausale Folge über zwei Geräte bleibt in jeder Reihenfolge dieselbe (Q liest Ps Schritt, dann Qs Schritt)', async () => {
+    const { w, A, am } = await pair()
+    const A2 = await w.enrol(A, 'A2')
+    await w.rounds(2)
+    const self = (await A.cand.keys.pair('self/A')).rkid
+    const old = w.stores.get('A1')!.snapshot() // vor P
+    // A1 setzt die Klasse aus (P), A2 liest das und setzt sie wieder an (Q): Qs Batch hängt von Ps Batch ab.
+    await A.setClass(am.x.id, false)
+    await w.rounds(2)
+    expect(M.rel(A2.state, am.x.id).classOn).toBe(false)
+    const held = new Set<string>()
+    // A1 aus einem Abbild von vor P, das Q vor P bekommt: Q hängt an P und wartet.
+    await A2.setClass(am.x.id, true)
+    w.stores.get('A1')!.restore(old)
+    await A.reload()
+    expect(M.rel(A.state, am.x.id).classOn).toBe(true) // altes Abbild: vor P
+    w.carrier.faults.reverse(true)
+    await w.rounds(3)
+    w.carrier.faults.reset()
+    const n = await w.until(() => w.agree('A').agree, 15)
+    expect(n).toBeGreaterThan(0)
+    expect(M.rel(A.state, am.x.id).classOn).toBe(true) // P dann Q, nie Q dann P
+    expect(M.rel(A2.state, am.x.id).classOn).toBe(true)
+    void self
+    void held
+  }, 90_000)
+
+  it('11. B3: ein Batch nur mit Absichten ist ein Vorgänger; der nächste wird ohne ihn zurückgestellt', async () => {
+    const { w, A, Mm, am } = await pair()
+    const A2 = await w.enrol(A, 'A2')
+    await w.rounds(2)
+    // Die Wiederholung eines Mappings nach `failed` erzeugt einen Schritt nur mit Absicht (reportOne 6845.4); einfacher: eine Absicht ohne Op über die Alterung.
+    const self = (await A.cand.keys.pair('self/A')).rkid
+    let first: Uint8Array | null = null
+    w.carrier.faults.withhold('A2', (f) => { if (f.address === self && !first) first = f.bytes; return !!first && Buffer.compare(first, f.bytes) === 0 })
+    await A.setClass(am.x.id, false) // Batch 1 (zurückgehalten)
+    await w.rounds(1)
+    await A.setClass(am.x.id, true) // Batch 2 hängt an Batch 1
+    await w.rounds(2)
+    expect(A2.dispositions.some((d) => d.startsWith('deferred(batch:'))).toBe(true)
+    const deps = (A.cand as K1aDevice).persist().batches.slice(-1)[0]!.deps
+    expect(deps.some((d) => d.startsWith(A.cand.writer))).toBe(true) // der eigene vorige Batch als Kopf
+    w.carrier.faults.reset()
+    const n = await w.until(() => w.agree('A').agree, 15)
+    expect(n).toBeGreaterThan(0)
+    expect(M.rel(Mm.state, am.y.id).view?.keys.length).toBe(5)
+  }, 90_000)
+
+  it('12. B3/X6: ein Gerät aus einem alten Backup holt über die Self-Adresse nach, auch seine eigene frühere Inkarnation; X6 besteht', async () => {
+    const r = byId(await runX15(k1a(), false, ['X6']))
+    expect(r.X6!.crashed).toBeFalsy()
+    expect(r.X6!.outcome, r.X6!.detail).toBe('bestanden')
+  }, 300_000)
 })

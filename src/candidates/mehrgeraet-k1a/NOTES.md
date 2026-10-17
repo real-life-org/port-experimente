@@ -12,10 +12,18 @@ limit are assigned to one device in advance.
   (user action, received frame, time step) as one unit: the operations
   it applied and the production intents it created (digest, sealed bytes,
   address, expected receipt signer, reply address, producing device and
-  incarnation). The batch key is the writer incarnation plus a counter;
-  the previous batch of the same device is the predecessor. A device
-  applies a batch only after its predecessor (otherwise the frame is
-  deferred and the sender's dispatcher repeats it), and exactly once.
+  incarnation). The batch key is the writer incarnation plus a counter.
+  Every batch carries the last batch key seen from every writer
+  (including the device's own previous batch, and batches with intents
+  only); a device applies a batch only once all those heads are known,
+  otherwise the frame is deferred, and exactly once.
+- **Catch-up over the self address (HSC-440).** After a restore, an
+  enrollment or a deferred batch the device sends its heads as a
+  `journal-sync` document to the person's own address; every sibling
+  answers with the batches the requester lacks, including the requester's
+  own earlier incarnations. A device restored from an old backup thus
+  recovers its own history (consumed keys, accepted acts) and the
+  siblings' steps; X6 passes.
 - **Incarnation.** A restore from the store gives the device a fresh
   random incarnation (`A1@3f9a1c20`), never a counter from the backup, so
   two restores of the same backup never collide; a batch key seen twice
@@ -70,9 +78,7 @@ below is filled from the report run.
 Counts over X1 to X12 with two devices: 7 kept, 4 not kept, 1 not
 applicable (K0: 1 kept, 10 not kept, 1 not applicable).
 
-Reservations (gate review 8): X11 and X12 are kept without a general
-journal repair, so they do not show that a device recovers batches it
-has lost after acknowledging them (step 1c, X21); X1, X2 and X5 show
+Reservations (gate review 8): X1, X2 and X5 show
 fixed rights with the entitled device available and no re-production,
 not a transfer of rights or a takeover after a device is lost (K1b,
 X20); X8 and X11 do not show a union of the person's own tuples (X14,
@@ -94,11 +100,13 @@ X15).
   conflict, not as an executed connect (model fix in this step). Making consent and
   decline a device right is the open question for the multi-writer
   contract, not something a journal solves.
-- **No catch-up after a backup (X6).** A2 restored from an old backup gets
-  a new incarnation but never the batches it missed: the carrier has
-  concluded them for A2, and K1a has no gap repair (HSC-440). Two keys
-  that M consumed stay active on A2 and two acts are missing. Gap repair
-  over the journal is the first item of the broad K1a matrix (X21).
+- **Catch-up after a backup works through the journal (X6).** A2 restored
+  from an old backup gets a new incarnation and, after one sync round,
+  every batch it missed, including those of its own earlier incarnation;
+  the keys M consumed are consumed on A2 again, the acts are back. What
+  the sync does not do: bound the journal, forget anything, or decide
+  between two devices that answer the same request (both answer, the
+  requester deduplicates).
 - **Shared tuples are not united (X7).** Both devices learn both
   encounters with B from the journal, so each holds two relationship
   entries to B; the continuity protocol (probe, mapping, union, 6975) runs
@@ -123,6 +131,7 @@ X15).
 - No transfer of quota between devices (that is K1b); no takeover of a
   sibling's intent when the sibling is lost (X20, K2).
 - The journal is a plain list of batches in the device's store; no
-  cleanup, no tombstones, no bound on its size (X21 measures the size).
+  cleanup, no tombstones, no bound on its size; a sync answer re-sends
+  whole batches (X21 measures size and repair traffic).
 - The acceptance run checks one person with two devices; X13–X18 and
   X21 are the broad K1a matrix and come next.
