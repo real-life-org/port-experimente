@@ -67,10 +67,14 @@ describe('B1 (Review 4): Vereinigung und Kante ohne Vorgänger', () => {
     M.apply(s, op({ kind: 'union', a: 'A:e1', b: 'A:e2', edge: ['A:e1', 'A:e2'] }, 'other'))
     expect(s.relationships.length).toBe(1)
   })
-  it('edge auf ein unbekanntes Tupel wirft Missing', () => {
+  it('edge auf ein unbekanntes Tupel wirft Missing, auch wenn nur das zweite fehlt', () => {
     const s = M.emptyState('A')
     expect(() => M.apply(s, op({ kind: 'edge', edge: ['A:x', 'A:y'] }))).toThrow(M.Missing)
     expect(s.edges).toEqual([])
+    M.apply(s, op({ kind: 'open-tuple', rel: null, tuple: tuple('A:x', 'ax', 'bx'), provenance: 'encounter', vouchedBy: null, act: null }))
+    expect(() => M.apply(s, op({ kind: 'edge', edge: ['A:x', 'A:y'] }))).toThrow(M.Missing)
+    expect(s.edges).toEqual([])
+    expect(s.applied.length).toBe(1)
   })
 })
 

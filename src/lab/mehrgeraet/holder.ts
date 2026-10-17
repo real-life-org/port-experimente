@@ -849,7 +849,9 @@ export class HolderDevice {
         const p = doc.payload as unknown as { revision: number; keys: Array<{ anchor: string; keyAgreement: string; expiresAt: string }> }
         if (r.view && r.view.scope === t.id && p.revision <= r.view.revision) {
           const same = p.revision === r.view.revision
-          const sameKeys = same && JSON.stringify(p.keys.map((k) => k.anchor).sort()) === JSON.stringify(r.view.keys.map((k) => k.anchor).sort())
+          // Wiederholung nur bei gleichem ganzen Schlüsselwert (Anker, Vereinbarung, Ablauf); sonst Equivokation (6270; Review 5).
+          const whole = (ks: typeof p.keys) => M.canonical([...ks].sort((a, b) => a.anchor.localeCompare(b.anchor)))
+          const sameKeys = same && whole(p.keys) === whole(r.view.keys)
           if (same && sameKeys) return true
           this.emit({ kind: 'finding', text: same ? `revision ${p.revision} von ${doc.issuer.slice(-8)}: gleiche Nummer, andere Schlüssel: Equivokation (6270)` : `revision ${p.revision} von ${doc.issuer.slice(-8)} unter der gehaltenen ${r.view.revision}: abgewiesen (6270)` })
           return false

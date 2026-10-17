@@ -32,6 +32,8 @@ import * as M from '../src/lab/mehrgeraet/model'
 //      bei direkter Ankunft: Akt-Id, Absender, Ablauf (B7).
 //  13. Abgang: eine schon eingereichte Sendung bleibt bei Delivery und wird weiter wiederholt
 //      (6845.7, Delivery 6.1); nur Neues geht nicht mehr hinaus (8475.S6) (Tor-Review 4, B4).
+//  14. Empfang: eine zweite Revision gleicher Nummer mit gleichen Ankern, aber anderem Ablauf,
+//      ist eine Equivokation (6270), keine Wiederholung (Tor-Review 5, R4-B2).
 
 const enc = new TextEncoder()
 const byId = (rs: Awaited<ReturnType<typeof runX15>>) => Object.fromEntries(rs.map((r) => [r.scenario, r]))
@@ -492,5 +494,27 @@ describe('E15 Gegenläufe: Rollback-Tiefe, fällige Arbeit, Kartenpuffer', () =>
     const after = w.carrier.carried.slice(carried).filter((f) => f.address === am.x.peerKeyAgreement)
     expect(after.length).toBeGreaterThanOrEqual(1)
     expect(after.every((f) => Buffer.compare(f.bytes, sub.frame) === 0)).toBe(true)
+  }, 60_000)
+
+  it('Empfang: Revision 1 noch einmal mit gleichen Ankern und anderem Ablauf: M weist ab und hält ein 6270-Finding', async () => {
+    const w = new Welt15(k0())
+    const A = await w.person('A', 'A1')
+    const Mm = await w.person('M', 'M1')
+    const am = await w.encounter(A, Mm)
+    await w.rounds(2)
+    await A.setClass(am.x.id, true)
+    await w.rounds(3)
+    const view = M.rel(Mm.state, am.y.id).view!
+    expect(view.revision).toBe(1)
+    // A1 selbst (mit seinem Schlüssel) sendet Revision 1 erneut, gleiche Anker, Ablauf ein Jahr später.
+    const h = M.head(M.rel(A.state, am.x.id))
+    const k = await A.cand.keys.pair(h.ownKey)
+    const keys = view.keys.map((x) => ({ ...x, expiresAt: '2028-01-01T00:00:00.000Z' }))
+    const doc = await diSign({ anchor: k.anchor, ed: { priv: k.ed.priv } }, { id: crypto.randomUUID(), type: TYPES.revision, issuer: k.anchor, recipient: h.peer, replyTo: k.rkid, issuedAt: w.clock.now(), payload: { revision: 1, keys } }, w.clock.now())
+    w.carrier.deposit(h.peerKeyAgreement, enc.encode(jcs(await seal(doc as unknown as Json, h.peerKeyAgreement))))
+    await w.rounds(2)
+    expect(M.rel(Mm.state, am.y.id).view).toEqual(view)
+    expect(Mm.state.findings.some((f) => f.includes('6270'))).toBe(true)
+    expect(Mm.dispositions).toContain('failed(validation-failed)')
   }, 60_000)
 })

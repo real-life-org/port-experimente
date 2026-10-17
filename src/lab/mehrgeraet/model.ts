@@ -539,6 +539,7 @@ function applyBody(s: HolderState, op: Op): void {
       if (!s.edges.some((e) => e[0] === op.edge[0] && e[1] === op.edge[1])) s.edges.push(op.edge)
       const r = relOfTuple(s, op.edge[0])
       if (!r) throw new Missing('tuple', op.edge[0], s.person)
+      tuple(s, op.edge[1]) // beide Enden müssen bekannt sein (Review 5)
       const h = head(r)
       for (const t of r.tuples) t.deactivated = t.id !== h.id
       return
