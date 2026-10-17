@@ -167,14 +167,19 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       s.M2.online = true
       await s.w.rounds(6)
       // Fortschritt nach der Heilung: eine offline blockierte Vorstellung darf jetzt gelingen (B1); hat M2 das Recht nicht, stellt M1 vor (autorisierter Pfad, B6).
+      const attempts = [r1, r2]
       let retry = 'act' in r2 ? r2 : await s.M2.introduce(s.ma, mc)
-      if (!('act' in retry)) retry = await s.Mm.introduce(s.ma, mc)
+      if (!('act' in r2)) attempts.push(retry)
+      if (!('act' in retry)) {
+        retry = await s.Mm.introduce(s.ma, mc)
+        attempts.push(retry)
+      }
       await s.w.rounds(4)
       const fe = finalEffects(s.w, 'M')
       const conformance = s.w.of('A').flatMap((d) => d.state.findings).filter((f) => f.includes('8640.12')).length
       const progress = ['act' in r1, 'act' in retry].filter(Boolean).length
       // Rechtebedingte Verweigerung vor der Operation (kein benennbarer Schlüssel) zählt eigens (Review 7 S3); Fortschritt nach der Heilung gehört zur Zusage.
-      const keyRefusals = [r1, r2, retry].filter((r) => 'refused' in r).length
+      const keyRefusals = attempts.filter((r) => 'refused' in r).length // jede Verweigerung zählt, auch die vor dem Ausweichen auf M1 (Review 8)
       const ok = fe.doubleConsumption === 0 && conformance === 0 && progress === 2
       return { outcome: mark(ok), detail: `offline ausgestellt: ${['act' in r1, 'act' in r2].filter(Boolean).length} von 2, blockiert: ${blocked(s.w, 'M')}, verweigert (Schlüssel): ${keyRefusals}; nach der Heilung gelungen: ${progress} von 2; doppelt benannte Schlüssel bei M: ${fe.doubleConsumption}; Konformitätsfehler bei A: ${conformance}`, measures: { doubleFinalEffects: fe.doubleConsumption, mediatorConformanceFailures: conformance, blockedOperations: blocked(s.w, 'M'), keyRefusals, progressAfterHeal: progress } }
     },

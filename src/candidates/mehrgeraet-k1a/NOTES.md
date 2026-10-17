@@ -70,6 +70,14 @@ below is filled from the report run.
 Counts over X1 to X12 with two devices: 7 kept, 4 not kept, 1 not
 applicable (K0: 1 kept, 10 not kept, 1 not applicable).
 
+Reservations (gate review 8): X11 and X12 are kept without a general
+journal repair, so they do not show that a device recovers batches it
+has lost after acknowledging them (step 1c, X21); X1, X2 and X5 show
+fixed rights with the entitled device available and no re-production,
+not a transfer of rights or a takeover after a device is lost (K1b,
+X20); X8 and X11 do not show a union of the person's own tuples (X14,
+X15).
+
 ## Findings
 
 - **Static rights keep the hard limits (X1, X2).** Two mediator devices
