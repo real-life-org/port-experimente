@@ -214,6 +214,22 @@ describe('K1a Schritt 1: Abnahmelauf', () => {
     expect((A.cand as K1aDevice).slots).toBe(2)
   }, 60_000)
 
+  it('8c. B4: scheitert das Enrollment am Gerät, wird der Platz wieder frei (CodeRabbit auf #63)', async () => {
+    const { w, A } = await pair()
+    const broken = w.candidate.enrol.bind(w.candidate)
+    // Der Kandidat liefert einen Platz, aber das Gerät kommt nicht zustande (Schlüsseldienst wirft beim Anmelden).
+    w.candidate.enrol = async (from, name) => {
+      const r = await broken(from, name)
+      const cand = Object.create(r.cand) as typeof r.cand
+      Object.defineProperty(cand, 'keys', { value: { pair: async () => { throw new Error('kein Schlüsseldienst') } } })
+      return { ...r, cand }
+    }
+    await expect(w.enrol(A, 'A2')).rejects.toThrow(/Schlüsseldienst/)
+    w.candidate.enrol = broken
+    const A2 = await w.enrol(A, 'A2') // der Platz ist wieder frei
+    expect((A2.cand as K1aDevice).index).toBe(1)
+  }, 60_000)
+
   it('9. S1: eine eigene Annahme außerhalb des 28-Tage-Fensters zählt nicht mehr gegen das Kontingent', async () => {
     const d = new K1aDevice('A', 'A1', new Uint8Array(32), 0, 1, 1)
     const s = M.emptyState('A')

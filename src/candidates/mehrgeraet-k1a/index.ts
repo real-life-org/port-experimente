@@ -187,5 +187,9 @@ export function k1a(opts: K1aOptions = {}): MultiDeviceCandidate {
       // Zustand, Journal und Absichten wandern mit: das neue Gerät kennt jede offene Produktion und produziert nichts neu.
       return { cand: d, state: structuredClone(from.state), intents: [...from.intents.values()] }
     },
+    release(person, name) {
+      const list = devices.get(person)
+      if (list) devices.set(person, list.filter((d) => d.name !== name))
+    },
   }
 }

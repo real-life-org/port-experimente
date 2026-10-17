@@ -151,6 +151,8 @@ export interface MultiDeviceCandidate {
   enrol(from: HolderDevice, device: string): Promise<{ cand: CandidateDevice; state: M.HolderState; intents?: Intent[] }>
   /** Widerruf eines Geräts (X9, K2): was die übrigen Geräte und die Gegenseiten davon erfahren. Ohne Methode geschieht nichts. */
   revoke?(from: HolderDevice, device: string): Promise<void>
+  /** Ein Enrollment ist nach `enrol` am Gerät gescheitert (kein Holder entstanden): der Kandidat gibt den Platz wieder frei. */
+  release?(person: string, device: string): void
 }
 
 // ── Dokumente ────────────────────────────────────────────────────────────────

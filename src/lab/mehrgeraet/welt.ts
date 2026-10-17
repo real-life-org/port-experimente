@@ -51,8 +51,13 @@ export class Welt15 {
     const { cand, state, intents } = await this.candidate.enrol(from, device)
     const d = new HolderDevice(device, from.person, cand, this.carrier, this.clock, this.store(device), state)
     for (const i of intents ?? []) d.intents.set(i.digest, i)
-    await d.relisten()
-    d.commit()
+    try {
+      await d.relisten()
+      d.commit()
+    } catch (e) {
+      this.candidate.release?.(from.person, device) // der Platz bleibt nicht belegt, wenn das Gerät nie entstand
+      throw e
+    }
     this.devices.push(d)
     return d
   }
