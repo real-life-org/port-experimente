@@ -238,8 +238,9 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const states = s.w.of('A').map((d) => M.act(d.state, r.act).state)
       const bState = M.act(s.B.state, r.act).state
       const agree = s.w.agree('A')
-      // Terminalität (8325.A3): ein Gerät, das abgelehnt hat, verlässt `declined` nie; wird es dennoch connected, ist die Zusage geändert.
-      const leftTerminal = s.w.of('A').some((d) => d.state.effects.some((e) => e.id === `decline:${r.act}`) && M.act(d.state, r.act).state !== 'declined')
+      // Terminalität (8325.A3): das Gerät, das selbst abgelehnt hat, verlässt `declined` nie; wird es dennoch connected, ist die Zusage geändert.
+      // (Mit Journal trägt jedes Gerät beide Effekte im Ledger; es zählt die eigene Entscheidung, erkennbar am Schreiber der Operation.)
+      const leftTerminal = s.w.of('A').some((d) => d.state.effects.some((e) => e.id === `decline:${r.act}` && e.op.startsWith(`${d.name}@`)) && M.act(d.state, r.act).state !== 'declined')
       // Widerspruch: B hält eine Karte oder ist verbunden, während A als Ganzes abgelehnt hat.
       const contradiction = states.some((x) => x === 'declined') && (bState === 'connected' || M.act(s.B.state, r.act).v !== null)
       const progress = states.every((x) => x !== 'offered')

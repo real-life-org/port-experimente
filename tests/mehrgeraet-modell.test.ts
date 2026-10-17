@@ -171,6 +171,18 @@ describe('B2: Reihenfolge und Konflikte', () => {
     expect(y.effects.some((e) => e.id === 'consent:act1')).toBe(true)
   })
 
+  it('Verbindung nach Ablehnung: der terminale Zustand bleibt, der Widerspruch steht im Ledger (8325.A3, K1a X3)', () => {
+    const s = withRel()
+    M.apply(s, op({ kind: 'allocate', rel: 'A:e1', nonce: 'n1', keys: [key('n1', 1)] }))
+    M.apply(s, op({ kind: 'ticket-accept', act: actOf('act1', 'A:e1', 'n1-1') }))
+    M.apply(s, op({ kind: 'decline', act: 'act1' }, 'A2@1'))
+    M.apply(s, op({ kind: 'connect', act: 'act1', rel: 'A:act:act1', tuple: tuple('A:act:act1', 'c', 'v') }, 'A1@1'))
+    expect(M.act(s, 'act1').state).toBe('declined')
+    expect(s.relationships.length).toBe(1)
+    expect(s.effects.some((e) => e.id === 'connect:act1')).toBe(true)
+    expect(s.findings.some((f) => f.includes('8325.A3'))).toBe(true)
+  })
+
   it('Vereinigung führt die bestätigten Annahmen beider Teile zusammen', () => {
     const s = M.emptyState('A')
     M.apply(s, op({ kind: 'open-tuple', rel: null, tuple: tuple('A:e1', 'a1', 'm1'), provenance: 'encounter', vouchedBy: null, act: null }))
