@@ -74,7 +74,7 @@ describe('E15 Engine, seriell (ein Gerät je Person)', () => {
     expect(A.state.acts.length).toBe(10) // 8510/8640.10: die elfte fällt
     expect(M.budgetUsed(relA, w.clock.now())).toBe(10)
     expect(A.state.findings.some((f) => f.includes('Budget erschöpft'))).toBe(true)
-    A.decline(acts[0]!)
+    await A.decline(acts[0]!)
     expect(M.act(A.state, acts[0]!).state).toBe('declined')
     await A.consent(acts[0]!)
     expect(M.act(A.state, acts[0]!).state).toBe('declined') // terminal (8325.A3)

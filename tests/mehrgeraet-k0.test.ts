@@ -26,12 +26,13 @@ describe('E15 K0 one-seed: Eichung', () => {
     expect(r.X7!.measures.duplicates).toBeGreaterThan(0)
   }, 300_000)
 
-  it('X4–X6, X8–X12 mit zwei Geräten: K0 verfehlt X4, X5, X6, X9, X11; besteht X8 (Kopie) und X12 (Zustellung); X10 nicht abbildbar', async () => {
+  it('X4–X6, X8–X12 mit zwei Geräten: K0 verfehlt X4, X5, X6, X9, X11, X12 (A2 bleibt zurück); besteht X8 (Kopie); X10 nicht abbildbar', async () => {
     const r = byId(await runX15(k0(), false, ['X4', 'X5', 'X6', 'X8', 'X9', 'X10', 'X11', 'X12']))
-    for (const id of ['X4', 'X5', 'X6', 'X9', 'X11']) expect(r[id]!.outcome, `${id}: ${r[id]!.detail}`).toBe('nicht bestanden')
-    for (const id of ['X8', 'X12']) expect(r[id]!.outcome, `${id}: ${r[id]!.detail}`).toBe('bestanden')
+    for (const id of ['X4', 'X5', 'X6', 'X9', 'X11', 'X12']) expect(r[id]!.outcome, `${id}: ${r[id]!.detail}`).toBe('nicht bestanden')
+    expect(r.X8!.outcome, r.X8!.detail).toBe('bestanden')
     expect(r.X10!.outcome).toBe('nicht abbildbar')
     expect(r.X9!.measures.thiefReads).toBeGreaterThan(0)
     expect(r.X11!.measures.roundsToConverge).toBe(-1)
+    expect(r.X12!.measures.doubleFinalEffects).toBe(0) // die Zustellung selbst stimmt; nur A2 bleibt zurück
   }, 600_000)
 })

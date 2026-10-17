@@ -40,6 +40,7 @@ export class Welt15 {
     this.seeds.set(person, seed)
     const cand = await this.candidate.first(person, device, seed)
     const d = new HolderDevice(device, person, cand, this.carrier, this.clock, this.store(device))
+    await d.relisten()
     d.commit()
     this.devices.push(d)
     return d
@@ -55,12 +56,13 @@ export class Welt15 {
     return d
   }
 
-  /** Widerruf eines Geräts (X9): am Träger abgemeldet; was B und M davon erfahren, entscheidet der Kandidat. */
-  revoke(device: HolderDevice) {
+  /** Widerruf eines Geräts (X9) von einem anderen Gerät der Person aus: am Träger abgemeldet; was B und M davon erfahren, entscheidet der Kandidat (`revoke`). */
+  async revoke(by: HolderDevice, device: HolderDevice): Promise<void> {
     this.carrier.unregister(device.name)
     device.online = false
     const i = this.devices.indexOf(device)
     if (i >= 0) this.devices.splice(i, 1)
+    await this.candidate.revoke?.(by, device.name)
   }
 
   device(name: string): HolderDevice {
@@ -127,7 +129,7 @@ export class Welt15 {
 
   /** Gleiche fachliche Projektion aller Geräte einer Person? */
   agree(person: string): { agree: boolean; diff: string } {
-    const ps = this.of(person).map((d) => ({ name: d.name, p: JSON.stringify(d.projection()) }))
+    const ps = this.of(person).map((d) => ({ name: d.name, p: M.canonical(d.projection()) }))
     const first = ps[0]
     if (!first) return { agree: true, diff: '' }
     const other = ps.find((x) => x.p !== first.p)
