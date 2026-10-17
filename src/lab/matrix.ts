@@ -8,12 +8,13 @@ import type { Outcome, ScenarioResult } from './types'
 // einer Zusage jedes Szenario, steht sie als „nicht geprüft“ in der Tabelle:
 // die Lücke ist Teil der Ausgabe.
 
-export type Port = 'autorität' | 'schlüssel' | 'replikation'
+export type Port = 'autorität' | 'schlüssel' | 'replikation' | 'mehrgerät'
 
 export const portTitle: Record<Port, string> = {
   autorität: 'Autoritäts-Port (Access §3, §3.6, §4, §7.3, §9.3)',
   schlüssel: 'Schlüssel-Port (KV1–KV6 aus der Port-Synthese; Geräte aus E7)',
   replikation: 'Replikations-Port (Replication Contract I1–I16, Türen D1–D5; Zustellung DV aus E11)',
+  mehrgerät: 'Mehrgeräte-Port (E15: Holder-Zustand über mehrere Geräte einer Person; Trust 0.32 §8/§6a, HSC)',
 }
 
 export interface Promise {
@@ -73,6 +74,19 @@ export const promises: Promise[] = [
   { id: 'R1', port: 'replikation', title: 'Dienstklassen: blind bedient den Entfernten weiter (er öffnet nichts), Sicht/Log verweigern', ref: 'Access §9.3', scenarios: ['T7'] },
   { id: 'DV4', port: 'replikation', title: 'Pseudonym je Gruppe: der Träger verbindet Gruppen nicht über Identitäten', ref: 'Delivery-Hypothesen DV4/DV6', scenarios: ['T11'] },
   { id: 'DV2', port: 'replikation', title: 'Zustellung: Quittungsverlust und unerreichbarer Träger enden nie still', ref: 'Delivery 6.1, 6.3 (E11: T9, T10)', scenarios: [], gap: 'braucht einen Zustellungs-Adapter (E11, nach IIW)' },
+  // ── Mehrgeräte-Port (E15; Szenarien X in src/lab/mehrgeraet/scenarios.ts) ──
+  { id: 'MG1', port: 'mehrgerät', title: 'Einmalverbrauch beim Mediator: ein Vorrats-Schlüssel wird in höchstens einem Akt benannt, auch von zwei Geräten', ref: 'Trust 0.32 §8 8570.1 (E15 X1, später X13)', scenarios: ['X1'] },
+  { id: 'MG2', port: 'mehrgerät', title: 'Harte Annahmegrenze: zehn Annahmen je Mediatorbeziehung über alle Geräte der Person', ref: '§8 8510, 8640.10 (X2)', scenarios: ['X2'] },
+  { id: 'MG3', port: 'mehrgerät', title: 'Ein Zustand je Person: Consent und Ablehnung sind terminal, die Gegenseite sieht nichts, was die Person als Ganzes nicht trägt', ref: '§8 8325.A3/A4, 8765 (X3, später X18)', scenarios: ['X3'] },
+  { id: 'MG4', port: 'mehrgerät', title: 'Klassenwiderruf neben Versand: der laufende Akt läuft weiter, Ms Sicht wird leer, keine Equivokation', ref: '§8 8232.2, 8535, 6270 (X4, später X16)', scenarios: ['X4'] },
+  { id: 'MG5', port: 'mehrgerät', title: 'Abgang beendet Pflichten; ein Replay von einem anderen Gerät belebt nichts', ref: '§6a 6845.7, 6845.10 (X5)', scenarios: ['X5'] },
+  { id: 'MG6', port: 'mehrgerät', title: 'Wiederherstellung aus Backup: keine Nummernwiederverwendung, kein veralteter Vorrat, keine verlorenen Akte', ref: '§8 8500, 8315–8318 (X6, später X19)', scenarios: ['X6'] },
+  { id: 'MG7', port: 'mehrgerät', title: 'Kontinuität über Geräte: zwei Begegnungen derselben Personen auf verschiedenen Geräten werden eine Beziehung, keine Doppel', ref: '§6a 2300, 6975; I-6 (X7, später X14, X15)', scenarios: ['X7'] },
+  { id: 'MG8', port: 'mehrgerät', title: 'Enrollment: ein neues Gerät sieht alles und handelt sofort', ref: 'HSC-020 Ersatz, Identity Enrollment (X8)', scenarios: ['X8'] },
+  { id: 'MG9', port: 'mehrgerät', title: 'Gerätewiderruf: ein widerrufenes Gerät liest nichts Neues, auch nicht mit dem alten Zustand', ref: 'Identity Widerruf; K7 (X9, später X20)', scenarios: ['X9'] },
+  { id: 'MG10', port: 'mehrgerät', title: 'Rechte je Gerät oder App: eine eingeschränkte App kann nur, was ihr Recht erlaubt', ref: 'Delegationsprofil K2 (X10, später X22)', scenarios: ['X10'] },
+  { id: 'MG11', port: 'mehrgerät', title: 'Konvergenz nach langer Trennung: gleiche fachliche Projektion aller Geräte', ref: 'HSC-440; Plan E15 Abschnitt 5 (X11, später X21)', scenarios: ['X11'] },
+  { id: 'MG12', port: 'mehrgerät', title: 'Zustellung bei Mehrgerät: Quittungsverlust und unerreichbarer Träger je Gerät enden nie still, Wirkung einmal', ref: 'Delivery 6.1, 6.3 (X12)', scenarios: ['X12'] },
 ]
 
 /** `teilweise`: ein Teil der zugeordneten Szenarien besteht, der Rest ist nicht abbildbar oder nicht gelaufen; die Zusage gilt damit nicht. */
@@ -97,7 +111,8 @@ export interface Row {
 
 export interface Matrix {
   readonly candidates: readonly string[]
-  readonly ports: ReadonlyArray<{ port: Port; title: string; rows: Row[] }>
+  /** Je Port die Kandidaten seiner Familie: Gruppen-Kandidaten (S/T) in den drei Gruppen-Ports, Mehrgeräte-Kandidaten (X) im Mehrgeräte-Port. */
+  readonly ports: ReadonlyArray<{ port: Port; title: string; candidates: readonly string[]; rows: Row[] }>
 }
 
 /**
@@ -122,13 +137,18 @@ export function cell(p: Promise, results: ReadonlyMap<string, Outcome>): Cell {
 
 export function buildMatrix(runs: readonly CandidateRun[]): Matrix {
   const byCandidate = new Map(runs.map((r) => [r.id, new Map([...r.scenarios, ...r.carrier].map((x) => [x.scenario, x.outcome] as const))] as const))
-  const ports = (['autorität', 'schlüssel', 'replikation'] as Port[]).map((port) => ({
-    port,
-    title: portTitle[port],
-    rows: promises
-      .filter((p) => p.port === port)
-      .map((promise) => ({ promise, cells: Object.fromEntries(runs.map((r) => [r.id, cell(promise, byCandidate.get(r.id)!)])) })),
-  }))
+  // Zwei Familien: Gruppen-Kandidaten (S/T/Z-Szenarien) stehen in den drei Gruppen-Ports, Mehrgeräte-Kandidaten (X) im Mehrgeräte-Port.
+  const family = (r: CandidateRun) => ([...r.scenarios, ...r.carrier].some((x) => x.scenario.startsWith('X')) ? 'X' : 'ST')
+  const ports = (['autorität', 'schlüssel', 'replikation', 'mehrgerät'] as Port[]).map((port) => {
+    const ofPort = promises.filter((p) => p.port === port)
+    const cands = runs.filter((r) => family(r) === (port === 'mehrgerät' ? 'X' : 'ST')).map((r) => r.id)
+    return {
+      port,
+      title: portTitle[port],
+      candidates: cands,
+      rows: ofPort.map((promise) => ({ promise, cells: Object.fromEntries(cands.map((c) => [c, cell(promise, byCandidate.get(c)!)])) })),
+    }
+  })
   return { candidates: runs.map((r) => r.id), ports }
 }
 
@@ -144,8 +164,9 @@ export function cellText(c: Cell): string {
 export function toMarkdown(m: Matrix, at = new Date().toISOString().slice(0, 10)): string {
   const lines: string[] = ['# Konformitätsmatrix', '', `Stand ${at}. Eine Zusage gilt nur, wenn jedes zugeordnete Szenario besteht: ✓ bestanden, ✗ nicht bestanden, – nicht abbildbar, ? nicht gelaufen. „teilweise“ heißt: ein Teil besteht, der Rest ist nicht abbildbar oder nicht gelaufen. „nicht geprüft“ heißt: es gibt noch kein Szenario dafür; „nicht gelaufen“: es gibt eines, der Lauf enthielt es nicht.`, '']
   for (const p of m.ports) {
-    lines.push(`## ${p.title}`, '', `| Zusage | ${m.candidates.join(' | ')} |`, `|---|${m.candidates.map(() => '---').join('|')}|`)
-    for (const row of p.rows) lines.push(`| ${row.promise.id} ${row.promise.title} (${row.promise.ref})${row.promise.gap ? ` — Lücke: ${row.promise.gap}` : ''} | ${m.candidates.map((c) => cellText(row.cells[c]!)).join(' | ')} |`)
+    if (!p.candidates.length) continue
+    lines.push(`## ${p.title}`, '', `| Zusage | ${p.candidates.join(' | ')} |`, `|---|${p.candidates.map(() => '---').join('|')}|`)
+    for (const row of p.rows) lines.push(`| ${row.promise.id} ${row.promise.title} (${row.promise.ref})${row.promise.gap ? ` — Lücke: ${row.promise.gap}` : ''} | ${p.candidates.map((c) => cellText(row.cells[c]!)).join(' | ')} |`)
     lines.push('')
   }
   return lines.join('\n')

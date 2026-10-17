@@ -41,6 +41,11 @@ workshop repository (`rltp/design/port-experimente-2026-10.md`).
 Run times are comparable only within a transport class: with an own server,
 S9 is almost all waiting.
 
+- `mehrgeraet-k0`: E15, the multi-device holder state. K0 is today's
+  cut, one seed and no merge, the baseline that has to fail X1, X2, X3
+  and X7. Further candidates (journal with pre-assigned rights, device
+  sets with a delegation profile, soft limits) follow.
+
 ## Scenarios
 
 - **S1 to S11** (`src/lab/scenarios.ts`): membership under conflict, devices
@@ -53,6 +58,12 @@ S9 is almost all waiting.
   lost receipt, device offline, what the carrier learns, carrier switch,
   multiple devices, foreign sender, wrong recipient key.
 - **S9, S9b** (`src/lab/load.ts`): load, 30 members.
+- **X1 to X12** (`src/lab/mehrgeraet/scenarios.ts`): several devices of
+  one person against the target model of Trust 0.32 §8 and §6a: double
+  consumption, budget, consent against decline, revocation against send,
+  departure against replay, restore from backup, continuity across
+  devices, enrollment, device revocation, long separation, delivery per
+  device. Each runs with two devices and serially as the control.
 
 ## Layout
 
@@ -67,6 +78,8 @@ S9 is almost all waiting.
   (`authority.ts`) decides membership, the key port (`keyport.ts`) delivers
   the keys, BeeKEM or MLS; the service at the relay is in `service.ts`.
 - `src/candidates/zustellung/`: the wires of the delivery bench.
+- `src/lab/mehrgeraet/`: the multi-device bench (E15): target model,
+  holder device, world, scenarios.
 - `rust/`: WebAssembly wrappers (`p2panda-wasm`, `beekem-wasm`, `mls-wasm`),
   built by `scripts/build-wasm.sh`; the bindings land under
   `src/candidates/*/pkg/`. `rust/mls-wasm/examples/vectors.rs` exchanges
