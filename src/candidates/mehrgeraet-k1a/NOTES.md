@@ -60,10 +60,13 @@ limit are assigned to one device in advance.
   introduces. Decisions (consent, decline) are allowed on every device:
   a conflict stays visible in the fold (8325 finding, X3).
 
-## Results (17 October, K1a against X1–X12)
+## Results (17 October, K1a against X1–X18 and X21)
 
 See the matrix (`matrix.md`, multi-device port) for the cells; the table
-below is filled from the report run.
+below is filled from the report run and the acceptance tests. "Serial"
+is the control run with one device per person and undivided rights
+(`k1a({ devices: 1 })`); K0 passes the same serial control for every
+scenario that has one.
 
 | | two devices | serial | what the bench measured |
 |---|---|---|---|
@@ -79,21 +82,25 @@ below is filled from the report run.
 | X10 restricted app | n/a | n/a | step 1 has no rights profile per app |
 | X11 long separation | passed | n/a | both devices connected after reunion, stable after three rounds, no double effects, journal about 22 kB |
 | X12 delivery per device | passed | passed | B's effect once, A1 delivered after two rounds, A2 equal after one round |
+| X13 mediator devices against the shared budget | passed | passed | M1 and M2 each issue one introduction offline at budget 9, A1 sees one ticket, A2 the other: ten acts, no overrun, five blocked acceptances, no key named twice |
+| X14 double introduction | failed | passed | two acts, both connected; with B1 and B2 separated while consenting, B1, B2 and C1 each hold two entries with one tuple (no union) |
+| X15 union ∥ running act | passed | passed | A2, separated from A1, unites the two relationships to M while A1's card is in transit; one entry with two tuples on both devices, the act connected, its mediator and acceptance on the united relationship, M's view on the united head |
+| X16 old stock after class revocation | failed | passed | A2, separated, accepts a ticket on a key A1 withdrew; after healing both devices hold the act and the key is consumed |
+| X17 parallel production | failed | passed | both devices refill and send revision 2 with different keys; one revision number from two operations, M records 6270 findings; probe sequence (6680) not modelled |
+| X18 two cards of one act | failed | passed | B receives two card documents with the same card key, connects once, no conflict mark; A's devices keep different hand-over digests and never agree |
+| X21 journal robustness | passed | n/a | repair after old and double restore with reordering, duplicates, concurrent requests and two crashes in 7 rounds; after 15 rounds of lost requests, answers or receipts each in 1 round; no missing batch, no double effect, no conflict; 621 frames and 1.5 MB on the self address, of which 260 journal frames (1.09 MB for an 11-batch, 22 kB journal) and 438 repeats; the journal does not grow |
 
-Counts over X1 to X12 with two devices: 8 kept, 3 not kept, 1 not
-applicable (K0: 1 kept, 10 not kept, 1 not applicable).
+Counts over X1 to X18 and X21 with two devices: 11 kept, 7 not kept, 1
+not applicable (K0: 1 kept, 17 not kept, 1 not applicable).
 
 Reservations (gate reviews 8 and 9): a successful restore with reachable
-history (X6) is not the same as repair after lost sync traffic, which
-the acceptance run covers for one device and one loss at a time (X21
-measures repair rounds and traffic under reordering, duplicates and
-concurrent requests); a thief with the device's image has the same self
+history (X6) is not the same as repair after lost sync traffic (X21
+measures that separately); a thief with the device's image has the same self
 anchor and receives new history through the sync as well (X9, one seed);
 X1, X2 and X5 show
 fixed rights with the entitled device available and no re-production,
 not a transfer of rights or a takeover after a device is lost (K1b,
-X20); X8 and X11 do not show a union of the person's own tuples (X14,
-X15).
+X20); X8 and X11 do not show a union of the person's own tuples (X14).
 
 ## Findings
 
@@ -136,6 +143,56 @@ X15).
   list the numbers (8445).
 - **Journal size (X11):** about 22 kB of batches after two acts and a
   thirty-round separation; no cleanup yet.
+- **Repair works and ends, at a price (X21).** A2 restored twice from an
+  old backup while A1 restarts and asks at the same time, under reordering
+  and duplicates, with A2 crashing before and A1 after a commit, recovers
+  every batch (its own earlier incarnation's included) in 7 rounds. After
+  15 rounds of lost requests (only A2's), lost answers (A1's journal frames
+  and replies) or lost receipts on the self address, the device converges
+  within one round of healing, without any new domain operation, and the
+  self address falls silent at once. Lost requests and answers leave A2
+  behind for the whole loss; lost receipts do not (the answers arrive, only
+  their acknowledgement is missing). The cost is the full journal on every
+  answer: 260 journal frames carry 1.09 MB to repair an 11-batch journal of
+  22 kB; 438 of 621 deposits on the self address are repeats by the
+  delivery layer, 306 are receipts; A1 sends 284 answer frames, A2 two.
+  Three frames go from A's devices to counterparts during the repair. The
+  journal does not grow during repair.
+- **Mediator devices hold the shared budget (X13).** Two mediator devices
+  issuing offline against A's budget at nine do not overrun it: A's
+  devices split the acceptance quota, the device without quota blocks, and
+  the person ends at ten acts. K0 reaches eleven.
+- **Own tuples are still not united (X14).** Two acts from A1 and A2 for the
+  same pair connect on B1 and B2. Each probe is checked by the device that
+  lacks the other tuple and acknowledged; once the journal heals, no device
+  checks again, and B and C keep two entries each. Without the separation
+  of B1 and B2 the outcome depends on frame order (the acts were united in
+  about half of the runs); the scenario separates them so the result is
+  stable. This is the same gap as X7: K1a needs a union step over the
+  person's own tuples.
+- **A union through the counterpart travels well (X15).** When M's mapping
+  unites two relationships on one device, the union is an operation in the
+  journal; the other device folds it, re-points the running act and its
+  acceptance to the united relationship, and the act connects. No union
+  over own tuples is needed here, since the counterpart detects the
+  continuity.
+- **Revocation and production are not rights (X16, X17).** A device that
+  did not see the class revocation accepts a ticket on a withdrawn key,
+  and the fold then marks the key consumed on every device. Two devices
+  refilling apart send the same revision number with different keys, and
+  M records the conflict (6270). Static rights cover consumption (budget,
+  nameable keys), not changes of the class or of revision numbers.
+- **Two hand-overs of one act do not fold (X18).** Both devices consent and
+  send a card; with one seed the card key is the same, so B sees a
+  repetition and connects once. A's devices each keep their own hand-over
+  digest, since the fold takes the last hand-over operation, and their
+  projections never agree. With keys per device (K2) B would also see two
+  different cards (8910.8).
+- **Bench note: a repeated ticket after a budget refusal.** The ticket that
+  A refuses for budget (8640.13) consumes the key; the mediator repeats the
+  unacknowledged ticket and A then records 8640.12 (mediator conformance)
+  for the repeat. X13 does not use that count; X1, which counts 8640.12,
+  has no budget refusal.
 
 ## Limits of step 1
 
@@ -143,8 +200,14 @@ X15).
   re-splitting rights is K1b.
 - No transfer of quota between devices (that is K1b); no takeover of a
   sibling's intent when the sibling is lost (X20, K2).
+- No union step over the person's own tuples: two tuples to the same
+  person that the continuity probes missed stay two entries (X7, X14).
+- Class changes, revision numbers and hand-overs are not rights and have
+  no merge rule beyond the fold: X16, X17 and X18 fail.
 - The journal is a plain list of batches in the device's store; no
-  cleanup, no tombstones, no bound on its size; a sync answer re-sends
-  whole batches (X21 measures size and repair traffic).
-- The acceptance run checks one person with two devices; X13–X18 and
-  X21 are the broad K1a matrix and come next.
+  cleanup, no tombstones, no bound on its size; every sibling that
+  receives a request answers with all batches after the requester's heads,
+  and every new request of the backoff is answered again in full (X21: 1.09 MB of
+  journal frames for a 22 kB journal).
+- Every scenario runs one person per role with two devices; X19, X20, X22
+  and X23 are not built, X10 needs rights per app.
