@@ -195,11 +195,13 @@ interface Doc {
 /** Eine Operation ohne Kennung und Zeit (verteilt über die Union). */
 type OpBody = M.Op extends infer O ? (O extends M.Op ? Omit<O, 'id' | 'at'> : never) : never
 
-/** Eigene Dokumente, deren Ausgang fachlich wirkt (Karte, Mapping), mit den Bytes für eine Wiederholung. */
+/** Eigene Dokumente, deren Ausgang fachlich wirkt (Karte, Mapping, späte Probe), mit den Bytes für eine Wiederholung. */
 interface Sent {
-  kind: 'card' | 'mapping' | 'journal'
+  kind: 'card' | 'mapping' | 'journal' | 'probe'
   act?: string
   pair?: [string, string]
+  /** Späte Probe: das probende Tupel und das Tupel, dessen Gegenanker nachgetragen wurde (Tor-Review 13 B2). */
+  late?: { tuple: string; other: string }
   frame: Uint8Array
   address: string
 }
@@ -706,10 +708,10 @@ export class HolderDevice {
     return createHmac('sha256', this.pairKeyOf(t)).update(anchor).digest('base64')
   }
   /** Probe auf dem neuen Tupel: geblendete Kandidaten (die Gegenanker aller anderen gehaltenen Tupel, eingefroren bei der Öffnung); `only` = nur diese (späte Kandidaten). */
-  private async sendProbe(t: M.Tuple, only?: string[]): Promise<void> {
+  private async sendProbe(t: M.Tuple, only?: string[]): Promise<{ digest: string; bytes: Uint8Array } | null> {
     const entries = (only ?? t.candidates).filter((c) => c !== t.peer).map((c) => this.blind(t, c))
-    if (!entries.length) return
-    await this.sendDoc(TYPES.probe, t.ownKey, t.peer, t.peerKeyAgreement, (await this.keysFor(t.ownKey)).rkid, { entries })
+    if (!entries.length) return null
+    return this.sendDoc(TYPES.probe, t.ownKey, t.peer, t.peerKeyAgreement, (await this.keysFor(t.ownKey)).rkid, { entries })
   }
   /**
    * Nebenläufige eigene Tupel (K1a Schritt 2): zwei Tupel verschiedener Beziehungen, von denen keines in der eingefrorenen
@@ -732,8 +734,10 @@ export class HolderDevice {
   /**
    * Späte Probe (K1a Schritt 2). Annahme über das Inventar hinaus: der Schnappschuss von 2300 („the active heads of its
    * relationships then“) gilt für die Person; ein Tupel, das ein Schwestergerät nebenläufig geöffnet hat, wird nachgetragen,
-   * sobald das Gerät es kennt (6750 bleibt für alles, was der Person bei der Öffnung nicht gehörte). Nachgetragen wird beim
-   * Tupel mit dem größeren Record-Anker (die Rolle des Ankunftstupels, 2290), und dieses Tupel probt nur den neuen Eintrag.
+   * sobald das Gerät es kennt. Nachgetragen wird beim Tupel mit dem größeren Record-Anker (die Rolle des Ankunftstupels,
+   * 2290), und dieses Tupel probt nur den neuen Eintrag. Record-Anker ordnen keine Öffnungszeiten: das früher geöffnete
+   * Tupel kann so einen später entstandenen Anker tragen, gegen 6750 (Tor-Review 13 B1, Gegenlauf in den Tests; die Regel
+   * entscheidet Anton, Plan 6j).
    * Alles Weitere ist der unveränderte Kontinuitätsfluss: ein Treffer der Gegenseite verpflichtet sie zu einem Mapping
    * (6845.1), vereinigt aber nichts (6804); vereinigt wird nur auf ein verifiziertes Mapping (6975.1: „The only trigger is
    * the verification of a counterpart continuity mapping“), in einer Transaktion samt eigenem Mapping (6975.2), und die
@@ -747,8 +751,18 @@ export class HolderDevice {
       const t = M.tuple(this.state, probed.id)
       if (t.candidates.includes(other.peer)) continue // in dieser Runde schon nachgetragen (mehrere Paare an einem Tupel)
       this.emit({ kind: 'candidates', tuple: t.id, add: [other.peer] })
-      await this.sendProbe(t, [other.peer])
+      const sent = await this.sendProbe(t, [other.peer])
+      // Tor-Review 13 B2: der Eintrag in `candidates` ist nicht der einzige Vermerk. Die späte Probe ist eine Pflicht des
+      // erzeugenden Geräts mit Wiederholung (`reportOne`), wie die Mapping-Pflicht (6845.4): offen bis zur Quittung der
+      // Gegenseite, einem Treffer (beide Tupel in einem Eintrag) oder dem Abgang.
+      if (sent) this.sent.set(sent.digest, { kind: 'probe', late: { tuple: t.id, other: other.id }, frame: sent.bytes, address: t.peerKeyAgreement })
     }
+  }
+  /** Ist die Pflicht der späten Probe erledigt, ohne dass die Gegenseite quittiert hat? Treffer (vereinigt) oder Abgang. */
+  private lateProbeSettled(late: { tuple: string; other: string }): boolean {
+    const ra = M.relOfTuple(this.state, late.tuple)
+    const rb = M.relOfTuple(this.state, late.other)
+    return !ra || !rb || ra.departed || rb.departed || ra.id === rb.id
   }
   private async sendMapping(arrival: M.Tuple, other: M.Tuple): Promise<void> {
     const pair = M.pairKey(arrival.id, other.id)
@@ -872,7 +886,7 @@ export class HolderDevice {
     await this.refillAll()
   }
 
-  /** Zustellerberichte in Fachwirkung: Karte taken/given-up (8326), Mapping sent, Wiederholung nach `failed` (6845.4). */
+  /** Zustellerberichte in Fachwirkung: Karte taken/given-up (8326), Mapping sent, Wiederholung nach `failed` (6845.4), späte Probe (Tor-Review 13 B2). */
   private async reports(): Promise<void> {
     for (const [d, x] of [...this.sent]) await this.guarded(() => this.reportOne(d, x))
   }
@@ -897,6 +911,16 @@ export class HolderDevice {
           this.zusteller.record(d, x.frame, x.address)
           this.held.push(d)
           this.emit({ kind: 'duty', pair: x.pair, state: 'hit', mappingDigest: d })
+        }
+      }
+      if (x.kind === 'probe' && x.late) {
+        // Quittiert: die Gegenseite hat die Probe ausgewertet (Treffer oder nicht, das entscheidet sie). Erledigt auch
+        // ohne Quittung bei Treffer oder Abgang. Sonst nach ausgeschöpften Zustellversuchen dieselben Bytes in einer neuen
+        // Übergabe, wie beim Mapping (6845.4); keine Neuproduktion.
+        if (r.state === 'delivered' || this.lateProbeSettled(x.late)) this.sent.delete(d)
+        else if (r.state === 'failed') {
+          this.zusteller.record(d, x.frame, x.address)
+          this.held.push(d)
         }
       }
     }
