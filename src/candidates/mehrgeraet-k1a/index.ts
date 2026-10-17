@@ -120,7 +120,7 @@ export class K1aDevice implements CandidateDevice {
     const b = JSON.parse(dec.decode(body)) as Batch
     const known = this.batches.find((x) => x.writer === b.writer && x.n === b.n)
     if (known) {
-      if (JSON.stringify(known.ops) === JSON.stringify(b.ops) && JSON.stringify(known.intents) === JSON.stringify(b.intents)) return { ops: [], intents: [] } // schon bekannt: nichts Neues
+      if (JSON.stringify(known.ops) === JSON.stringify(b.ops) && JSON.stringify(known.intents) === JSON.stringify(b.intents) && JSON.stringify(known.deps) === JSON.stringify(b.deps)) return { ops: [], intents: [] } // schon bekannt: nichts Neues (Inhalt samt Abhängigkeiten, Review 9)
       // Gleicher Schlüssel, anderer Inhalt: zwei Inkarnationen mit derselben Kennung (B2); sichtbar machen, nicht still verwerfen.
       return { ops: [{ id: { writer: `${b.writer}#conflict`, n: b.n }, at: b.ops[0]?.at ?? new Date(0).toISOString(), kind: 'finding', text: `Journal-Konflikt: Batch ${b.writer}#${b.n} zweimal mit anderem Inhalt` }], intents: [] }
     }

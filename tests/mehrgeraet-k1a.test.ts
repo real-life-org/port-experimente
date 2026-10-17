@@ -130,13 +130,15 @@ describe('K1a Schritt 1: Abnahmelauf', () => {
   it('4. Journal doppelt, umgeordnet, unvollständig: genau eine Wirkung, gleiche Projektion', async () => {
     const { w, A, Mm, am } = await pair()
     const A2 = await w.enrol(A, 'A2')
-    await w.rounds(2)
+    await w.rounds(4) // der Nachhol-Abgleich des Enrollments ist durch
     const self = (await A.cand.keys.pair('self/A')).rkid
-    // Erst wird ein Rahmen für A2 zurückgehalten, dann doppelt und umgekehrt geliefert.
-    let held: Uint8Array | null = null
-    w.carrier.faults.withhold('A2', (f) => { if (f.address === self && !held) held = f.bytes; return !!held && Buffer.compare(held, f.bytes) === 0 })
+    // Erst wird A1s Journalrahmen des nächsten Schritts für A2 zurückgehalten, dann doppelt und umgekehrt geliefert.
+    const mark = w.carrier.carried.length
     await A.setClass(am.x.id, false)
-    await w.rounds(1)
+    await A.round() // A1 liefert seinen Journalrahmen ein; A2 war noch nicht dran
+    const held = w.carrier.carried.slice(mark).find((f) => f.address === self && [...A.zusteller.submissions.values()].some((x) => Buffer.compare(x.frame, f.bytes) === 0))!.bytes
+    w.carrier.faults.withhold('A2', (f) => Buffer.compare(held, f.bytes) === 0)
+    expect(M.rel(A2.state, am.x.id).classOn).toBe(true)
     await A.setClass(am.x.id, true)
     await w.rounds(1)
     w.carrier.faults.duplicate(true)
@@ -167,12 +169,13 @@ describe('K1a Schritt 1: Abnahmelauf', () => {
   it('6. B1: scheitert ein Schritt nach dem Anwenden eines Journalrahmens, bleibt der Batch dem Kandidaten unbekannt; Wiederholung heilt', async () => {
     const { w, A, am } = await pair()
     const A2 = await w.enrol(A, 'A2')
-    await w.rounds(2)
+    await w.rounds(4) // der Nachhol-Abgleich des Enrollments ist durch
     // Einmal scheitert bei A2 die Quittungsbildung nach dem Anwenden (fehlende Voraussetzung → zurückgestellt).
     const inner = A2.cand.keys
-    let fail = 1
-    ;(A2.cand as { keys: typeof inner }).keys = { pair: async (ctx) => { if (fail && ctx === 'self/A') { fail = 0; throw new M.Missing('tuple', 'injected', 'A') } return inner.pair(ctx) } }
     const before = (A2.cand as K1aDevice).persist().batches.length
+    let fail = 1
+    // Scheitert genau bei der Quittungsbildung, also nachdem der Kandidat den neuen Batch kennt (`applied`).
+    ;(A2.cand as { keys: typeof inner }).keys = { pair: async (ctx) => { if (fail && ctx === 'self/A' && (A2.cand as K1aDevice).persist().batches.length > before) { fail = 0; throw new M.Missing('tuple', 'injected', 'A') } return inner.pair(ctx) } }
     await A.setClass(am.x.id, false)
     await w.rounds(1)
     expect(A2.dispositions.some((d) => d.startsWith('deferred(tuple:injected'))).toBe(true)
@@ -267,6 +270,7 @@ describe('K1a Schritt 1: Abnahmelauf', () => {
     w.carrier.faults.reverse(true)
     await w.rounds(3)
     w.carrier.faults.reset()
+    expect(A.dispositions.some((d) => d.startsWith('deferred(batch:'))).toBe(true) // Q wartete auf P
     const n = await w.until(() => w.agree('A').agree, 15)
     expect(n).toBeGreaterThan(0)
     expect(M.rel(A.state, am.x.id).classOn).toBe(true) // P dann Q, nie Q dann P
@@ -275,26 +279,50 @@ describe('K1a Schritt 1: Abnahmelauf', () => {
     void held
   }, 90_000)
 
-  it('11. B3: ein Batch nur mit Absichten ist ein Vorgänger; der nächste wird ohne ihn zurückgestellt', async () => {
-    const { w, A, Mm, am } = await pair()
-    const A2 = await w.enrol(A, 'A2')
-    await w.rounds(2)
-    // Die Wiederholung eines Mappings nach `failed` erzeugt einen Schritt nur mit Absicht (reportOne 6845.4); einfacher: eine Absicht ohne Op über die Alterung.
-    const self = (await A.cand.keys.pair('self/A')).rkid
-    let first: Uint8Array | null = null
-    w.carrier.faults.withhold('A2', (f) => { if (f.address === self && !first) first = f.bytes; return !!first && Buffer.compare(first, f.bytes) === 0 })
-    await A.setClass(am.x.id, false) // Batch 1 (zurückgehalten)
-    await w.rounds(1)
-    await A.setClass(am.x.id, true) // Batch 2 hängt an Batch 1
-    await w.rounds(2)
-    expect(A2.dispositions.some((d) => d.startsWith('deferred(batch:'))).toBe(true)
-    const deps = (A.cand as K1aDevice).persist().batches.slice(-1)[0]!.deps
-    expect(deps.some((d) => d.startsWith(A.cand.writer))).toBe(true) // der eigene vorige Batch als Kopf
-    w.carrier.faults.reset()
-    const n = await w.until(() => w.agree('A').agree, 15)
-    expect(n).toBeGreaterThan(0)
-    expect(M.rel(Mm.state, am.y.id).view?.keys.length).toBe(5)
-  }, 90_000)
+  it('11. B3: ein Batch nur mit Absichten ist ein Vorgänger; der nächste wird ohne ihn zurückgestellt', () => {
+    const seed = new Uint8Array(32)
+    const a = new K1aDevice('A', 'A1', seed, 0, 2, 10)
+    const b = new K1aDevice('A', 'A2', seed, 1, 2, 10)
+    const intent = { digest: 'd1', kind: 'x', bytes: new Uint8Array([1]), address: 'adr', expected: 'e', replyTo: 'r', device: 'A1', writer: a.writer }
+    a.commit({ ops: [], intents: [intent] }) // Batch 1: keine Operation, eine Absicht
+    const op: M.Op = { id: { writer: a.writer, n: 1 }, at: '2026-10-17T00:00:00.000Z', kind: 'finding', text: 't' }
+    a.commit({ ops: [op], intents: [] }) // Batch 2 hängt an Batch 1
+    const [f1, f2] = a.takeOwnFrames()
+    const b1 = JSON.parse(new TextDecoder().decode(f1!.body)) as { ops: unknown[]; deps: string[] }
+    const b2 = JSON.parse(new TextDecoder().decode(f2!.body)) as { deps: string[] }
+    expect(b1.ops).toEqual([])
+    expect(b2.deps).toContain(`${a.writer}#1`)
+    expect(() => b.receiveOwnFrame(f2!.body)).toThrow(M.Missing) // ohne Batch 1 zurückgestellt
+    const tx1 = b.receiveOwnFrame(f1!.body)
+    expect(tx1.intents.length).toBe(1)
+    b.applied(f1!.body)
+    expect(b.receiveOwnFrame(f2!.body).ops.length).toBe(1)
+  })
+
+  it('11b. B1 (Review 9): verlorene Nachhol-Anfragen oder -Antworten beenden das Nachholen nicht; es konvergiert ohne weitere Nutzeraktion', async () => {
+    for (const variant of ['requests', 'answers'] as const) {
+      const { w, A, am } = await pair()
+      const A2 = await w.enrol(A, 'A2')
+      await w.rounds(2)
+      const backup = w.stores.get('A2')!.snapshot()
+      await A.setClass(am.x.id, false)
+      await w.rounds(3)
+      expect(M.rel(A2.state, am.x.id).classOn).toBe(false)
+      w.stores.get('A2')!.restore(backup)
+      await A2.reload()
+      expect(M.rel(A2.state, am.x.id).classOn).toBe(true) // altes Abbild
+      const self = (await A.cand.keys.pair('self/A')).rkid
+      // 15 Runden lang gehen auf der Self-Adresse entweder die Anfragen (alles, was A2 einliefert) oder die Antworten (alles, was A1 einliefert) verloren; die Rahmen sind versiegelt, erkannt wird der Absender über seine Submissions.
+      const from = (d: typeof A) => (f: { bytes: Uint8Array }) => [...d.zusteller.submissions.values()].some((x) => Buffer.compare(x.frame, f.bytes) === 0)
+      w.carrier.faults.drop((f) => f.address === self && (variant === 'requests' ? from(A2)(f) : from(A)(f)))
+      await w.rounds(15)
+      expect(M.rel(A2.state, am.x.id).classOn, variant).toBe(true)
+      w.carrier.faults.reset()
+      const n = await w.until(() => w.agree('A').agree && !M.rel(A2.state, am.x.id).classOn, 30)
+      expect(n, `${variant}: Konvergenz ohne requestSync`).toBeGreaterThan(0)
+      expect(A2.syncRequests).toBeGreaterThan(1)
+    }
+  }, 180_000)
 
   it('12. B3/X6: ein Gerät aus einem alten Backup holt über die Self-Adresse nach, auch seine eigene frühere Inkarnation; X6 besteht', async () => {
     const r = byId(await runX15(k1a(), false, ['X6']))

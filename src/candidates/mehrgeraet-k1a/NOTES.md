@@ -21,9 +21,14 @@ limit are assigned to one device in advance.
   enrollment or a deferred batch the device sends its heads as a
   `journal-sync` document to the person's own address; every sibling
   answers with the batches the requester lacks, including the requester's
-  own earlier incarnations. A device restored from an old backup thus
-  recovers its own history (consumed keys, accepted acts) and the
-  siblings' steps; X6 passes.
+  own earlier incarnations, and with its own heads. The requester keeps
+  asking with backoff (1, 2, 4, up to 16 rounds) until an answer shows
+  that its heads cover the answerer's, so a lost request, answer or
+  receipt does not end the repair (gate review 9). A device restored from
+  an old backup thus recovers its own history (consumed keys, accepted
+  acts) and the siblings' steps; X6 passes. Two requests at once, a
+  restore during an answer and a double restore were checked by the
+  review.
 - **Incarnation.** A restore from the store gives the device a fresh
   random incarnation (`A1@3f9a1c20`), never a counter from the backup, so
   two restores of the same backup never collide; a batch key seen twice
@@ -67,7 +72,7 @@ below is filled from the report run.
 | X3 consent ∥ decline | failed | passed | A1 connected, A2 declined; both effects in the ledger, contradiction at B; the devices never agree |
 | X4 class off ∥ send | passed | passed | M's view empty on both devices, the running act connected on both, no equivocation |
 | X5 departure ∥ replay | passed | passed | A2 holds A1's mapping intent and produces nothing; only repeats of earlier bytes reach B |
-| X6 restore from backup | failed | n/a | new incarnation, but no catch-up: two stale active keys, two acts missing |
+| X6 restore from backup | passed | n/a | new incarnation; the catch-up over the self address brings the missed batches, own earlier incarnation included |
 | X7 continuity across devices | failed | passed | every device holds two entries to B with one tuple each: the facts are shared, nothing is united |
 | X8 enrollment | passed | n/a | state, journal and intents copied; A2 consents and connects at once |
 | X9 device revocation | failed | n/a | the thief with the image reads four documents and holds an act (one seed) |
@@ -75,10 +80,16 @@ below is filled from the report run.
 | X11 long separation | passed | n/a | both devices connected after reunion, stable after three rounds, no double effects, journal about 22 kB |
 | X12 delivery per device | passed | passed | B's effect once, A1 delivered after two rounds, A2 equal after one round |
 
-Counts over X1 to X12 with two devices: 7 kept, 4 not kept, 1 not
+Counts over X1 to X12 with two devices: 8 kept, 3 not kept, 1 not
 applicable (K0: 1 kept, 10 not kept, 1 not applicable).
 
-Reservations (gate review 8): X1, X2 and X5 show
+Reservations (gate reviews 8 and 9): a successful restore with reachable
+history (X6) is not the same as repair after lost sync traffic, which
+the acceptance run covers for one device and one loss at a time (X21
+measures repair rounds and traffic under reordering, duplicates and
+concurrent requests); a thief with the device's image has the same self
+anchor and receives new history through the sync as well (X9, one seed);
+X1, X2 and X5 show
 fixed rights with the entitled device available and no re-production,
 not a transfer of rights or a takeover after a device is lost (K1b,
 X20); X8 and X11 do not show a union of the person's own tuples (X14,
@@ -115,7 +126,9 @@ X15).
   them; K1a needs the union step over own tuples (I-6).
 - **A seed is still a capability (X9).** The thief with A2's image reads
   the next ticket and holds the act; revocation at the carrier changes
-  nothing under one seed, as with K0. Keys per device (K2) are the answer.
+  nothing under one seed, as with K0, and the catch-up answers the thief
+  like any device because it signs with the shared self anchor. Keys per
+  device (K2) are the answer.
 - **Hash parity starves a device.** The first cut split nameable keys by
   anchor hash: with five keys in stock M1 got one, and A refills only
   under three active keys, so M1 could not introduce again. Splitting by

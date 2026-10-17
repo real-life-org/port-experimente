@@ -252,8 +252,13 @@ export class HolderDevice {
   expected = new Map<string, string>()
   /** Innerhalb eines `guarded`-Rahmens: der Schritt, den der Kandidat erst nach dem Gelingen als Einheit committet. */
   private pending: Transaction | null = null
-  /** Nachholen fällig (nach Neuaufbau, Enrollment, Zurückstellung): die nächste Runde schickt die eigenen Köpfe an die Self-Adresse. */
-  private syncDue = false
+  /**
+   * Nachholen (HSC-440, X21): `pending` bis ein Schwestergerät geantwortet hat und die eigenen Köpfe dessen Köpfe decken;
+   * solange wird mit Backoff erneut angefragt (Anfrage, Antwort oder Quittung können verloren gehen, Review 9 B1).
+   */
+  private sync: { pending: boolean; wait: number; backoff: number } = { pending: false, wait: 0, backoff: 1 }
+  /** Anzahl gesendeter Nachhol-Anfragen (Messgröße des Reparaturverkehrs). */
+  syncRequests = 0
   /** Produktionsabsichten (B4): eigene und die der anderen eigenen Geräte aus dem Journal; lesbar für Messungen. */
   intents = new Map<string, Intent>()
   /** Aufgezeichnet, noch nicht eingeliefert: geht nach dem nächsten Commit hinaus. */
@@ -399,7 +404,7 @@ export class HolderDevice {
       }
       if (defer && e instanceof M.Missing) {
         this.dispositions.push(`deferred(${e.what}:${e.ref})`)
-        if (e.what === 'batch') this.syncDue = true // der Vorgänger fehlt: nachholen lassen
+        if (e.what === 'batch' && !this.sync.pending) this.requestSync() // der Vorgänger fehlt: nachholen lassen
         return false
       }
       throw e
@@ -447,7 +452,7 @@ export class HolderDevice {
   }
   /** Nachholen anstoßen: nach Neuaufbau, Enrollment oder wenn ein Rahmen zurückgestellt wurde (HSC-440). */
   requestSync() {
-    this.syncDue = true
+    this.sync = { pending: true, wait: 0, backoff: 1 }
   }
   private crash(point: CrashPoint) {
     if (this.crashAt !== point) return
@@ -758,17 +763,36 @@ export class HolderDevice {
     }
   }
 
-  /** Nachholen: die eigenen Köpfe an die eigenen Geräte; wer mehr weiß, liefert die fehlenden Batches (HSC-440, X21). */
+  /**
+   * Nachholen: die eigenen Köpfe an die eigenen Geräte; wer mehr weiß, liefert die fehlenden Batches und antwortet mit
+   * seinen Köpfen (HSC-440, X21). Erneut angefragt wird mit Backoff (1, 2, 4, … höchstens 16 Runden), bis eine Antwort
+   * zeigt, dass die eigenen Köpfe die des Antwortenden decken.
+   */
   private async syncOut(): Promise<void> {
-    if (!this.syncDue || !this.ownRkid || !this.cand.heads) return
-    this.syncDue = false
+    if (!this.sync.pending || !this.ownRkid || !this.cand.heads) return
+    if (this.sync.wait > 0) {
+      this.sync.wait--
+      return
+    }
+    this.sync.wait = this.sync.backoff
+    this.sync.backoff = Math.min(16, this.sync.backoff * 2)
+    this.syncRequests++
+    await this.sendSelf(TYPES.journalSync, { heads: this.cand.heads(), reply: false })
+  }
+  /** Ein Dokument an die eigene Adresse der Person (Journal, Nachholen), gezählt als eigener Verkehr. */
+  private async sendSelf(type: string, payload: Record<string, Json>): Promise<void> {
     const ctx = `self/${this.person}`
     const self = (await this.keysFor(ctx)).anchor
-    const { bytes } = await this.sendDoc(TYPES.journalSync, ctx, self, this.ownRkid, this.ownRkid, { heads: this.cand.heads() })
+    const { bytes } = await this.sendDoc(type, ctx, self, this.ownRkid!, this.ownRkid!, payload)
     this.measures.ownFramesOut++
     this.measures.ownBytesOut += bytes.length
     this.measures.framesOut--
     this.measures.bytesOut -= bytes.length
+  }
+  /** Deckt der eigene Stand die genannten Köpfe? */
+  private covers(heads: Record<string, number>): boolean {
+    const mine = this.cand.heads?.() ?? {}
+    return Object.entries(heads).every(([w, n]) => (mine[w] ?? 0) >= n)
   }
 
   /** 8110.7: Zeitübergänge. */
@@ -883,13 +907,16 @@ export class HolderDevice {
         this.dispositions.push('failed(journal-from-unexpected-signer)')
         return
       }
-      const heads = (doc.payload as { heads?: Record<string, number> }).heads ?? {}
-      for (const f of this.cand.batchesAfter?.(heads) ?? []) {
-        const { bytes } = await this.sendDoc(TYPES.journal, `self/${this.person}`, self, this.ownRkid, this.ownRkid, { b: Buffer.from(f.body).toString('base64') })
-        this.measures.ownFramesOut++
-        this.measures.ownBytesOut += bytes.length
-        this.measures.framesOut--
-        this.measures.bytesOut -= bytes.length
+      const p = doc.payload as { heads?: Record<string, number>; reply?: boolean }
+      const heads = p.heads ?? {}
+      if (p.reply) {
+        // Antwort eines Schwestergeräts: decken die eigenen Köpfe seine, ist das Nachholen abgeschlossen; sonst weiter anfragen.
+        if (this.sync.pending && this.covers(heads)) this.sync = { pending: false, wait: 0, backoff: 1 }
+      } else {
+        for (const f of this.cand.batchesAfter?.(heads) ?? []) await this.sendSelf(TYPES.journal, { b: Buffer.from(f.body).toString('base64') })
+        if (this.cand.heads) await this.sendSelf(TYPES.journalSync, { heads: this.cand.heads(), reply: true })
+        // Weiß der Anfragende mehr als wir, holen wir selbst nach.
+        if (!this.covers(heads) && !this.sync.pending) this.requestSync()
       }
       effect = true
     } else if (doc.type === TYPES.journal) {
