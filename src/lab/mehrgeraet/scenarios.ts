@@ -779,6 +779,41 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
     },
   },
   {
+    id: 'X18',
+    title: 'A1 und A2 stimmen getrennt demselben Akt zu und produzieren unabhängig je eine Karte: zwei Karten eines Akts, was B sieht (8325.A4, 8910.7, 8910.8)',
+    async run(c, serial) {
+      const s = await setup(c, serial)
+      const r = await introduceAny(s, s.ma, s.mb, serial)
+      if (!('act' in r)) return fail(`Vorstellung verweigert: ${r.refused}`)
+      if ((await s.w.until(() => knowsAct(s.w, 'A', r.act) && knowsAct(s.w, 'B', r.act), 10)) < 0) return fail('Akt nicht bei A und B')
+      // A1 und A2 getrennt (kein Journal): beide stimmen zu, jedes produziert seine Karte; seriell stimmt A1 zweimal zu (das zweite Mal ein Befund, keine Karte).
+      const selfA = (await s.A.cand.keys.pair('self/A')).rkid
+      if (!serial) for (const d of s.w.of('A')) s.w.carrier.faults.withhold(d.name, (f) => f.address === selfA)
+      await s.A.consent(r.act)
+      await s.A2.consent(r.act)
+      await s.B.consent(r.act)
+      await s.w.rounds(4)
+      s.w.carrier.faults.reset()
+      await s.w.until(() => [...s.w.of('A'), ...s.w.of('B')].every((d) => M.act(d.state, r.act).state === 'connected'), 15)
+      const nA = await untilStable(s.w, 'A')
+      const nB = await untilStable(s.w, 'B')
+      // A: Karten-Dokumente des Akts (eigene Absichten je Gerät), Zustimmungen; B: Verbindungen, Kartenwerte, Konfliktmarke K.
+      const cards = new Set(s.w.of('A').flatMap((d) => [...d.intents.values()]).filter((i) => i.kind.includes('introduction-card') && s.w.of('A').some((d) => d.state.acts.some((a) => a.id === r.act && a.voucher.keyAgreement === i.address))).map((i) => i.digest)).size
+      const cardKeys = new Set(s.w.of('A').map((d) => M.act(d.state, r.act).ownCard?.anchor).filter(Boolean)).size
+      const consents = ledger(s.w, 'A').get(`consent:${r.act}`)?.size ?? 0
+      const connectsAtB = ledger(s.w, 'B').get(`connect:${r.act}`)?.size ?? 0
+      const conflicts = s.w.of('B').filter((d) => M.act(d.state, r.act).k).length
+      const cardsAtB = s.w.of('B').map((d) => d.log.filter((e) => e.type === 'introduction-card').length)
+      const tuplesAtB = s.w.of('B').map((d) => d.state.relationships.filter((x) => x.tuples.some((t) => t.id.includes(r.act))).length)
+      const agree = s.w.agree('A')
+      // Welche Übergabe der Akt trägt (8326: der Digest des Kartendokuments): verschiedene Digests heißen, die Geräte sind uneins.
+      const handOvers = new Set(s.w.of('A').map((d) => M.act(d.state, r.act).ownCardDigest)).size
+      const states = [...s.w.of('A'), ...s.w.of('B')].map((d) => `${d.name}: ${M.act(d.state, r.act).state}`)
+      const ok = nA > 0 && nB > 0 && connectsAtB === 1 && conflicts === 0 && tuplesAtB.every((x) => x === 1) && agree.agree && states.every((x) => x.endsWith('connected'))
+      return { outcome: mark(ok), detail: `${states.join(', ')}; A: ${cards} Karten-Dokument(e), ${cardKeys} Kartenschlüssel, Zustimmung aus ${consents} Operation(en); B: Karten empfangen ${cardsAtB.join('/')}, verbunden ${connectsAtB}×, Konfliktmarke K auf ${conflicts} Gerät(en), Tupel des Akts je Gerät ${tuplesAtB.join('/')}; Übergabe-Digests des Akts auf den A-Geräten: ${handOvers}; A stabil gleich nach ${nA} Runden: ${agree.agree ? 'ja' : 'nein'}, B nach ${nB}`, measures: { cardsProducedByA: cards, cardKeys, consentOperations: consents, connectsAtB, cardConflictsAtB: conflicts, doubleFinalEffects: Math.max(0, connectsAtB - 1), handOverDigestsOnA: handOvers, projectionAgrees: agree.agree ? 1 : 0, roundsToConverge: nA } }
+    },
+  },
+  {
     id: 'X21',
     title: 'Journal doppelt, umgeordnet, unvollständig: abgeschlossene Batches nach altem und doppeltem Restore, gleichzeitige Anfragen, Absturz vor dem Commit; Verlust von Anfrage, Antwort und Quittung je über 12 Runden (HSC-440, Review 9)',
     async run(c, serial) {

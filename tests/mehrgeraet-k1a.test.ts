@@ -417,4 +417,21 @@ describe('K1a breite Matrix', () => {
     expect(one.outcome, one.detail).toBe('bestanden')
     expect(one.measures.revisionNumbersReused).toBe(0)
   }, 600_000)
+
+  it('X18: A1 und A2 stimmen getrennt demselben Akt zu und produzieren je eine Karte: B sieht eine Verbindung, A bleibt uneins über die Übergabe', async () => {
+    const two = byId(await runX15(k1a(), false, ['X18'])).X18!
+    expect(two.crashed, two.detail).toBeFalsy()
+    expect(two.measures.cardsProducedByA).toBe(2) // zwei Karten-Dokumente eines Akts
+    expect(two.measures.connectsAtB).toBe(1)
+    // Ein Seed: beide Karten tragen denselben Kartenschlüssel, B sieht eine Wiederholung (8910.7), keinen Konflikt (8910.8).
+    expect(two.measures.cardConflictsAtB).toBe(0)
+    // Die Faltung hat keine Regel für zwei Übergaben eines Akts: jedes Gerät behält eine andere (Digest, O), die Projektionen bleiben verschieden.
+    expect(two.measures.handOverDigestsOnA).toBe(2)
+    expect(two.measures.projectionAgrees).toBe(0)
+    expect(two.outcome, two.detail).toBe('nicht bestanden')
+    const one = byId(await runX15(k1a({ devices: 1 }), true, ['X18'])).X18!
+    expect(one.crashed, one.detail).toBeFalsy()
+    expect(one.outcome, one.detail).toBe('bestanden')
+    expect(one.measures.cardsProducedByA).toBe(1)
+  }, 600_000)
 })

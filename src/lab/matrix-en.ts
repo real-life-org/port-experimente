@@ -243,7 +243,7 @@ export const promiseEn: Record<string, { title: string; ref: string; gap: string
   },
   "MG3": {
     "title": "One state per person: consent and decline are terminal, the counterpart sees nothing the person as a whole does not carry",
-    "ref": "§8 8325.A3/A4, 8765 (X3, later X18)",
+    "ref": "§8 8325.A3/A4, 8765, 8910.7/.8 (X3, X18)",
     "gap": null
   },
   "MG4": {
@@ -345,6 +345,7 @@ export const scenarioEn: Record<string, string> = {
   "X15": "Union of two relationships with M (6975) while an act runs on one (consented, card in transit): A1 consents, A2, separated from A1, meets M again and unites (6987.5/.6/.10/.12/.14)",
   "X16": "A1 revokes the class, A2, separated, holds the old stock; a mediator device with the old view still introduces, A2 accepts the ticket (old stock after class revocation, 8535, 8475.S6, 8640.6)",
   "X17": "A1 and A2, separated, each produce a revision with the same previous number (each accepts another ticket and refills): parallel production, 8500, 6270; probe sequence 6680 not modelled",
+  "X18": "A1 and A2, separated, consent to the same act and each produce a card: two cards of one act, what B sees (8325.A4, 8910.7, 8910.8)",
   "X21": "Journal duplicated, reordered, incomplete: completed batches after an old and a double restore, concurrent requests, a crash before commit; loss of request, answer and receipt, each for more than 12 rounds (HSC-440, review 9)"
 }
 
