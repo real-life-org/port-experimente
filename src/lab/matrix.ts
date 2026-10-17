@@ -129,7 +129,8 @@ export function cell(p: Promise, results: ReadonlyMap<string, CellResult>): Cell
     const r = results.get(s)
     return r ? { scenario: s, outcome: r.outcome, crashed: r.crashed, promiseChanged: r.promiseChanged } : { scenario: s, outcome: 'nicht gelaufen' as const }
   })
-  const outcomes = evidence.map((e) => e.outcome)
+  // Ein abgebrochener Lauf ist kein gemessener Verstoß (Issue #60): für den Status zählt er wie „nicht gelaufen“, die Marke bleibt im Beleg.
+  const outcomes = evidence.map((e) => (e.crashed ? ('nicht gelaufen' as const) : e.outcome))
   let status: CellStatus
   if (!p.scenarios.length) status = 'nicht geprüft'
   else if (outcomes.includes('nicht bestanden')) status = 'nicht bestanden'

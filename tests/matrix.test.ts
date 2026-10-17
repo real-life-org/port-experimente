@@ -45,6 +45,23 @@ describe('Konformitätsmatrix', () => {
     expect(toMarkdown(m)).toContain('? S5 – S5b ✗ S5c')
   })
 
+  it('ein abgebrochener Lauf ist kein gemessener Verstoß: er zählt wie „nicht gelaufen“, die Marke bleibt im Beleg (Issue #60)', () => {
+    const x = (scenario: string, outcome: ScenarioResult['outcome'], crashed?: boolean): ScenarioResult => ({ ...r(scenario, outcome), crashed })
+    const runs: CandidateRun[] = [
+      { id: 'crashOnly', scenarios: [], carrier: [x('X7', 'nicht bestanden', true)] },
+      { id: 'mixedOk', scenarios: [], carrier: [x('S2', 'bestanden'), x('S5b', 'nicht bestanden', true), x('S5c', 'nicht abbildbar')] },
+      { id: 'mixedFail', scenarios: [], carrier: [x('S2', 'bestanden'), x('S5b', 'nicht bestanden', true), x('S5c', 'nicht bestanden')] },
+    ]
+    const m = buildMatrix(runs)
+    const mg7 = m.ports.find((p) => p.port === 'mehrgerät')!.rows.find((x) => x.promise.id === 'MG7')!
+    expect(mg7.cells.crashOnly!.status).toBe('nicht geprüft')
+    expect(mg7.cells.crashOnly!.evidence).toEqual([{ scenario: 'X7', outcome: 'nicht bestanden', crashed: true, promiseChanged: undefined }])
+    expect(toMarkdown(m)).toContain('⚠ X7')
+    const kv1 = (id: string) => m.ports.find((p) => p.port === 'schlüssel')!.rows.find((x) => x.promise.id === 'KV1')!.cells[id]!
+    expect(kv1('mixedOk').status).toBe('teilweise') // bestanden + abgebrochen + nicht abbildbar: nicht alles belegt, nichts verletzt
+    expect(kv1('mixedFail').status).toBe('nicht bestanden') // ein echter Verstoß bleibt einer
+  })
+
   it('A10 (Konvergenz) fällt, wenn die Mitgliedschaft uneinig ist, auch wenn alle Inhalte lesen (Review zu #35)', async () => {
     const bobAlone = () => {
       const c = klartext()

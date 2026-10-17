@@ -34,6 +34,8 @@ import * as M from '../src/lab/mehrgeraet/model'
 //      (6845.7, Delivery 6.1); nur Neues geht nicht mehr hinaus (8475.S6) (Tor-Review 4, B4).
 //  14. Empfang: eine zweite Revision gleicher Nummer mit gleichen Ankern, aber anderem Ablauf,
 //      ist eine Equivokation (6270), keine Wiederholung (Tor-Review 5, R4-B2).
+//  15. Nach dem Abgang quittiert das Gerät keinen neuen Rahmen des abgegangenen Kontakts mehr
+//      (8475.S6); die Wiederholung einer schon gesendeten Quittung bleibt erlaubt (CodeRabbit auf #59).
 
 const enc = new TextEncoder()
 const byId = (rs: Awaited<ReturnType<typeof runX15>>) => Object.fromEntries(rs.map((r) => [r.scenario, r]))
@@ -516,5 +518,41 @@ describe('E15 Gegenläufe: Rollback-Tiefe, fällige Arbeit, Kartenpuffer', () =>
     expect(M.rel(Mm.state, am.y.id).view).toEqual(view)
     expect(Mm.state.findings.some((f) => f.includes('6270'))).toBe(true)
     expect(Mm.dispositions).toContain('failed(validation-failed)')
+  }, 60_000)
+
+  it('Abgang: eine neue Probe von B auf dem abgegangenen Tupel wird nicht quittiert; die Wiederholung einer alten Quittung schon', async () => {
+    const w = new Welt15(k0())
+    const A = await w.person('A', 'A1')
+    const B = await w.person('B', 'B1')
+    const Mm = await w.person('M', 'M1')
+    await w.encounter(A, Mm)
+    const ab = await w.encounter(A, B)
+    await w.rounds(3)
+    // B schickt A etwas, das A quittiert (eine Revision auf dem A–B-Tupel), damit es eine gespeicherte Quittung gibt.
+    await B.setClass(ab.y.id, true)
+    await w.rounds(3)
+    // Bs eigenes Dokument an A (nicht Bs Quittung auf As Probe: Quittungen werden nie quittiert).
+    const revB = [...B.zusteller.submissions.values()].find((s) => s.address === ab.y.peerKeyAgreement && B.expected.has(s.digest))!
+    expect(revB.report?.state).toBe('delivered')
+    expect(await A.depart(ab.x.id)).toBe('ok')
+    const mark = w.carrier.carried.length
+    const toB = ab.x.peerKeyAgreement
+    // (1) Wiederholung: B liefert dieselbe Revision noch einmal ein; A antwortet mit der aufbewahrten Quittung (gleiche Bytes wie zuvor).
+    const ackBefore = w.carrier.carried.filter((f) => f.address === toB).map((f) => Buffer.from(f.bytes).toString('base64'))
+    w.carrier.deposit(revB.address, revB.frame)
+    await w.rounds(2)
+    const repeats = w.carrier.carried.slice(mark).filter((f) => f.address === toB)
+    expect(repeats.length).toBe(1)
+    expect(ackBefore).toContain(Buffer.from(repeats[0]!.bytes).toString('base64'))
+    // (2) Neu: eine Probe von B auf dem abgegangenen Tupel; A quittiert nicht.
+    const mark2 = w.carrier.carried.length
+    const kb = await B.cand.keys.pair(ab.y.ownKey)
+    const doc = await diSign({ anchor: kb.anchor, ed: { priv: kb.ed.priv } }, { id: crypto.randomUUID(), type: TYPES.probe, issuer: kb.anchor, recipient: ab.y.peer, replyTo: kb.rkid, issuedAt: w.clock.now(), payload: { entries: ['x'] } }, w.clock.now())
+    w.carrier.deposit((await A.cand.keys.pair(ab.x.ownKey)).rkid, enc.encode(jcs(await seal(doc as unknown as Json, (await A.cand.keys.pair(ab.x.ownKey)).rkid))))
+    await w.rounds(2)
+    expect(A.dispositions).toContain('failed(validation-failed)')
+    // Nichts Neues an B: alles, was noch hinausgeht, sind Wiederholungen früherer Bytes (die Quittung aus (1) nach ACK_WAIT).
+    const known = new Set(w.carrier.carried.slice(0, mark2).filter((f) => f.address === toB).map((f) => Buffer.from(f.bytes).toString('base64')))
+    expect(w.carrier.carried.slice(mark2).filter((f) => f.address === toB && !known.has(Buffer.from(f.bytes).toString('base64')))).toEqual([])
   }, 60_000)
 })

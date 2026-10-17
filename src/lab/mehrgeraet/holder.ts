@@ -830,10 +830,11 @@ export class HolderDevice {
     }
   }
 
+  /** Das eigene Tupel hinter einer Empfangsadresse; nach dem Abgang der Beziehung keines mehr (8475.S6: kein neuer Rahmen des Kontakts wirkt oder wird quittiert). */
   private tupleOfAddress(address: string): M.Tuple | undefined {
     const ctx = this.ctxOfRkid.get(address)
     if (!ctx) return undefined
-    for (const r of this.state.relationships) for (const t of r.tuples) if (t.ownKey === ctx) return t
+    for (const r of this.state.relationships) if (!r.departed) for (const t of r.tuples) if (t.ownKey === ctx) return t
     return undefined
   }
 
