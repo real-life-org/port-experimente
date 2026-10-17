@@ -57,12 +57,17 @@ function k0With(authorize: (device: string, op: M.Op, state: M.HolderState) => b
   }
 }
 
-/** Ein minimales Journal (Testskelett): jeder committete Schritt reist als ein Rahmen an die eigene Adresse; `deny` verweigert einzelne Operationen je Gerät. */
+/**
+ * Ein minimales Journal (Testskelett): jeder committete Schritt reist als ein Rahmen an die eigene Adresse; `deny` verweigert
+ * einzelne Operationen je Gerät. `hack` darf den Zustand verbiegen (ein absichtlich kaputter Kandidat): bei jeder eigenen
+ * Operation und beim Empfang eines Journalrahmens (mit dem zuletzt gesehenen Zustand des Geräts).
+ */
 function journal(hack?: (op: M.Op, state: M.HolderState) => void, deny?: (device: string, op: M.Op) => boolean): MultiDeviceCandidate {
   const seeds = new Map<string, Uint8Array>()
   const device = (person: string, name: string, seed: Uint8Array): CandidateDevice => {
     const out: Transaction[] = []
     const log: M.Op[] = []
+    let last: M.HolderState | null = null
     return {
       keys: seedScheme(seed),
       writer: `${name}@1`,
@@ -74,11 +79,13 @@ function journal(hack?: (op: M.Op, state: M.HolderState) => void, deny?: (device
       receiveOwnFrame(body) {
         const raw = JSON.parse(new TextDecoder().decode(body)) as { ops: M.Op[]; intents: Array<Omit<Transaction['intents'][number], 'bytes'> & { bytes: string }> }
         log.push(...raw.ops)
+        if (last) for (const op of raw.ops) hack?.(op, last)
         return { ops: raw.ops, intents: raw.intents.map((i) => ({ ...i, bytes: new Uint8Array(Buffer.from(i.bytes, 'base64')) })) }
       },
       persist: () => log,
       restore() {},
       authorize(op, state) {
+        last = state
         hack?.(op, state)
         return !deny?.(name, op)
       },
