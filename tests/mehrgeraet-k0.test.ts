@@ -38,4 +38,13 @@ describe('E15 K0 one-seed: Eichung', () => {
     expect(r.X11!.measures.roundsToConverge).toBe(-1)
     expect(r.X12!.measures.doubleFinalEffects).toBe(0) // die Zustellung selbst stimmt; nur A2 bleibt zurück
   }, 600_000)
+
+  it('X13–X18, X21 mit zwei Geräten: K0 verfehlt alle (Budget 11, doppelt benannte Schlüssel, Doppel, alter Vorrat, Equivokation, uneinige Geräte, kein Nachholen)', async () => {
+    const r = byId(await runX15(k0(), false, ['X13', 'X14', 'X15', 'X16', 'X17', 'X18', 'X21']))
+    for (const x of Object.values(r)) expect(x.crashed, x.detail).toBeFalsy()
+    for (const id of ['X13', 'X14', 'X15', 'X16', 'X17', 'X18', 'X21']) expect(r[id]!.outcome, `${id}: ${r[id]!.detail}`).toBe('nicht bestanden')
+    expect(r.X13!.measures.budgetOverrun).toBe(1)
+    expect(r.X16!.measures.acceptedAfterRevocation).toBe(1)
+    expect(r.X21!.measures.repairRoundsRestore).toBe(-1)
+  }, 600_000)
 })
