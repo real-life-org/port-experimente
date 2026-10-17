@@ -15,9 +15,9 @@ export function k0(): MultiDeviceCandidate {
     return {
       keys: seedScheme(seed),
       writer: `${name}@${n}`,
-      record() {},
+      commit() {},
       takeOwnFrames: () => [],
-      receiveOwnFrame: () => [],
+      receiveOwnFrame: () => ({ ops: [], intents: [] }),
       persist: () => null,
       restore() {},
     }

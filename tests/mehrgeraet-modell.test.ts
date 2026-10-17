@@ -81,8 +81,8 @@ describe('B1 (Review 4): Vereinigung und Kante ohne Vorgänger', () => {
 describe('B2: Reihenfolge und Konflikte', () => {
   const views = (order: number[]) => {
     const s = withRel()
-    const v1 = op({ kind: 'view', rel: 'A:e1', scope: 'A:e1', revision: 1, keys: [{ anchor: 'k1', keyAgreement: 'r1', expiresAt: t0 }] })
-    const v2 = op({ kind: 'view', rel: 'A:e1', scope: 'A:e1', revision: 2, keys: [{ anchor: 'k2', keyAgreement: 'r2', expiresAt: t0 }] })
+    const v1 = op({ kind: 'view', rel: 'A:e1', scope: 'A:e1', revision: 1, keys: [{ n: 1, anchor: 'k1', keyAgreement: 'r1', expiresAt: t0 }] })
+    const v2 = op({ kind: 'view', rel: 'A:e1', scope: 'A:e1', revision: 2, keys: [{ n: 1, anchor: 'k2', keyAgreement: 'r2', expiresAt: t0 }] })
     for (const i of order) M.apply(s, i === 1 ? v1 : v2)
     return M.rel(s, 'A:e1').view!
   }
@@ -94,8 +94,8 @@ describe('B2: Reihenfolge und Konflikte', () => {
   it('Sicht: gleiche Revision, andere Schlüssel ist eine Equivokation (6270): Finding, deterministisches Ergebnis in beiden Reihenfolgen', () => {
     const run = (order: number[]) => {
       const s = withRel()
-      const a = op({ kind: 'view', rel: 'A:e1', scope: 'A:e1', revision: 3, keys: [{ anchor: 'ka', keyAgreement: 'ra', expiresAt: t0 }] })
-      const b = op({ kind: 'view', rel: 'A:e1', scope: 'A:e1', revision: 3, keys: [{ anchor: 'kb', keyAgreement: 'rb', expiresAt: t0 }] })
+      const a = op({ kind: 'view', rel: 'A:e1', scope: 'A:e1', revision: 3, keys: [{ n: 1, anchor: 'ka', keyAgreement: 'ra', expiresAt: t0 }] })
+      const b = op({ kind: 'view', rel: 'A:e1', scope: 'A:e1', revision: 3, keys: [{ n: 1, anchor: 'kb', keyAgreement: 'rb', expiresAt: t0 }] })
       for (const i of order) M.apply(s, i === 1 ? a : b)
       return s
     }
@@ -108,7 +108,7 @@ describe('B2: Reihenfolge und Konflikte', () => {
   it('Sicht: die Schlüsselmenge wird kanonisch gehalten, die Ankunftsreihenfolge der Schlüssel ist nicht handlungswirksam', () => {
     const run = (anchors: string[]) => {
       const s = withRel()
-      M.apply(s, op({ kind: 'view', rel: 'A:e1', scope: 'A:e1', revision: 1, keys: anchors.map((a) => ({ anchor: a, keyAgreement: `r${a}`, expiresAt: t0 })) }))
+      M.apply(s, op({ kind: 'view', rel: 'A:e1', scope: 'A:e1', revision: 1, keys: anchors.map((a) => ({ n: a === 'ka' ? 1 : 2, anchor: a, keyAgreement: `r${a}`, expiresAt: t0 })) }))
       return M.rel(s, 'A:e1').view!
     }
     expect(run(['kb', 'ka']).keys.map((k) => k.anchor)).toEqual(['ka', 'kb'])
@@ -116,8 +116,8 @@ describe('B2: Reihenfolge und Konflikte', () => {
   })
   it('Sicht: gleiche Anker, anderer Ablauf ist eine andere Sicht (Equivokation, nicht Wiederholung)', () => {
     const s = withRel()
-    M.apply(s, op({ kind: 'view', rel: 'A:e1', scope: 'A:e1', revision: 1, keys: [{ anchor: 'ka', keyAgreement: 'ra', expiresAt: '2026-10-18T08:00:00.000Z' }] }))
-    M.apply(s, op({ kind: 'view', rel: 'A:e1', scope: 'A:e1', revision: 1, keys: [{ anchor: 'ka', keyAgreement: 'ra', expiresAt: '2027-01-01T08:00:00.000Z' }] }))
+    M.apply(s, op({ kind: 'view', rel: 'A:e1', scope: 'A:e1', revision: 1, keys: [{ n: 1, anchor: 'ka', keyAgreement: 'ra', expiresAt: '2026-10-18T08:00:00.000Z' }] }))
+    M.apply(s, op({ kind: 'view', rel: 'A:e1', scope: 'A:e1', revision: 1, keys: [{ n: 1, anchor: 'ka', keyAgreement: 'ra', expiresAt: '2027-01-01T08:00:00.000Z' }] }))
     expect(s.findings.some((f) => f.includes('6270'))).toBe(true)
   })
 
@@ -171,6 +171,19 @@ describe('B2: Reihenfolge und Konflikte', () => {
     expect(y.effects.some((e) => e.id === 'consent:act1')).toBe(true)
   })
 
+  it('Verbindung nach Ablehnung: der terminale Zustand bleibt, der Widerspruch steht im Ledger (8325.A3, K1a X3)', () => {
+    const s = withRel()
+    M.apply(s, op({ kind: 'allocate', rel: 'A:e1', nonce: 'n1', keys: [key('n1', 1)] }))
+    M.apply(s, op({ kind: 'ticket-accept', act: actOf('act1', 'A:e1', 'n1-1') }))
+    M.apply(s, op({ kind: 'decline', act: 'act1' }, 'A2@1'))
+    M.apply(s, op({ kind: 'connect', act: 'act1', rel: 'A:act:act1', tuple: tuple('A:act:act1', 'c', 'v') }, 'A1@1'))
+    expect(M.act(s, 'act1').state).toBe('declined')
+    expect(s.relationships.length).toBe(1)
+    expect(s.effects.some((e) => e.id === 'conflict:connect:act1')).toBe(true)
+    expect(s.effects.some((e) => e.id === 'connect:act1')).toBe(false)
+    expect(s.findings.some((f) => f.includes('8325.A3'))).toBe(true)
+  })
+
   it('Vereinigung führt die bestätigten Annahmen beider Teile zusammen', () => {
     const s = M.emptyState('A')
     M.apply(s, op({ kind: 'open-tuple', rel: null, tuple: tuple('A:e1', 'a1', 'm1'), provenance: 'encounter', vouchedBy: null, act: null }))
@@ -193,15 +206,15 @@ describe('B5: Projektion', () => {
   it('zwei Sichten mit gleicher Revision und Schlüsselzahl, aber anderen Schlüsseln, sind verschieden', () => {
     const a = withRel()
     const b = withRel()
-    M.apply(a, op({ kind: 'view', rel: 'A:e1', scope: 'A:e1', revision: 1, keys: [{ anchor: 'ka', keyAgreement: 'ra', expiresAt: t0 }] }))
-    M.apply(b, op({ kind: 'view', rel: 'A:e1', scope: 'A:e1', revision: 1, keys: [{ anchor: 'kb', keyAgreement: 'rb', expiresAt: t0 }] }))
+    M.apply(a, op({ kind: 'view', rel: 'A:e1', scope: 'A:e1', revision: 1, keys: [{ n: 1, anchor: 'ka', keyAgreement: 'ra', expiresAt: t0 }] }))
+    M.apply(b, op({ kind: 'view', rel: 'A:e1', scope: 'A:e1', revision: 1, keys: [{ n: 1, anchor: 'kb', keyAgreement: 'rb', expiresAt: t0 }] }))
     expect(M.canonical(M.project(a, t0))).not.toBe(M.canonical(M.project(b, t0)))
   })
   it('zwei Sichten mit gleichen Ankern, aber anderem Ablauf, sind verschieden (nutzbar heute: nein/ja)', () => {
     const a = withRel()
     const b = withRel()
-    M.apply(a, op({ kind: 'view', rel: 'A:e1', scope: 'A:e1', revision: 1, keys: [{ anchor: 'ka', keyAgreement: 'ra', expiresAt: '2026-10-18T08:00:00.000Z' }] }))
-    M.apply(b, op({ kind: 'view', rel: 'A:e1', scope: 'A:e1', revision: 1, keys: [{ anchor: 'ka', keyAgreement: 'ra', expiresAt: '2027-01-01T08:00:00.000Z' }] }))
+    M.apply(a, op({ kind: 'view', rel: 'A:e1', scope: 'A:e1', revision: 1, keys: [{ n: 1, anchor: 'ka', keyAgreement: 'ra', expiresAt: '2026-10-18T08:00:00.000Z' }] }))
+    M.apply(b, op({ kind: 'view', rel: 'A:e1', scope: 'A:e1', revision: 1, keys: [{ n: 1, anchor: 'ka', keyAgreement: 'ra', expiresAt: '2027-01-01T08:00:00.000Z' }] }))
     expect(M.usable('2026-10-18T08:00:00.000Z', t0)).toBe(false)
     expect(M.usable('2027-01-01T08:00:00.000Z', t0)).toBe(true)
     expect(M.canonical(M.project(a, t0))).not.toBe(M.canonical(M.project(b, t0)))
