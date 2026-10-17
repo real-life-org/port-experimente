@@ -451,7 +451,14 @@ export class Device {
     this.received = s?.received.slice() ?? []
     this.dispositions = s?.dispositions.slice() ?? []
     this.zusteller.restore(s?.submissions ?? [])
+    this.held = []
     this.down = false
+  }
+  /** Quittungen, die mit der Wirkung aufgezeichnet sind und nach dem Commit der Runde eingeliefert werden. */
+  private held: string[] = []
+  private release(digest: string, frame: Uint8Array, address: string) {
+    this.zusteller.record(digest, frame, address)
+    this.held.push(digest)
   }
   private crash(point: CrashPoint) {
     if (this.crashAt !== point) return
@@ -503,6 +510,8 @@ export class Device {
         this.crash('before-commit')
         this.commit()
         this.crash('after-commit')
+        // Quittungen verlassen das Gerät erst nach dem Commit der Wirkung (#54, HSC-110).
+        for (const d of this.held.splice(0)) this.zusteller.deposit(d)
         if (frames.length) this.carrier.conclude(this.name, frames.map((f) => f.id))
       }
       this.zusteller.advance()
@@ -525,7 +534,7 @@ export class Device {
     if (v.disposition === 'duplicate-known') {
       // Die aufbewahrte Quittung noch einmal, byte-identisch (§6.2 Stufe 4).
       const ack = this.acks.get(v.digest!)
-      if (ack) this.zusteller.submit(ack.digest, ack.frame, this.peerEndpoint.address)
+      if (ack) this.release(ack.digest, ack.frame, this.peerEndpoint.address)
       return
     }
     if (v.disposition !== 'unique') return
@@ -557,7 +566,7 @@ export class Device {
     const ackFrame = await this.peerEndpoint.pack(ackBytes)
     this.acks.set(v.digest!, { frame: ackFrame, digest: ackDigest })
     this.completed.add(v.digest!)
-    this.zusteller.submit(ackDigest, ackFrame, this.peerEndpoint.address)
+    this.release(ackDigest, ackFrame, this.peerEndpoint.address)
   }
 }
 

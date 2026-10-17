@@ -122,7 +122,9 @@ unchanged with the defaults.
   leaves (the submission is recorded, committed, then deposited). Crash
   points for tests: `crashAt = 'before-commit' | 'after-commit' |
   'before-send'`; a crashed device does nothing until `reload()`, which
-  rebuilds it from the store. Tests show: a crash before the commit
+  rebuilds it from the store. A receipt is recorded with the effect and
+  deposited only after the round's commit (#54): while the receiver is
+  down before its commit, the sender never sees `delivered`. Tests show: a crash before the commit
   loses the effect but not the frame (it is delivered again, effect
   once); a crash after the commit sees the frame again as
   `duplicate-known`; a crash before the send dispatches on reload; an

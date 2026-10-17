@@ -125,6 +125,20 @@ describe('E15-Harness: Store, Commit-Grenzen, Absturz, Backup', () => {
     expect(m.get('bob')!.commits).toBeGreaterThan(0)
   })
 
+  it('#54: die Quittung verlässt das Gerät erst nach dem Commit der Wirkung; während des Ausfalls meldet der Sender nichts als delivered', async () => {
+    const { w, m } = stores()
+    const { A, B } = await w.pair(await party('alice'), await party('bob'))
+    B.crashAt = 'before-commit'
+    const d = await A.send({ note: 'vor-dem-commit' })
+    await w.rounds(2) // Bob stürzt in der ersten Runde ab, kein Reload
+    expect(A.zusteller.report(d)?.state).toBe('accepted')
+    expect(m.get('bob')!.load()?.received.length ?? 0).toBe(0)
+    expect(w.carrier.carried.filter((f) => f.address === A.endpoint.address).length).toBe(0) // keine Quittung unterwegs
+    B.reload()
+    await w.until(() => A.zusteller.report(d)?.state === 'delivered')
+    expect(m.get('bob')!.load()?.received.length).toBe(1)
+  })
+
   it('Absturz nach dem Commit, vor der Bestätigung: der Rahmen kommt noch einmal, die Wirkung bleibt einmal', async () => {
     const { w } = stores()
     const { A, B } = await w.pair(await party('alice'), await party('bob'))
