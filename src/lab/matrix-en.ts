@@ -346,7 +346,7 @@ export const scenarioEn: Record<string, string> = {
   "X16": "A1 revokes the class, A2, separated, holds the old stock; a mediator device with the old view still introduces, A2 accepts the ticket (old stock after class revocation, 8535, 8475.S6, 8640.6)",
   "X17": "A1 and A2, separated, each produce a revision with the same previous number (each accepts another ticket and refills): parallel production, 8500, 6270; probe sequence 6680 not modelled",
   "X18": "A1 and A2, separated, consent to the same act and each produce a card: two cards of one act, what B sees (8325.A4, 8910.7, 8910.8)",
-  "X21": "Journal duplicated, reordered, incomplete: completed batches after an old and a double restore, concurrent requests, a crash before commit; loss of request, answer and receipt, each for more than 12 rounds (HSC-440, review 9)"
+  "X21": "Journal duplicated, reordered, incomplete: completed batches after an old and a double restore, concurrent requests, crashes before and after commit; loss of request, answer and receipt, each for more than 12 rounds (HSC-440, review 9)"
 }
 
 /** Candidate id → name and one line. */

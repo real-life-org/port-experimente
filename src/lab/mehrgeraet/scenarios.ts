@@ -815,7 +815,7 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
   },
   {
     id: 'X21',
-    title: 'Journal doppelt, umgeordnet, unvollständig: abgeschlossene Batches nach altem und doppeltem Restore, gleichzeitige Anfragen, Absturz vor dem Commit; Verlust von Anfrage, Antwort und Quittung je über 12 Runden (HSC-440, Review 9)',
+    title: 'Journal doppelt, umgeordnet, unvollständig: abgeschlossene Batches nach altem und doppeltem Restore, gleichzeitige Anfragen, Absturz vor und nach dem Commit; Verlust von Anfrage, Antwort und Quittung je über 12 Runden (HSC-440, Review 9)',
     async run(c, serial) {
       if (serial) return na('ein Gerät: kein Journal zwischen Geräten')
       const s = await setup(c, serial, ['C'])
@@ -844,7 +844,7 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       }
       const behind = () => (missingBatches(s.w, 'A') ?? 0) > 0 || M.canonical(s.A2.projection()) !== ref ? 1 : 0
       // Phase 1: A2 aus dem alten Abbild, A1 startet zugleich neu (zwei gleichzeitige Anfragen), Umordnung und Duplikate an;
-      // nach zwei Runden A2 noch einmal aus demselben Abbild (doppelter Restore), dann stürzt A2 einmal vor dem Commit ab.
+      // nach zwei Runden A2 noch einmal aus demselben Abbild (doppelter Restore), dann stürzen A2 vor und A1 nach dem Commit je einmal ab.
       s.w.carrier.faults.reverse(true)
       s.w.carrier.faults.duplicate(true)
       await restoreA2()
@@ -852,9 +852,11 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       await s.w.rounds(2)
       await restoreA2()
       s.A2.crashAt = 'before-commit'
+      s.A.crashAt = 'after-commit' // A1 hat die Rahmen der Runde angewandt und committet, aber am Träger nicht bestätigt
       await s.w.rounds(1)
-      const crashed = s.A2.crashes.length
-      if (crashed) await s.A2.reload()
+      const crashed = s.A2.crashes.length + s.A.crashes.length
+      if (s.A2.crashes.length) await s.A2.reload()
+      if (s.A.crashes.length) await s.A.reload()
       const restore = await untilStable(s.w, 'A', 40)
       s.w.carrier.faults.reset()
       // Phasen 2–4: je ein frischer Restore von A2, dann 15 Runden Verlust einer Art auf der Self-Adresse, dann ohne Fachoperation weiter.
