@@ -37,7 +37,7 @@ numbers its revisions under a pseudonymous writer tag per relationship.
   both journal paths (mailbox and log) with the same check. One table of
   nested shapes in model.ts (`Shape`, `SHAPES`, `OP_FIELDS`,
   `shapeProblem`): payload an object whose body is strict base64; batch
-  with exactly writer (string), counter (positive integer), deps (strings),
+  with exactly writer, counter (positive integer), deps (batch keys),
   ops and intents (`batchProblem`); every op with id (writer, integer
   n ≥ 0), a readable time, a known kind and exactly its fields, down to
   every value that becomes state (`opProblem`): stock keys and listed keys
@@ -49,7 +49,22 @@ numbers its revisions under a pseudonymous writer tag per relationship.
   and string fields, bytes strict base64 (length, alphabet, padding:
   the round trip gives the same string; `INTENT_FIELDS` in holder.ts);
   the transaction the candidate returns again (`transactionProblem`).
-  Numbers are never NaN or infinite. A frame that fails the check, or whose fold throws anything
+  Numbers are never NaN or infinite. Gate review 28 closed the class of
+  inherited keys: **keyed tables never carry a prototype; reads use own
+  properties only** (model.ts `table`, `own`, `put`; `aliases`, the
+  writers of a relationship, the writers and clears of a view, the cards
+  of an act, the clears of a view op, the journal heads), and a store
+  image or clone is rebuilt into such tables on load (`fromJson`,
+  `cloneState`, used by `reload`, checkpoints and enrolment). On top, the
+  shape table gives every identifier and every table key its grammar
+  (`GRAMMAR`: `ident` for ids, anchors, rkids and context names, `tag`
+  for writer tags as 16 base64url characters, `writer` for
+  `<device>@<incarnation>`, `dep` for `<writer>#<n>`, digests and nonces
+  in their alphabets) and rejects reserved names (`RESERVED`: the
+  properties of `Object.prototype` such as `__proto__`, `constructor`,
+  `toString`, and `prototype`) as keys and identifiers at any depth; the
+  heads of a `journal-sync` and the writer tag of a counterpart's
+  revision are checked the same way. A frame that fails the check, or whose fold throws anything
   but `Missing` (deferred) or `Blocked`, is corrupt: the step is rolled
   back, no receipt, one finding `finding(journal:corrupt-frame@<digest>)`
   per digest, and the round goes on (the sender's deliverer repeats it,

@@ -98,13 +98,14 @@ const fresh = () => randomBytes(4).toString('hex')
 const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x)
 /**
  * Gate review 26 B2, gate review 27 B2a: the shape of a journal batch before anything is folded, deep. Exactly the
- * fields writer (string), n (positive integer), deps (batch keys, strings), ops (each op down to every value that becomes
+ * fields writer (`<device>@<incarnation>`), n (positive integer), deps (batch keys `<writer>#<n>`; gate review 28: every
+ * identifier matches its grammar and is never a reserved name such as `__proto__` or `constructor`), ops (each op down to every value that becomes
  * state: model.ts `opProblem`, the shape table) and intents (holder.ts `INTENT_FIELDS`, bytes strict base64). Returns
  * null or the path that is wrong; `receiveOwnFrame` throws on it (the device counts the frame as corrupt, never folds it).
  * The same check runs for both journal paths (log and mailbox).
  */
 const BATCH_SHAPE: M.Shape = {
-  object: { writer: 'string', n: 'nat', deps: { array: 'string' }, ops: { array: { object: {} } }, intents: { array: { object: { ...INTENT_FIELDS, bytes: 'base64' } } } },
+  object: { writer: 'writer', n: 'nat', deps: { array: 'dep' }, ops: { array: { object: {} } }, intents: { array: { object: { ...INTENT_FIELDS, bytes: 'base64' } } } },
 }
 export function batchProblem(b: unknown): string | null {
   if (!isObj(b)) return 'batch'
@@ -190,13 +191,13 @@ export class K1aDevice implements CandidateDevice {
   }
   /** The last batch seen from every writer. */
   heads(): Record<string, number> {
-    const h: Record<string, number> = {}
-    for (const b of this.batches) if ((h[b.writer] ?? 0) < b.n) h[b.writer] = b.n
-    return h
+    const h = new Map<string, number>()
+    for (const b of this.batches) if ((h.get(b.writer) ?? 0) < b.n) h.set(b.writer, b.n)
+    return M.table(h) // review 28: a keyed table without prototype
   }
   /** What a device with these heads has not seen yet, oldest first (the sync answer). */
   batchesAfter(heads: Record<string, number>) {
-    return this.batches.filter((b) => b.n > (heads[b.writer] ?? 0)).map((b) => ({ body: enc.encode(JSON.stringify(b)) }))
+    return this.batches.filter((b) => b.n > (M.own(heads, b.writer) ?? 0)).map((b) => ({ body: enc.encode(JSON.stringify(b)) }))
   }
   commit(tx: Transaction): void {
     const deps = Object.entries(this.heads()).map(([w, n]) => `${w}#${n}`)
@@ -314,7 +315,7 @@ export function k1a(opts: K1aOptions = {}): MultiDeviceCandidate {
       // offene Produktion, produziert nichts neu und kann die Proben neu auswerten, auch wenn `from` danach fehlt (Review 16 S2).
       const probes = [...from.keptProbes()].map(([id, e]): [string, string[]] => [id, [...e]])
       if (eo?.fromLog) return { cand: d, state: M.emptyState(from.person), probes } // step 6: state and intents come from the log
-      return { cand: d, state: structuredClone(from.state), intents: [...from.intents.values()], probes }
+      return { cand: d, state: M.cloneState(from.state), intents: [...from.intents.values()], probes }
     },
     release(person, name) {
       const list = devices.get(person)

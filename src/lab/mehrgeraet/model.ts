@@ -66,6 +66,31 @@ export const opKey = (id: OpId) => `${id.writer}#${id.n}`
 export type Anchor = string
 export type Rkid = string
 
+// ── Schlüsseltabellen (Tor-Review 28) ────────────────────────────────────────
+//
+// Regel: keyed tables never carry a prototype; reads use own properties only. Jede Tabelle, deren Schlüssel aus Daten
+// kommen (Schreiberkennungen, Beziehungs-Ids, Digests, Köpfe), ist ein Objekt ohne Prototyp (`table`), gelesen über
+// `own` (nur eigene Eigenschaften), geschrieben über `put` (eigene Dateneigenschaft, auch für einen Namen wie
+// `__proto__` nie ein Setter). Ein Abbild aus dem Store oder ein Klon (`structuredClone`, JSON) erhält wieder Objekte
+// mit Prototyp; `fromJson` baut die Tabellen des Zustands neu ohne Prototyp auf, `cloneState` klont und baut neu. So ist
+// die Klasse „ein String aus dem Journal trifft eine geerbte Eigenschaft“ durch Bauart geschlossen; die Formtabelle
+// weist zusätzlich reservierte Namen und Kennungen außerhalb ihrer Grammatik ab (`RESERVED`, `GRAMMAR`).
+export type Table<T> = Record<string, T>
+/** Eine Schlüsseltabelle ohne Prototyp, optional aus Einträgen. */
+export function table<T>(entries?: Iterable<[string, T]>): Table<T> {
+  const t = Object.create(null) as Table<T>
+  if (entries) for (const [k, v] of entries) put(t, k, v)
+  return t
+}
+/** Lesen nur über eigene Eigenschaften (nie geerbt). */
+export const own = <T>(t: Table<T> | null | undefined, k: string): T | undefined => (t != null && Object.hasOwn(t, k) ? t[k] : undefined)
+/** Schreiben als eigene Dateneigenschaft (kein Setter, auch nicht `__proto__`). */
+export function put<T>(t: Table<T>, k: string, v: T): void {
+  Object.defineProperty(t, k, { value: v, writable: true, enumerable: true, configurable: true })
+}
+/** Kopie einer Tabelle ohne Prototyp (eigene Einträge). */
+export const tableOf = <T>(t: Table<T> | null | undefined): Table<T> => table(t == null ? [] : Object.entries(t))
+
 // ── Zustand ──────────────────────────────────────────────────────────────────
 
 /** Ein Tupel: ein Paar (eigener Anker, Gegenanker) mit den Paar-Schlüsseln (privat nur als Kontextname, die Bytes hält der Schlüsseldienst). */
@@ -239,8 +264,25 @@ export interface HolderState {
 }
 
 export function emptyState(person: string): HolderState {
-  return { person, relationships: [], aliases: {}, acts: [], mediatorActs: [], consumed: [], voucherAssigned: [], duties: [], edges: [], effects: [], findings: [], applied: [] }
+  return { person, relationships: [], aliases: table(), acts: [], mediatorActs: [], consumed: [], voucherAssigned: [], duties: [], edges: [], effects: [], findings: [], applied: [] }
 }
+
+/**
+ * Zustand aus einem Abbild (Store, Klon, JSON): die Schlüsseltabellen (`aliases`, `writers` je Beziehung, `writers` und
+ * `clears` der Sicht, `cards` je Akt) werden ohne Prototyp neu aufgebaut. Verändert und liefert `s`.
+ */
+export function fromJson(s: HolderState): HolderState {
+  s.aliases = tableOf(s.aliases)
+  for (const r of s.relationships) {
+    if (r.writers) r.writers = tableOf(r.writers)
+    if (r.view?.writers) r.view.writers = tableOf(r.view.writers)
+    if (r.view?.clears) r.view.clears = tableOf(r.view.clears)
+  }
+  for (const a of s.acts) if (a.cards) a.cards = tableOf(a.cards)
+  return s
+}
+/** Tiefer Klon des Zustands mit Tabellen ohne Prototyp. */
+export const cloneState = (s: HolderState): HolderState => fromJson(structuredClone(s))
 
 // ── Operationen ──────────────────────────────────────────────────────────────
 
@@ -277,8 +319,15 @@ export type Op = { id: OpId; at: string } & (
  * Zustand. Grundformen: `string`; `boolean`; `nat` = ganze Zahl ≥ 0; `time` = Zeitstempel als String, den `Date.parse`
  * lesen kann (Zahlen nie NaN oder unendlich); `base64` = streng (Länge, Alphabet, Auffüllung: der Rundlauf ergibt
  * denselben String); `digest` = Dokumentdigest des Prüfstands. Zusammengesetzt: `enum`, `array` (jedes Element), `tuple` (feste Länge), `object` (genau diese
- * Felder, keine weiteren), `record` (jeder Wert). `nullable` = vorhanden, Wert oder null; `optional` = darf fehlen.
- * Rückgabe von `shapeProblem`: null oder der Pfad, der nicht stimmt.
+ * Felder, keine weiteren), `record` (jeder Wert; jeder Schlüssel nach `key`, ohne Angabe `ident`). `nullable` = vorhanden,
+ * Wert oder null; `optional` = darf fehlen.
+ * Kennungen (Tor-Review 28): jede Kennung und jeder Tabellenschlüssel hat eine Grammatik (`GRAMMAR`), und kein reservierter
+ * Name (`RESERVED`: die Eigenschaften von `Object.prototype` wie `__proto__`, `constructor`, `toString`, dazu `prototype`)
+ * ist je eine Kennung oder ein Schlüssel, in keiner Tiefe. `ident` = allgemeine Kennung des Prüfstands (Beziehungs-,
+ * Tupel-, Akt-Ids, Anker, rkids, Kontextnamen: Buchstabe oder Ziffer, dann Buchstaben, Ziffern und `._:@#+/=~-`, höchstens
+ * 512 Zeichen); `tag` = Schreiberkennung (base64url von 12 Bytes, 16 Zeichen); `writer` = Schreiberinkarnation
+ * `<Gerät>@<Inkarnation>`; `opWriter` = Schreiber einer Operation (`writer`, im Konfliktbefund mit `#conflict`); `dep` =
+ * Batchschlüssel `<writer>#<n>`. Rückgabe von `shapeProblem`: null oder der Pfad, der nicht stimmt.
  */
 export type Shape =
   | 'string'
@@ -287,11 +336,16 @@ export type Shape =
   | 'time'
   | 'base64'
   | 'digest'
+  | 'ident'
+  | 'tag'
+  | 'writer'
+  | 'opWriter'
+  | 'dep'
   | { enum: readonly string[] }
   | { array: Shape }
   | { tuple: readonly Shape[] }
   | { object: { readonly [field: string]: Shape } }
-  | { record: Shape }
+  | { record: Shape; key?: Shape }
   | { nullable: Shape }
   | { optional: Shape }
 const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x)
@@ -299,13 +353,28 @@ const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object
 export const isBase64 = (x: unknown): x is string => typeof x === 'string' && x.length % 4 === 0 && /^[A-Za-z0-9+/]*={0,2}$/.test(x) && Buffer.from(x, 'base64').toString('base64') === x
 /** Dokumentdigest wie im Prüfstand (`digestBytes`): multibase base64url (`u`) eines sha2-256-Multihash (34 Bytes, Präfix 0x12 0x20). */
 export const isDigest = (x: unknown): x is string => typeof x === 'string' && /^uEi[A-D][A-Za-z0-9_-]{43}$/.test(x)
+/** Reservierte Namen (Tor-Review 28): nie Kennung, nie Tabellenschlüssel. */
+export const RESERVED: ReadonlySet<string> = new Set([...Object.getOwnPropertyNames(Object.prototype), 'prototype'])
+const NAME = '[A-Za-z0-9][A-Za-z0-9._-]{0,63}'
+/** Grammatik der Kennungen (Tor-Review 28), siehe `Shape`. */
+export const GRAMMAR = {
+  ident: /^[A-Za-z0-9][A-Za-z0-9._:@#+/=~-]{0,511}$/,
+  tag: /^[A-Za-z0-9_-]{16}$/,
+  writer: new RegExp(`^${NAME}@${NAME}$`),
+  opWriter: new RegExp(`^${NAME}@${NAME}(#conflict)?$`),
+  dep: new RegExp(`^${NAME}@${NAME}#[1-9][0-9]{0,15}$`),
+} as const
+const isName = (x: unknown, g: RegExp): x is string => typeof x === 'string' && g.test(x) && !RESERVED.has(x)
 export function shapeProblem(x: unknown, s: Shape, path: string): string | null {
-  if (s === 'string') return typeof x === 'string' ? null : path
-  if (s === 'boolean') return typeof x === 'boolean' ? null : path
-  if (s === 'nat') return Number.isSafeInteger(x) && (x as number) >= 0 ? null : path
-  if (s === 'time') return typeof x === 'string' && Number.isFinite(Date.parse(x)) ? null : path
-  if (s === 'base64') return isBase64(x) ? null : path
-  if (s === 'digest') return isDigest(x) ? null : path
+  if (typeof s === 'string') {
+    if (s === 'string') return typeof x === 'string' ? null : path
+    if (s === 'boolean') return typeof x === 'boolean' ? null : path
+    if (s === 'nat') return Number.isSafeInteger(x) && (x as number) >= 0 ? null : path
+    if (s === 'time') return typeof x === 'string' && Number.isFinite(Date.parse(x)) ? null : path
+    if (s === 'base64') return isBase64(x) ? null : path
+    if (s === 'digest') return isDigest(x) ? null : path
+    return isName(x, GRAMMAR[s]) ? null : path
+  }
   if ('enum' in s) return typeof x === 'string' && s.enum.includes(x) ? null : path
   if ('nullable' in s) return x === null ? null : shapeProblem(x, s.nullable, path)
   if ('optional' in s) return x === undefined ? null : shapeProblem(x, s.optional, path)
@@ -328,6 +397,7 @@ export function shapeProblem(x: unknown, s: Shape, path: string): string | null 
   if (!isObj(x)) return path
   if ('record' in s) {
     for (const [k, v] of Object.entries(x)) {
+      if (shapeProblem(k, s.key ?? 'ident', path) || RESERVED.has(k)) return `${path}[${JSON.stringify(k)}]`
       const p = shapeProblem(v, s.record, `${path}.${k}`)
       if (p) return p
     }
@@ -335,77 +405,78 @@ export function shapeProblem(x: unknown, s: Shape, path: string): string | null 
   }
   for (const k of Object.keys(x)) if (!Object.hasOwn(s.object, k)) return `${path}.${k}`
   for (const [k, f] of Object.entries(s.object)) {
-    const p = shapeProblem(x[k], f, `${path}.${k}`)
+    const p = shapeProblem(Object.hasOwn(x, k) ? x[k] : undefined, f, `${path}.${k}`)
     if (p) return p
   }
   return null
 }
 
 const str = 'string' as const
-const pair: Shape = { tuple: [str, str] }
+const id = 'ident' as const
+const pair: Shape = { tuple: [id, id] }
 const handOver: Shape = { enum: ['none', 'intent', 'handed', 'taken', 'delivered', 'given-up', 'cancelled'] satisfies HandOver[] }
-/** Die Formen der Werte, die Zustand werden (Review 27 B2a), nach den Typen oben. */
+/** Die Formen der Werte, die Zustand werden (Review 27 B2a), nach den Typen oben; Kennungen nach ihrer Grammatik (Review 28). */
 export const SHAPES = {
-  tuple: { object: { id: str, own: str, ownKey: str, peer: str, peerKeyAgreement: str, record: str, openedAt: 'time', candidates: { array: str }, deactivated: 'boolean' } },
+  tuple: { object: { id, own: id, ownKey: id, peer: id, peerKeyAgreement: id, record: id, openedAt: 'time', candidates: { array: id }, deactivated: 'boolean' } },
   stockKey: {
-    object: { n: 'nat', nonce: str, anchor: str, keyAgreement: str, key: str, expiresAt: 'time', state: { enum: ['allocated', 'registered', 'active', 'aging', 'consumed', 'withdrawn', 'tombstoned'] satisfies StockState[] } },
+    object: { n: 'nat', nonce: 'base64', anchor: id, keyAgreement: id, key: id, expiresAt: 'time', state: { enum: ['allocated', 'registered', 'active', 'aging', 'consumed', 'withdrawn', 'tombstoned'] satisfies StockState[] } },
   },
-  listedKey: { object: { n: 'nat', anchor: str, keyAgreement: str, expiresAt: 'time' } },
-  card: { object: { anchor: str, keyAgreement: str } },
+  listedKey: { object: { n: 'nat', anchor: id, keyAgreement: id, expiresAt: 'time' } },
+  card: { object: { anchor: id, keyAgreement: id } },
   act: {
     object: {
-      id: str,
-      mediator: str,
-      own: str,
-      voucher: { object: { anchor: str, keyAgreement: str, name: str } },
+      id,
+      mediator: id,
+      own: id,
+      voucher: { object: { anchor: id, keyAgreement: id, name: str } },
       issuedAt: 'time',
       expiresAt: 'time',
       state: { enum: ['offered', 'declined', 'consented', 'connected', 'expired'] satisfies ActState[] },
-      pending: { nullable: { object: { anchor: str, keyAgreement: str } } },
+      pending: { nullable: { object: { anchor: id, keyAgreement: id } } },
       v: { nullable: str },
       k: 'boolean',
-      ownCard: { nullable: { object: { anchor: str, keyAgreement: str } } },
-      ownCardKey: { nullable: str },
+      ownCard: { nullable: { object: { anchor: id, keyAgreement: id } } },
+      ownCardKey: { nullable: id },
       o: handOver,
       ownCardDigest: { nullable: 'digest' },
-      opened: { nullable: str },
-      decisions: { optional: { array: { object: { kind: { enum: ['consent', 'decline'] }, op: str, at: 'time' } } } },
-      cards: { optional: { record: handOver } },
-      consentOp: { optional: str },
+      opened: { nullable: id },
+      decisions: { optional: { array: { object: { kind: { enum: ['consent', 'decline'] }, op: id, at: 'time' } } } },
+      cards: { optional: { record: handOver, key: 'digest' } },
+      consentOp: { optional: id },
     },
   },
   mediatorAct: {
-    object: { id: str, a: { object: { rel: str, key: str, keyAgreement: str } }, b: { object: { rel: str, key: str, keyAgreement: str } }, issuedAt: 'time', expiresAt: 'time' },
+    object: { id, a: { object: { rel: id, key: id, keyAgreement: id } }, b: { object: { rel: id, key: id, keyAgreement: id } }, issuedAt: 'time', expiresAt: 'time' },
   },
 } satisfies Record<string, Shape>
-/** Je Art die Felder neben `id`, `at`, `kind` (Review 26 B2: bekannte Art; Review 27 B2a: jedes Feld bis in die Elemente). */
+/** Je Art die Felder neben `id`, `at`, `kind` (Review 26 B2: bekannte Art; Review 27 B2a: jedes Feld bis in die Elemente; Review 28: Kennungen). */
 const OP_FIELDS: { [K in Op['kind']]: { [field: string]: Shape } } = {
-  'open-tuple': { rel: { nullable: str }, tuple: SHAPES.tuple, provenance: { enum: ['encounter', 'introduction'] }, vouchedBy: { nullable: str }, act: { nullable: str } },
-  class: { rel: str, on: 'boolean' },
-  depart: { rel: str },
-  allocate: { rel: str, nonce: str, keys: { array: SHAPES.stockKey } },
-  revision: { rel: str, revision: 'nat', keys: { array: SHAPES.listedKey }, writer: { optional: str } },
-  withdraw: { rel: str, anchors: { array: str } },
-  age: { rel: str, anchors: { array: str } },
-  view: { rel: str, scope: str, revision: 'nat', keys: { array: SHAPES.listedKey }, writer: { optional: str }, clears: { optional: { record: 'nat' } } },
+  'open-tuple': { rel: { nullable: id }, tuple: SHAPES.tuple, provenance: { enum: ['encounter', 'introduction'] }, vouchedBy: { nullable: id }, act: { nullable: id } },
+  class: { rel: id, on: 'boolean' },
+  depart: { rel: id },
+  allocate: { rel: id, nonce: 'base64', keys: { array: SHAPES.stockKey } },
+  revision: { rel: id, revision: 'nat', keys: { array: SHAPES.listedKey }, writer: { optional: 'tag' } },
+  withdraw: { rel: id, anchors: { array: id } },
+  age: { rel: id, anchors: { array: id } },
+  view: { rel: id, scope: id, revision: 'nat', keys: { array: SHAPES.listedKey }, writer: { optional: 'tag' }, clears: { optional: { record: 'nat', key: 'tag' } } },
   introduce: { act: SHAPES.mediatorAct },
   'ticket-accept': { act: SHAPES.act },
-  'ticket-refuse-budget': { rel: str, own: str },
+  'ticket-refuse-budget': { rel: id, own: id },
   finding: { text: str },
-  consent: { act: str, card: SHAPES.card, cardKey: str },
-  decline: { act: str },
-  'hand-over': { act: str, o: handOver, digest: { optional: 'digest' } },
-  'card-pending': { act: str, card: SHAPES.card, v: str },
-  'card-refused': { act: str, v: str, k: 'boolean' },
-  connect: { act: str, rel: str, tuple: SHAPES.tuple },
-  expire: { act: str },
-  'budget-confirm': { rel: str, acts: { array: str } },
+  consent: { act: id, card: SHAPES.card, cardKey: id },
+  decline: { act: id },
+  'hand-over': { act: id, o: handOver, digest: { optional: 'digest' } },
+  'card-pending': { act: id, card: SHAPES.card, v: str },
+  'card-refused': { act: id, v: str, k: 'boolean' },
+  connect: { act: id, rel: id, tuple: SHAPES.tuple },
+  expire: { act: id },
+  'budget-confirm': { rel: id, acts: { array: id } },
   duty: { pair, state: { enum: ['none', 'hit', 'sent', 'united', 'moot'] satisfies PairDuty['state'][] }, mappingDigest: { nullable: 'digest' } },
-  union: { a: str, b: str, edge: pair },
+  union: { a: id, b: id, edge: pair },
   edge: { edge: pair },
 }
 const OP_SHAPES: Record<string, Shape> = Object.fromEntries(
-  Object.entries(OP_FIELDS).map(([kind, fields]): [string, Shape] => [kind, { object: { id: { object: { writer: str, n: 'nat' } }, at: 'time', kind: { enum: [kind] }, ...fields } }]),
+  Object.entries(OP_FIELDS).map(([kind, fields]): [string, Shape] => [kind, { object: { id: { object: { writer: 'opWriter', n: 'nat' } }, at: 'time', kind: { enum: [kind] }, ...fields } }]),
 )
 /** Form einer Operation (Review 26 B2, Review 27 B2a): null oder der Pfad, der nicht stimmt. */
 export function opProblem(op: unknown): string | null {
@@ -421,7 +492,7 @@ export const pairKey = (a: string, b: string): [string, string] => (a < b ? [a, 
 /** Alias-Auflösung (6975.2): die Id eines vereinigten Teils führt zur vereinigten Beziehung. */
 export function resolveId(s: HolderState, id: string): string {
   let cur = id
-  for (let i = 0; i < 64 && s.aliases[cur]; i++) cur = s.aliases[cur]!
+  for (let i = 0, next = own(s.aliases, cur); i < 64 && next; i++, next = own(s.aliases, cur)) cur = next
   return cur
 }
 
@@ -602,17 +673,17 @@ function aggregateO(a: Act): void {
 function applyWriterView(s: HolderState, r: Relationship, op: Op & { kind: 'view' }, keys: ListedKey[]): void {
   const w = op.writer!
   let v = r.view
-  if (!v || v.scope !== op.scope || !v.writers) v = { scope: op.scope, revision: 0, keys: [], writers: {}, clears: {} }
-  const writers = { ...v.writers }
-  const clears = { ...(v.clears ?? {}) }
-  for (const [x, n] of Object.entries(op.clears ?? {})) clears[x] = Math.max(clears[x] ?? 0, n)
-  const held = writers[w]
+  if (!v || v.scope !== op.scope || !v.writers) v = { scope: op.scope, revision: 0, keys: [], writers: table(), clears: table() }
+  const writers = tableOf(v.writers)
+  const clears = tableOf(v.clears)
+  for (const [x, n] of Object.entries(op.clears ?? {})) put(clears, x, Math.max(own(clears, x) ?? 0, n))
+  const held = own(writers, w)
   let take = !held || op.revision > held.revision
   if (held && op.revision === held.revision && canonical(keys) !== canonical(held.keys)) {
     s.findings.push(`view auf ${r.id}: Schreiber ${w.slice(0, 8)} Revision ${op.revision} zweimal mit anderen Schlüsseln: Equivokation (6270)`)
     take = canonical(keys) < canonical(held.keys) // in jeder Reihenfolge dasselbe
   }
-  if (take) writers[w] = { revision: op.revision, keys }
+  if (take) put(writers, w, { revision: op.revision, keys })
   const v2 = viewKeys(writers, clears)
   for (const anchor of v2.conflicts) keyValueConflict(s, anchor)
   r.view = { scope: op.scope, revision: Math.max(0, ...Object.values(writers).map((x) => x.revision)), keys: v2.keys, writers, clears }
@@ -628,8 +699,8 @@ export function viewKeys(writers: Record<string, { revision: number; keys: Liste
   const m = new Map<string, ListedKey>()
   const conflicts = new Set<string>()
   for (const w of Object.keys(writers).sort()) {
-    const x = writers[w]!
-    if (x.revision <= (clears[w] ?? 0)) continue
+    const x = own(writers, w)!
+    if (x.revision <= (own(clears, w) ?? 0)) continue
     for (const k of x.keys) {
       const held = m.get(k.anchor)
       if (!held) m.set(k.anchor, k)
@@ -654,8 +725,9 @@ export function apply(s: HolderState, original: Op): void {
   const key = opKey(original.id)
   if (s.applied.includes(key)) return
   const op = structuredClone(original)
+  if (op.kind === 'view' && op.clears) op.clears = tableOf(op.clears) // Review 28: Tabellen ohne Prototyp
   // Ganz oder gar nicht (B1): auf einem Entwurf anwenden, erst bei Erfolg übernehmen. `s` behält seine Identität.
-  const draft = structuredClone(s)
+  const draft = cloneState(s)
   applyBody(draft, op)
   draft.applied.push(key)
   Object.assign(s, draft)
@@ -719,8 +791,12 @@ function applyBody(s: HolderState, op: Op): void {
       r.revision = Math.max(r.revision, op.revision) // 8500: Nummern bleiben verbraucht
       if (op.writer) {
         // Schritt 4: 8500 je Schreiber; die höchste Revision des Schreibers zählt, gleich in welcher Reihenfolge gefaltet.
-        const w = r.writers?.[op.writer]
-        if (!w || op.revision > w.revision) r.writers = { ...(r.writers ?? {}), [op.writer]: { revision: op.revision, empty: op.keys.length === 0 } }
+        const w = own(r.writers, op.writer)
+        if (!w || op.revision > w.revision) {
+          const ws = tableOf(r.writers)
+          put(ws, op.writer, { revision: op.revision, empty: op.keys.length === 0 })
+          r.writers = ws
+        }
         effect(s, op, `revision:${r.id}:${op.writer}:${op.revision}`)
       } else effect(s, op, `revision:${r.id}:${op.revision}`)
       return
@@ -816,7 +892,9 @@ function applyBody(s: HolderState, op: Op): void {
       // keine Karte); „erste in Journalordnung“ ist damit für sie nicht definiert, es gilt der Gleichstand: kleinerer Digest.
       const a = act(s, op.act)
       if (op.digest) {
-        a.cards = { ...(a.cards ?? {}), [op.digest]: FOLD.handOver ? higher(a.cards?.[op.digest], op.o) : op.o } // B1b: Rang je Übergabe
+        const cards = tableOf(a.cards)
+        put(cards, op.digest, FOLD.handOver ? higher(own(a.cards, op.digest), op.o) : op.o) // B1b: Rang je Übergabe
+        a.cards = cards
         if (!a.ownCardDigest || (FOLD.handOver ? op.digest < a.ownCardDigest : true)) a.ownCardDigest = op.digest
         if (FOLD.handOver) aggregateO(a)
         else a.o = op.o
@@ -916,8 +994,8 @@ function applyBody(s: HolderState, op: Op): void {
       keep.nextN = Math.max(keep.nextN, other.nextN)
       keep.revision = Math.max(keep.revision, other.revision) // 6987.4
       if (keep.writers || other.writers) {
-        const ws = { ...(keep.writers ?? {}) }
-        for (const [w, x] of Object.entries(other.writers ?? {})) if (!ws[w] || x.revision > ws[w]!.revision) ws[w] = x
+        const ws = tableOf(keep.writers)
+        for (const [w, x] of Object.entries(other.writers ?? {})) if (!own(ws, w) || x.revision > own(ws, w)!.revision) put(ws, w, x)
         keep.writers = ws // 6987.4 je Schreiber
       }
       for (const e of other.accepted) if (!keep.accepted.some((x) => x.act === e.act)) keep.accepted.push(e) // 6987.6
@@ -926,7 +1004,7 @@ function applyBody(s: HolderState, op: Op): void {
       keep.classOn = keep.classOn && other.classOn // 2160: aus gewinnt
       // 6987.8: Ms Sicht ist die des Kopfteils, sonst keine.
       keep.view = keep === ra ? (headA.record > headB.record ? ra.view : null) : headB.record > headA.record ? rb.view : null
-      s.aliases[other.id] = keep.id
+      put(s.aliases, other.id, keep.id)
       for (const a of s.acts) if (a.mediator === other.id) a.mediator = keep.id // 6987.10
       for (const r of s.relationships) r.vouchedBy = r.vouchedBy.map((v) => (v === other.id ? keep.id : v))
       s.relationships = s.relationships.filter((r) => r !== other)
@@ -967,12 +1045,12 @@ export function project(s: HolderState, now: string): Projection {
       head: head(r).id,
       classOn: r.classOn,
       departed: r.departed,
-      view: r.view ? { scope: r.view.scope, revision: r.view.revision, keys: sortKeys(r.view.keys), ...(r.view.writers ? { writers: r.view.writers, clears: r.view.clears ?? {} } : {}) } : null,
+      view: r.view ? { scope: r.view.scope, revision: r.view.revision, keys: sortKeys(r.view.keys), ...(r.view.writers ? { writers: { ...r.view.writers }, clears: { ...(r.view.clears ?? {}) } } : {}) } : null,
       stock: Object.fromEntries(r.stock.map((k) => [k.anchor, { n: k.n, nonce: k.nonce, state: k.state, keyAgreement: k.keyAgreement, expiresAt: k.expiresAt }]).sort(([a], [b]) => (a as string).localeCompare(b as string))),
       nonce: r.nonce,
       nextN: r.nextN,
       revision: r.revision,
-      ...(r.writers ? { writers: r.writers } : {}),
+      ...(r.writers ? { writers: { ...r.writers } } : {}),
       accepted: [...r.accepted].sort((x, y) => x.act.localeCompare(y.act)),
       confirmed: [...r.confirmed].sort(),
       budget: budgetUsed(r, now),
@@ -980,9 +1058,9 @@ export function project(s: HolderState, now: string): Projection {
     .sort((a, b) => a.peers.join().localeCompare(b.peers.join()))
   const acts: Projection['acts'] = {}
   // P eines abgelehnten Akts ist verdeckt (8325.A3 „P discarded“), bleibt aber im Zustand, falls Regel 2 später für die Zustimmung entscheidet.
-  for (const a of [...s.acts].sort((x, y) => x.id.localeCompare(y.id))) acts[a.id] = { state: a.state, pending: a.state === 'declined' ? null : a.pending, v: a.v, k: a.k, o: a.o, ownCard: a.ownCard, ownCardDigest: a.ownCardDigest, expiresAt: a.expiresAt, opened: a.opened }
+  for (const a of [...s.acts].sort((x, y) => x.id.localeCompare(y.id))) put(acts, a.id, { state: a.state, pending: a.state === 'declined' ? null : a.pending, v: a.v, k: a.k, o: a.o, ownCard: a.ownCard, ownCardDigest: a.ownCardDigest, expiresAt: a.expiresAt, opened: a.opened })
   const duties: Projection['duties'] = {}
-  for (const d of [...s.duties].sort((x, y) => x.pair.join().localeCompare(y.pair.join()))) duties[d.pair.join('|')] = { state: d.state, mappingDigest: d.mappingDigest }
+  for (const d of [...s.duties].sort((x, y) => x.pair.join().localeCompare(y.pair.join()))) put<Projection['duties'][string]>(duties, d.pair.join('|'), { state: d.state, mappingDigest: d.mappingDigest })
   return { contacts, acts, consumed: [...s.consumed].sort(), duties }
 }
 

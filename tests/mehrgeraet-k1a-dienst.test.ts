@@ -30,6 +30,8 @@ import * as M from '../src/lab/mehrgeraet/model'
 //   Review 26 B2 (Rest): 13. Ablage, 14. Briefkasten, 15. Enrollment aus der Ablage: kaputte Form oder werfende Faltung
 //   ist ein Befund, kein Abbruch; 16. Formprüfung.
 //   Review 27: B2a tiefe Formprüfung (13, 14, 16: verschachtelte Werte, beide Pfade); 17. B2b: eine Antwort ist eine Einheit.
+//   Review 28 (Klasse): reservierte Namen als Schlüssel und Kennungen auf beiden Pfaden (13, 14); 18. Schlüsseltabellen
+//   ohne Prototyp, Kennungsgrammatik, Eigenschaftstest; 19. Zufallsrahmen auf dem Briefkastenpfad; 20. Store-Abbild.
 
 const variant = () => k1a({ journalAtService: true })
 const byId = (rs: Awaited<ReturnType<typeof runX15>>) => Object.fromEntries(rs.map((r) => [r.scenario, r]))
@@ -388,6 +390,7 @@ describe('K1a Schritt 6 (Variante): Journal beim Dienst', () => {
   // weiter (Blockieren: die Reihenfolge der Ablage zählt). Briefkasten (Default-K1a): Befund `journal:corrupt-frame@digest`
   // je Digest, keine Quittung, die Runde läuft weiter, spätere Rahmen falten (deps schützen die Kausalität).
   const X = 'X@feed'
+  const TAG = 'AAAAAAAAAAAAAAAA' // Schreiberkennung in Prüfstandsform (16 Zeichen base64url)
   const xop = (extra: Record<string, unknown>) => ({ id: { writer: X, n: 1 }, at: '2026-10-17T08:00:00.000Z', ...extra })
   const T0 = '2026-10-17T08:00:00.000Z'
   const INTENT = { digest: 'uEiAtcRZCtyawRAFifKn7rDL1yFMPsZA8xNsCJYcXkhpIgQ', kind: 'k', bytes: 'AA==', address: 'a', expected: 'e', replyTo: 'r', device: 'A1', writer: 'A1@x' }
@@ -446,6 +449,25 @@ describe('K1a Schritt 6 (Variante): Journal beim Dienst', () => {
     ['unbekannter Zustand (Enum)', batch({ ops: [xop({ kind: 'allocate', rel, nonce: 'AA==', keys: [{ ...SKEY, state: 'bogus' }] })] })],
     ['verschachteltes Nicht-Objekt (voucher: 7)', batch({ ops: [xop({ kind: 'ticket-accept', act: { ...ACT, voucher: 7 } })] })],
     ['Intent-Digest kein Digest', batch({ intents: [{ ...INTENT, digest: 'kein digest' }] })],
+    // Review 28: reservierte Namen als Schlüssel und als Kennungen, die Schlüssel werden, in jeder Tiefe (Astras Probe zuerst).
+    ['view.clears: {"constructor": 1}', batch({ ops: [xop({ kind: 'view', rel, scope: 's', revision: 1, keys: [], writer: TAG, clears: { constructor: 1 } })] })],
+    ['view.clears: {"__proto__": 1}', batch({ ops: [xop({ kind: 'view', rel, scope: 's', revision: 1, keys: [], writer: TAG, clears: { ['__proto__']: 1 } })] })],
+    ['view.clears: {"toString": 1}', batch({ ops: [xop({ kind: 'view', rel, scope: 's', revision: 1, keys: [], writer: TAG, clears: { toString: 1 } })] })],
+    ['view.writer: "constructor"', batch({ ops: [xop({ kind: 'view', rel, scope: 's', revision: 1, keys: [], writer: 'constructor' })] })],
+    ['view mit writers: {"__proto__": …}', batch({ ops: [xop({ kind: 'view', rel, scope: 's', revision: 1, keys: [], writer: TAG, writers: { ['__proto__']: { revision: 9, keys: [] } } })] })],
+    ['revision.writer: "__proto__"', batch({ ops: [xop({ kind: 'revision', rel, revision: 1, keys: [], writer: '__proto__' })] })],
+    ['Alias-Schlüssel "constructor" (union)', batch({ ops: [xop({ kind: 'union', a: 'constructor', b: rel, edge: ['constructor', rel] })] })],
+    ['rel: "constructor"', batch({ ops: [xop({ kind: 'class', rel: 'constructor', on: true })] })],
+    ['cards: {"prototype": …}', batch({ ops: [xop({ kind: 'ticket-accept', act: { ...ACT, cards: { prototype: 'handed' } } })] })],
+    ['hand-over.digest: "prototype"', batch({ ops: [xop({ kind: 'hand-over', act: 'act', o: 'handed', digest: 'prototype' })] })],
+    ['voucher mit "__proto__"', batch({ ops: [xop({ kind: 'ticket-accept', act: { ...ACT, voucher: { ...ACT.voucher, ['__proto__']: { name: 'x' } } } })] })],
+    ['Akt-Id "hasOwnProperty"', batch({ ops: [xop({ kind: 'ticket-accept', act: { ...ACT, id: 'hasOwnProperty' } })] })],
+    ['deps mit "__proto__"-Schreiber', batch({ deps: ['__proto__@feed#1'] })],
+    ['deps mit "constructor"', batch({ deps: ['constructor'] })],
+    ['Batch-Schreiber "constructor"', batch({ writer: 'constructor' })],
+    ['Op-Schreiber "__proto__"', batch({ ops: [{ ...xop({ kind: 'finding', text: 'x' }), id: { writer: '__proto__', n: 1 } }] })],
+    ['Intent-Gerät "constructor"', batch({ intents: [{ ...INTENT, device: 'constructor' }] })],
+    ['Batch mit "__proto__"-Feld', batch({ ['__proto__']: { n: 99 } })],
   ]
 
   it('13. Review 26 B2, Ablage: kaputte Form oder werfende Faltung ist ein Befund je Position, kein Abbruch; der Cursor bleibt, Backoff, die Sperre hält; der gültige Eintrag dahinter wird nicht gefaltet, solange der kaputte blockiert', async () => {
@@ -474,6 +496,7 @@ describe('K1a Schritt 6 (Variante): Journal beim Dienst', () => {
       expect(Object.keys(A.cand.heads!()).some((k) => k.startsWith('X@')), what).toBe(false) // nichts vom kaputten Batch im Journal
       expect(A.state.relationships.every((r) => Number.isInteger(r.nextN) && r.stock.every((k) => typeof k.anchor === 'string')), what).toBe(true)
       expect(A.state.relationships.every((r) => !r.view || r.view.keys.every((k) => typeof k === 'object' && k !== null)), what).toBe(true)
+      expect(A.state.relationships.every((r) => Number.isFinite(r.view?.revision ?? 0) && Object.values(r.view?.clears ?? {}).every(Number.isFinite)), what).toBe(true) // Review 28: nie NaN
       expect(A.gated, what).toBe(true)
       expect(a1CardDeposits(A, act), what).toBe(0)
       ins.heal()
@@ -549,9 +572,9 @@ describe('K1a Schritt 6 (Variante): Journal beim Dienst', () => {
     // Review 27 B2a: die Formprüfung reicht in jeden Wert, der Zustand wird.
     for (const good of [
       xop({ kind: 'allocate', rel: 'r', nonce: 'AA==', keys: [SKEY] }),
-      xop({ kind: 'view', rel: 'r', scope: 's', revision: 0, keys: [{ n: 1, anchor: 'a', keyAgreement: 'k', expiresAt: T0 }], clears: { w: 2 } }),
+      xop({ kind: 'view', rel: 'r', scope: 's', revision: 0, keys: [{ n: 1, anchor: 'a', keyAgreement: 'k', expiresAt: T0 }], writer: TAG, clears: { [TAG]: 2 } }),
       xop({ kind: 'ticket-accept', act: ACT }),
-      xop({ kind: 'ticket-accept', act: { ...ACT, pending: CARD, decisions: [{ kind: 'consent', op: 'o', at: T0 }], cards: { d: 'handed' }, consentOp: 'o' } }),
+      xop({ kind: 'ticket-accept', act: { ...ACT, pending: CARD, decisions: [{ kind: 'consent', op: 'o', at: T0 }], cards: { [INTENT.digest]: 'handed' }, consentOp: 'o' } }),
       xop({ kind: 'introduce', act: { id: 'm', a: { rel: 'r', key: 'k', keyAgreement: 'ka' }, b: { rel: 'r2', key: 'k2', keyAgreement: 'kb' }, issuedAt: T0, expiresAt: T0 } }),
       xop({ kind: 'consent', act: 'a', card: CARD, cardKey: 'k' }),
       xop({ kind: 'duty', pair: ['a', 'b'], state: 'hit', mappingDigest: null }),
@@ -566,7 +589,8 @@ describe('K1a Schritt 6 (Variante): Journal beim Dienst', () => {
       xop({ kind: 'allocate', rel: 'r', nonce: 'AA==', keys: [{ ...SKEY, extra: 1 }] }),
       xop({ kind: 'view', rel: 'r', scope: 's', revision: 1, keys: [7] }),
       xop({ kind: 'view', rel: 'r', scope: 's', revision: -1, keys: [] }),
-      xop({ kind: 'view', rel: 'r', scope: 's', revision: 1, keys: [], clears: { w: 'x' } }),
+      xop({ kind: 'view', rel: 'r', scope: 's', revision: 1, keys: [], clears: { [TAG]: 'x' } }),
+      xop({ kind: 'view', rel: 'r', scope: 's', revision: 1, keys: [], clears: { w: 1 } }), // Review 28: Schlüssel keine Schreiberkennung
       xop({ kind: 'ticket-accept', act: { ...ACT, state: 'bogus' } }),
       xop({ kind: 'ticket-accept', act: { ...ACT, pending: 7 } }),
       xop({ kind: 'ticket-accept', act: { ...ACT, cards: { d: 'bogus' } } }),
@@ -625,4 +649,164 @@ describe('K1a Schritt 6 (Variante): Journal beim Dienst', () => {
       }
     }
   }, 600_000)
+
+  // ── Review 28 (Klasse): ein String aus dem Journal traf als Schlüssel eines einfachen Objekts eine geerbte Eigenschaft
+  // (`clears: {"constructor": 1}` → NaN im Zustand). Jetzt: Schlüsseltabellen ohne Prototyp, Lesen nur über eigene
+  // Eigenschaften (model.ts `table`/`own`/`put`/`fromJson`), und die Formtabelle weist reservierte Namen und Kennungen
+  // außerhalb ihrer Grammatik ab (`RESERVED`, `GRAMMAR`).
+  const RES = ['__proto__', 'constructor', 'prototype', 'toString', 'hasOwnProperty', 'valueOf', '__defineGetter__']
+  /** Kleiner Zufall mit Saat (mulberry32), damit der Eigenschaftstest wiederholbar ist. */
+  const rng = (seed: number) => () => {
+    seed = (seed + 0x6d2b79f5) | 0
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+  const TUPLE28 = { id: 't', own: 'o', ownKey: 'ok', peer: 'p', peerKeyAgreement: 'pk', record: 'r', openedAt: T0, candidates: ['c'], deactivated: false }
+  const ACT28 = { ...ACT, mediator: 't' }
+  const GOOD28 = () => [
+    xop({ kind: 'open-tuple', rel: null, tuple: TUPLE28, provenance: 'encounter', vouchedBy: null, act: null }),
+    xop({ kind: 'allocate', rel: 't', nonce: 'AA==', keys: [SKEY] }),
+    xop({ kind: 'view', rel: 't', scope: 't', revision: 1, keys: [{ n: 1, anchor: 'a', keyAgreement: 'k', expiresAt: T0 }], writer: TAG, clears: { [TAG]: 0 } }),
+    xop({ kind: 'revision', rel: 't', revision: 1, keys: [{ n: 1, anchor: 'a', keyAgreement: 'k', expiresAt: T0 }], writer: TAG }),
+    xop({ kind: 'ticket-accept', act: { ...ACT28, decisions: [{ kind: 'consent', op: 'o', at: T0 }], cards: { [INTENT.digest]: 'handed' }, consentOp: 'o' } }),
+    xop({ kind: 'introduce', act: { id: 'm', a: { rel: 't', key: 'k', keyAgreement: 'ka' }, b: { rel: 't', key: 'k2', keyAgreement: 'kb' }, issuedAt: T0, expiresAt: T0 } }),
+    xop({ kind: 'hand-over', act: 'act', o: 'handed', digest: INTENT.digest }),
+    xop({ kind: 'duty', pair: ['a', 'b'], state: 'hit', mappingDigest: null }),
+    xop({ kind: 'union', a: 't', b: 'u', edge: ['t', 'u'] }),
+    xop({ kind: 'budget-confirm', rel: 't', acts: ['act'] }),
+  ]
+  /** Alle Objekte (Knoten) eines JSON-Werts mit ihren Pfaden, und alle String-Blätter. */
+  function nodes(v: unknown, objs: Array<Record<string, unknown>> = [], leaves: Array<[Record<string, unknown> | unknown[], string | number]> = []) {
+    if (Array.isArray(v)) v.forEach((x, i) => (typeof x === 'string' ? leaves.push([v, i]) : nodes(x, objs, leaves)))
+    else if (v && typeof v === 'object') {
+      objs.push(v as Record<string, unknown>)
+      for (const [k, x] of Object.entries(v)) if (typeof x === 'string') leaves.push([v as Record<string, unknown>, k])
+      else nodes(x, objs, leaves)
+    }
+    return { objs, leaves }
+  }
+  /** Freitext, der nie Schlüssel oder Kennung wird (bleibt beim Ersetzen aus). */
+  const FREE = new Set(['text', 'name', 'v'])
+  /** Ein gültiger Op mit einem reservierten Namen an einer zufälligen Stelle: als Schlüssel eines beliebigen Objekts oder als Wert eines Kennungsfelds. */
+  function poisoned(r: () => number) {
+    const ops = GOOD28()
+    const op = JSON.parse(JSON.stringify(ops[Math.floor(r() * ops.length)])) as Record<string, unknown>
+    const name = RES[Math.floor(r() * RES.length)]!
+    const { objs, leaves } = nodes(op)
+    const ids = leaves.filter(([o, k]) => !(typeof k === 'string' && FREE.has(k)) && !(Array.isArray(o) === false && k === 'kind' && o === op))
+    if (r() < 0.5 || !ids.length) {
+      const o = objs[Math.floor(r() * objs.length)]!
+      Object.defineProperty(o, name, { value: r() < 0.5 ? 1 : { revision: 1, keys: [] }, enumerable: true, writable: true, configurable: true })
+    } else {
+      const [o, k] = ids[Math.floor(r() * ids.length)]!
+      ;(o as Record<string | number, unknown>)[k] = name
+    }
+    return { op: JSON.parse(JSON.stringify(op)) as unknown, name }
+  }
+
+  it('18. Review 28: Schlüsseltabellen ohne Prototyp (die Faltung liest nur eigene Eigenschaften, auch ohne Formprüfung), Kennungsgrammatik, Eigenschaftstest', () => {
+    // a) Bauart: die Faltung selbst, an der Formprüfung vorbei (JSON wie aus dem Journal).
+    const s = M.emptyState('M')
+    expect(Object.getPrototypeOf(s.aliases)).toBeNull()
+    for (const o of GOOD28().slice(0, 1)) M.apply(s, o as M.Op)
+    expect(M.resolveId(s, 'constructor')).toBe('constructor') // nie die geerbte Funktion
+    expect(M.findRel(s, 'toString')).toBeUndefined()
+    const view = JSON.parse(`{"id":{"writer":"X@feed","n":2},"at":"${T0}","kind":"view","rel":"t","scope":"t","revision":1,"keys":[],"writer":"${TAG}","clears":{"constructor":1,"__proto__":2,"${TAG}":0}}`) as M.Op
+    M.apply(s, view)
+    const r = s.relationships[0]!
+    expect(Object.getPrototypeOf(r.view!.clears)).toBeNull()
+    expect(Object.getPrototypeOf(r.view!.writers)).toBeNull()
+    expect(M.own(r.view!.clears, 'constructor')).toBe(1)
+    expect(M.own(r.view!.clears, '__proto__')).toBe(2)
+    expect(Object.values(r.view!.clears!).every(Number.isFinite)).toBe(true)
+    expect(Number.isFinite(r.view!.revision)).toBe(true)
+    M.apply(s, JSON.parse(`{"id":{"writer":"X@feed","n":3},"at":"${T0}","kind":"view","rel":"t","scope":"t","revision":2,"keys":[],"writer":"constructor"}`) as M.Op)
+    expect(M.own(r.view!.writers, 'constructor')).toBeUndefined() // r ist der alte Entwurf; der Zustand hat die neue Beziehung
+    const r2 = s.relationships[0]!
+    expect(M.own(r2.view!.writers, 'constructor')?.revision).toBe(2)
+    expect(r2.view!.revision).toBe(2)
+    M.apply(s, JSON.parse(`{"id":{"writer":"X@feed","n":4},"at":"${T0}","kind":"revision","rel":"t","revision":1,"keys":[],"writer":"__proto__"}`) as M.Op)
+    expect(Object.getPrototypeOf(s.relationships[0]!.writers)).toBeNull()
+    expect(M.own(s.relationships[0]!.writers, '__proto__')?.revision).toBe(1)
+    M.apply(s, xop({ id: { writer: X, n: 5 }, kind: 'ticket-accept', act: ACT28 }) as M.Op)
+    M.apply(s, JSON.parse(`{"id":{"writer":"X@feed","n":6},"at":"${T0}","kind":"hand-over","act":"act","o":"handed","digest":"__proto__"}`) as M.Op)
+    const a = M.act(s, 'act')
+    expect(Object.getPrototypeOf(a.cards)).toBeNull()
+    expect(M.own(a.cards, '__proto__')).toBe('handed')
+    expect(a.o).toBe('handed')
+    expect(() => M.canonical(M.project(s, T0))).not.toThrow()
+    // b) Grammatik der Kennungen.
+    for (const n of RES) {
+      for (const g of ['ident', 'tag', 'writer', 'opWriter', 'dep'] as const) expect(M.shapeProblem(n, g, 'k'), `${g}:${n}`).not.toBeNull()
+      expect(M.shapeProblem({ [n]: 1 }, { record: 'nat' }, 'k'), n).not.toBeNull()
+      expect(M.shapeProblem(JSON.parse(`{"${n}":1}`), { record: 'nat', key: 'writer' }, 'k'), n).not.toBeNull()
+    }
+    for (const [g, ok, bad] of [
+      ['tag', TAG, ['AAAA', 'AAAAAAAAAAAAAAA=', 'AAAAAAAAAAAAAAA/']],
+      ['writer', 'A1@3f2a9c01', ['A1', '@x', 'A1@x@y', 'A 1@x']],
+      ['opWriter', 'A1@x#conflict', ['A1@x#other']],
+      ['dep', 'A1@x#12', ['A1@x', 'A1@x#0', 'A1@x#-1']],
+      ['ident', 'introduction/AA+/=/3', ['', '_x', 'a b', 'x'.repeat(513)]],
+    ] as const) {
+      expect(M.shapeProblem(ok, g, 'k'), `${g}:${ok}`).toBeNull()
+      for (const b of bad) expect(M.shapeProblem(b, g, 'k'), `${g}:${b}`).not.toBeNull()
+    }
+    // c) Eigenschaft: jeder gültige Op, vergiftet mit einem reservierten Namen an zufälliger Stelle (Schlüssel in jeder
+    // Tiefe oder Kennungswert), wird abgewiesen; die Projektion einer Faltung mit Formprüfung bleibt dieselbe.
+    for (const o of GOOD28()) expect(M.opProblem(o), JSON.stringify(o)).toBeNull()
+    const r0 = rng(28)
+    const base = M.emptyState('A')
+    for (const o of GOOD28().slice(0, 5)) M.apply(base, o as M.Op)
+    const before = M.canonical(M.project(base, T0))
+    for (let i = 0; i < 400; i++) {
+      const { op } = poisoned(r0)
+      expect(M.opProblem(op), JSON.stringify(op)).not.toBeNull()
+      expect(batchProblem({ writer: X, n: 1, deps: [], ops: [op], intents: [] }), JSON.stringify(op)).not.toBeNull()
+      const st = M.cloneState(base)
+      if (!M.opProblem(op)) M.apply(st, op as M.Op)
+      expect(M.canonical(M.project(st, T0))).toBe(before)
+    }
+  })
+
+  it('19. Review 28, Briefkasten: zufällig vergiftete, gültig self-signierte Rahmen ändern weder Projektion noch Kopf; jeder ist ein Befund', async () => {
+    const { w, A, A2 } = await withA2(() => k1a())
+    const r0 = rng(2828)
+    for (let i = 0; i < 12; i++) {
+      const { op } = poisoned(r0)
+      const f = await selfFrame(w, A2, batch({ n: 1 + i, ops: [op] }))
+      w.carrier.deposit(f.rkid, f.bytes)
+      const before = M.canonical(A.projection())
+      const headsBefore = JSON.stringify(A.cand.heads!())
+      await w.rounds(1)
+      expect(A.dispositions.filter((d) => d === `finding(journal:corrupt-frame@${f.digest})`).length, JSON.stringify(op)).toBe(1)
+      expect(M.canonical(A.projection()), JSON.stringify(op)).toBe(before)
+      expect(JSON.stringify(A.cand.heads!())).toBe(headsBefore)
+    }
+  }, 300_000)
+
+  it('20. Review 28: das Store-Abbild behält die Tabellen; nach reload() sind sie wieder ohne Prototyp, Projektion und Köpfe gleich', async () => {
+    const { w, A, A2, Mm, act } = await withA2(() => k1a())
+    expect(await A.consent(act)).toBe('ok')
+    await w.rounds(4)
+    const tables = (d: HolderDevice) => [
+      d.state.aliases,
+      ...d.state.relationships.flatMap((r) => [r.writers, r.view?.writers, r.view?.clears]),
+      ...d.state.acts.map((a) => a.cards),
+    ].filter((t) => t !== undefined)
+    expect(tables(Mm).length).toBeGreaterThan(1) // Ms Sicht mit Schreibern und Aufhebungsmarken
+    expect(A.state.acts.some((a) => a.cards)).toBe(true) // Übergaben je Digest
+    for (const d of [A, A2, Mm]) {
+      const proj = M.canonical(d.projection())
+      const heads = M.canonical(d.cand.heads?.() ?? {})
+      d.commit()
+      await d.reload()
+      expect(tables(d).every((t) => Object.getPrototypeOf(t) === null), d.name).toBe(true)
+      expect(Object.getPrototypeOf(d.cand.heads?.() ?? Object.create(null))).toBeNull()
+      expect(M.canonical(d.projection()), d.name).toBe(proj)
+      expect(M.canonical(d.cand.heads?.() ?? {}), d.name).toBe(heads)
+    }
+    await w.rounds(4)
+    expect(states(w, act).every((x) => x.startsWith('consented/'))).toBe(true)
+  }, 300_000)
 })

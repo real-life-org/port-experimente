@@ -128,7 +128,9 @@ const isRecord = (x: unknown): x is Record<string, unknown> => typeof x === 'obj
  * Form einer Absicht ohne ihre Bytes (Review 27 B2a), für beide Journalpfade: der Batch trägt die Bytes als strenges base64
  * (`batchProblem` im Kandidaten), die Transaktion als Uint8Array (`transactionProblem`).
  */
-export const INTENT_FIELDS = { digest: 'digest', kind: 'string', address: 'string', expected: 'string', replyTo: 'string', device: 'string', writer: 'string' } as const satisfies Record<Exclude<keyof Intent, 'bytes'>, M.Shape>
+export const INTENT_FIELDS = { digest: 'digest', kind: 'string', address: 'string', expected: 'string', replyTo: 'string', device: 'ident', writer: 'writer' } as const satisfies Record<Exclude<keyof Intent, 'bytes'>, M.Shape>
+/** Köpfe eines `journal-sync` (Review 28): Schreiberinkarnation → letzter Zähler. */
+const HEADS_SHAPE: M.Shape = { record: 'nat', key: 'writer' }
 const INTENT_SHAPE: M.Shape = { object: { ...INTENT_FIELDS, bytes: 'string' } } // `bytes` hier nur Platzhalter, geprüft unten
 /** Form einer Transaktion aus `receiveOwnFrame` (Review 26 B2, Review 27 B2a), bevor das Gerät sie faltet: null oder was nicht stimmt. */
 export function transactionProblem(tx: unknown): string | null {
@@ -469,7 +471,7 @@ export class HolderDevice {
     private readonly store?: Store<DeviceState>,
     state: M.HolderState = M.emptyState(person),
   ) {
-    this.state = state
+    this.state = M.fromJson(state) // Review 28: Tabellen ohne Prototyp, auch aus einem Enrollment
     this.carrierRef = carrier
     this.zusteller = new Zusteller(name, () => this.carrierRef, () => this.online && !this.down)
     this.zusteller.gate = (x) => this.catchUp && x.address !== this.ownRkid // B1a: Wiederholungen warten aufs Nachholen
@@ -543,7 +545,7 @@ export class HolderDevice {
   // ── Alles oder nichts ──
   private checkpoint() {
     return {
-      holder: structuredClone(this.state),
+      holder: M.cloneState(this.state),
       submissions: structuredClone([...this.zusteller.submissions.values()]), // tief: auch die Berichte (B3)
       completed: new Set(this.completed),
       acks: new Map(this.acks),
@@ -616,7 +618,7 @@ export class HolderDevice {
   // ── Store, Commit-Grenze, Absturz ──
   snapshotState(): DeviceState {
     return {
-      holder: structuredClone(this.state),
+      holder: M.cloneState(this.state),
       submissions: [...this.zusteller.submissions.values()],
       completed: [...this.completed],
       acks: [...this.acks],
@@ -640,7 +642,7 @@ export class HolderDevice {
   /** Neuaufbau aus dem Store (#57): alles Flüchtige wird aus dem Abbild ersetzt, nichts bleibt aus dem alten Lauf. */
   async reload(): Promise<void> {
     const s = this.store?.load()
-    this.state = s?.holder ?? M.emptyState(this.person)
+    this.state = s?.holder ? M.fromJson(s.holder) : M.emptyState(this.person) // Review 28: Tabellen ohne Prototyp
     this.zusteller.restore(s?.submissions ?? [])
     this.completed = new Set(s?.completed ?? [])
     this.acks = new Map(s?.acks ?? [])
@@ -870,7 +872,7 @@ export class HolderDevice {
     for (const r of this.state.relationships) {
       if (r.classOn || r.departed) continue
       const live = r.stock.filter((k) => k.state === 'active' || k.state === 'aging' || k.state === 'allocated' || k.state === 'registered').map((k) => k.anchor)
-      const own = r.writers?.[this.cand.writerTag(r.id)]
+      const own = M.own(r.writers, this.cand.writerTag(r.id))
       if (!live.length && !(own && !own.empty)) continue
       await this.guarded(async () => {
         if (live.length) this.emit({ kind: 'withdraw', rel: r.id, anchors: live })
@@ -893,7 +895,7 @@ export class HolderDevice {
       return
     }
     const h = M.head(r)
-    const revision = tag ? (r.writers?.[tag]?.revision ?? 0) + 1 : r.revision + 1
+    const revision = tag ? (M.own(r.writers, tag)?.revision ?? 0) + 1 : r.revision + 1
     const keys = r.stock.filter((k) => k.state === 'active').map((k) => ({ n: k.n, anchor: k.anchor, keyAgreement: k.keyAgreement, expiresAt: k.expiresAt }))
     this.emit({ kind: 'revision', rel: r.id, revision, keys, ...(tag ? { writer: tag } : {}) })
     await this.sendDoc(TYPES.revision, h.ownKey, h.peer, h.peerKeyAgreement, (await this.keysFor(h.ownKey)).rkid, { revision, keys, ...(tag ? { writer: tag } : {}) })
@@ -992,7 +994,7 @@ export class HolderDevice {
       if (x.kind !== 'card' || !x.act) continue
       const a = this.state.acts.find((y) => y.id === x.act)
       if (!a) continue
-      const o = a.cards?.[d] ?? a.o
+      const o = M.own(a.cards, d) ?? a.o
       // B1a: die Faltung kennt die Rücknahme schon (aus dem Journal, etwa einer früheren Inkarnation vor einem Restore),
       // der Adapter hält die Karte aber noch: abgrenzen, ohne neue Operation. Hat sie den Träger erreicht, bleibt sie und
       // schlägt die Rücknahme (B1b, Rang je Übergabe).
@@ -1469,7 +1471,7 @@ export class HolderDevice {
   /** Deckt der eigene Stand die genannten Köpfe? */
   private covers(heads: Record<string, number>): boolean {
     const mine = this.cand.heads?.() ?? {}
-    return Object.entries(heads).every(([w, n]) => (mine[w] ?? 0) >= n)
+    return Object.entries(heads).every(([w, n]) => (M.own(mine, w) ?? 0) >= n)
   }
 
   /** 8110.7: Zeitübergänge. */
@@ -1499,7 +1501,7 @@ export class HolderDevice {
         const a = this.state.acts.find((y) => y.id === x.act)
         if (!a) return
         // O je Übergabe (Regel 3): die Karte des Schwestergeräts ändert nichts am Bericht dieser Karte.
-        const o = a.cards?.[d] ?? a.o
+        const o = M.own(a.cards, d) ?? a.o
         if (o === 'handed' && r.state === 'accepted') {
           this.emit({ kind: 'hand-over', act: x.act, o: 'taken', digest: d })
           await this.evaluatePending(x.act)
@@ -1594,8 +1596,9 @@ export class HolderDevice {
         return
       }
       const p = doc.payload as { heads?: Record<string, number>; reply?: boolean; req?: string }
-      // Review 26 B2: Köpfe sind ein Objekt aus Zahlen; sonst ist die Anfrage oder Antwort nicht lesbar.
-      if (p.heads !== undefined && (!isRecord(p.heads) || Object.values(p.heads).some((n) => !Number.isFinite(n)))) {
+      // Review 26 B2: Köpfe sind ein Objekt aus Zahlen; sonst ist die Anfrage oder Antwort nicht lesbar. Review 28: jeder
+      // Schlüssel ist eine Schreiberinkarnation nach ihrer Grammatik (nie ein reservierter Name), jeder Wert ganz ≥ 0.
+      if (p.heads !== undefined && M.shapeProblem(p.heads, HEADS_SHAPE, 'heads')) {
         this.dispositions.push('failed(malformed-payload)')
         return
       }
@@ -1653,7 +1656,7 @@ export class HolderDevice {
     if (!x) return
     if (x.kind === 'card' && x.act) {
       const a = M.act(this.state, x.act)
-      const o = a.cards?.[ref] ?? a.o
+      const o = M.own(a.cards, ref) ?? a.o
       if (o === 'taken' || o === 'given-up' || o === 'handed') {
         this.emit({ kind: 'hand-over', act: x.act, o: 'delivered', digest: ref })
         await this.evaluatePending(x.act)
@@ -1688,6 +1691,7 @@ export class HolderDevice {
         if (!t || doc.issuer !== t.peer) return false
         const r = M.relOfTuple(this.state, t.id)!
         const p = doc.payload as unknown as { revision: number; keys: Array<{ n: number; anchor: string; keyAgreement: string; expiresAt: string }>; writer?: string }
+        if (p.writer !== undefined && M.shapeProblem(p.writer, 'tag', 'writer')) return false // Review 28: Schreiberkennung nach ihrer Grammatik, sonst abgewiesen
         if (typeof p.writer === 'string') return this.acceptWriterRevision(r, t, doc.issuer, p as typeof p & { writer: string })
         if (r.view && r.view.scope === t.id && p.revision <= r.view.revision) {
           const same = p.revision === r.view.revision
@@ -1833,7 +1837,7 @@ export class HolderDevice {
    */
   private acceptWriterRevision(r: M.Relationship, t: M.Tuple, issuer: string, p: { revision: number; keys: M.ListedKey[]; writer: string }): boolean {
     const same = r.view && r.view.scope === t.id ? r.view : null
-    const held = same?.writers?.[p.writer]
+    const held = M.own(same?.writers, p.writer)
     if (held && p.revision <= held.revision) {
       const whole = (ks: M.ListedKey[]) => M.canonical([...ks].sort((a, b) => a.anchor.localeCompare(b.anchor)))
       if (p.revision === held.revision && whole(p.keys) === whole(held.keys)) return true
