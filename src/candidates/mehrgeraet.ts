@@ -1,6 +1,7 @@
 import type { MultiDeviceCandidate } from '../lab/mehrgeraet/holder'
 import { k0 } from './mehrgeraet-k0'
 import { k1a } from './mehrgeraet-k1a'
+import { k2 } from './mehrgeraet-k2'
 
 /** Die Kandidaten des Mehrgeräte-Prüfstands (E15). Eine Fabrik je Kandidat, wie bei den Gruppen-Kandidaten. */
 export const multiDeviceCandidates: Array<{ id: string; make: () => MultiDeviceCandidate }> = [
@@ -8,4 +9,6 @@ export const multiDeviceCandidates: Array<{ id: string; make: () => MultiDeviceC
   { id: 'k1a-static', make: () => k1a() },
   // Step 6 (variant, Anton 18.10.): the same K1a rules with the journal retained at the self address; an option under study, not the default.
   { id: 'k1a-journal-service', make: () => k1a({ journalAtService: true }) },
+  // K2 step 1 (Anton 18.10., assumptions 6o.5 no. 1–5): device keys, registration per device, device-signed journal.
+  { id: 'k2-device-keys', make: () => k2() },
 ]

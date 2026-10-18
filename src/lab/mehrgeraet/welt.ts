@@ -192,7 +192,8 @@ export class Welt15 {
    * derselben Bytes, die schon einmal eingeliefert waren (auch vor `from`), getrennt nach Zielseite in `repeatsOwn` und
    * `repeatsToPeer` (Review 11 S1). Zugeordnet wird über `produced` der Geräte.
    */
-  deposits(person: string, selfRkid: string, from = 0) {
+  deposits(person: string, self: string | ReadonlySet<string>, from = 0) {
+    const selves = typeof self === 'string' ? new Set([self]) : self
     const origin = new Map<string, { device: string; kind: string }>()
     for (const d of this.devices) if (d.person === person) for (const [h, kind] of d.produced) origin.set(h, { device: d.name, kind })
     const seen = new Set<string>()
@@ -203,7 +204,7 @@ export class Welt15 {
       const repeat = seen.has(h)
       seen.add(h)
       if (i < from || !o) return
-      const isOwn = f.address === selfRkid
+      const isOwn = selves.has(f.address)
       const side = isOwn ? out.own : out.toPeer
       side.frames++
       side.bytes += f.bytes.length
@@ -212,7 +213,7 @@ export class Welt15 {
         if (isOwn) out.repeatsOwn++
         else out.repeatsToPeer++
       }
-      const k = (out.byKind[`${f.address === selfRkid ? 'own' : 'peer'}:${o.kind}`] ??= { frames: 0, bytes: 0 })
+      const k = (out.byKind[`${isOwn ? 'own' : 'peer'}:${o.kind}`] ??= { frames: 0, bytes: 0 })
       k.frames++
       k.bytes += f.bytes.length
       const dv = (out.byDevice[o.device] ??= {})
@@ -228,6 +229,14 @@ export class Welt15 {
       if (kind) return { device: d.name, kind }
     }
     return undefined
+  }
+
+  /**
+   * Die Self-Adressen einer Person (Messung, Störregeln): K0/K1a eine gemeinsame, K2 eine je Gerät (Schritt 1). Auch die
+   * Adressen nicht mehr eingeschriebener Geräte zählen nicht mit: nur die Geräte der Welt.
+   */
+  selfAddresses(person: string): ReadonlySet<string> {
+    return new Set(this.of(person).map((d) => d.selfAddress).filter((a): a is string => !!a))
   }
 
   /** Verkehr über alle Geräte einer Person. */

@@ -97,6 +97,11 @@ export interface Intent {
   replyTo: string
   device: string
   writer: string
+  /**
+   * K2 Schritt 1: weitere Kopien derselben Bytes je weiterem Gerät des Empfängers (Adresse und versiegelte Bytes, base64);
+   * ein Wiederanlauf liefert sie mit dem Hauptrahmen ein. Ohne Feld: ein Rahmen (K0, K1a).
+   */
+  copies?: Array<{ address: string; bytes: string }>
 }
 
 /** Ein gelungener Schritt des Geräts als Einheit: die Operationen und die Absichten, die er erzeugt hat (Review 6: Batch statt einzelner `record`). */
@@ -125,16 +130,29 @@ export class CorruptFrame extends Error {
   constructor(
     message: string,
     readonly ref?: string,
+    /** K2 Schritt 1: `unknown-writer` = gültig gelesen, aber von keinem Gerät der aktuellen Gerätemenge geschrieben oder signiert. */
+    readonly kind?: 'unknown-writer',
   ) {
     super(message)
   }
 }
+/**
+ * K2 Schritt 1: ein Journalbatch (oder ein Journalrahmen), dessen Schreiber nicht in der aktuellen Gerätemenge der Person
+ * ist oder dessen Signatur nicht vom Geräteschlüssel des Schreibers stammt. Befund `journal:unknown-writer`, nie Zustand.
+ */
+export class UnknownWriter extends Error {}
+/**
+ * K2 Schritt 1: der Schreiber einer Revision ist der signierende Geräteschlüssel der Beziehung (8500/6270 je Signierer). Als
+ * Tabellenschlüssel (Form `tag`, 16 Zeichen base64url) dient ein Hash des Ankers; er reist nicht im Dokument, die Gegenseite
+ * bildet ihn aus dem Signierer. Keine Kennung unter einem Seed, keine eigene Drahtangabe.
+ */
+export const signerId = (anchor: string) => createHash('sha256').update(`signer|${anchor}`).digest().subarray(0, 12).toString('base64url')
 const isRecord = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x)
 /**
  * Form einer Absicht ohne ihre Bytes (Review 27 B2a), für beide Journalpfade: der Batch trägt die Bytes als strenges base64
  * (`batchProblem` im Kandidaten), die Transaktion als Uint8Array (`transactionProblem`).
  */
-export const INTENT_FIELDS = { digest: 'digest', kind: 'string', address: 'string', expected: 'string', replyTo: 'string', device: 'ident', writer: 'writer' } as const satisfies Record<Exclude<keyof Intent, 'bytes'>, M.Shape>
+export const INTENT_FIELDS = { digest: 'digest', kind: 'string', address: 'string', expected: 'string', replyTo: 'string', device: 'ident', writer: 'writer', copies: { optional: { array: { object: { address: 'string', bytes: 'base64' } } } } } as const satisfies Record<Exclude<keyof Intent, 'bytes'>, M.Shape>
 /** Köpfe eines `journal-sync` (Review 28): Schreiberinkarnation → letzter Zähler. */
 const HEADS_SHAPE: M.Shape = { record: 'nat', key: 'writer' }
 const INTENT_SHAPE: M.Shape = { object: { ...INTENT_FIELDS, bytes: 'string' } } // `bytes` hier nur Platzhalter, geprüft unten
@@ -206,6 +224,21 @@ export interface CandidateDevice {
    * Schreiber) und trägt die Kennung in Revision, Probe und Mapping. Rein. Ohne Methode (K0) gibt es einen Schreiber.
    */
   writerTag?(relationship: string): string
+  /**
+   * K2 Schritt 1 (Prüfstandsliste statt `device-set@1`, das baut Schritt 2): die Schlüssel aller Geräte der aktuellen
+   * Gerätemenge einer Person für den Kontext hinter `key` (Anker oder rkid eines Geräteschlüssels), je {anchor, rkid}. Ein
+   * Absender versiegelt an jeden (eine Kopie je Gerät), ein Empfänger nimmt eine Signatur jedes Geräts der Menge an. Null:
+   * kein Geräteschlüssel der Liste (dann gilt der genannte Schlüssel allein). Ohne Methode (K0, K1a): ein Schlüssel je Kontext.
+   */
+  recipients?(key: string): Promise<Array<{ anchor: string; rkid: string }> | null>
+  /** K2: die Self-Schlüssel der anderen Geräte der aktuellen Gerätemenge (an sie wird das Journal je Schwester versiegelt). */
+  selfPeers?(): Promise<Array<{ anchor: string; rkid: string }>>
+  /** K2: das Gerät der aktuellen Gerätemenge der eigenen Person, dessen Self-Anker das ist; null sonst (Befund `journal:unknown-writer`). */
+  selfDevice?(anchor: string): Promise<string | null>
+  /** K2: der Schreiber einer Revision ist der signierende Geräteschlüssel (8500/6270 je Signierer, `signerId`); keine Schreiberkennung im Dokument. */
+  readonly signerWriters?: boolean
+  /** K2: die Einführungs-Nonce dieses Geräts für eine Beziehung (8430/8445: jedes Gerät nummeriert seinen eigenen Vorrat unter eigener Nonce). */
+  stockNonce?(relationship: string): string
   /** Was der Kandidat dauerhaft hält (Journal); Teil des Store-Abbilds. */
   persist(): unknown
   /** Neuaufbau aus dem Store; ein Kandidat mit Inkarnationen wechselt hier die Inkarnation. */
@@ -329,7 +362,7 @@ export class HolderDevice {
   acks = new Map<string, { frame: Uint8Array; digest: string; address: string }>()
   dispositions: string[] = []
   /** Empfangene Dokumente (Typ, Absender) für die Auswertung. */
-  readonly log: Array<{ type: string; from: string; at: string; writer?: string }> = []
+  readonly log: Array<{ type: string; from: string; at: string; writer?: string; rel?: string }> = []
   online = true
   crashAt: CrashPoint | null = null
   readonly crashes: CrashPoint[] = []
@@ -418,6 +451,9 @@ export class HolderDevice {
   /** Briefkasten (Review 26 B2): gültig signierte, nicht faltbare eigene Journalrahmen; je Digest ein Befund `journal:corrupt-frame`. */
   frameCorrupt = 0
   private corruptFrames = new Set<string>()
+  /** K2 Schritt 1: Journalrahmen oder -batches von einem Schreiber außerhalb der aktuellen Gerätemenge (Befund `journal:unknown-writer`), je Digest einmal. */
+  unknownWriters = 0
+  private unknownSeen = new Set<string>()
   private deferredProbes: Array<[string, string[]]> | null = null
   /** Messung (Schritt 6): Einträge und Bytes, die dieses Gerät aus der Ablage gelesen hat. */
   logEntriesRead = 0
@@ -480,7 +516,7 @@ export class HolderDevice {
     this.state = M.fromJson(state) // Review 28: Tabellen ohne Prototyp, auch aus einem Enrollment
     this.carrierRef = carrier
     this.zusteller = new Zusteller(name, () => this.carrierRef, () => this.online && !this.down)
-    this.zusteller.gate = (x) => this.catchUp && x.address !== this.ownRkid // B1a: Wiederholungen warten aufs Nachholen
+    this.zusteller.gate = (x) => this.catchUp && !this.ownTraffic(x.address) // B1a: Wiederholungen warten aufs Nachholen
   }
   get carrier() {
     return this.carrierRef
@@ -491,6 +527,67 @@ export class HolderDevice {
   }
 
   // ── Adressen und Schlüssel ──
+  /** K2 Schritt 1: die Self-Adressen der Schwestergeräte der aktuellen Menge (Journal, Nachholen, Quittungen darauf); abgeleitet, nicht im Abbild. */
+  private siblingSelves = new Set<string>()
+  private async refreshSiblings(): Promise<void> {
+    if (this.cand.selfPeers) this.siblingSelves = new Set((await this.cand.selfPeers()).map((k) => k.rkid))
+  }
+  /** Verkehr zwischen eigenen Geräten (die Sperre nach Restore hält ihn nicht zurück, B1a): K0/K1a die gemeinsame Self-Adresse, K2 zusätzlich die der Schwestern. */
+  private ownTraffic(address: string | undefined): boolean {
+    return address === this.ownRkid || (address !== undefined && this.siblingSelves.has(address))
+  }
+  /** Die Self-Adresse dieses Geräts (K0/K1a: die gemeinsame der Person; K2: je Gerät). */
+  get selfAddress(): string | null {
+    return this.ownRkid
+  }
+  /** K2 Schritt 1: eigene Schlüssel je Gerät, die Gerätemenge der Gegenseite kommt aus der Prüfstandsliste (`recipients`). */
+  private get deviceKeys(): boolean {
+    return !!this.cand.recipients
+  }
+  /** Nummeriert das Gerät Revisionen je Schreiber (K1a Schritt 4: Kennung; K2: Geräteschlüssel)? */
+  private get perWriter(): boolean {
+    return !!(this.cand.writerTag || this.cand.signerWriters)
+  }
+  /**
+   * Ist `issuer` der Signierer, den das Gegenüber für den aufgezeichneten Schlüssel `recorded` zeigen darf? K0/K1a: genau
+   * dieser. K2: jedes Gerät der aktuellen Gerätemenge der Gegenperson für denselben Kontext (Prüfstandsliste, Schritt 1).
+   */
+  private async isPeer(issuer: string, recorded: string): Promise<boolean> {
+    if (!this.cand.recipients) return issuer === recorded
+    const set = await this.cand.recipients(recorded)
+    if (!set) return issuer === recorded
+    return set.some((k) => k.anchor === issuer)
+  }
+  /** K2: der Kontext eines aufgezeichneten eigenen Ankers (der des Geräts, das ihn erzeugt hat): Tupel, Vorrat, Karte. */
+  private recordedCtx(anchor: string): string | undefined {
+    for (const r of this.state.relationships) {
+      for (const t of r.tuples) if (t.own === anchor) return t.ownKey
+      for (const k of r.stock) if (k.anchor === anchor) return k.key
+    }
+    for (const a of this.state.acts) if (a.ownCard?.anchor === anchor && a.ownCardKey) return a.ownCardKey
+    return undefined
+  }
+  /** Schreiber dieses Geräts in einer Beziehung: K1a die Kennung, K2 der signierende Geräteschlüssel (Kopf), K0 keiner. */
+  private async writerOf(relId: string): Promise<string | undefined> {
+    if (this.cand.writerTag) return this.cand.writerTag(relId)
+    if (!this.cand.signerWriters) return undefined
+    return signerId((await this.keysFor(M.head(M.rel(this.state, relId)).ownKey)).anchor)
+  }
+  /** Journalrahmen und Nachholen nur von einem eigenen Gerät (K0/K1a: der gemeinsame Self-Anker; K2: ein Gerät der aktuellen Menge). */
+  private async fromOwnDevice(issuer: string): Promise<boolean> {
+    if (this.cand.selfDevice) return (await this.cand.selfDevice(issuer)) !== null
+    return issuer === (await this.keysFor(`self/${this.person}`)).anchor
+  }
+  private ownSignerRejected(issuer: string, digest: string): void {
+    if (!this.cand.selfDevice) {
+      this.dispositions.push('failed(journal-from-unexpected-signer)')
+      return
+    }
+    if (this.unknownSeen.has(digest)) return
+    this.unknownSeen.add(digest)
+    this.unknownWriters++
+    this.dispositions.push(`finding(journal:unknown-writer@${issuer.slice(-8)})`)
+  }
   /** Jeder eigene Empfangsschlüssel ist eine Adresse am Träger; beide Geräte einer Person registrieren dieselben (K0/K1). */
   async listen(ctx: string): Promise<Keys> {
     const k = await this.keysFor(ctx)
@@ -504,6 +601,7 @@ export class HolderDevice {
   /** Nach Enrollment oder Neuaufbau: alle Adressen aus dem Zustand neu registrieren, offene Pflichten wieder aufnehmen. */
   async relisten(): Promise<void> {
     this.ownRkid = (await this.listen(`self/${this.person}`)).rkid
+    await this.refreshSiblings()
     if (this.selfLog) this.carrierRef.retain(this.ownRkid) // Schritt 6: die Self-Adresse ist eine Ablage
     for (const r of this.state.relationships) {
       for (const t of r.tuples) await this.listen(t.ownKey)
@@ -709,7 +807,7 @@ export class HolderDevice {
   /** Freigeben (nach dem Commit): während des Nachholens nach einem Neuaufbau nur Verkehr an die eigene Adresse (B1a). */
   private release(ds: string[]): void {
     for (const d of ds) {
-      if (this.catchUp && this.zusteller.submissions.get(d)?.address !== this.ownRkid) {
+      if (this.catchUp && !this.ownTraffic(this.zusteller.submissions.get(d)?.address)) {
         if (!this.parked.includes(d)) this.parked.push(d)
       } else this.zusteller.deposit(d)
     }
@@ -769,25 +867,36 @@ export class HolderDevice {
 
   // ── Senden ──
   /** Dokument signieren, versiegeln, aufzeichnen; eingeliefert wird nach dem nächsten Commit (`flush`, Rundenende). `recipient` ist der Anker, von dem die Quittung erwartet wird (#55). */
-  private async sendDoc(type: string, issuerCtx: string, recipient: string, toRkid: string, replyTo: string, payload: Record<string, Json>): Promise<{ digest: string; bytes: Uint8Array }> {
+  /**
+   * K2 Schritt 1: `fan` (oder, für Gegenseiten, die Gerätemenge aus `recipients`) nennt die Geräteschlüssel, an die dasselbe
+   * signierte Dokument je einmal versiegelt wird (eine Kopie je Gerät an dessen eigene Adresse, eine Submission). Der
+   * aufgezeichnete Schlüssel geht zuerst, wenn er noch zur Menge gehört. Ohne Menge (K0, K1a): ein Rahmen an `toRkid`.
+   */
+  private async sendDoc(type: string, issuerCtx: string, recipient: string, toRkid: string, replyTo: string, payload: Record<string, Json>, fan?: Array<{ anchor: string; rkid: string }>): Promise<{ digest: string; bytes: Uint8Array; address: string; frames: number; total: number }> {
     const k = await this.keysFor(issuerCtx)
     const unsigned: Doc = { id: crypto.randomUUID(), type, issuer: k.anchor, recipient, replyTo, issuedAt: this.clock.now(), payload }
     const doc = await diSign({ anchor: k.anchor, ed: { priv: k.ed.priv } }, unsigned as unknown as Record<string, Json>, this.clock.now())
-    const env = await seal(doc as unknown as Json, toRkid)
-    const bytes = enc.encode(jcs(env))
+    const set = fan ?? (this.cand.recipients ? await this.cand.recipients(toRkid) : null)
+    const to = set?.length ? [...set.filter((x) => x.rkid === toRkid), ...set.filter((x) => x.rkid !== toRkid)] : [{ anchor: recipient, rkid: toRkid }]
+    const frames: Array<{ address: string; frame: Uint8Array }> = []
+    for (const r of to) frames.push({ address: r.rkid, frame: enc.encode(jcs(await seal(doc as unknown as Json, r.rkid))) })
+    const { address, frame: bytes } = frames[0]!
+    const extra = frames.slice(1)
     const digest = await digestBytes(enc.encode(jcs(doc)))
-    this.produced.set(frameHash(bytes), type === TYPES.journalSync ? (payload.reply ? 'journal-sync-reply' : 'journal-sync') : (type.split('/').slice(-2)[0] ?? type))
-    this.zusteller.record(digest, bytes, toRkid)
+    const kind = type === TYPES.journalSync ? (payload.reply ? 'journal-sync-reply' : 'journal-sync') : (type.split('/').slice(-2)[0] ?? type)
+    for (const f of frames) this.produced.set(frameHash(f.frame), kind)
+    this.zusteller.record(digest, bytes, address, extra.length ? extra : undefined)
     this.held.push(digest)
     this.expected.set(digest, recipient)
     if (type !== TYPES.journal && type !== TYPES.journalSync) {
-      const intent: Intent = { digest, kind: type, bytes, address: toRkid, expected: recipient, replyTo, device: this.name, writer: this.cand.writer }
+      const intent: Intent = { digest, kind: type, bytes, address, expected: recipient, replyTo, device: this.name, writer: this.cand.writer, ...(extra.length ? { copies: extra.map((x) => ({ address: x.address, bytes: Buffer.from(x.frame).toString('base64') })) } : {}) }
       this.intents.set(digest, intent)
       this.pending?.intents.push(intent)
     }
-    this.measures.framesOut++
-    this.measures.bytesOut += bytes.length
-    return { digest, bytes }
+    const total = frames.reduce((n, f) => n + f.frame.length, 0)
+    this.measures.framesOut += frames.length
+    this.measures.bytesOut += total
+    return { digest, bytes, address, frames: frames.length, total }
   }
 
   // ── Nutzeraktionen und Fachlogik ──
@@ -852,12 +961,12 @@ export class HolderDevice {
     // Schritt 4: mit Schreiberkennung teilt ein Gerät während des Nachholens nach einem Neuaufbau nichts zu und nummeriert
     // nichts (Schlüsselnummern 8445 und Revisionsnummern 8500 seiner früheren Inkarnationen kennt es erst danach); das
     // Nachfüllen ist fällige Arbeit aus dem Zustand (B6) und läuft in der ersten Runde nach dem Nachholen.
-    if (this.cand.writerTag && this.catchUp) return
+    if (this.perWriter && this.catchUp) return
     const r = M.rel(this.state, relId)
     if (!r.classOn || r.departed || M.budgetExhausted(r, this.clock.now())) return
     const active = r.stock.filter((k) => k.state === 'active')
     if (active.length >= M.PARAM.refillBelow) return
-    const nonce = r.nonce ?? Buffer.from(derive(enc.encode(`${this.person}/${r.id}/${this.cand.writer}/${this.counter}`), 'nonce')).toString('base64')
+    const nonce = this.cand.stockNonce?.(r.id) ?? r.nonce ?? Buffer.from(derive(enc.encode(`${this.person}/${r.id}/${this.cand.writer}/${this.counter}`), 'nonce')).toString('base64')
     const keys: M.StockKey[] = []
     // Das Ziel zählt die aktiven Schlüssel der Person (alle Geräte, über das Journal), nicht je Restklasse: ein Gerät allein
     // hält M aus seinen eigenen Nummern versorgt (Review 21 B1).
@@ -883,11 +992,11 @@ export class HolderDevice {
    * Schreiberkennung; ohne (K0) bleibt alles wie vorher.
    */
   private async withdrawAfterClassOff(): Promise<void> {
-    if (!this.cand.writerTag) return
+    if (!this.perWriter) return
     for (const r of this.state.relationships) {
       if (r.classOn || r.departed) continue
       const live = r.stock.filter((k) => k.state === 'active' || k.state === 'aging' || k.state === 'allocated' || k.state === 'registered').map((k) => k.anchor)
-      const own = M.own(r.writers, this.cand.writerTag(r.id))
+      const own = M.own(r.writers, (await this.writerOf(r.id))!)
       if (!live.length && !(own && !own.empty)) continue
       await this.guarded(async () => {
         if (live.length) this.emit({ kind: 'withdraw', rel: r.id, anchors: live })
@@ -904,7 +1013,7 @@ export class HolderDevice {
   private async sendRevision(relId: string): Promise<void> {
     const r = M.rel(this.state, relId)
     if (r.departed) return
-    const tag = this.cand.writerTag?.(r.id)
+    const tag = await this.writerOf(r.id)
     if (tag && this.catchUp) {
       this.owed.add(r.id)
       return
@@ -913,7 +1022,7 @@ export class HolderDevice {
     const revision = tag ? (M.own(r.writers, tag)?.revision ?? 0) + 1 : r.revision + 1
     const keys = r.stock.filter((k) => k.state === 'active').map((k) => ({ n: k.n, anchor: k.anchor, keyAgreement: k.keyAgreement, expiresAt: k.expiresAt }))
     this.emit({ kind: 'revision', rel: r.id, revision, keys, ...(tag ? { writer: tag } : {}) })
-    await this.sendDoc(TYPES.revision, h.ownKey, h.peer, h.peerKeyAgreement, (await this.keysFor(h.ownKey)).rkid, { revision, keys, ...(tag ? { writer: tag } : {}) })
+    await this.sendDoc(TYPES.revision, h.ownKey, h.peer, h.peerKeyAgreement, (await this.keysFor(h.ownKey)).rkid, { revision, keys, ...(tag && this.cand.writerTag ? { writer: tag } : {}) }) // K2: der Schreiber ist der Signierer, kein Feld
   }
   /** Die Schreiberkennung dieses Geräts für die Beziehung eines Tupels (Schritt 4), als Nutzlastfeld; ohne Kennung leer. */
   private tagField(tupleId: string): { writer?: string } {
@@ -966,11 +1075,12 @@ export class HolderDevice {
   private async handOverCard(actId: string): Promise<void> {
     const a = M.act(this.state, actId)
     if (!a.ownCard || !a.ownCardKey) return
-    const ownCtx = this.ctxOfAnchor.get(a.own)
+    // K2: der Vorrats-Schlüssel kann von einem Schwestergerät zugeteilt sein (aufgezeichneter Anker); dieses Gerät signiert mit seinem eigenen Schlüssel desselben Kontexts.
+    const ownCtx = this.ctxOfAnchor.get(a.own) ?? (this.deviceKeys ? this.recordedCtx(a.own) : undefined)
     if (!ownCtx) return
     const own = await this.keysFor(ownCtx)
-    const { digest, bytes } = await this.sendDoc(TYPES.card, ownCtx, a.voucher.anchor, a.voucher.keyAgreement, own.rkid, { act: actId, expiresAt: a.expiresAt, from: a.own, fromKeyAgreement: own.rkid, to: a.voucher.anchor, card: { anchor: a.ownCard.anchor, keyAgreement: a.ownCard.keyAgreement } })
-    this.sent.set(digest, { kind: 'card', act: actId, frame: bytes, address: a.voucher.keyAgreement })
+    const { digest, bytes, address } = await this.sendDoc(TYPES.card, ownCtx, a.voucher.anchor, a.voucher.keyAgreement, own.rkid, { act: actId, expiresAt: a.expiresAt, from: a.own, fromKeyAgreement: own.rkid, to: a.voucher.anchor, card: { anchor: a.ownCard.anchor, keyAgreement: a.ownCard.keyAgreement } })
+    this.sent.set(digest, { kind: 'card', act: actId, frame: bytes, address }) // the address the primary frame is sealed to (K2: may differ from the recorded key)
     this.emit({ kind: 'hand-over', act: actId, o: 'handed', digest })
   }
 
@@ -1106,8 +1216,8 @@ export class HolderDevice {
   }
   private async sendMapping(arrival: M.Tuple, other: M.Tuple): Promise<void> {
     const pair = M.pairKey(arrival.id, other.id)
-    const { digest, bytes } = await this.sendDoc(TYPES.mapping, arrival.ownKey, arrival.peer, arrival.peerKeyAgreement, (await this.keysFor(arrival.ownKey)).rkid, { entry: this.blind(arrival, other.own), ...this.tagField(arrival.id) })
-    this.sent.set(digest, { kind: 'mapping', pair, frame: bytes, address: arrival.peerKeyAgreement })
+    const { digest, bytes, address } = await this.sendDoc(TYPES.mapping, arrival.ownKey, arrival.peer, arrival.peerKeyAgreement, (await this.keysFor(arrival.ownKey)).rkid, { entry: this.blind(arrival, other.own), ...this.tagField(arrival.id) })
+    this.sent.set(digest, { kind: 'mapping', pair, frame: bytes, address }) // 6845.4 retries the primary frame at the address it is sealed to
     this.emit({ kind: 'duty', pair, state: 'hit', mappingDigest: digest })
   }
   /**
@@ -1123,7 +1233,7 @@ export class HolderDevice {
       const intent = d.mappingDigest ? this.intents.get(d.mappingDigest) : undefined
       if (intent) {
         if (intent.device !== this.name || this.zusteller.submissions.has(intent.digest)) continue
-        this.zusteller.record(intent.digest, intent.bytes, intent.address)
+        this.zusteller.record(intent.digest, intent.bytes, intent.address, intent.copies?.map((c) => ({ address: c.address, frame: new Uint8Array(Buffer.from(c.bytes, 'base64')) })))
         this.expected.set(intent.digest, intent.expected)
         this.sent.set(intent.digest, { kind: 'mapping', pair: d.pair, frame: intent.bytes, address: intent.address })
         this.held.push(intent.digest)
@@ -1143,6 +1253,7 @@ export class HolderDevice {
     if (this.down) return
     try {
       if (this.online) {
+        await this.refreshSiblings() // K2: die Gerätemenge kann sich geändert haben (Enrollment, Widerruf)
         const frames = this.carrier.collect(this.name)
         for (const f of frames) {
           try {
@@ -1195,15 +1306,7 @@ export class HolderDevice {
   private async journalOut(): Promise<void> {
     const frames = this.cand.takeOwnFrames()
     if (!frames.length || !this.ownRkid) return
-    const ctx = `self/${this.person}`
-    const self = (await this.keysFor(ctx)).anchor // das andere eigene Gerät quittiert unter demselben Anker (one-seed; K2 entscheidet neu)
-    for (const f of frames) {
-      const { bytes } = await this.sendDoc(TYPES.journal, ctx, self, this.ownRkid, this.ownRkid, { b: Buffer.from(f.body).toString('base64') })
-      this.measures.ownFramesOut++
-      this.measures.ownBytesOut += bytes.length
-      this.measures.framesOut--
-      this.measures.bytesOut -= bytes.length
-    }
+    for (const f of frames) await this.sendSelf(TYPES.journal, { b: Buffer.from(f.body).toString('base64') })
   }
 
   /**
@@ -1251,14 +1354,21 @@ export class HolderDevice {
     }
   }
   /** Ein Dokument an die eigene Adresse der Person (Journal, Nachholen), gezählt als eigener Verkehr. */
-  private async sendSelf(type: string, payload: Record<string, Json>): Promise<void> {
+  /**
+   * K0/K1a: an die gemeinsame Self-Adresse, quittiert unter demselben Anker (one-seed). K2 Schritt 1: dasselbe signierte
+   * Dokument je Schwester der aktuellen Gerätemenge versiegelt, an deren eigene Self-Adresse (`to`: nur diese, etwa der
+   * Anfragende einer Nachholantwort); ohne Schwester geht nichts hinaus.
+   */
+  private async sendSelf(type: string, payload: Record<string, Json>, to?: Array<{ anchor: string; rkid: string }>): Promise<void> {
     const ctx = `self/${this.person}`
-    const self = (await this.keysFor(ctx)).anchor
-    const { bytes } = await this.sendDoc(type, ctx, self, this.ownRkid!, this.ownRkid!, payload)
-    this.measures.ownFramesOut++
-    this.measures.ownBytesOut += bytes.length
-    this.measures.framesOut--
-    this.measures.bytesOut -= bytes.length
+    const peers = to ?? (this.cand.selfPeers ? await this.cand.selfPeers() : undefined)
+    if (peers && !peers.length) return
+    const self = peers ? peers[0]!.anchor : (await this.keysFor(ctx)).anchor
+    const { frames, total } = await this.sendDoc(type, ctx, self, peers ? peers[0]!.rkid : this.ownRkid!, this.ownRkid!, payload, peers)
+    this.measures.ownFramesOut += frames
+    this.measures.ownBytesOut += total
+    this.measures.framesOut -= frames
+    this.measures.bytesOut -= total
   }
   /**
    * Schritt 6: eine Antwort der Ablage lesen. Nur die Antwort auf die laufende Leseanfrage zählt (MV-5); jeder Eintrag wird
@@ -1407,6 +1517,7 @@ export class HolderDevice {
       tx = this.cand.receiveOwnFrame(body)
     } catch (e) {
       if (e instanceof M.Missing) throw e // zurückgestellt (guarded, defer)
+      if (e instanceof UnknownWriter) throw new CorruptFrame(`frame: ${e.message}`, undefined, 'unknown-writer') // K2 Schritt 1
       throw new CorruptFrame(`frame: ${e instanceof Error ? e.message : String(e)}`)
     }
     const problem = transactionProblem(tx)
@@ -1433,6 +1544,15 @@ export class HolderDevice {
   /** Briefkasten (Review 26 B2): Befund je Digest, einmal; keine Quittung (der Schritt ist zurückgenommen). */
   private corruptFrame(e: CorruptFrame): void {
     const ref = e.ref ?? '?'
+    if (e.kind === 'unknown-writer') {
+      // K2 Schritt 1: ein Batch, dessen Schreiber nicht zur aktuellen Gerätemenge gehört (oder nicht von ihm signiert ist).
+      if (this.unknownSeen.has(ref)) return
+      this.unknownSeen.add(ref)
+      this.unknownWriters++
+      this.dispositions.push(`failed(journal-unknown-writer): ${e.message}`)
+      this.dispositions.push(`finding(journal:unknown-writer@${ref})`)
+      return
+    }
     if (this.corruptFrames.has(ref)) return
     this.corruptFrames.add(ref)
     this.frameCorrupt++
@@ -1535,7 +1655,7 @@ export class HolderDevice {
         if (duty.state === 'hit' && r.state === 'accepted') this.emit({ kind: 'duty', pair: x.pair, state: 'sent', mappingDigest: d })
         if ((duty.state === 'sent' || duty.state === 'hit') && r.state === 'failed') {
           // 6845.4: dieselben Bytes in einer neuen Übergabe.
-          this.zusteller.record(d, x.frame, x.address)
+          this.zusteller.record(d, x.frame, x.address, this.zusteller.submissions.get(d)?.extra)
           this.held.push(d)
           this.emit({ kind: 'duty', pair: x.pair, state: 'hit', mappingDigest: d })
         }
@@ -1583,9 +1703,20 @@ export class HolderDevice {
     }
     const payload = isRecord(doc.payload) ? doc.payload : null
     const writer = payload?.writer
-    this.log.push({ type: doc.type.split('/').slice(-2)[0] ?? doc.type, from: doc.issuer, at: this.clock.now(), ...(typeof writer === 'string' ? { writer } : {}) })
+    // K2 Schritt 1: der Schreiber ist der Signierer (Revision, Probe, Mapping); die Beziehung kommt aus der Empfangsadresse, weil ein Schwestergerät der Gegenperson unter einem anderen Anker signiert als dem aufgezeichneten.
+    const signed = this.cand.signerWriters && (doc.type === TYPES.revision || doc.type === TYPES.probe || doc.type === TYPES.mapping)
+    const via = signed ? this.tupleOfAddress(address) : undefined
+    const viaRel = via ? M.relOfTuple(this.state, via.id) : undefined
+    this.log.push({ type: doc.type.split('/').slice(-2)[0] ?? doc.type, from: doc.issuer, at: this.clock.now(), ...(signed ? { writer: signerId(doc.issuer) } : typeof writer === 'string' ? { writer } : {}), ...(viaRel ? { rel: M.resolveId(this.state, viaRel.id) } : {}) })
     // Review 26 B2: ohne Objekt als Payload ist kein Dokument lesbar (Journalrahmen: Befund im Journalzweig).
     if (!payload && doc.type !== TYPES.journal) {
+      this.dispositions.push('failed(malformed-payload)')
+      return
+    }
+    // Review 31 B1: unter Geräteschlüsseln bestimmt nur der Signierer den Schreiber (8500/6270); ein Nutzlastfeld `writer`
+    // ist ein Formfehler, auch wenn es den Signierer nennt: Befund, keine Wirkung, keine Quittung.
+    if (signed && payload && Object.hasOwn(payload, 'writer')) {
+      this.emit({ kind: 'finding', text: `${doc.type.split('/').slice(-2)[0] ?? doc.type} von ${doc.issuer.slice(-8)}: writer-Feld unter Geräteschlüsseln (Schreiber = Signierer): Formfehler` })
       this.dispositions.push('failed(malformed-payload)')
       return
     }
@@ -1599,7 +1730,7 @@ export class HolderDevice {
         this.measures.unboundAcks++
         return
       }
-      if (want !== doc.issuer) {
+      if (want !== doc.issuer && !(this.deviceKeys && (await this.isPeer(doc.issuer, want)))) {
         this.dispositions.push('failed(ack-from-unexpected-signer)')
         return
       }
@@ -1612,9 +1743,8 @@ export class HolderDevice {
     if (doc.type === TYPES.journalSync) {
       // Ein eigenes Gerät nennt seine Köpfe: was es nicht hat, geht ihm als Journalrahmen zu (Nachholen, X21).
       if (address !== this.ownRkid) return
-      const self = (await this.keysFor(`self/${this.person}`)).anchor
-      if (doc.issuer !== self) {
-        this.dispositions.push('failed(journal-from-unexpected-signer)')
+      if (!(await this.fromOwnDevice(doc.issuer))) {
+        this.ownSignerRejected(doc.issuer, v.digest!)
         return
       }
       const p = doc.payload as { heads?: Record<string, number>; reply?: boolean; req?: string }
@@ -1632,8 +1762,10 @@ export class HolderDevice {
         if (typeof p.req !== 'string' || p.req !== this.sync.id) this.staleSyncAnswers++
         else if (this.sync.pending && this.covers(heads)) this.sync = { ...this.sync, pending: false, wait: 0, backoff: 1 }
       } else {
-        for (const f of this.cand.batchesAfter?.(heads) ?? []) await this.sendSelf(TYPES.journal, { b: Buffer.from(f.body).toString('base64') })
-        if (this.cand.heads) await this.sendSelf(TYPES.journalSync, { heads: this.cand.heads(), reply: true, ...(typeof p.req === 'string' ? { req: p.req } : {}) })
+        // K2 Schritt 1: die Antwort geht nur an das anfragende Gerät (versiegelt an dessen Self-Schlüssel), nicht an jede Schwester.
+        const asker = this.cand.selfPeers ? (await this.cand.selfPeers()).filter((k) => k.anchor === doc.issuer) : undefined
+        for (const f of this.cand.batchesAfter?.(heads) ?? []) await this.sendSelf(TYPES.journal, { b: Buffer.from(f.body).toString('base64') }, asker)
+        if (this.cand.heads) await this.sendSelf(TYPES.journalSync, { heads: this.cand.heads(), reply: true, ...(typeof p.req === 'string' ? { req: p.req } : {}) }, asker)
         // Weiß der Anfragende mehr als wir, holen wir selbst nach.
         if (!this.covers(heads) && !this.sync.pending) this.requestSync()
       }
@@ -1641,8 +1773,8 @@ export class HolderDevice {
     } else if (doc.type === TYPES.journal) {
       // Journalrahmen: nur auf der eigenen Adresse und nur vom eigenen Self-Anker (one-seed: auf allen Geräten derselbe).
       if (address !== this.ownRkid) return
-      if (doc.issuer !== (await this.keysFor(`self/${this.person}`)).anchor) {
-        this.dispositions.push('failed(journal-from-unexpected-signer)')
+      if (!(await this.fromOwnDevice(doc.issuer))) {
+        this.ownSignerRejected(doc.issuer, v.digest!)
         return
       }
       // Review 26 B2: Form vor dem Falten; nicht faltbar → CorruptFrame mit Digest (`round`: Befund, keine Quittung).
@@ -1650,7 +1782,7 @@ export class HolderDevice {
       try {
         await this.foldOwn(doc.payload)
       } catch (e) {
-        if (e instanceof CorruptFrame) throw new CorruptFrame(e.message, v.digest!)
+        if (e instanceof CorruptFrame) throw new CorruptFrame(e.message, v.digest!, e.kind)
         throw e
       }
       effect = true
@@ -1710,9 +1842,10 @@ export class HolderDevice {
       case TYPES.revision: {
         // M: 8550/8557/6270, vereinfacht.
         const t = this.tupleOfAddress(address)
-        if (!t || doc.issuer !== t.peer) return false
+        if (!t || !(await this.isPeer(doc.issuer, t.peer))) return false
         const r = M.relOfTuple(this.state, t.id)!
         const p = doc.payload as unknown as { revision: number; keys: Array<{ n: number; anchor: string; keyAgreement: string; expiresAt: string }>; writer?: string }
+        if (this.cand.signerWriters) return this.acceptWriterRevision(r, t, doc.issuer, { ...p, writer: signerId(doc.issuer) }) // K2: 6270 je Signierer; nur der Signierer (Review 31 B1)
         if (p.writer !== undefined && M.shapeProblem(p.writer, 'tag', 'writer')) return false // Review 28: Schreiberkennung nach ihrer Grammatik, sonst abgewiesen
         if (typeof p.writer === 'string') return this.acceptWriterRevision(r, t, doc.issuer, p as typeof p & { writer: string })
         if (r.view && r.view.scope === t.id && p.revision <= r.view.revision) {
@@ -1731,7 +1864,7 @@ export class HolderDevice {
       case TYPES.ticket: {
         // Seite: 8640.
         const t = this.tupleOfAddress(address)
-        if (!t || doc.issuer !== t.peer) return false // 8640.2: Kanal und Signierer
+        if (!t || !(await this.isPeer(doc.issuer, t.peer))) return false // 8640.2: Kanal und Signierer (K2: ein Gerät der Gegenperson)
         const r = M.relOfTuple(this.state, t.id)!
         const p = doc.payload as unknown as { act: string; issuedAt: string; expiresAt: string; own: string; voucher: { anchor: string; keyAgreement: string; name: string } }
         if (Date.parse(now) > Date.parse(p.expiresAt) || Date.parse(p.issuedAt) > Date.parse(now) + M.PARAM.actSkewMs) return false // 8640.3 / 8110
@@ -1776,12 +1909,14 @@ export class HolderDevice {
         const own = ctx ? await this.keysFor(ctx) : undefined
         if (!own) return false
         const p = doc.payload as unknown as { act: string; expiresAt: string; from: string; fromKeyAgreement: string; to: string; card: M.Card }
-        if (p.to !== own.anchor || doc.issuer !== p.from) return false // 8850.2 (b)
+        // K2 Schritt 1: die Karte nennt den aufgezeichneten Anker des Vorrats-Schlüssels (das Gerät, das ihn zugeteilt hat); dieses Gerät hat sie an seiner eigenen Adresse desselben Kontexts empfangen.
+        const to = this.deviceKeys && p.to !== own.anchor && this.recordedCtx(p.to) === ctx ? p.to : own.anchor
+        if (p.to !== to || !(await this.isPeer(doc.issuer, p.from))) return false // 8850.2 (b)
         const v = await digestBytes(enc.encode(jcs({ act: p.act, card: p.card })))
-        const a = this.state.acts.find((x) => x.own === own.anchor)
+        const a = this.state.acts.find((x) => x.own === to)
         if (!a) {
           // Pufferzweig (8910.1–.3): die ganze Nutzlast, geprüft wird bei der Zuordnung (B7).
-          const key = `${own.anchor}|${p.from}|${p.act}`
+          const key = `${to}|${p.from}|${p.act}`
           const b = this.buffer.get(key)
           if (!b) this.buffer.set(key, { act: p.act, from: p.from, expiresAt: p.expiresAt, card: p.card, v })
           else if (b.v !== v) return false
@@ -1813,7 +1948,7 @@ export class HolderDevice {
       }
       case TYPES.probe: {
         const t = this.tupleOfAddress(address)
-        if (!t || doc.issuer !== t.peer) return false
+        if (!t || !(await this.isPeer(doc.issuer, t.peer))) return false
         const p = doc.payload as unknown as { entries: string[] }
         const open = await this.evaluateProbe(t, p.entries)
         // Aufbewahrung (Tor-Review 16 B2): nur die jüngste Probe je Ankunftstupel, ihre offenen Einträge ersetzen die der
@@ -1827,7 +1962,7 @@ export class HolderDevice {
       }
       case TYPES.mapping: {
         const t = this.tupleOfAddress(address)
-        if (!t || doc.issuer !== t.peer) return false
+        if (!t || !(await this.isPeer(doc.issuer, t.peer))) return false
         const p = doc.payload as unknown as { entry: string }
         const matches: M.Tuple[] = []
         for (const r of this.state.relationships) if (!r.departed) for (const other of r.tuples) if (other.id !== t.id && this.blind(t, other.peer) === p.entry) matches.push(other)

@@ -42,13 +42,13 @@
 // tag (8500 per writer); the tag travels in revision, probe and mapping.
 
 import { createHmac, randomBytes } from 'node:crypto'
-import { derive, EnrolmentRefused, INTENT_FIELDS, seedScheme, type CandidateDevice, type EnrolOptions, type HolderDevice, type Intent, type MultiDeviceCandidate, type Transaction } from '../../lab/mehrgeraet/holder'
+import { derive, EnrolmentRefused, INTENT_FIELDS, seedScheme, type CandidateDevice, type KeyScheme, type EnrolOptions, type HolderDevice, type Intent, type MultiDeviceCandidate, type Transaction } from '../../lab/mehrgeraet/holder'
 import * as M from '../../lab/mehrgeraet/model'
 
 const enc = new TextEncoder()
 const dec = new TextDecoder()
 
-interface Batch {
+export interface Batch {
   writer: string
   n: number
   /** Batch keys (`writer#n`) of the last batch seen from every writer, including this device's own; every one must be known before this batch (step 1c). */
@@ -123,17 +123,18 @@ export function batchProblem(b: unknown): string | null {
 export class MalformedBatch extends Error {}
 
 export class K1aDevice implements CandidateDevice {
-  readonly keys
+  /** K1a: aus dem Seed der Person (`seedScheme`); K2 ersetzt das Schema durch eines je Gerät (`mehrgeraet-k2`). */
+  keys: KeyScheme
   /** Position among the person's devices (0 = first) and how many devices share the rights, fixed at enrollment. */
   index: number
   slots: number
   /** Inkarnation: frische Zufallskennung je Instanz und je Restore (B2), nie aus dem Backup gezählt. */
-  private inc = fresh()
-  private batches: Batch[] = []
-  private out: Batch[] = []
-  private n = 0
+  protected inc = fresh()
+  protected batches: Batch[] = []
+  protected out: Batch[] = []
+  protected n = 0
   /** Other enrolled devices of the person this device knows from enrollment (source and new device both record it; review 18 B1a). */
-  private known = new Set<string>()
+  protected known = new Set<string>()
   /** Step 2: devices learn their siblings' tuples through the journal, so the holder keeps received probes and evaluates them again when the own tuple set grows. */
   readonly reevaluateProbes = true
   constructor(
@@ -142,7 +143,7 @@ export class K1aDevice implements CandidateDevice {
     seed: Uint8Array,
     index: number,
     slots: number,
-    private readonly budget: number,
+    protected readonly budget: number,
     tags = true,
     private readonly split = true,
   ) {
