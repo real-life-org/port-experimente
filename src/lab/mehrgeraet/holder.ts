@@ -109,6 +109,34 @@ export interface Transaction {
 export class Blocked extends Error {}
 /** Der Kandidat verweigert ein weiteres Gerät (feste Gerätezahl, K1a): das Szenario weicht auf ein vorhandenes aus. */
 export class EnrolmentRefused extends Error {}
+/**
+ * Ein eigener Journalrahmen ist gültig signiert, aber nicht faltbar (Tor-Review 26 B2): kaputte Form (Payload, Batch,
+ * Operationen, Absichten) oder eine Ausnahme der Faltung außer `Missing` (zurückgestellt) und `Blocked`. Der Schritt wird
+ * ganz zurückgenommen (`guarded`); Ablage und Briefkasten verbuchen ihn als Befund, nie als gefaltet. `ref`: Digest des
+ * Dokuments (Briefkasten).
+ */
+export class CorruptFrame extends Error {
+  constructor(
+    message: string,
+    readonly ref?: string,
+  ) {
+    super(message)
+  }
+}
+const isRecord = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x)
+const INTENT_FIELDS = ['digest', 'kind', 'address', 'expected', 'replyTo', 'device', 'writer'] as const
+/** Form einer Transaktion aus `receiveOwnFrame` (Review 26 B2), bevor das Gerät sie faltet: null oder was nicht stimmt. */
+export function transactionProblem(tx: unknown): string | null {
+  if (!isRecord(tx)) return 'transaction'
+  if (!Array.isArray(tx.ops)) return 'ops'
+  if (!Array.isArray(tx.intents)) return 'intents'
+  for (const op of tx.ops) {
+    const p = M.opProblem(op)
+    if (p) return p
+  }
+  if (tx.intents.some((i) => !isRecord(i) || !(i.bytes instanceof Uint8Array) || INTENT_FIELDS.some((f) => typeof i[f] !== 'string'))) return 'intent'
+  return null
+}
 
 /**
  * Was ein Kandidat je Gerät beisteuert. Der Holder-Zustand gehört dem Gerät; der Kandidat sagt, was erlaubt ist und wie
@@ -369,6 +397,9 @@ export class HolderDevice {
   /** Unlesbare oder ungültige Einträge der Ablage (Review 25 B2): nie gefaltet gezählt, der Cursor bleibt davor; je Position ein Befund. */
   logCorrupt = 0
   private corruptSeen = new Set<number>()
+  /** Briefkasten (Review 26 B2): gültig signierte, nicht faltbare eigene Journalrahmen; je Digest ein Befund `journal:corrupt-frame`. */
+  frameCorrupt = 0
+  private corruptFrames = new Set<string>()
   private deferredProbes: Array<[string, string[]]> | null = null
   /** Messung (Schritt 6): Einträge und Bytes, die dieses Gerät aus der Ablage gelesen hat. */
   logEntriesRead = 0
@@ -1086,7 +1117,16 @@ export class HolderDevice {
     try {
       if (this.online) {
         const frames = this.carrier.collect(this.name)
-        for (const f of frames) await this.guarded(() => this.handle(f.bytes, f.address), true)
+        for (const f of frames) {
+          try {
+            await this.guarded(() => this.handle(f.bytes, f.address), true)
+          } catch (e) {
+            // Review 26 B2: ein nicht faltbarer eigener Journalrahmen ist zurückgenommen (`guarded`), ein Befund je Digest,
+            // keine Quittung; die Runde läuft weiter.
+            if (!(e instanceof CorruptFrame)) throw e
+            this.corruptFrame(e)
+          }
+        }
         if (this.logMode) for (const a of this.carrier.takeLogAnswers(this.name)) await this.readLogAnswer(a)
         // B1a: das Nachholen ist abgeschlossen; die Faltung entscheidet, was von dem Zurückgehaltenen noch gilt (eine
         // zurückgenommene Karte bleibt zurückgenommen), der Rest geht nach dem Commit dieser Runde hinaus.
@@ -1213,16 +1253,25 @@ export class HolderDevice {
     for (const e of a.entries) if (e.pos >= a.from && e.pos < a.end && !byPos.has(e.pos)) byPos.set(e.pos, e.bytes)
     const bad = new Set<number>()
     let rest = [...byPos.entries()].sort((x, y) => x[0] - y[0])
+    // Review 26 B2: ab der ersten beschädigten Position faltet diese Antwort nichts weiter (Blockieren, die Reihenfolge der
+    // Ablage zählt); die nächste Leseanfrage beginnt bei ihr.
+    let stop = Infinity
     this.readingLog = true
     try {
       while (rest.length) {
         const next: typeof rest = []
+        let progress = false
         for (const [pos, bytes] of rest) {
-          const r: { st: 'folded' | 'skip' | 'corrupt' } = { st: 'skip' }
-          const ok = await this.guarded(async () => void (r.st = await this.replay(bytes)), true)
-          if (!ok) next.push([pos, bytes])
-          else if (r.st === 'corrupt' && !bad.has(pos)) {
+          if (pos > stop) continue
+          const st = await this.replayStep(bytes)
+          if (st === 'deferred') {
+            next.push([pos, bytes])
+            continue
+          }
+          progress = true
+          if (st === 'corrupt' && !bad.has(pos)) {
             bad.add(pos)
+            stop = Math.min(stop, pos)
             if (!this.corruptSeen.has(pos)) {
               this.corruptSeen.add(pos)
               this.logCorrupt++
@@ -1230,8 +1279,8 @@ export class HolderDevice {
             }
           }
         }
-        if (next.length === rest.length) break
-        rest = next
+        rest = next.filter(([p]) => p < stop)
+        if (!progress) break
       }
     } finally {
       this.readingLog = false
@@ -1252,11 +1301,70 @@ export class HolderDevice {
     }
   }
   /**
+   * Ein Eintrag der Ablage als Schritt (alles oder nichts): `deferred` = Vorgänger fehlt oder blockiert (später erneut);
+   * `corrupt` auch, wenn die Faltung nicht faltbar war (Review 26 B2, `CorruptFrame`: zurückgenommen, nie gefaltet).
+   */
+  private async replayStep(bytes: Uint8Array): Promise<'folded' | 'skip' | 'corrupt' | 'deferred'> {
+    const r: { st: 'folded' | 'skip' | 'corrupt' } = { st: 'skip' }
+    try {
+      return (await this.guarded(async () => void (r.st = await this.replay(bytes)), true)) ? r.st : 'deferred'
+    } catch (e) {
+      if (!(e instanceof CorruptFrame)) throw e
+      this.dispositions.push(`failed(journal-corrupt): ${e.message}`)
+      return 'corrupt'
+    }
+  }
+  /**
+   * Einen eigenen Journalrahmen falten (Ablage und Briefkasten gleich, Review 26 B2): zuerst die Form (Payload mit `b`,
+   * Batch im Kandidaten, Transaktion: `transactionProblem`), dann `applyRemote`. Wirft `CorruptFrame` für kaputte Form und
+   * jede Ausnahme der Faltung außer `Missing` (zurückgestellt) und `Blocked`; der umgebende Schritt (`guarded`) nimmt alles
+   * zurück. Ein Prüfstandfehler in der Faltung erscheint damit als Befund mit seiner Meldung, nicht als Absturz.
+   */
+  private async foldOwn(payload: unknown): Promise<void> {
+    const b = isRecord(payload) ? payload.b : undefined
+    if (typeof b !== 'string') throw new CorruptFrame('payload')
+    const body = new Uint8Array(Buffer.from(b, 'base64'))
+    let tx: Transaction
+    try {
+      tx = this.cand.receiveOwnFrame(body)
+    } catch (e) {
+      if (e instanceof M.Missing) throw e // zurückgestellt (guarded, defer)
+      throw new CorruptFrame(`frame: ${e instanceof Error ? e.message : String(e)}`)
+    }
+    const problem = transactionProblem(tx)
+    if (problem) throw new CorruptFrame(`transaction: ${problem}`)
+    try {
+      await this.applyRemote(tx)
+      this.cand.applied?.(body)
+    } catch (e) {
+      if (e instanceof M.Missing || e instanceof Blocked || e instanceof Crashed || e instanceof CorruptFrame) throw e
+      throw new CorruptFrame(`fold: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+  /** Briefkasten (Review 26 B2): Befund je Digest, einmal; keine Quittung (der Schritt ist zurückgenommen). */
+  private corruptFrame(e: CorruptFrame): void {
+    const ref = e.ref ?? '?'
+    if (this.corruptFrames.has(ref)) return
+    this.corruptFrames.add(ref)
+    this.frameCorrupt++
+    this.dispositions.push(`failed(journal-corrupt): ${e.message}`)
+    this.dispositions.push(`finding(journal:corrupt-frame@${ref})`)
+  }
+  /** Signaturprüfung, die bei kaputter Dokumentform nicht wirft (Review 26 B2): ungültig. */
+  private async verified(doc: Doc & { proof: unknown }): Promise<boolean> {
+    try {
+      return await diVerify(doc, doc.issuer)
+    } catch {
+      return false
+    }
+  }
+  /**
    * Ein Eintrag der Ablage: ein versiegelter Rahmen an die Self-Adresse. Journalrahmen vom eigenen Self-Anker werden
    * gefaltet wie bei der Zustellung (`receiveOwnFrame`, `applyRemote`, `applied`). Rückgabe (Review 25 B2): `folded`;
    * `skip` = geprüft und ohne Wirkung (eigener oder schon bekannter Rahmen, Quittung oder anderer gültiger Verkehr an der
    * Self-Adresse, den der Träger nicht unterscheidet); `corrupt` = nicht lesbar, nicht zu öffnen, ungültig signiert, fremder
-   * Signierer oder kaputter Journalinhalt. Ein fehlender Vorgänger wirft `Missing` (zurückgestellt). Lesen ist keine
+   * Signierer oder kaputter Journalinhalt (Review 26 B2: `foldOwn` wirft `CorruptFrame`, `replayStep` verbucht ihn). Ein
+   * fehlender Vorgänger wirft `Missing` (zurückgestellt). Lesen ist keine
    * Zustellung: keine Quittung, kein `completed`.
    */
   private async replay(bytes: Uint8Array): Promise<'folded' | 'skip' | 'corrupt'> {
@@ -1277,24 +1385,13 @@ export class HolderDevice {
     if (v.disposition !== 'unique') return v.disposition === 'duplicate-known' ? 'skip' : 'corrupt'
     if (this.zusteller.submissions.has(v.digest!)) return 'skip'
     const doc = v.document as unknown as Doc & { proof: unknown }
-    if (!(await diVerify(doc, doc.issuer))) return 'corrupt'
+    if (!(await this.verified(doc))) return 'corrupt'
     if (doc.type !== TYPES.journal) return 'skip'
     if (doc.issuer !== self) {
       this.dispositions.push('failed(journal-from-unexpected-signer)')
       return 'corrupt'
     }
-    const b = (doc.payload as { b?: string }).b
-    if (typeof b !== 'string') return 'corrupt'
-    const body = new Uint8Array(Buffer.from(b, 'base64'))
-    let frame: ReturnType<CandidateDevice['receiveOwnFrame']>
-    try {
-      frame = this.cand.receiveOwnFrame(body)
-    } catch (e) {
-      if (e instanceof M.Missing) throw e // zurückgestellt (guarded, defer)
-      return 'corrupt'
-    }
-    await this.applyRemote(frame)
-    this.cand.applied?.(body)
+    await this.foldOwn(doc.payload) // CorruptFrame: `replayStep`
     this.log.push({ type: doc.type.split('/').slice(-2)[0] ?? doc.type, from: doc.issuer, at: this.clock.now() })
     return 'folded'
   }
@@ -1385,12 +1482,18 @@ export class HolderDevice {
       return
     }
     const doc = v.document as unknown as Doc & { proof: unknown }
-    if (!(await diVerify(doc, doc.issuer))) {
+    if (!(await this.verified(doc))) {
       this.dispositions.push('failed(proof-invalid)')
       return
     }
-    const writer = (doc.payload as { writer?: unknown }).writer
+    const payload = isRecord(doc.payload) ? doc.payload : null
+    const writer = payload?.writer
     this.log.push({ type: doc.type.split('/').slice(-2)[0] ?? doc.type, from: doc.issuer, at: this.clock.now(), ...(typeof writer === 'string' ? { writer } : {}) })
+    // Review 26 B2: ohne Objekt als Payload ist kein Dokument lesbar (Journalrahmen: Befund im Journalzweig).
+    if (!payload && doc.type !== TYPES.journal) {
+      this.dispositions.push('failed(malformed-payload)')
+      return
+    }
     if (doc.type === TYPES.ack) {
       const p = doc.payload as { ref?: string }
       if (typeof p.ref !== 'string') return
@@ -1420,6 +1523,11 @@ export class HolderDevice {
         return
       }
       const p = doc.payload as { heads?: Record<string, number>; reply?: boolean; req?: string }
+      // Review 26 B2: Köpfe sind ein Objekt aus Zahlen; sonst ist die Anfrage oder Antwort nicht lesbar.
+      if (p.heads !== undefined && (!isRecord(p.heads) || Object.values(p.heads).some((n) => !Number.isFinite(n)))) {
+        this.dispositions.push('failed(malformed-payload)')
+        return
+      }
       const heads = p.heads ?? {}
       if (p.reply) {
         // Antwort eines Schwestergeräts: nur auf die laufende Anfrage (Kennung, Review 19 B1a). Decken die eigenen Köpfe
@@ -1441,11 +1549,13 @@ export class HolderDevice {
         this.dispositions.push('failed(journal-from-unexpected-signer)')
         return
       }
-      const b = (doc.payload as { b?: string }).b
-      if (typeof b === 'string') {
-        const body = new Uint8Array(Buffer.from(b, 'base64'))
-        await this.applyRemote(this.cand.receiveOwnFrame(body)) // Missing → zurückgestellt (guarded, defer)
-        this.cand.applied?.(body)
+      // Review 26 B2: Form vor dem Falten; nicht faltbar → CorruptFrame mit Digest (`round`: Befund, keine Quittung).
+      // Missing → zurückgestellt (guarded, defer).
+      try {
+        await this.foldOwn(doc.payload)
+      } catch (e) {
+        if (e instanceof CorruptFrame) throw new CorruptFrame(e.message, v.digest!)
+        throw e
       }
       effect = true
     } else effect = await this.dispatch(doc, address)

@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { Welt15 } from '../src/lab/mehrgeraet/welt'
-import type { HolderDevice } from '../src/lab/mehrgeraet/holder'
+import { TYPES, transactionProblem, type HolderDevice } from '../src/lab/mehrgeraet/holder'
+import { diSign, digestBytes, jcs, seal } from '@real-life/trust-protocol'
 import { journalGrowth, runX15, serviceLearns } from '../src/lab/mehrgeraet/scenarios'
-import { k1a } from '../src/candidates/mehrgeraet-k1a'
+import { batchProblem, k1a } from '../src/candidates/mehrgeraet-k1a'
 import { multiDeviceCandidates } from '../src/candidates/mehrgeraet'
 import { Carrier } from '../src/lab/zustellung'
 import * as M from '../src/lab/mehrgeraet/model'
@@ -26,6 +27,8 @@ import * as M from '../src/lab/mehrgeraet/model'
 //   6. Restore mit verlorener Schwester und gültiger Karte: gesperrt bis Widerruf wie K1a.
 //   7. Bindung (MV-5). 8. Träger unerreichbar. 9. S2: verlorene Antwort, nächste Runde neu.
 //   10. Enrollment aus der Ablage. 11. Alle Szenarien: dieselben Ausgänge wie K1a. 12. Was der Dienst lernt; Wachstum.
+//   Review 26 B2 (Rest): 13. Ablage, 14. Briefkasten, 15. Enrollment aus der Ablage: kaputte Form oder werfende Faltung
+//   ist ein Befund, kein Abbruch; 16. Formprüfung.
 
 const variant = () => k1a({ journalAtService: true })
 const byId = (rs: Awaited<ReturnType<typeof runX15>>) => Object.fromEntries(rs.map((r) => [r.scenario, r]))
@@ -376,4 +379,140 @@ describe('K1a Schritt 6 (Variante): Journal beim Dienst', () => {
     const self = (await mb.A.cand.keys.pair('self/A')).rkid
     expect(serviceLearns(mb.w, self).entries).toBe(0)
   }, 1_200_000)
+  // ── Review 26 B2 (Rest): Form vor dem Falten, jede Ausnahme der Faltung ist `corrupt` ──
+  // Ein gültig self-signierter Journalrahmen (Seed) mit kaputter Form brach die Runde mit einem TypeError ab, ohne Befund
+  // und Backoff. Jetzt: Formprüfung (Payload, Batch, Operationen, Absichten) vor dem Falten; eine Ausnahme aus
+  // `receiveOwnFrame`/`applyRemote` außer `Missing` (zurückgestellt) und `Blocked` ist `corrupt`. Ablage: Cursor bleibt,
+  // Befund `journal:corrupt-entry@pos` je Position, Backoff, und ab der beschädigten Position faltet die Antwort nichts
+  // weiter (Blockieren: die Reihenfolge der Ablage zählt). Briefkasten (Default-K1a): Befund `journal:corrupt-frame@digest`
+  // je Digest, keine Quittung, die Runde läuft weiter, spätere Rahmen falten (deps schützen die Kausalität).
+  const X = 'X@feed'
+  const xop = (extra: Record<string, unknown>) => ({ id: { writer: X, n: 1 }, at: '2026-10-17T08:00:00.000Z', ...extra })
+  const batch = (extra: Record<string, unknown>) => ({ b: Buffer.from(JSON.stringify({ writer: X, n: 1, deps: [], ops: [], intents: [], ...extra })).toString('base64') })
+  /** Ein gültig self-signierter, versiegelter Journalrahmen an die eigene Adresse (wer den Seed hat). */
+  async function selfFrame(w: Welt15, D: HolderDevice, payload: unknown): Promise<{ bytes: Uint8Array; digest: string; rkid: string }> {
+    const k = await (D as unknown as { keysFor(c: string): Promise<{ anchor: string; rkid: string; ed: { priv: CryptoKey } }> }).keysFor(`self/${D.person}`)
+    const doc = await diSign({ anchor: k.anchor, ed: { priv: k.ed.priv } }, { id: crypto.randomUUID(), type: TYPES.journal, issuer: k.anchor, recipient: k.anchor, replyTo: k.rkid, issuedAt: w.clock.now(), payload } as never, w.clock.now())
+    const bytes = new TextEncoder().encode(jcs(await seal(doc as never, k.rkid)))
+    return { bytes, digest: await digestBytes(new TextEncoder().encode(jcs(doc as never))), rkid: k.rkid }
+  }
+  /** Die Ablage liefert `name` vor dem ersten echten Eintrag einen zusätzlichen (die echten rücken eine Position weiter). */
+  function insertFirst(w: Welt15, name: string, bytes: Uint8Array) {
+    const take = w.carrier.takeLogAnswers.bind(w.carrier)
+    const at: number[] = []
+    w.carrier.takeLogAnswers = (n) =>
+      take(n).map((a) => {
+        if (n !== name) return a
+        at.push(a.from)
+        return { ...a, end: a.end + 1, entries: [{ pos: a.from, at: w.clock.now(), bytes }, ...a.entries.map((e) => ({ ...e, pos: e.pos + 1 }))] }
+      })
+    return { at, heal: () => void (w.carrier.takeLogAnswers = take) }
+  }
+  const malformed = (rel: string): Array<[string, unknown]> => [
+    ['payload: null', null],
+    ['ops: null', batch({ ops: null })],
+    ['deps kein Array', batch({ deps: 'A1@x#1' })],
+    ['deps mit Nicht-String', batch({ deps: [7] })],
+    ['writer kein String', batch({ writer: 7 })],
+    ['intents kein Array', batch({ intents: {} })],
+    ['unbekannte Op-Art', batch({ ops: [xop({ kind: 'bogus' })] })],
+    ['Op ohne id', batch({ ops: [{ at: '2026-10-17T08:00:00.000Z', kind: 'finding', text: 'x' }] })],
+    ['Faltung wirft (view mit kaputten Schlüsseln)', batch({ ops: [xop({ kind: 'view', rel, scope: 's', revision: 1, keys: [null, null] })] })],
+  ]
+
+  it('13. Review 26 B2, Ablage: kaputte Form oder werfende Faltung ist ein Befund je Position, kein Abbruch; der Cursor bleibt, Backoff, die Sperre hält; der gültige Eintrag dahinter wird nicht gefaltet, solange der kaputte blockiert', async () => {
+    for (const [what, payload] of [...malformed('REL'), ['eingespritzte Ausnahme in applyRemote', batch({ ops: [xop({ kind: 'finding', text: 'x' })] })] as [string, unknown]]) {
+      const { w, A, B, act } = await restoredCounterRun(false)
+      const rel = A.state.relationships[0]!.id
+      const p = what.startsWith('Faltung') ? batch({ ops: [xop({ kind: 'view', rel, scope: 's', revision: 1, keys: [null, null] })] }) : payload
+      if (what.startsWith('eingespritzte')) {
+        const orig = A.applyRemote.bind(A)
+        A.applyRemote = async (tx) => {
+          if (tx.ops.some((o) => o.id.writer === X)) throw new TypeError('eingespritzt')
+          return orig(tx)
+        }
+      }
+      const { bytes } = await selfFrame(w, A, p)
+      const ins = insertFirst(w, 'A1', bytes)
+      const r0 = A.logRequests
+      await w.rounds(20) // kein Abbruch
+      const first = ins.at[0]!
+      expect(A.logCorrupt, what).toBe(1)
+      expect(A.dispositions.filter((d) => d === `finding(journal:corrupt-entry@${first})`).length, what).toBe(1)
+      expect(A.snapshotState().logCursor, what).toBe(first)
+      expect(A.logPending, what).toBe(true)
+      expect(A.logRequests - r0, what).toBeLessThanOrEqual(5) // Backoff
+      expect(M.act(A.state, act).o, what).toBe('handed') // die Ablehnung dahinter ist nicht gefaltet (Blockieren)
+      expect(A.gated, what).toBe(true)
+      expect(a1CardDeposits(A, act), what).toBe(0)
+      ins.heal()
+      expect(await w.until(() => !A.logPending, 20), what).toBeGreaterThan(0)
+      expect(M.act(A.state, act).o, what).toBe('cancelled')
+      expect(A.gated, what).toBe(true)
+      expect(M.act(B.state, act).state).toBe('consented')
+    }
+  }, 900_000)
+
+  it('14. Review 26 B2, Briefkasten (Default-K1a): derselbe kaputte Rahmen ist ein Befund je Digest, keine Quittung, keine Wirkung; die Runde läuft weiter und spätere Rahmen falten; nach Restore hält die Sperre', async () => {
+    const p = await withA2(() => k1a())
+    const { w, A, A2, act } = p
+    const rel = A.state.relationships[0]!.id
+    const frames: string[] = []
+    for (const [what, payload] of malformed(rel)) {
+      const f = await selfFrame(w, A2, payload)
+      frames.push(f.digest)
+      w.carrier.deposit(f.rkid, f.bytes)
+      w.carrier.deposit(f.rkid, f.bytes) // zweimal: ein Befund
+      const before = M.canonical(A.projection())
+      await w.rounds(1)
+      expect(A.dispositions.filter((d) => d === `finding(journal:corrupt-frame@${f.digest})`).length, what).toBe(1)
+      expect(M.canonical(A.projection()), what).toBe(before)
+      expect(A.snapshotState().completed.includes(f.digest), what).toBe(false) // keine Quittung
+    }
+    expect(A.frameCorrupt).toBe(frames.length)
+    expect(await A2.decline(act)).toBe('ok')
+    expect(await w.until(() => M.act(A.state, act).state === 'declined', 5)).toBeGreaterThan(0) // spätere Rahmen falten
+    // Restore mit verlorener Schwester: der kaputte Rahmen ändert nichts an der Sperre.
+    const q = await restoredWithLostSibling(() => k1a())
+    const f = await selfFrame(q.w, q.A, batch({ ops: null }))
+    q.w.carrier.deposit(f.rkid, f.bytes)
+    await q.w.rounds(10)
+    expect(q.A.frameCorrupt).toBe(1)
+    expect(q.A.gated).toBe(true)
+    expect(a1CardDeposits(q.A, q.act)).toBe(0)
+  }, 900_000)
+
+  it('15. Review 26 B2, Enrollment aus der Ablage: ein kaputter erster Eintrag blockiert die Ablagespur (Befund, Cursor 0, kein Abbruch); Daten und Zeugnis kommen über die Schwesterspur von A1 (dieselbe Projektion); heil gelesen endet auch die Ablagespur', async () => {
+    const { w, A } = await pair()
+    await w.rounds(1)
+    const { bytes } = await selfFrame(w, A, batch({ ops: null }))
+    const take = w.carrier.takeLogAnswers.bind(w.carrier)
+    let on = true
+    w.carrier.takeLogAnswers = (n) => take(n).map((a) => (n === 'A2' && on ? { ...a, end: a.end + 1, entries: [{ pos: a.from, at: w.clock.now(), bytes }, ...a.entries.map((e) => ({ ...e, pos: e.pos + 1 }))] } : a))
+    const A2 = await w.enrol(A, 'A2')
+    await w.rounds(8)
+    expect(A2.logCorrupt).toBe(1)
+    expect(A2.dispositions).toContain('finding(journal:corrupt-entry@0)')
+    expect(A2.snapshotState().logCursor).toBe(0)
+    expect(A2.logPending).toBe(true) // die Ablage ist blockiert
+    expect(M.canonical(A2.projection())).toBe(M.canonical(A.projection())) // die Schwester lieferte (Briefkasten an der Self-Adresse)
+    expect(A2.gated).toBe(false) // Zeugnis von A1, nicht die Ablage
+    on = false
+    expect(await w.until(() => !A2.logPending, 20)).toBeGreaterThan(0)
+    expect(A2.logCorrupt).toBe(1)
+    expect(M.canonical(A2.projection())).toBe(M.canonical(A.projection()))
+  }, 300_000)
+
+  it('16. Formprüfung: Batch (K1a), Transaktion und Operation', () => {
+    const ok = { writer: X, n: 1, deps: ['A1@x#1'], ops: [xop({ kind: 'finding', text: 'x' })], intents: [{ digest: 'd', kind: 'k', bytes: 'AA==', address: 'a', expected: 'e', replyTo: 'r', device: 'A1', writer: 'A1@x' }] }
+    expect(batchProblem(ok)).toBeNull()
+    for (const bad of [null, 7, [], { ...ok, writer: 7 }, { ...ok, n: 0 }, { ...ok, n: '1' }, { ...ok, deps: 'x' }, { ...ok, deps: [1] }, { ...ok, ops: null }, { ...ok, ops: {} }, { ...ok, intents: null }, { ...ok, intents: [{ ...ok.intents[0], bytes: 1 }] }, { ...ok, intents: [null] }])
+      expect(batchProblem(bad), JSON.stringify(bad)).not.toBeNull()
+    expect(transactionProblem({ ops: [], intents: [] })).toBeNull()
+    for (const bad of [null, { ops: null, intents: [] }, { ops: [], intents: null }, { ops: [null], intents: [] }, { ops: [], intents: [{ digest: 'd' }] }]) expect(transactionProblem(bad), JSON.stringify(bad)).not.toBeNull()
+    expect(M.opProblem(xop({ kind: 'class', rel: 'r', on: true }))).toBeNull()
+    expect(M.opProblem(xop({ kind: 'open-tuple', rel: null, tuple: {}, provenance: 'encounter', vouchedBy: null, act: null }))).toBeNull()
+    for (const bad of [null, xop({ kind: 'bogus' }), { at: 'x', kind: 'finding', text: 'x' }, { id: { writer: X, n: '1' }, at: 'x', kind: 'finding', text: 'x' }, { ...xop({ kind: 'finding', text: 'x' }), at: 1 }, xop({ kind: 'class', rel: 'r', on: 'yes' }), xop({ kind: 'withdraw', rel: 'r', anchors: null }), xop({ kind: 'consent', act: 'a', cardKey: 'k' })])
+      expect(M.opProblem(bad), JSON.stringify(bad)).not.toBeNull()
+  })
 })

@@ -95,6 +95,30 @@ export function writerTagOf(seed: Uint8Array, device: string, relationship: stri
 
 const fresh = () => randomBytes(4).toString('hex')
 
+const INTENT_FIELDS = ['digest', 'kind', 'bytes', 'address', 'expected', 'replyTo', 'device', 'writer'] as const
+const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x)
+/**
+ * Gate review 26 B2: the shape of a journal batch before anything is folded. Writer a string, counter a positive
+ * integer, deps an array of batch keys (strings), ops an array (each op's shape: model.ts `opProblem`), intents an array
+ * of objects with string fields (bytes base64). Returns null or what is wrong; `receiveOwnFrame` throws on it (the
+ * device counts the frame as corrupt, never folds it).
+ */
+export function batchProblem(b: unknown): string | null {
+  if (!isObj(b)) return 'batch'
+  if (typeof b.writer !== 'string') return 'batch.writer'
+  if (!Number.isInteger(b.n) || (b.n as number) < 1) return 'batch.n'
+  if (!Array.isArray(b.deps) || b.deps.some((d) => typeof d !== 'string')) return 'batch.deps'
+  if (!Array.isArray(b.ops)) return 'batch.ops'
+  for (const op of b.ops) {
+    const p = M.opProblem(op)
+    if (p) return `batch.${p}`
+  }
+  if (!Array.isArray(b.intents) || b.intents.some((i) => !isObj(i) || INTENT_FIELDS.some((f) => typeof i[f] !== 'string'))) return 'batch.intents'
+  return null
+}
+/** A journal batch that cannot be read (gate review 26 B2): not `Missing`, so the device counts it as corrupt. */
+export class MalformedBatch extends Error {}
+
 export class K1aDevice implements CandidateDevice {
   readonly keys
   /** Position among the person's devices (0 = first) and how many devices share the rights, fixed at enrollment. */
@@ -182,7 +206,10 @@ export class K1aDevice implements CandidateDevice {
     return this.out.splice(0).map((b) => ({ body: enc.encode(JSON.stringify(b)) }))
   }
   receiveOwnFrame(body: Uint8Array): Transaction {
-    const b = JSON.parse(dec.decode(body)) as Batch
+    const raw: unknown = JSON.parse(dec.decode(body))
+    const problem = batchProblem(raw)
+    if (problem) throw new MalformedBatch(problem) // review 26 B2: shape before anything else
+    const b = raw as Batch
     const known = this.batches.find((x) => x.writer === b.writer && x.n === b.n)
     if (known) {
       if (JSON.stringify(known.ops) === JSON.stringify(b.ops) && JSON.stringify(known.intents) === JSON.stringify(b.intents) && JSON.stringify(known.deps) === JSON.stringify(b.deps)) return { ops: [], intents: [] } // schon bekannt: nichts Neues (Inhalt samt Abhängigkeiten, Review 9)

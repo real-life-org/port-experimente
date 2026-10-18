@@ -32,7 +32,20 @@ numbers its revisions under a pseudonymous writer tag per relationship.
   an old backup thus recovers its own history (consumed keys, accepted
   acts) and the siblings' steps; X6 passes. Two requests at once, a
   restore during an answer and a double restore were checked by the
-  review.
+  review. A journal frame is checked for shape before it is folded (gate
+  review 26 B2): payload an object with a string body; batch with a string
+  writer, a positive integer counter, deps an array of strings, ops and
+  intents arrays (`batchProblem`); every op with id, time, a known kind
+  and the fields the fold reads (`opProblem` in model.ts); the
+  transaction the candidate returns again (`transactionProblem` in
+  holder.ts). A frame that fails the check, or whose fold throws anything
+  but `Missing` (deferred) or `Blocked`, is corrupt: the step is rolled
+  back, no receipt, one finding `finding(journal:corrupt-frame@<digest>)`
+  per digest, and the round goes on (the sender's deliverer repeats it,
+  the finding stays one). Later frames fold as before: the mailbox has no
+  order, `deps` keep causality (a batch that names the corrupt one stays
+  deferred). The gate after restore is untouched: a corrupt batch never
+  joins the heads, so a sibling answer that names it is not covered.
 - **Incarnation.** A restore from the store gives the device a fresh
   random incarnation (`A1@3f9a1c20`), never a counter from the backup, so
   two restores of the same backup never collide; a batch key seen twice
@@ -840,7 +853,18 @@ witness stays.
   corrupt entry never counts as folded: the cursor stops before it, a
   finding `finding(journal:corrupt-entry@<pos>)` is recorded once per
   position, the next read starts at it, with backoff (1, 2, 4, up to 16
-  rounds). The gate is untouched by it.
+  rounds). The gate is untouched by it. After gate review 26 (B2 rest) the
+  body is checked for shape before folding, as in the mailbox path
+  (payload object with a string body, `batchProblem`, `opProblem`,
+  `transactionProblem`), and any exception from the fold other than
+  `Missing` or `Blocked` is corrupt as well (`CorruptFrame`, step rolled
+  back): a validly self-signed frame with `payload: null` or a batch with
+  `ops: null` no longer aborts the round. Policy: block. From the first
+  corrupt position on, the answer folds nothing further (the log is
+  ordered; skipping would fold later entries ahead of a step the device
+  cannot read); the next read starts at the corrupt position. Enrolment
+  from the log uses the same path: a corrupt first entry blocks the log
+  track at position 0, the sibling track still delivers and witnesses.
 - **Lost log answers (review 25 S2).** If no answer to the current read
   arrived with the next pickup (request or answer lost), the device asks
   again in that round: at most one log read per device and round, never a
@@ -956,7 +980,11 @@ every repeat.
   whole log tail (X21: 7.24 MB sent for 2.66 MB arrived).
 - No compaction, no snapshot: the log is unbounded and keeps repeats.
 - A permanently corrupt entry keeps the log track pending (re-read with
-  backoff); the sibling track still repairs and releases.
+  backoff) and, by the block policy, nothing behind it is folded from the
+  log; the sibling track still repairs and releases. Only a holder of the
+  seed can write a validly self-signed corrupt entry.
+- A bench error inside the fold now shows as a corrupt finding with its
+  message (`failed(journal-corrupt): fold: …`), not as a crash.
 - One seed stays a capability (X9): a thief with the image registers and
   reads the log.
 - The service learns the person's activity profile (count, size and time

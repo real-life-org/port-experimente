@@ -270,6 +270,54 @@ export type Op = { id: OpId; at: string } & (
   | { kind: 'edge'; edge: [string, string] } // 6975.3
 )
 
+/**
+ * Form einer Operation (Tor-Review 26 B2): Kennung, Zeit, bekannte Art und die Felder, die die Faltung liest, mit ihrem
+ * Grundtyp (`?` = darf fehlen oder null sein). Geprüft wird nur die Form, nicht der Inhalt (Elemente von Listen, Werte von
+ * Objekten); was die Faltung darüber hinaus nicht lesen kann, wirft dort und ist für das Gerät ebenfalls `corrupt`.
+ * Rückgabe: null oder was nicht stimmt.
+ */
+type FieldType = 'string' | 'number' | 'boolean' | 'array' | 'object'
+const OP_FIELDS: { [K in Op['kind']]: Record<string, FieldType | `${FieldType}?`> } = {
+  'open-tuple': { rel: 'string?', tuple: 'object', provenance: 'string', vouchedBy: 'string?', act: 'string?' },
+  class: { rel: 'string', on: 'boolean' },
+  depart: { rel: 'string' },
+  allocate: { rel: 'string', nonce: 'string', keys: 'array' },
+  revision: { rel: 'string', revision: 'number', keys: 'array', writer: 'string?' },
+  withdraw: { rel: 'string', anchors: 'array' },
+  age: { rel: 'string', anchors: 'array' },
+  view: { rel: 'string', scope: 'string', revision: 'number', keys: 'array', writer: 'string?', clears: 'object?' },
+  introduce: { act: 'object' },
+  'ticket-accept': { act: 'object' },
+  'ticket-refuse-budget': { rel: 'string', own: 'string' },
+  finding: { text: 'string' },
+  consent: { act: 'string', card: 'object', cardKey: 'string' },
+  decline: { act: 'string' },
+  'hand-over': { act: 'string', o: 'string', digest: 'string?' },
+  'card-pending': { act: 'string', card: 'object', v: 'string' },
+  'card-refused': { act: 'string', v: 'string', k: 'boolean' },
+  connect: { act: 'string', rel: 'string', tuple: 'object' },
+  expire: { act: 'string' },
+  'budget-confirm': { rel: 'string', acts: 'array' },
+  duty: { pair: 'array', state: 'string', mappingDigest: 'string?' },
+  union: { a: 'string', b: 'string', edge: 'array' },
+  edge: { edge: 'array' },
+}
+const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x)
+const hasType = (x: unknown, t: FieldType) => (t === 'array' ? Array.isArray(x) : t === 'object' ? isObj(x) : typeof x === t && (t !== 'number' || Number.isFinite(x)))
+export function opProblem(op: unknown): string | null {
+  if (!isObj(op)) return 'op'
+  if (!isObj(op.id) || typeof op.id.writer !== 'string' || !Number.isFinite(op.id.n)) return 'op.id'
+  if (typeof op.at !== 'string') return 'op.at'
+  if (typeof op.kind !== 'string' || !Object.hasOwn(OP_FIELDS, op.kind)) return `op.kind(${String(op.kind)})`
+  for (const [f, t] of Object.entries(OP_FIELDS[op.kind as Op['kind']])) {
+    const optional = t.endsWith('?')
+    const v = op[f]
+    if (optional && (v === undefined || v === null)) continue
+    if (!hasType(v, t.replace('?', '') as FieldType)) return `op.${op.kind}.${f}`
+  }
+  return null
+}
+
 // ── Hilfen ───────────────────────────────────────────────────────────────────
 
 export const pairKey = (a: string, b: string): [string, string] => (a < b ? [a, b] : [b, a])
