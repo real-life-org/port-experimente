@@ -434,7 +434,49 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const duplicates = Math.max(0, entriesAcross(s.w, 'A', 'B') - 1) + Math.max(0, entriesAcross(s.w, 'B', 'A') - 1)
       const missing = per.filter(({ r }) => r.entries === 0).length
       const ok = n > 0 && duplicates === 0 && per.every(({ r }) => r.entries === 1 && r.tuples === 2)
-      return { outcome: mark(ok), detail: `${per.map(({ d, r }) => `${d.name}: ${r.entries} Eintrag/Einträge mit ${r.tuples} Tupel(n)`).join('; ')}; stabil nach ${n} Runden`, measures: { duplicates, devicesWithoutContact: missing, roundsToConverge: n } }
+      // Grenze (Anton 18.10., Option 2): öffnen beide Personen nebenläufig auf je zwei Geräten, trägt keine eingefrorene Probe
+      // das andere Tupel (2300, 6750), auch die Neuauswertung findet nichts; das Doppel heilt erst bei der nächsten Begegnung.
+      const heal = duplicates > 0 ? '; das Doppel heilt bei der nächsten Begegnung (X7b)' : ''
+      return { outcome: mark(ok), detail: `${per.map(({ d, r }) => `${d.name}: ${r.entries} Eintrag/Einträge mit ${r.tuples} Tupel(n)`).join('; ')}; stabil nach ${n} Runden${heal}`, measures: { duplicates, devicesWithoutContact: missing, roundsToConverge: n } }
+    },
+  },
+  {
+    id: 'X7b',
+    title: 'Dritte Begegnung nach dem symmetrischen nebenläufigen Paar (X7): beide Geräte abgeglichen, A1 trifft B1 erneut; Einträge je Gerät vorher/nachher, Runden bis zu einem Eintrag mit drei Tupeln, keine Doppelwirkung (2300, 6806, 6975)',
+    async run(c, serial) {
+      const s = await setup(c, serial)
+      // Wie X7: beide Begegnungen vor jeder Runde, dann Abgleich der Geräte.
+      await s.w.encounter(s.A, s.B)
+      await s.w.encounter(s.A2, s.B2)
+      await untilStable(s.w, 'A')
+      await untilStable(s.w, 'B')
+      const count = (person: string, other: string) => s.w.of(person).map((d) => relationshipsTo(s.w, d, other))
+      const before = [...count('A', 'B'), ...count('B', 'A')]
+      const entriesBefore = Math.max(...before.map((r) => r.entries))
+      // Die dritte Begegnung: die frische Probe trägt beide alten Tupel als Kandidaten (2300), die Gegenseite trifft beide.
+      await s.w.encounter(s.A, s.B)
+      const one = () => [...count('A', 'B'), ...count('B', 'A')].every((r) => r.entries === 1 && r.tuples === 3)
+      let rounds = -1
+      for (let i = 1; i <= 30; i++) {
+        await s.w.rounds(1)
+        if (one()) {
+          rounds = i
+          break
+        }
+      }
+      const n = Math.max(await untilStable(s.w, 'A'), await untilStable(s.w, 'B'))
+      const after = [...count('A', 'B'), ...count('B', 'A')]
+      const duplicates = Math.max(0, entriesAcross(s.w, 'A', 'B') - 1) + Math.max(0, entriesAcross(s.w, 'B', 'A') - 1)
+      const feA = finalEffects(s.w, 'A')
+      const feB = finalEffects(s.w, 'B')
+      const doubles = feA.total + feB.total
+      const ok = rounds > 0 && n >= 0 && duplicates === 0 && doubles === 0 && one()
+      const names = [...s.w.of('A'), ...s.w.of('B')].map((d) => d.name)
+      return {
+        outcome: mark(ok),
+        detail: `vorher ${before.map((r, i) => `${names[i]}: ${r.entries}`).join(', ')} Einträge; nachher ${after.map((r, i) => `${names[i]}: ${r.entries} mit ${r.tuples} Tupeln`).join(', ')}; ein Eintrag mit drei Tupeln nach ${rounds} Runden; Doppel in der Liste ${duplicates}; doppelte Wirkungen ${doubles}`,
+        measures: { entriesBefore, entriesAfter: Math.max(...after.map((r) => r.entries)), tuplesAfter: Math.min(...after.map((r) => r.tuples)), roundsToOneEntry: rounds, duplicates, doubleFinalEffects: doubles, roundsToConverge: n },
+      }
     },
   },
   {

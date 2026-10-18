@@ -1,6 +1,6 @@
-# Port notes: K1a, one seed, operation journal, static rights (E15 step 1)
+# Port notes: K1a, one seed, operation journal, static rights (E15 steps 1 and 2)
 
-As of 17 October 2026. K1a is the first positive candidate of the
+As of 18 October 2026. K1a is the first positive candidate of the
 multi-device experiment: every device derives all keys from the same seed
 (like K0), but every committed step of a device travels as one journal
 batch to the person's own address, and the rights that consume a hard
@@ -62,8 +62,92 @@ limit are assigned to one device in advance.
   turns; a mediator device without a nameable key refuses, the other
   introduces. Decisions (consent, decline) are allowed on every device:
   a conflict stays visible in the fold (8325 finding, X3).
+- **Re-evaluation of received probes (step 2).** Two devices of a person
+  can each open a tuple to the same counterpart before the journal brings
+  the other's. A counterpart probe that arrives on one of them is checked
+  against the tuples the receiving device holds at that moment; the
+  sibling's tuple is not among them, so a hit that the person as a whole
+  would have is missed. With the candidate flag `reevaluateProbes` the
+  device keeps every received probe, per own arrival tuple, with the
+  entries that hit nothing. Whenever it folds a sibling's journal batch
+  that adds own tuples, it evaluates every kept probe again against its
+  now larger set of own pair anchors, with the same hit rule as at
+  arrival (6806). This is an extension beyond 6800, 6802, 6806 and 6960,
+  not a derivation from them (see the assumption below). A hit owes the own
+  mapping on the arrival tuple (6845.1, 6840), as a hit at first
+  evaluation does; the union happens only on the counterpart's verified
+  mapping (6900, 6975.1, 6975.2). The probe is the counterpart's own,
+  sent at its scan with its frozen candidate list (2300, 6750 on its
+  side); nothing is added to any candidate list, no new message type
+  exists, and no clock is read.
+  - **Every match is a hit.** A probe with several matching entries now
+    owes one mapping per matched pair (6806: "each probe match"), not
+    only for the first match. This is what makes a third encounter heal
+    two old tuples at once (X7b).
+  - **What is journalised.** The re-evaluation runs inside the step that
+    folds the batch; the duty operation and the mapping intent it
+    produces are part of that step's commit and travel as one batch. The
+    kept probes themselves are device state like a received frame: part
+    of the checkpoint (rolled back with a failed step) and of the store
+    image (they survive a rebuild), not of the journal.
+  - **Which device re-evaluates.** Received frames do not travel in the
+    journal, so only a device that received the probe holds it. Its
+    sibling learns the duty from the journal and maps nothing itself (the
+    pair duty already exists). If both devices received the probe and
+    re-evaluate while separated, or one maps from re-evaluation while the
+    other verifies the counterpart's answer, two mappings over the same
+    pair can arise; the counterpart unites once and records only the edge
+    for the second (6975.3).
+  - **Concurrent unions.** With one seed both devices listen on every
+    tuple address, so the counterpart's answer mapping reaches both and
+    both may unite over the same edge. Two fold rules make that converge:
+    a union over an edge that is already united keeps the effect of the
+    canonically smallest operation (6230: one union, not two, in every
+    order); a pair duty that two devices each bring to `united` keeps the
+    smallest mapping digest (6845.9 stays final). Without them the ledger
+    shows the union from two operations and the duty digests differ
+    between the devices (checked by removing them: tests 5 and 6 fail).
+    Reservation: rule (a) makes the ledger show one union where two
+    devices each produced one. The ledger therefore shows the set effect
+    (6230), not single production: whether one mapping, one union and one
+    follow-up revision were produced needs a production or traffic oracle
+    (frames per device and kind at the carrier), not the ledger. That
+    oracle is an open point (6845 production identity, gate review 16 S3).
+  - **Retention.** Per own arrival tuple only the latest probe received
+    on it: its entries that hit nothing replace the kept entries of any
+    earlier probe on that tuple, they are never united with them. The
+    rule follows from 6750: the counterpart's candidate list is frozen at
+    its scan, so a repeated probe shows nothing the first did not; a
+    probe that differs is the counterpart's latest statement and the only
+    one kept. The hard bound is therefore the size of one probe (the
+    counterpart's candidate list), whatever the number of probes; a
+    counterpart that sends many probes with different entries leaves only
+    those of its last (test 7c). An entry that hits is dropped (a pair
+    anchor matches exactly one tuple); the set is dropped when it is
+    empty or when the relationship of the arrival tuple departs, whether
+    the departure is local or folded from a sibling's journal batch (the
+    drop is part of every apply: local `depart`, journal fold, rebuild
+    from the store; test 7b). Entries for the counterpart's other
+    contacts never hit and stay until departure.
+  - **Enrolment.** Kept probes are part of the device image that
+    enrolment copies, as state, journal and intents are: an enrolled
+    device receives the kept probes of the device it is enrolled from and
+    re-evaluates them when its journal brings new own tuples, also while
+    that device is offline (test 7d: A3 enrolled from A2, A2 offline, A's
+    journal brings A1's tuple, A3 hits on A2's kept probe and maps; the
+    duplicate is resolved without A2).
+  - **Assumption beyond the inventory (spec follow-up).** Re-evaluation
+    is an extension beyond 6800, 6802, 6806 and 6960. 6800 and 6802 bound
+    the candidate relation, 6806 states the hit rule, 6960 governs the
+    verification of a mapping; none of them provides for evaluating a
+    probe again or for searching every tuple the person holds. The
+    candidate evaluates a probe against the own tuples of all devices of
+    the person and repeats this when that set grows through the journal;
+    the inventory evaluates a probe once, at arrival. Repetition and the
+    wider search set are two decisions for the spec. 6750 is kept
+    literally on the sender's side.
 
-## Results (17 October, K1a against X1–X18 and X21)
+## Results (18 October, K1a against X1–X18, X7b and X21)
 
 See the matrix (`matrix.md`, multi-device port) for the cells; the table
 below is filled from the report run and the acceptance tests. "Serial"
@@ -79,22 +163,25 @@ scenario that has one.
 | X4 class off ∥ send | passed | passed | M's view empty on both devices, the running act connected on both, no equivocation |
 | X5 departure ∥ replay | passed | passed | A2 holds A1's mapping intent and produces nothing; only repeats of earlier bytes reach B |
 | X6 restore from backup | passed | n/a | new incarnation; the catch-up over the self address brings the missed batches, own earlier incarnation included |
-| X7 continuity across devices | failed | passed | every device holds two entries to B with one tuple each: the facts are shared, nothing is united |
+| X7 continuity across devices | failed | passed | both persons open concurrently on two devices each: every device holds two entries to the other person with one tuple each; neither frozen probe holds the other tuple, so re-evaluation finds nothing; the duplicate heals at the next encounter (X7b) |
+| X7b third encounter after X7 | passed | passed | after the symmetric concurrent pair and a sync every device holds two entries; A1 meets B1 again: the fresh probes carry both old tuples (2300), both sides hit both, and after two rounds A1, A2, B1 and B2 each hold one entry with three tuples; no duplicate, no double effect |
 | X8 enrollment | passed | n/a | state, journal and intents copied; A2 consents and connects at once |
 | X9 device revocation | failed | n/a | the thief with the image reads four documents and holds an act (one seed) |
 | X10 restricted app | n/a | n/a | step 1 has no rights profile per app |
 | X11 long separation | passed | n/a | both devices connected after reunion, stable after three rounds, no double effects, journal about 22 kB |
 | X12 delivery per device | passed | passed | B's effect once, A1 delivered after two rounds, A2 equal after one round |
 | X13 mediator devices against the shared budget | passed | passed | M1 and M2 each issue one introduction offline at budget 9, A1 sees one ticket, A2 the other: ten acts, no overrun, five blocked acceptances, no key named twice |
-| X14 double introduction | failed | passed | two acts, both connected; with B1 and B2 separated while consenting, B1, B2 and C1 each hold two entries with one tuple (no union) |
+| X14 double introduction | passed | passed | two acts, both connected; with B1 and B2 separated while consenting, C's probe on its second tuple (which holds the first) misses at the B device that lacks B's other tuple; after B's journal heals, that device re-evaluates the kept probe, hits and maps; B1, B2 and C1 each hold one entry with both tuples, no double effect |
 | X15 union ∥ running act | passed | passed | A2, separated from A1, unites the two relationships to M while A1's card is in transit; one entry with two tuples on both devices, the act connected, its mediator and acceptance on the united relationship, M's view on the united head |
 | X16 old stock after class revocation | failed | passed | A2, separated, accepts a ticket on a key A1 withdrew; after healing both devices hold the act and the key is consumed |
 | X17 parallel production | failed | passed | both devices refill and send revision 2 with different keys; one revision number from two operations, M records 6270 findings; probe sequence (6680) not modelled |
 | X18 two cards of one act | failed | passed | fails for two reasons: A's ledger holds consent and connect of the act each from two operations (two double final effects at A, none at B), and A's devices keep different hand-over digests and never agree; B receives two card documents with the same card key, connects once, no conflict mark |
 | X21 journal robustness | passed | n/a | repair after old and double restore with reordering, duplicates, concurrent requests and two crashes in 7 rounds; after 15 rounds of lost requests, answers, journal batches alone (reply head and receipts delivered) or receipts each in 1 round; after every phase no missing batch key and the reference projection on both devices; repair ends with no device waiting for catch-up and 17 silent rounds on the self address; no double effect, no conflict; 813 frames and 2.1 MB on the self address, of which 395 journal frames (1.65 MB for an 11-batch, 22 kB journal); 569 repeats, 566 on the self address and 3 to counterparts; the journal does not grow |
 
-Counts over X1 to X18 and X21 with two devices: 11 kept, 7 not kept, 1
-not applicable (K0: 1 kept, 17 not kept, 1 not applicable).
+Counts over X1 to X18, X7b and X21 with two devices: 13 kept, 6 not
+kept, 1 not applicable (K0: 1 kept, 18 not kept, 1 not applicable).
+Step 2 changed X14 and added X7b; every other outcome is the same as
+after step 1.
 
 Reservations (gate reviews 8 and 9): a successful restore with reachable
 history (X6) is not the same as repair after lost sync traffic (X21
@@ -103,7 +190,8 @@ anchor and receives new history through the sync as well (X9, one seed);
 X1, X2 and X5 show
 fixed rights with the entitled device available and no re-production,
 not a transfer of rights or a takeover after a device is lost (K1b,
-X20); X8 and X11 do not show a union of the person's own tuples (X14).
+X20); X8 and X11 do not show a union of the person's own tuples (X14
+and X7b do).
 
 ## Findings
 
@@ -128,12 +216,17 @@ X20); X8 and X11 do not show a union of the person's own tuples (X14).
   the sync does not do: bound the journal, forget anything, or decide
   between two devices that answer the same request (both answer, the
   requester deduplicates).
-- **Shared tuples are not united (X7).** Both devices learn both
-  encounters with B from the journal, so each holds two relationship
-  entries to B; the continuity protocol (probe, mapping, union, 6975) runs
-  only between a device's own tuple and the counterpart, never between
-  two own tuples of the same person. Sharing the facts is not merging
-  them; K1a needs the union step over own tuples (I-6).
+- **Concurrent openings on both sides heal only at the next encounter
+  (X7, X7b).** Both devices learn both encounters with B from the
+  journal, but each tuple's probe was sent with the candidate list of
+  its own device, and B's likewise. When A and B both open concurrently
+  on two devices each, no probe holds the other tuple, on either side, so
+  re-evaluation has nothing to find and every device keeps two entries.
+  At the next encounter the fresh probe of each side carries both old
+  tuples (2300), the other side hits both, and the three tuples end in
+  one entry on every device (X7b). Re-evaluation helps whenever at least
+  one side opened its two tuples in order (one device, or a sync in
+  between): that side's second probe holds the first tuple.
 - **A seed is still a capability (X9).** The thief with A2's image reads
   the next ticket and holds the act; revocation at the carrier changes
   nothing under one seed, as with K0, and the catch-up answers the thief
@@ -176,20 +269,28 @@ X20); X8 and X11 do not show a union of the person's own tuples (X14).
   issuing offline against A's budget at nine do not overrun it: A's
   devices split the acceptance quota, the device without quota blocks, and
   the person ends at ten acts. K0 reaches eleven.
-- **Own tuples are still not united (X14).** Two acts from A1 and A2 for the
-  same pair connect on B1 and B2. Each probe is checked by the device that
-  lacks the other tuple and acknowledged; once the journal heals, no device
-  checks again, and B and C keep two entries each. Without the separation
-  of B1 and B2 the outcome depends on frame order (the acts were united in
-  about half of the runs); the scenario separates them so the result is
-  stable. This is the same gap as X7: K1a needs a union step over the
-  person's own tuples.
+- **Asymmetric concurrent openings unite through re-evaluation (X14,
+  test 4).** Only one side has two concurrent tuples, the other opened in
+  order: its second probe carries the first tuple and misses at the
+  device that lacks it; after the journal heals, that device re-evaluates
+  the kept probe and hits. In the acceptance test from gate review 13
+  (A on two devices, B on one) every probe of A is dropped for the whole
+  run, and A and B still end in one entry with both tuples on every
+  device: A2 maps from re-evaluation, B unites and answers. In X14 the
+  same happens with B on two devices and C on one.
+- **Concurrent unions on both devices converge (step 2).** A1 and A2,
+  separated from each other after both learned both tuples to B: A2 maps
+  from re-evaluation, A1 verifies B's answer mapping (it reaches both,
+  one seed) and unites with an operation of its own. After healing both
+  hold one entry with both tuples, the same projection, one union effect
+  for the edge and no double effect at A or B. Duplicated and reordered
+  frames during the whole flow give the same result.
 - **A union through the counterpart travels well (X15).** When M's mapping
   unites two relationships on one device, the union is an operation in the
   journal; the other device folds it, re-points the running act and its
-  acceptance to the united relationship, and the act connects. No union
-  over own tuples is needed here, since the counterpart detects the
-  continuity.
+  acceptance to the united relationship, and the act connects. No
+  re-evaluation is involved: A2's new tuple has the old one in its
+  snapshot.
 - **Revocation and production are not rights (X16, X17).** A device that
   did not see the class revocation accepts a ticket on a withdrawn key,
   and the fold then marks the key consumed on every device. Two devices
@@ -216,14 +317,69 @@ X20); X8 and X11 do not show a union of the person's own tuples (X14).
   for the repeat. X13 does not use that count; X1, which counts 8640.12,
   has no budget refusal.
 
-## Limits of step 1
+## What re-evaluation adds (plan section 5: carrier, M, counterpart)
+
+On the receiving side, keeping entries means the receiver can run later
+equality tests with them. The bench runs them only against its own pair
+anchors: an
+entry is `HMAC(k_p, a)` under the pair key of the arrival tuple, and the
+receiver computes candidates only from anchors of tuples it holds itself.
+It can learn whether the counterpart's frozen list names one of its own
+anchors (that is, one of its own tuples), and nothing about third
+parties: an entry for the counterpart's contact with someone else never
+matches and tells the receiver nothing beyond the count of entries. Only
+the latest probe per arrival tuple is kept, so the number of such tests
+is bounded by one probe.
+
+Nothing on the wire beyond the mapping a hit owes anyway. Re-evaluation
+reads probes the device has already received and acknowledged; it sends
+no probe, no request and no further document type. Measured on the
+bench against main (deposits at the carrier, continuity documents, 25
+rounds after the encounters):
+
+- Symmetric concurrent pair (X7 flow): four probes on both, nothing
+  else on either; identical traffic.
+- Asymmetric pair (A on two devices, B on one): four probes on both; on
+  this branch two mappings more (A2's mapping owed by its hit, 6845.1,
+  and B's answer mapping, 6845.1 second trigger), on main none because
+  the pair is never united.
+
+The carrier sees the mapping frames of an ordinary union. M, as
+mediator, sees nothing. The counterpart receives a mapping some rounds
+after its probe instead of right away; the delay tells it that the hit
+was found late, which in K1a happens only after a journal fold, so it
+can infer that the person uses more than one device.
+
+## Limits of steps 1 and 2
 
 - The device count is fixed; a third device is refused. Transferring or
   re-splitting rights is K1b.
 - No transfer of quota between devices (that is K1b); no takeover of a
   sibling's intent when the sibling is lost (X20, K2).
-- No union step over the person's own tuples: two tuples to the same
-  person that the continuity probes missed stay two entries (X7, X14).
+- When both persons open concurrently on two devices each (X7 strict),
+  the duplicate stays until the next encounter between them (X7b); there
+  is no step that heals it earlier.
+- Kept probes are device state. A device that is lost takes its kept
+  probes with it (an enrolled device gets those of the device it is
+  enrolled from at enrolment, nothing later), and only a
+  journal fold triggers re-evaluation (no re-evaluation after a union or
+  a local opening).
+- Entries of a kept probe for the counterpart's other contacts never hit
+  and are kept until the arrival tuple's relationship departs or a later
+  probe on the same tuple replaces them.
+- The ledger shows the set effect of concurrent unions (fold rule (a)),
+  not how often a mapping, union or revision was produced; single
+  production needs a production or traffic oracle, which the bench does
+  not have for step 2 yet.
+- The bench evaluates a probe against every own tuple, not only the
+  arrival tuple's candidate list and mutual candidates (6800, 6802); the
+  repetition over the person's tuples is an assumption beyond the
+  inventory.
+- The tie rules for concurrent unions (smallest operation for the union
+  effect, smallest digest for a `united` duty) are bench rules of the
+  fold, not inventory rules. Concurrent unions with own stock on the
+  united relationship would each produce a revision under the same
+  number; that is the open production question of X17.
 - Class changes, revision numbers and hand-overs are not rights and have
   no merge rule beyond the fold: X16, X17 and X18 fail.
 - The journal is a plain list of batches in the device's store; no

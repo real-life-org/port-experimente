@@ -233,3 +233,38 @@ describe('B5: Projektion', () => {
     expect(M.canonical(M.project(a, t0))).not.toBe(M.canonical(M.project(b, t0)))
   })
 })
+
+describe('K1a Schritt 2: nebenläufige Vereinigung über eigene Tupel', () => {
+  const base = () => {
+    const s = M.emptyState('A')
+    M.apply(s, op({ kind: 'open-tuple', rel: null, tuple: tuple('A:e1', 'a1', 'b1'), provenance: 'encounter', vouchedBy: null, act: null }, 'A1@x'))
+    M.apply(s, op({ kind: 'open-tuple', rel: null, tuple: tuple('A:e2', 'a2', 'b2'), provenance: 'encounter', vouchedBy: null, act: null }, 'A2@y'))
+    return s
+  }
+  it('zwei Geräte vereinigen über dieselbe Kante: eine Vereinigung, die Wirkung trägt in jeder Reihenfolge die kanonisch kleinste Operation (6230)', () => {
+    const u1 = op({ kind: 'union', a: 'A:e1', b: 'A:e2', edge: ['A:e1', 'A:e2'] }, 'A1@x')
+    const u2 = op({ kind: 'union', a: 'A:e2', b: 'A:e1', edge: ['A:e1', 'A:e2'] }, 'A2@y')
+    const s1 = base()
+    const s2 = base()
+    M.apply(s1, u1)
+    M.apply(s1, u2)
+    M.apply(s2, u2)
+    M.apply(s2, u1)
+    for (const s of [s1, s2]) {
+      expect(s.relationships.length).toBe(1)
+      expect(s.effects.filter((e) => e.id.startsWith('union:'))).toEqual([{ id: 'union:A:e1+A:e2', op: M.opKey(u1.id), at: t0 }])
+    }
+    expect(M.canonical(M.project(s1, t0))).toBe(M.canonical(M.project(s2, t0)))
+  })
+  it('zwei Geräte erreichen dieselbe Pflicht `united` mit je eigenem Mapping: der Digest ist in jeder Reihenfolge der kleinste (6845.9 bleibt final)', () => {
+    const pair: [string, string] = ['A:e1', 'A:e2']
+    const d1 = op({ kind: 'duty', pair, state: 'united', mappingDigest: 'd-b' }, 'A1@x')
+    const d2 = op({ kind: 'duty', pair, state: 'united', mappingDigest: 'd-a' }, 'A2@y')
+    const late = op({ kind: 'duty', pair, state: 'hit', mappingDigest: 'd-0' }, 'A2@y')
+    const s1 = base()
+    const s2 = base()
+    for (const o of [d1, d2, late]) M.apply(s1, o)
+    for (const o of [late, d2, d1]) M.apply(s2, o)
+    for (const s of [s1, s2]) expect(M.project(s, t0).duties['A:e1|A:e2']).toEqual({ state: 'united', mappingDigest: 'd-a' })
+  })
+})

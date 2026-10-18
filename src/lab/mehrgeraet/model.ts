@@ -504,7 +504,12 @@ function applyBody(s: HolderState, op: Op): void {
     case 'duty': {
       const d = s.duties.find((x) => x.pair[0] === op.pair[0] && x.pair[1] === op.pair[1])
       if (d) {
-        if (d.state === 'united' || d.state === 'moot') return // 6845.9: final
+        if (d.state === 'united' || d.state === 'moot') {
+          // 6845.9: final. Erreichen zwei Geräte einer Person denselben Endzustand mit je eigenem Mapping (nebenläufige
+          // Vereinigung, K1a Schritt 2), hält jedes Gerät den kanonisch kleinsten Digest, in jeder Reihenfolge.
+          if (op.state === d.state && op.mappingDigest && d.mappingDigest && op.mappingDigest < d.mappingDigest) d.mappingDigest = op.mappingDigest
+          return
+        }
         d.state = op.state
         if (op.mappingDigest) d.mappingDigest = op.mappingDigest
       } else s.duties.push({ pair: op.pair, state: op.state, mappingDigest: op.mappingDigest })
@@ -516,7 +521,15 @@ function applyBody(s: HolderState, op: Op): void {
       const ra = rel(s, op.a) // unbekannt = Missing (Review 4 B1): „noch nicht bekannt“ ist nie „schon vereinigt“
       const rb = rel(s, op.b)
       if (!s.edges.some((e) => e[0] === op.edge[0] && e[1] === op.edge[1])) s.edges.push(op.edge)
-      if (ra === rb || ra.departed || rb.departed) return // schon vereinigt, oder keine Vereinigung über einen Abgang
+      if (ra === rb) {
+        // 6230: „Processing a union more than once MUST be idempotent“. Zwei Geräte einer Person, die über dieselbe Kante
+        // nebenläufig vereinigen, haben eine Vereinigung vollzogen, nicht zwei (K1a Schritt 2): die Wirkung behält die
+        // kanonisch kleinste Operation, in jeder Reihenfolge; die Mengenvereinigung selbst ist schon geschehen.
+        const e = s.effects.find((x) => x.id === `union:${op.edge.join('+')}`)
+        if (e && opKey(op.id) < e.op) Object.assign(e, { op: opKey(op.id), at: op.at })
+        return
+      }
+      if (ra.departed || rb.departed) return // keine Vereinigung über einen Abgang
       const headA = head(ra)
       const headB = head(rb)
       const [keep, other] = headA.record > headB.record ? [ra, rb] : [rb, ra]

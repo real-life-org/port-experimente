@@ -13,7 +13,12 @@
 // allowed on every device; a conflict stays visible in the fold. The number
 // of devices is fixed at the first enrollment (rights are never
 // redistributed in step 1); a restore gives a fresh random incarnation; the
-// candidate's volatile state is part of the device's checkpoint.
+// candidate's volatile state is part of the device's checkpoint. Step 2:
+// since the devices learn each other's tuples, a device keeps every probe
+// it received with the entries that hit nothing and evaluates it again
+// when a folded batch adds own tuples (`reevaluateProbes`); a hit owes the
+// own mapping, the union itself still comes only from a verified
+// counterpart mapping (6975.1) and travels as a journal operation.
 
 import { randomBytes } from 'node:crypto'
 import { EnrolmentRefused, seedScheme, type CandidateDevice, type HolderDevice, type Intent, type MultiDeviceCandidate, type Transaction } from '../../lab/mehrgeraet/holder'
@@ -58,6 +63,8 @@ export class K1aDevice implements CandidateDevice {
   private batches: Batch[] = []
   private out: Batch[] = []
   private n = 0
+  /** Step 2: devices learn their siblings' tuples through the journal, so the holder keeps received probes and evaluates them again when the own tuple set grows. */
+  readonly reevaluateProbes = true
   constructor(
     readonly person: string,
     readonly name: string,
@@ -194,8 +201,10 @@ export function k1a(opts: K1aOptions = {}): MultiDeviceCandidate {
       d.adopt((from.cand as K1aDevice).journal())
       list.push(d)
       devices.set(from.person, list)
-      // Zustand, Journal und Absichten wandern mit: das neue Gerät kennt jede offene Produktion und produziert nichts neu.
-      return { cand: d, state: structuredClone(from.state), intents: [...from.intents.values()] }
+      // Zustand, Journal, Absichten und behaltene Proben wandern mit (das Abbild des Geräts): das neue Gerät kennt jede
+      // offene Produktion, produziert nichts neu und kann die Proben neu auswerten, auch wenn `from` danach fehlt (Review 16 S2).
+      const probes = [...from.keptProbes()].map(([id, e]): [string, string[]] => [id, [...e]])
+      return { cand: d, state: structuredClone(from.state), intents: [...from.intents.values()], probes }
     },
     release(person, name) {
       const list = devices.get(person)

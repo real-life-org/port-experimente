@@ -3,6 +3,7 @@ import { Welt15 } from '../src/lab/mehrgeraet/welt'
 import { HolderDevice } from '../src/lab/mehrgeraet/holder'
 import { runX15 } from '../src/lab/mehrgeraet/scenarios'
 import { k1a, K1aDevice } from '../src/candidates/mehrgeraet-k1a'
+import { k0 } from '../src/candidates/mehrgeraet-k0'
 import * as M from '../src/lab/mehrgeraet/model'
 
 // E15 K1a Schritt 1: der Abnahmelauf aus Tor-Review 6 (Plan 6e).
@@ -404,23 +405,10 @@ describe('K1a breite Matrix', () => {
     }
   }, 600_000)
 
-  it('X14: A1 und A2 stellen B dieselbe Person C vor; B1 und B2 stimmen getrennt je einem zu: beide verbunden, aber nie vereinigt (kein Vereinigungsschritt über eigene Tupel)', async () => {
-    const two = byId(await runX15(k1a(), false, ['X14'])).X14!
-    expect(two.crashed, two.detail).toBeFalsy()
-    expect(two.measures.actsIssued, two.detail).toBe(2)
-    expect(two.measures.doubleFinalEffects).toBe(0)
-    // Jede Probe prüft ein Gerät, das das andere Tupel nicht kennt; nach der Heilung des Journals prüft niemand neu.
-    expect(two.measures.duplicates as number, two.detail).toBeGreaterThan(0)
-    expect(two.outcome, two.detail).toBe('nicht bestanden')
-    const one = byId(await runX15(k1a({ devices: 1 }), true, ['X14'])).X14!
-    expect(one.crashed, one.detail).toBeFalsy()
-    expect(one.outcome, one.detail).toBe('bestanden')
-  }, 600_000)
-
   it('X15: Vereinigung zweier Beziehungen zu M auf A2, während auf A1 ein Akt läuft (consented, Karte unterwegs): die Vereinigung trägt die Gegenseite M', async () => {
     const two = byId(await runX15(k1a(), false, ['X15'])).X15!
     expect(two.crashed, two.detail).toBeFalsy()
-    // Die Vereinigung entsteht aus Ms Mapping auf A2s neuem Tupel und wandert als Operation durchs Journal; kein Schritt über eigene Tupel nötig.
+    // Die Vereinigung entsteht aus Ms Mapping auf A2s neuem Tupel und wandert als Operation durchs Journal.
     expect(two.outcome, two.detail).toBe('bestanden')
     expect(two.measures.entriesToMediator).toBe(1)
     expect(two.measures.actsConnected).toBe(2)
@@ -494,5 +482,313 @@ describe('K1a breite Matrix', () => {
     } finally {
       spy.mockRestore()
     }
+  }, 600_000)
+})
+
+// K1a Schritt 2 (Anton 18.10., Optionen 1+2): Vereinigung eigener Tupel durch Neuauswertung empfangener Proben. Ein
+// Gerät behält die Probe der Gegenseite je eigenem Ankunftstupel, solange Einträge darin nichts getroffen haben. Wächst
+// die eigene Tupelmenge durch das Journal (ein Schwestergerät hat ein Tupel geöffnet), wertet es die behaltenen Proben
+// gegen die nun größere Menge eigener Paar-Anker neu aus (6960/6806). Ein Treffer verpflichtet zum eigenen Mapping
+// (6845.1) wie bei der ersten Auswertung; vereinigt wird nur auf das verifizierte Mapping der Gegenseite (6975.1/.2).
+// Kein neuer Rahmen, kein neuer Kandidat, 6750 unberührt, keine Uhr. Grenze (Option 2): öffnen beide Personen auf je zwei
+// Geräten nebenläufig (X7 streng), enthält keine eingefrorene Probe das andere Tupel; das Doppel heilt bei der nächsten
+// Begegnung (X7b).
+//   1. X7 streng: nicht bestanden, das Doppel heilt bei der nächsten Begegnung; seriell bestanden.
+//   1b. X7b: dritte Begegnung nach dem symmetrischen Paar: ein Eintrag mit drei Tupeln je Gerät, keine Doppelwirkung.
+//   1c. Gegenlauf: K1a ohne Neuauswertung verfehlt X14 und den asymmetrischen Fall.
+//   2. X14 besteht mit zwei Geräten und seriell.
+//   3. Alle Szenarien mit zwei Geräten wie in NOTES.
+//   4. Asymmetrisch (Tor-Review 13): nur A hat zwei Geräte; Bs Probe auf dem zweiten Tupel trägt das erste; A2 behält sie
+//      und trifft nach dem Journal, ohne jede Probe von A.
+//   5. A1 und A2 vereinigen getrennt voneinander (A2 aus der Neuauswertung, A1 auf Bs Antwort): nach der Heilung ein
+//      Eintrag, eine Vereinigungswirkung, Ledger sauber.
+//   6. Doppelte und umgeordnete Batches: genau eine Vereinigungswirkung, gleiche Projektion.
+//   7. Aufbewahrung: getroffene Einträge fallen weg; beim Abgang der Beziehung fällt die Probe weg.
+//   7b. Tor-Review 16 B1: auch ein Abgang aus dem Journal löscht die behaltene Probe (Faltung, nicht nur `depart()`).
+//   7c. Tor-Review 16 B2: je Ankunftstupel nur die jüngste Probe (aus 6750: eine Wiederholung zeigt nichts Neues).
+//   7d. Tor-Review 16 S2: behaltene Proben reisen mit dem Enrollment-Abbild.
+//   8. Eichung: K0 verfehlt X7 und X14 mit zwei Geräten weiter (kein Journal, keine Neuauswertung).
+
+async function twoByOne(opts: Parameters<typeof k1a>[0] = {}) {
+  const w = new Welt15(k1a(opts))
+  const A = await w.person('A', 'A1')
+  const B = await w.person('B', 'B1')
+  const Mm = await w.person('M', 'M1')
+  await w.encounter(A, Mm)
+  await w.encounter(B, Mm)
+  await w.rounds(2)
+  const A2 = await w.enrol(A, 'A2')
+  await w.rounds(3)
+  const selfA = (await A.cand.keys.pair('self/A')).rkid
+  return { w, A, A2, B, selfA }
+}
+const relsTo = (w: Welt15, d: HolderDevice, other: string) => d.state.relationships.filter((r) => !r.departed && r.tuples.some((t) => w.personOf(t.peer) === other))
+const tuplesTo = (w: Welt15, d: HolderDevice, other: string) => relsTo(w, d, other).flatMap((r) => r.tuples)
+/** Effekt-Id → erzeugende Operationen über alle Geräte einer Person (wie das Ledger-Orakel der Szenarien). */
+function ledgerOf(w: Welt15, person: string) {
+  const m = new Map<string, Set<string>>()
+  for (const d of w.of(person)) for (const e of d.state.effects) {
+    if (!m.has(e.id)) m.set(e.id, new Set())
+    m.get(e.id)!.add(e.op)
+  }
+  return m
+}
+const doubles = (w: Welt15, person: string) => [...ledgerOf(w, person).entries()].filter(([, ops]) => ops.size > 1).map(([id]) => id)
+const unions = (w: Welt15, person: string) => [...ledgerOf(w, person).keys()].filter((id) => id.startsWith('union:'))
+const isProbeOf = (w: Welt15, person: string) => (f: { bytes: Uint8Array }) => {
+  const o = w.frameOrigin(f.bytes)
+  return o?.kind === 'continuity-probe' && w.of(person).some((d) => d.name === o.device)
+}
+/** K1a ohne Neuauswertung (Gegenlauf). */
+function withoutReevaluation() {
+  const base = k1a()
+  const off = <T extends object>(d: T): T => Object.assign(d, { reevaluateProbes: false })
+  return { ...base, first: async (...a: Parameters<typeof base.first>) => off(await base.first(...a)), enrol: async (...a: Parameters<typeof base.enrol>) => { const r = await base.enrol(...a); off(r.cand); return r } }
+}
+
+describe('K1a Schritt 2: Vereinigung eigener Tupel durch Neuauswertung empfangener Proben', () => {
+  it('1. X7 streng: A1 trifft B1, A2 trifft B2 nebenläufig: nicht bestanden, das Doppel heilt bei der nächsten Begegnung; seriell bestanden', async () => {
+    const two = byId(await runX15(k1a(), false, ['X7'])).X7!
+    expect(two.crashed, two.detail).toBeFalsy()
+    expect(two.outcome, two.detail).toBe('nicht bestanden')
+    expect(two.measures.duplicates as number).toBeGreaterThan(0)
+    expect(two.detail).toMatch(/heilt bei der nächsten Begegnung \(X7b\)/)
+    const one = byId(await runX15(k1a({ devices: 1 }), true, ['X7'])).X7!
+    expect(one.crashed, one.detail).toBeFalsy()
+    expect(one.outcome, one.detail).toBe('bestanden')
+  }, 600_000)
+
+  it('1b. X7b: dritte Begegnung nach dem symmetrischen Paar: ein Eintrag mit drei Tupeln je Gerät, keine Doppelwirkung (zwei Geräte und seriell)', async () => {
+    const two = byId(await runX15(k1a(), false, ['X7b'])).X7b!
+    expect(two.crashed, two.detail).toBeFalsy()
+    expect(two.measures.entriesBefore, two.detail).toBe(2)
+    expect(two.measures.entriesAfter, two.detail).toBe(1)
+    expect(two.measures.tuplesAfter, two.detail).toBe(3)
+    expect(two.measures.doubleFinalEffects, two.detail).toBe(0)
+    expect(two.measures.roundsToOneEntry as number, two.detail).toBeGreaterThan(0)
+    expect(two.outcome, two.detail).toBe('bestanden')
+    const one = byId(await runX15(k1a({ devices: 1 }), true, ['X7b'])).X7b!
+    expect(one.crashed, one.detail).toBeFalsy()
+    expect(one.outcome, one.detail).toBe('bestanden')
+  }, 600_000)
+
+  it('1c. Gegenlauf: K1a ohne Neuauswertung (`reevaluateProbes` aus) verfehlt X14 wie vor Schritt 2', async () => {
+    const x = byId(await runX15(withoutReevaluation(), false, ['X14'])).X14!
+    expect(x.crashed, x.detail).toBeFalsy()
+    expect(x.outcome, x.detail).toBe('nicht bestanden')
+    expect(x.measures.duplicates as number).toBeGreaterThan(0)
+  }, 300_000)
+
+  it('2. X14: zwei Vorstellungen derselben Person C, B1 und B2 stimmen getrennt zu: B und C vereinigen (zwei Geräte und seriell)', async () => {
+    const two = byId(await runX15(k1a(), false, ['X14'])).X14!
+    expect(two.crashed, two.detail).toBeFalsy()
+    expect(two.measures.actsIssued, two.detail).toBe(2)
+    expect(two.measures.duplicates, two.detail).toBe(0)
+    expect(two.measures.doubleFinalEffects, two.detail).toBe(0)
+    expect(two.outcome, two.detail).toBe('bestanden')
+    const one = byId(await runX15(k1a({ devices: 1 }), true, ['X14'])).X14!
+    expect(one.crashed, one.detail).toBeFalsy()
+    expect(one.outcome, one.detail).toBe('bestanden')
+  }, 600_000)
+
+  it('3. alle Szenarien mit zwei Geräten: X14 und X7b bestanden, X7 streng nicht, der Rest wie in NOTES', async () => {
+    const r = byId(await runX15(k1a(), false))
+    for (const x of Object.values(r)) expect(x.crashed, `${x.scenario}: ${x.detail}`).toBeFalsy()
+    const want: Record<string, string> = {
+      X1: 'bestanden', X2: 'bestanden', X3: 'nicht bestanden', X4: 'bestanden', X5: 'bestanden', X6: 'bestanden', X7: 'nicht bestanden', X7b: 'bestanden', X8: 'bestanden', X9: 'nicht bestanden', X10: 'nicht abbildbar', X11: 'bestanden', X12: 'bestanden',
+      X13: 'bestanden', X14: 'bestanden', X15: 'bestanden', X16: 'nicht bestanden', X17: 'nicht bestanden', X18: 'nicht bestanden', X21: 'bestanden',
+    }
+    for (const [id, outcome] of Object.entries(want)) expect(r[id]?.outcome, `${id}: ${r[id]?.detail}`).toBe(outcome)
+  }, 1_800_000)
+
+  it('4. Tor-Review 13, asymmetrisch: nur A hat zwei Geräte; A2 behält Bs Probe und trifft nach dem Journal, ohne jede Probe von A', async () => {
+    const { w, A, A2, B, selfA } = await twoByOne()
+    // Keine Probe von A erreicht B, über den ganzen Lauf; das Journal zwischen A1 und A2 bleibt aus, bis Bs Proben ausgewertet sind.
+    const from = w.carrier.carried.length
+    w.carrier.faults.drop(isProbeOf(w, 'A'))
+    for (const d of w.of('A')) w.carrier.faults.withhold(d.name, (f) => f.address === selfA)
+    const first = await w.encounter(A, B)
+    const second = await w.encounter(A2, B)
+    // B hat ein Gerät: sein zweites Tupel trägt das erste als Kandidaten (2300), die Probe darauf geht an A2.
+    expect(M.tuple(B.state, second.y.id).candidates).toContain(first.x.own)
+    await w.rounds(3)
+    expect(relsTo(w, B, 'A').length, 'Bs Probe hat bei A2 nichts getroffen').toBe(2)
+    // Bs Probe auf dem zweiten Tupel trägt zwei Einträge: Bs Beziehung zu M (trifft bei A nie) und das erste Tupel.
+    expect(A2.keptProbes().get(second.x.id)?.length, 'A2 behält Bs Probe auf dem zweiten Tupel').toBe(2)
+    w.carrier.faults.reset()
+    w.carrier.faults.drop(isProbeOf(w, 'A'))
+    await w.rounds(20)
+    for (const d of [A, A2]) expect(relsTo(w, d, 'B').map((r) => r.tuples.length), d.name).toEqual([2])
+    expect(relsTo(w, B, 'A').map((r) => r.tuples.length), 'B1').toEqual([2])
+    expect(w.agree('A')).toEqual({ agree: true, diff: '' })
+    expect(doubles(w, 'A')).toEqual([])
+    expect(doubles(w, 'B')).toEqual([])
+    expect(A2.keptProbes().get(second.x.id)?.length, 'der getroffene Eintrag fällt weg, der für Bs Beziehung zu M bleibt').toBe(1)
+    // Kein Rahmen von A außer den Mappings, die der Treffer und die Antwortpflicht schulden.
+    const fromA = w.carrier.carried.slice(from).map((f) => w.frameOrigin(f.bytes)).filter((o) => o && w.of('A').some((d) => d.name === o.device) && o.kind.startsWith('continuity'))
+    const aProbes = w.carrier.carried.slice(from).filter(isProbeOf(w, 'A'))
+    expect(aProbes.length, 'A hat geprobt (Proben auf den neuen Tupeln)').toBeGreaterThan(0)
+    expect(aProbes.every((f) => w.carrier.swallowed.includes(f)), 'keine Probe von A kam an').toBe(true)
+    const mappings = fromA.filter((o) => o!.kind === 'continuity-mapping')
+    expect(mappings.length, 'ein Mapping von A (A2, aus der Neuauswertung)').toBeGreaterThan(0)
+    expect(new Set(mappings.map((o) => o!.device))).toContain('A2')
+  }, 180_000)
+
+  it('5. A1 und A2 vereinigen getrennt voneinander (Journal zurückgehalten): nach der Heilung ein Eintrag, eine Vereinigungswirkung, Ledger sauber', async () => {
+    const { w, A, A2, B, selfA } = await twoByOne()
+    for (const d of w.of('A')) w.carrier.faults.withhold(d.name, (f) => f.address === selfA)
+    await w.encounter(A, B)
+    await w.encounter(A2, B)
+    await w.rounds(3)
+    expect(A2.keptProbes().size).toBe(1)
+    w.carrier.faults.reset()
+    // Sobald beide A-Geräte beide Tupel zu B kennen, sind sie voneinander getrennt: A2 trifft aus der Neuauswertung, A1
+    // vereinigt auf Bs Antwort-Mapping, ohne von A2s Pflicht zu wissen.
+    let separated = false
+    const separate = () => {
+      if (separated || tuplesTo(w, A, 'B').length !== 2 || tuplesTo(w, A2, 'B').length !== 2) return
+      separated = true
+      for (const d of w.of('A')) w.carrier.faults.withhold(d.name, (f) => f.address === selfA)
+    }
+    const united = (d: HolderDevice) => relsTo(w, d, 'B').map((r) => r.tuples.length).join() === '2'
+    for (let i = 0; i < 20 && !(united(A) && united(A2)); i++) await w.rounds(1, separate)
+    expect(separated).toBe(true)
+    expect(united(A), 'A1 hält einen Eintrag mit beiden Tupeln').toBe(true)
+    expect(united(A2), 'A2 hält einen Eintrag mit beiden Tupeln').toBe(true)
+    const own = (d: HolderDevice) => d.state.effects.filter((e) => e.id.startsWith('union:') && e.op.startsWith(`${d.name}@`)).length
+    expect(own(A), 'A1 vereinigt selbst').toBeGreaterThan(0)
+    expect(own(A2), 'A2 vereinigt selbst').toBeGreaterThan(0)
+    w.carrier.faults.reset()
+    let stable = 0
+    for (let i = 0; i < 30 && stable < 3; i++) {
+      await w.rounds(1)
+      stable = w.agree('A').agree ? stable + 1 : 0
+    }
+    expect(w.agree('A')).toEqual({ agree: true, diff: '' })
+    for (const d of [A, A2]) expect(relsTo(w, d, 'B').map((r) => r.tuples.length)).toEqual([2])
+    expect(relsTo(w, B, 'A').map((r) => r.tuples.length)).toEqual([2])
+    expect(unions(w, 'A').length).toBe(1)
+    expect(doubles(w, 'A')).toEqual([])
+    expect(doubles(w, 'B')).toEqual([])
+    for (const d of [...w.of('A'), B]) expect(d.state.applied.filter((k, i, a) => a.indexOf(k) !== i), d.name).toEqual([])
+  }, 180_000)
+
+  it('6. doppelte und umgeordnete Batches: genau eine Vereinigungswirkung, gleiche Projektion', async () => {
+    const { w, A, A2, B, selfA } = await twoByOne()
+    for (const d of w.of('A')) w.carrier.faults.withhold(d.name, (f) => f.address === selfA)
+    await w.encounter(A, B)
+    await w.encounter(A2, B)
+    await w.rounds(3)
+    w.carrier.faults.reset()
+    w.carrier.faults.duplicate(true)
+    w.carrier.faults.reverse(true)
+    let stable = 0
+    for (let i = 0; i < 40 && stable < 3; i++) {
+      await w.rounds(1)
+      const united = [A, A2].every((d) => relsTo(w, d, 'B').length === 1) && relsTo(w, B, 'A').length === 1
+      stable = united && w.agree('A').agree ? stable + 1 : 0
+    }
+    w.carrier.faults.reset()
+    expect(stable).toBe(3)
+    expect(M.canonical(A2.projection())).toBe(M.canonical(A.projection()))
+    for (const d of [A, A2, B]) {
+      expect(d.state.applied.filter((k, i, a) => a.indexOf(k) !== i), d.name).toEqual([])
+      const ids = d.state.effects.map((e) => e.id).filter((id) => id.startsWith('union:'))
+      expect(new Set(ids).size, d.name).toBe(ids.length)
+    }
+    expect(unions(w, 'A').length).toBe(1)
+    expect(unions(w, 'B').length).toBe(1)
+    expect(doubles(w, 'A')).toEqual([])
+    expect(doubles(w, 'B')).toEqual([])
+    // Ein bekannter Vereinigungsbatch ein weiteres Mal geliefert: nichts Neues.
+    const batch = [A, A2].flatMap((d) => (d.cand as K1aDevice).journal()).find((b) => b.ops.some((o) => o.kind === 'union'))!
+    for (const d of [A, A2]) expect((d.cand as K1aDevice).receiveOwnFrame(new TextEncoder().encode(JSON.stringify(batch)))).toEqual({ ops: [], intents: [] })
+  }, 180_000)
+
+  it('7. Aufbewahrung: die Probe wird je Ankunftstupel gehalten, bis ihre Einträge getroffen haben oder die Beziehung abgeht', async () => {
+    const { w, A, A2, B, selfA } = await twoByOne()
+    for (const d of w.of('A')) w.carrier.faults.withhold(d.name, (f) => f.address === selfA)
+    await w.encounter(A, B)
+    const second = await w.encounter(A2, B)
+    await w.rounds(3)
+    expect(A2.keptProbes().get(second.x.id), 'zwei offene Einträge: Bs Beziehung zu M und Bs erstes Tupel').toHaveLength(2)
+    // Die Probe übersteht einen Neuaufbau aus dem Store (Teil des Geräteabbilds).
+    const kept = A2.keptProbes().get(second.x.id)!.slice()
+    await A2.reload()
+    expect(A2.keptProbes().get(second.x.id)).toEqual(kept)
+    expect(await A2.depart(M.relOfTuple(A2.state, second.x.id)!.id)).toBe('ok')
+    expect(A2.keptProbes().has(second.x.id), 'Abgang: die Probe fällt weg').toBe(false)
+    w.carrier.faults.reset()
+    await w.rounds(10)
+    expect(A2.state.effects.filter((e) => e.id.startsWith('union:'))).toEqual([])
+  }, 120_000)
+
+  it('7b. Tor-Review 16 B1: ein Abgang aus dem Journal löscht die behaltene Probe der Beziehung wie ein lokaler, auch im Store-Abbild', async () => {
+    const { w, A, A2, B } = await twoByOne()
+    const t = await w.encounter(A, B)
+    await w.rounds(3)
+    // Bs Probe trägt nur Bs Beziehung zu M: trifft bei A nie und bleibt beim empfangenden Gerät.
+    const holder = [A, A2].find((d) => d.keptProbes().has(t.x.id))
+    expect(holder, 'ein A-Gerät behält Bs Probe').toBeDefined()
+    const other = holder === A ? A2 : A
+    await w.rounds(3)
+    const rel = M.relOfTuple(other.state, t.x.id)
+    expect(rel, 'das andere Gerät kennt die Beziehung aus dem Journal').toBeDefined()
+    expect(await other.depart(rel!.id)).toBe('ok')
+    for (let i = 0; i < 8 && !M.relOfTuple(holder!.state, t.x.id)?.departed; i++) await w.rounds(1)
+    expect(M.relOfTuple(holder!.state, t.x.id)?.departed, 'der Abgang ist gefaltet').toBe(true)
+    expect(holder!.keptProbes().has(t.x.id), 'gefalteter Abgang: die Probe fällt weg').toBe(false)
+    await holder!.reload()
+    expect(holder!.keptProbes().has(t.x.id), 'auch im Store-Abbild').toBe(false)
+  }, 120_000)
+
+  it('7c. Tor-Review 16 B2: je Ankunftstupel nur die jüngste Probe; vier Proben mit disjunkten Einträgen: es bleiben die der letzten', async () => {
+    const w = new Welt15(k1a())
+    const A = await w.person('A', 'A1')
+    const B = await w.person('B', 'B1')
+    const t = await w.encounter(A, B) // B hat keine weitere Beziehung: keine eigene Probe
+    await w.rounds(2)
+    expect(A.keptProbes().size).toBe(0)
+    const sendProbe = (B as unknown as { sendProbe(t: M.Tuple): Promise<void> }).sendProbe.bind(B)
+    const kept: string[][] = []
+    for (let i = 0; i < 4; i++) {
+      // Signierte, verschlüsselte Probe der Gegenseite mit einem anderen Eintrag (Gegenlauf Astra).
+      await sendProbe({ ...M.tuple(B.state, t.y.id), candidates: [`fremd-${i}`] })
+      await w.rounds(2)
+      kept.push([...(A.keptProbes().get(t.x.id) ?? [])])
+    }
+    for (const k of kept) expect(k).toHaveLength(1)
+    expect(new Set(kept.map((k) => k[0])).size, 'vier verschiedene Einträge').toBe(4)
+    expect(A.keptProbes().get(t.x.id), 'nur die Einträge der letzten Probe').toEqual(kept[3])
+  }, 120_000)
+
+  it('7d. Tor-Review 16 S2: ein eingeschriebenes Gerät übernimmt die behaltenen Proben; A3 aus A2, A2 offline, A3 wertet aus und vereinigt', async () => {
+    const { w, A, A2, B, selfA } = await twoByOne({ devices: 3 })
+    w.carrier.faults.drop(isProbeOf(w, 'A'))
+    for (const d of w.of('A')) w.carrier.faults.withhold(d.name, (f) => f.address === selfA)
+    await w.encounter(A, B)
+    const second = await w.encounter(A2, B)
+    await w.rounds(3)
+    expect(A2.keptProbes().get(second.x.id), 'A2 behält Bs Probe auf dem zweiten Tupel').toHaveLength(2)
+    const A3 = await w.enrol(A2, 'A3')
+    expect(A3.keptProbes().get(second.x.id), 'die Probe reist mit dem Enrollment-Abbild').toEqual(A2.keptProbes().get(second.x.id))
+    A2.online = false
+    w.carrier.faults.reset()
+    w.carrier.faults.drop(isProbeOf(w, 'A'))
+    const from = w.carrier.carried.length
+    for (let i = 0; i < 20 && !(relsTo(w, A, 'B').length === 1 && relsTo(w, A3, 'B').length === 1 && relsTo(w, B, 'A').length === 1); i++) await w.rounds(1)
+    for (const d of [A, A3]) expect(relsTo(w, d, 'B').map((r) => r.tuples.length), d.name).toEqual([2])
+    expect(relsTo(w, B, 'A').map((r) => r.tuples.length), 'B1').toEqual([2])
+    const mappings = w.carrier.carried.slice(from).map((f) => w.frameOrigin(f.bytes)).filter((o) => o?.kind === 'continuity-mapping' && o.device.startsWith('A'))
+    expect(new Set(mappings.map((o) => o!.device)), 'A3 mappt aus der Neuauswertung, ohne A2').toContain('A3')
+    expect(doubles(w, 'B')).toEqual([])
+  }, 180_000)
+
+  it('8. Eichung: K0 verfehlt X7 und X14 mit zwei Geräten weiter', async () => {
+    const r = byId(await runX15(k0(), false, ['X7', 'X14']))
+    for (const x of Object.values(r)) expect(x.crashed, x.detail).toBeFalsy()
+    expect(r.X7!.outcome, r.X7!.detail).toBe('nicht bestanden')
+    expect(r.X7!.measures.duplicates as number).toBeGreaterThan(0)
+    expect(r.X14!.outcome, r.X14!.detail).toBe('nicht bestanden')
   }, 600_000)
 })
