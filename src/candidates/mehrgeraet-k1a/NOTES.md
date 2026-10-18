@@ -191,6 +191,37 @@ operations, so K0 behaves as before.
   as a repetition of the act (8910.7): acknowledged, no second connect, no
   conflict mark K. A card with different content (keys per device, K2)
   would be refused with K := yes (8910.8).
+  Bench limit (gate review 18 S1): the bench card carries only the card
+  anchor and the key-exchange key. That is why two cards of one act under
+  one seed are byte-identical in their payload and B treats the second as
+  a repetition (8910.7). A full card with its own `at` and `nonce` would
+  differ, and B would set K by 8910.8 (Astra's counter-run: a second signed
+  card with a different `card.at`/`card.nonce` sets K = true). The X18 pass
+  holds for the simplified payload only; which fields make two cards "the
+  same card" is a spec follow-up (8727, 8740, 8910).
+- **O per hand-over by rank (gate review 18 B1b).** Two values for the same
+  hand-over (digest) fold by rank, not by arrival order: `none` < `intent`
+  < `handed` < `cancelled` < `taken` < `given-up` < `delivered`. A
+  withdrawal that held never returns to `handed` (8326.8); a card the
+  carrier has taken holds against a withdrawal (8326.9, the line "what has
+  reached the carrier holds", as in rule 2); `delivered` is last (8326.10).
+  Cancelled-then-delivered and delivered-then-cancelled fold to the same
+  state on every device.
+- **No release before catch-up after a restore (gate review 18 B1a).**
+  After a rebuild from the store image, a device whose person has another
+  device (known from enrollment, or a foreign writer in its journal)
+  releases nothing to a counterpart (card, mapping, revision, receipt)
+  until its own catch-up has completed: the sibling answered the
+  `journal-sync` request and the own heads cover the sibling's. Only
+  traffic on the self address (journal, catch-up, receipts on it) goes
+  out; held submissions neither deposit nor repeat, and their deadlines
+  do not run. After the catch-up the fold decides which of them are still
+  valid: a card the journal shows as `cancelled` is demarcated locally
+  without a new operation, a card the fold now declines or that lost rule
+  3 is withdrawn as usual, the rest goes out after the round's commit. A
+  device whose sibling never answers stays held (no deadlock for others,
+  but nothing leaves it); a device of a person with one device, or a K0
+  device without journal, holds nothing back.
 - **Local withdrawal (`Zusteller.demarcate`).** The bench's delivery
   adapter discards a submission that never reached the carrier (recorded,
   or `awaiting-transport` without a successful deposit), like a
@@ -399,6 +430,17 @@ and X7b do).
   (8910.7); with keys per device it would be refused with K (8910.8). The
   inventory needs a rule for which card counts and what the counterpart
   does with the second.
+- **8326: withdrawal safe against restore, merge per hand-over.** A device
+  restored from a backup taken before a withdrawal must not release the
+  withdrawn card before it has caught up its own journal; the state of one
+  hand-over merges by rank (`cancelled` over the pre-carrier states,
+  `taken`/`delivered` over `cancelled`). The inventory needs both rules.
+- **8727/8740/8910: full card identity and the notion of repetition.** The
+  bench card has no `at` or `nonce`, so two cards of one act under one seed
+  are equal and the second is a repetition (8910.7). With full cards the
+  inventory needs to say which fields decide that two cards are the same
+  card, or whether a second fresh card of the same act always sets K
+  (8910.8).
 
 ## What re-evaluation adds (plan section 5: carrier, M, counterpart)
 
@@ -488,6 +530,17 @@ can infer that the person uses more than one device.
   separately (X18: two card documents to B), not in the ledger.
 - The tie rule of rule 3 (smaller digest) and the per-hand-over O are
   bench rules of the fold, not inventory rules.
+- The bench card carries only anchor and key-exchange key: two cards of one
+  act under one seed are byte-identical in payload and B treats the second
+  as a repetition (8910.7). A full card with its own `at`/`nonce` would
+  differ and B would set K (8910.8); X18 passes for the simplified card.
+- After a restore a device holds back everything for its counterparts
+  until a sibling answers its catch-up request. If no sibling ever answers
+  (the sibling is lost), the device stays held; there is no timeout and no
+  measurement of that case yet (taking over is X20).
+- Sibling knowledge comes from enrollment (both devices record each other)
+  or from a foreign writer in the journal. A backup taken before the
+  enrollment knows no sibling and releases at once.
 - The journal is a plain list of batches in the device's store; no
   cleanup, no tombstones, no bound on its size; every sibling that
   receives a request answers with all batches after the requester's heads,

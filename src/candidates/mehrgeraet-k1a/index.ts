@@ -46,6 +46,7 @@ interface Persisted {
   inc: string
   batches: Batch[]
   out: Batch[]
+  siblings?: string[]
 }
 
 export interface K1aOptions {
@@ -67,6 +68,8 @@ export class K1aDevice implements CandidateDevice {
   private batches: Batch[] = []
   private out: Batch[] = []
   private n = 0
+  /** Other enrolled devices of the person this device knows from enrollment (source and new device both record it; review 18 B1a). */
+  private known = new Set<string>()
   /** Step 2: devices learn their siblings' tuples through the journal, so the holder keeps received probes and evaluates them again when the own tuple set grows. */
   readonly reevaluateProbes = true
   constructor(
@@ -157,7 +160,7 @@ export class K1aDevice implements CandidateDevice {
     this.n = d.n
   }
   persist(): Persisted {
-    return { index: this.index, slots: this.slots, inc: this.inc, batches: this.batches, out: this.out }
+    return { index: this.index, slots: this.slots, inc: this.inc, batches: this.batches, out: this.out, siblings: [...this.known] }
   }
   restore(data: unknown): void {
     const d = data as Persisted | null
@@ -166,6 +169,7 @@ export class K1aDevice implements CandidateDevice {
     this.slots = d.slots
     this.batches = d.batches
     this.out = d.out
+    this.known = new Set(d.siblings ?? [])
     this.inc = fresh() // neue Inkarnation (Befund 5), unabhängig vom Backup (B2)
     this.n = 0
   }
@@ -175,6 +179,17 @@ export class K1aDevice implements CandidateDevice {
   }
   adopt(batches: Batch[]) {
     this.batches = batches
+  }
+  /** The other enrolled devices known from enrollment (review 18 B1a: who can answer this device's catch-up request). */
+  siblings(): string[] {
+    return [...this.known].sort()
+  }
+  /** Enrollment: the source device and the new device record each other. */
+  meet(name: string) {
+    if (name !== this.name) this.known.add(name)
+  }
+  forget(name: string) {
+    this.known.delete(name)
   }
 }
 
@@ -203,6 +218,11 @@ export function k1a(opts: K1aOptions = {}): MultiDeviceCandidate {
       if (list.length >= slots) throw new EnrolmentRefused(`K1a: Gerätezahl fest auf ${slots}; Enrollment von ${name} verweigert`)
       const d = new K1aDevice(from.person, name, seeds.get(from.person)!, list.length, slots, budget)
       d.adopt((from.cand as K1aDevice).journal())
+      // Beide Seiten des Enrollments merken sich das andere Gerät (Teil des Abbilds): wer nach einem Restore nachholen muss,
+      // weiß, dass eine Schwester antworten kann (Tor-Review 18 B1a).
+      for (const s of (from.cand as K1aDevice).siblings()) d.meet(s)
+      d.meet(from.name)
+      ;(from.cand as K1aDevice).meet(name)
       list.push(d)
       devices.set(from.person, list)
       // Zustand, Journal, Absichten und behaltene Proben wandern mit (das Abbild des Geräts): das neue Gerät kennt jede
@@ -213,6 +233,7 @@ export function k1a(opts: K1aOptions = {}): MultiDeviceCandidate {
     release(person, name) {
       const list = devices.get(person)
       if (list) devices.set(person, list.filter((d) => d.name !== name))
+      for (const d of list ?? []) d.forget(name)
     },
   }
 }

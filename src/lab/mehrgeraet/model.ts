@@ -403,6 +403,19 @@ function resolveDecision(s: HolderState, a: Act): void {
 }
 
 /** O des Akts aus den Übergaben seiner Karten (Regel 3): je Übergabe ein eigener Zustand, der Akt trägt das weiteste Fortkommen. */
+/**
+ * Tor-Review 18 B1b: Rang je Übergabe (ein Digest). Der Zustand einer Übergabe faltet als Verband, nicht nach
+ * Ankunftsreihenfolge: von zwei Werten für denselben Digest gilt der mit dem höheren Rang, auf jedem Gerät gleich.
+ *
+ *   8326.8  eine nie genommene Übergabe wird lokal abgegrenzt (`cancelled`, wie `not-taken`); das schlägt die Zustände vor
+ *           dem Träger (`none`, `intent`, `handed`): eine Rücknahme, die gegolten hat, kehrt nicht zu `handed` zurück.
+ *   8326.9  eine Übergabe, die der Träger genommen hat, wird nicht aufgehoben: `taken`, `given-up` und `delivered` schlagen
+ *           `cancelled` (was den Träger erreicht hat, gilt; Linie Anton 18.10., wie Regel 2).
+ *   8326.10 `delivered` ist der letzte Zustand, auch nach `given-up` (späte Quittung).
+ */
+const HAND_OVER_RANK: Record<HandOver, number> = { none: 0, intent: 1, handed: 2, cancelled: 3, taken: 4, 'given-up': 5, delivered: 6 }
+const higher = (x: HandOver | undefined, y: HandOver): HandOver => (x !== undefined && HAND_OVER_RANK[x] >= HAND_OVER_RANK[y] ? x : y)
+
 function aggregateO(a: Act): void {
   const os = Object.values(a.cards ?? {})
   if (!os.length) return
@@ -558,7 +571,7 @@ function applyBody(s: HolderState, op: Op): void {
       // keine Karte); „erste in Journalordnung“ ist damit für sie nicht definiert, es gilt der Gleichstand: kleinerer Digest.
       const a = act(s, op.act)
       if (op.digest) {
-        a.cards = { ...(a.cards ?? {}), [op.digest]: op.o }
+        a.cards = { ...(a.cards ?? {}), [op.digest]: FOLD.handOver ? higher(a.cards?.[op.digest], op.o) : op.o } // B1b: Rang je Übergabe
         if (!a.ownCardDigest || (FOLD.handOver ? op.digest < a.ownCardDigest : true)) a.ownCardDigest = op.digest
         if (FOLD.handOver) aggregateO(a)
         else a.o = op.o

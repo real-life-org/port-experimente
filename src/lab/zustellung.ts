@@ -277,6 +277,12 @@ export interface Submission {
 export class Zusteller {
   readonly submissions = new Map<string, Submission>()
   readonly notes: string[] = []
+  /**
+   * Zurückgehalten (E15, Tor-Review 18 B1a): eine freigegebene Submission, für die das Gerät `true` liefert, wird in
+   * dieser Runde weder eingeliefert noch wiederholt, und ihre Fristen laufen nicht (das Gerät holt nach einem
+   * Neuaufbau erst sein eigenes Journal nach). `null`: nichts zurückgehalten.
+   */
+  gate: ((s: Submission) => boolean) | null = null
   constructor(
     readonly device: string,
     private readonly carrier: () => Carrier,
@@ -343,6 +349,7 @@ export class Zusteller {
   advance() {
     for (const s of this.submissions.values()) {
       if (s.report === null) continue // vorgemerkt, nicht freigegeben: liegt vor der Commit-Grenze des Geräts (#56)
+      if (this.gate?.(s)) continue // zurückgehalten bis zum Nachholen (B1a): keine Einlieferung, keine Frist
       s.rounds++
       s.sinceDeposit++
       if (s.sinceAccepted !== null) s.sinceAccepted++

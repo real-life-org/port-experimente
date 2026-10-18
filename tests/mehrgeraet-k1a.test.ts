@@ -605,6 +605,72 @@ describe('K1a Schritt 3: Entscheidung und Übergabe', () => {
       expect(cardDocs(w, act)).toBe(1)
     } else expect(cardDocs(w, act)).toBe(2) // A1s Karte gewinnt, A2s war schon eingereicht: beide hinaus, B sieht eine Wiederholung
   }, 300_000)
+
+  /** Kartendokumente von A1 an B, die den Träger erreicht haben (Einlieferungen im Zusteller, auch nach Restore). */
+  const a1CardDeposits = (A: HolderDevice, act: string) => {
+    const a = M.act(A.state, act)
+    return [...A.zusteller.submissions.values()].filter((x) => x.address === a.voucher.keyAgreement && A.intents.get(x.digest)?.kind.includes('introduction-card') && x.deposits > 0).length
+  }
+  const states = (w: Welt15, act: string) => w.of('A').map((d) => `${M.act(d.state, act).state}/${M.act(d.state, act).o}`)
+
+  it('4. Tor-Review 18 B1a: Restore aus einem Backup vor der Rücknahme gibt nichts frei, bevor das eigene Journal nachgeholt ist; die zurückgenommene Karte erreicht B nie, A bleibt abgelehnt und einig', async () => {
+    const { w, A, A2, B, act } = await withA2()
+    // Astras Gegenlauf (Review 18): A1 stimmt offline zu (Karte beim Adapter, nie beim Träger), Backup.
+    A.online = A2.online = false
+    expect(await A.consent(act)).toBe('ok')
+    A.commit()
+    const backup = w.stores.get('A1')!.snapshot()
+    expect(await A2.decline(act)).toBe('ok')
+    expect(await B.consent(act)).toBe('ok')
+    A2.online = true
+    await w.rounds(1)
+    A.online = true
+    await w.rounds(20)
+    // X3-Heilung: beide A abgelehnt, die Karte zurückgenommen.
+    expect(states(w, act)).toEqual(['declined/cancelled', 'declined/cancelled'])
+    expect(a1CardDeposits(A, act)).toBe(0)
+    // Restore auf A1, das Self-Journal drei Runden zurückgehalten: keine Freigabe vor dem Nachholen.
+    w.stores.get('A1')!.restore(backup)
+    await A.reload()
+    expect(M.act(A.state, act).o).toBe('handed') // der Stand des Backups
+    const self = (await A.cand.keys.pair('self/A')).rkid
+    w.carrier.faults.withhold('A1', (f) => f.address === self)
+    await w.rounds(3)
+    expect(A.syncPending).toBe(true)
+    expect(a1CardDeposits(A, act)).toBe(0)
+    expect(M.act(B.state, act).state).toBe('consented')
+    w.carrier.faults.reset()
+    expect(await w.until(() => !A.syncPending, 30)).toBeGreaterThan(0)
+    await w.rounds(30)
+    expect(a1CardDeposits(A, act)).toBe(0)
+    expect(M.act(B.state, act)).toMatchObject({ state: 'consented', pending: null })
+    expect(states(w, act)).toEqual(['declined/cancelled', 'declined/cancelled'])
+    expect(w.agree('A').agree).toBe(true)
+    expect(doubles(w, 'A')).toEqual([])
+  }, 300_000)
+
+  it('5. Spiegel zu 4: Restore, nach dem die Karte rechtmäßig gilt (keine Ablehnung); sie wartet auf das Nachholen und geht danach hinaus; A und B verbunden', async () => {
+    const { w, A, A2, B, act } = await withA2()
+    A.online = false
+    expect(await A.consent(act)).toBe('ok')
+    A.commit()
+    const backup = w.stores.get('A1')!.snapshot()
+    expect(await B.consent(act)).toBe('ok')
+    w.stores.get('A1')!.restore(backup)
+    await A.reload()
+    const self = (await A.cand.keys.pair('self/A')).rkid
+    w.carrier.faults.withhold('A1', (f) => f.address === self)
+    A.online = true
+    await w.rounds(3)
+    expect(A.syncPending).toBe(true)
+    expect(a1CardDeposits(A, act)).toBe(0)
+    w.carrier.faults.reset()
+    expect(await w.until(() => [...w.of('A'), B].every((d) => M.act(d.state, act).state === 'connected') && w.agree('A').agree, 30)).toBeGreaterThan(0)
+    expect(a1CardDeposits(A, act)).toBe(1)
+    expect(ledgerOf(w, 'B').get(`connect:${act}`)?.size).toBe(1)
+    expect(doubles(w, 'A')).toEqual([])
+    void A2
+  }, 300_000)
 })
 
 // K1a Schritt 2 (Anton 18.10., Optionen 1+2): Vereinigung eigener Tupel durch Neuauswertung empfangener Proben. Ein

@@ -376,6 +376,23 @@ describe('K1a Schritt 3: Entscheidung und Übergabe', () => {
     expect(s.relationships.length).toBe(2)
     expect(actEffects(s).filter((e) => e.startsWith('connect:'))).toEqual([`connect:act1@${M.opKey(k1.id)}`])
   })
+  it('Tor-Review 18 B1b: O je Übergabe nach Rang, nicht nach Ankunft: cancelled vor und nach delivered faltet zu delivered (beim Träger gilt, 8326.9), cancelled schlägt handed; Duplikate und Umordnung: gleiche Projektion', () => {
+    const c1 = consent('A1@x')
+    const h1 = handOver('A1@x', 'handed', 'dB')
+    const x1 = handOver('A1@x', 'cancelled', 'dB')
+    // Dieselbe Übergabe aus einer neuen Inkarnation (Restore aus einem Backup vor der Rücknahme): sie erreicht den Träger.
+    const t1 = handOver('A1@z', 'taken', 'dB')
+    const d1 = handOver('A1@z', 'delivered', 'dB')
+    const s = allOrders([c1, h1, x1], [c1, t1, d1]) // die neue Inkarnation kennt die Zustimmung (Backup)
+    expect(M.act(s, 'act1').cards).toEqual({ dB: 'delivered' })
+    expect(M.project(s, t0).acts.act1).toMatchObject({ state: 'consented', o: 'delivered', ownCardDigest: 'dB' })
+    // Vor dem Träger schlägt cancelled die früheren Zustände, in jeder Reihenfolge.
+    const y = allOrders([c1, h1], [handOver('A2@y', 'cancelled', 'dB')])
+    expect(M.act(y, 'act1').cards).toEqual({ dB: 'cancelled' })
+    // Mit Ablehnung: delivered entscheidet Regel 2 für die Zustimmung, gleich in jeder Reihenfolge.
+    const z = allOrders([c1, h1, x1], [c1, decline('A2@y'), t1])
+    expect(M.act(z, 'act1')).toMatchObject({ state: 'consented', o: 'taken' })
+  })
   it('Gegenlauf: ohne Regel 1 tragen Zustimmung und Verbindung zwei Operationen; ohne Regel 3 hängt der Übergabedigest an der Reihenfolge; ohne Regel 2 bleibt jedes Gerät bei seinem ersten Zustand', () => {
     const c1 = consent('A1@x')
     const c2 = consent('A2@y')
