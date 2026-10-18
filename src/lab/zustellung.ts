@@ -368,6 +368,19 @@ export class Zusteller {
     const s = this.submissions.get(digest)
     if (s && s.report === null) this.submissions.delete(digest)
   }
+  /**
+   * Lokale Abgrenzung (E15 K1a Schritt 3, wie 8326.4 `not-taken` und 8326.8): eine Einlieferung, die den Träger nie
+   * erreicht hat (vorgemerkt, oder `awaiting-transport` ohne eine gelungene Einlieferung), kann nicht mehr genommen
+   * werden; der Adapter verwirft sie. Liefert true, wenn verworfen. Hat der Träger sie schon (`accepted` oder später),
+   * bleibt sie (8326.9: eine offene Übergabe wird nicht aufgehoben).
+   */
+  demarcate(digest: string): boolean {
+    const s = this.submissions.get(digest)
+    if (!s || s.deposits > 0) return false
+    if (s.report !== null && s.report.state !== 'awaiting-transport') return false
+    this.submissions.delete(digest)
+    return true
+  }
   transport(digest: string) {
     return this.submissions.get(digest)?.transport
   }

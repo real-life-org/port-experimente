@@ -10,7 +10,11 @@
 // statically at enrollment to the writer that consumes them: acceptance
 // budget split evenly across the devices of a person, the stock keys a
 // mediator may name split by key number. Decisions (consent, decline) are
-// allowed on every device; a conflict stays visible in the fold. The number
+// allowed on every device; step 3 folds them by the model's rules (one
+// effect per decision, a submitted own card decides consent against
+// decline, the smaller of two hand-overs wins; model.ts `resolveDecision`),
+// and the device withdraws its own card when the fold decided against it
+// and the card never reached the carrier (holder.ts). The number
 // of devices is fixed at the first enrollment (rights are never
 // redistributed in step 1); a restore gives a fresh random incarnation; the
 // candidate's volatile state is part of the device's checkpoint. Step 2:

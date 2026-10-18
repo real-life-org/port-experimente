@@ -389,6 +389,7 @@ export class HolderDevice {
     for (const op of tx.ops) M.apply(this.state, op)
     this.dropDeparted() // ein gefalteter Abgang beendet die Aufbewahrung wie ein lokaler (Tor-Review 16 B1)
     for (const i of tx.intents) if (!this.intents.has(i.digest)) this.intents.set(i.digest, i)
+    await this.withdrawLosingCards()
     await this.relisten()
     if ([...this.tupleIds()].some((id) => !known.has(id))) await this.reevaluate() // die eigene Tupelmenge ist gewachsen
     await this.refillAll()
@@ -719,7 +720,31 @@ export class HolderDevice {
   }
 
   private submitted(a: M.Act) {
-    return a.o === 'taken' || a.o === 'delivered' || a.o === 'given-up'
+    return M.SUBMITTED.has(a.o)
+  }
+  /**
+   * K1a Schritt 3, Regeln 2 und 3 (Anton 18.10.2026), auf dem Gerät, das die Karte erzeugt hat: nach dem Falten eines
+   * Batches eines Schwestergeräts nimmt es seine eigene Karte zurück, wenn die Faltung gegen sie entschieden hat (der Akt
+   * ist abgelehnt, Regel 2, oder eine andere Übergabe desselben Akts gewinnt, Regel 3) und die Karte nicht eingereicht
+   * ist (8232.2: „Unless submitted or currently undecided (8232.0), the registration and the document are cancelled“;
+   * 8765: wer ablehnt, sendet nichts). Zurückgenommen wird nur, was den Träger nie erreicht hat (`Zusteller.demarcate`,
+   * wie 8326.4/8326.8); hat der Träger die Karte schon, bleibt sie (8326.9), wird `taken` und entscheidet Regel 2 dann für
+   * die Zustimmung: was die Gegenseite erreicht hat, gilt. Die Rücknahme ist eine Operation im selben Schritt (Journal).
+   */
+  private async withdrawLosingCards(): Promise<void> {
+    for (const [d, x] of [...this.sent]) {
+      if (x.kind !== 'card' || !x.act) continue
+      const a = this.state.acts.find((y) => y.id === x.act)
+      if (!a || (a.cards?.[d] ?? a.o) !== 'handed') continue
+      const declined = a.state === 'declined'
+      const loses = a.ownCardDigest !== null && a.ownCardDigest !== d
+      if (!declined && !loses) continue
+      if (!this.zusteller.demarcate(d)) continue
+      this.sent.delete(d)
+      this.held = this.held.filter((h) => h !== d)
+      this.expected.delete(d)
+      this.emit({ kind: 'hand-over', act: a.id, o: 'cancelled', digest: d })
+    }
   }
   /** 8325.A5c: eine wartende Gegenkarte nach der Einreichung der eigenen Karte neu prüfen. */
   private async evaluatePending(actId: string): Promise<void> {
@@ -931,10 +956,12 @@ export class HolderDevice {
       if (x.kind === 'card' && x.act) {
         const a = this.state.acts.find((y) => y.id === x.act)
         if (!a) return
-        if (a.o === 'handed' && r.state === 'accepted') {
+        // O je Übergabe (Regel 3): die Karte des Schwestergeräts ändert nichts am Bericht dieser Karte.
+        const o = a.cards?.[d] ?? a.o
+        if (o === 'handed' && r.state === 'accepted') {
           this.emit({ kind: 'hand-over', act: x.act, o: 'taken', digest: d })
           await this.evaluatePending(x.act)
-        } else if (a.o === 'taken' && r.state === 'failed') this.emit({ kind: 'hand-over', act: x.act, o: 'given-up' })
+        } else if (o === 'taken' && r.state === 'failed') this.emit({ kind: 'hand-over', act: x.act, o: 'given-up', digest: d })
       }
       if (x.kind === 'mapping' && x.pair) {
         const duty = this.state.duties.find((y) => y.pair[0] === x.pair![0] && y.pair[1] === x.pair![1])
@@ -1067,7 +1094,8 @@ export class HolderDevice {
     if (!x) return
     if (x.kind === 'card' && x.act) {
       const a = M.act(this.state, x.act)
-      if (a.o === 'taken' || a.o === 'given-up' || a.o === 'handed') {
+      const o = a.cards?.[ref] ?? a.o
+      if (o === 'taken' || o === 'given-up' || o === 'handed') {
         this.emit({ kind: 'hand-over', act: x.act, o: 'delivered', digest: ref })
         await this.evaluatePending(x.act)
       }
@@ -1179,7 +1207,12 @@ export class HolderDevice {
           this.emit({ kind: 'card-refused', act: a.id, v, k: true }) // 8910.8
           return false
         }
-        if (a.v === v) return true // 8910.7: Wiederholung
+        // 8910.7: Wiederholung. Prüfstandregel für zwei Übergaben eines Akts (K1a Schritt 3, Regel 3; Spec-Folgepunkt
+        // 8326/8910): mit einem Seed tragen beide Karten denselben Kartenschlüssel und dieselbe Nutzlast, also denselben
+        // Vergleichsdigest V (8910.0 über die Nutzlast, 8913 unabhängig von den Dokumentbytes). B behält die erste geprüfte
+        // Karte; die zweite ist eine Wiederholung des Akts: Quittung, keine zweite Verbindung, keine Konfliktmarke K.
+        // Unterscheidet sich der Karteninhalt (Schlüssel je Gerät, K2), greift 8910.8: abgewiesen, K := yes.
+        if (a.v === v) return true
         if (a.state === 'declined' || a.state === 'expired') {
           this.emit({ kind: 'card-refused', act: a.id, v, k: false }) // 8910.6
           return true

@@ -6,8 +6,8 @@ import * as M from '../src/lab/mehrgeraet/model'
 //      `Missing`, der Zustand bleibt unberührt, die Operation gilt nicht als angewandt.
 //   B2 Reihenfolgeunabhängig, wo zulässig; sonst sichtbarer Konflikt:
 //      Sicht monoton (8500), Budgetbestätigung mit Akt-Ids (8515), Schlüsselidentität
-//      (Nonce, n) mit Finding „zweiter Vorrat“ (8435), Zustimmung gegen Ablehnung als
-//      Finding und Widerspruch im Ledger (8325.A3/A4), Vereinigung führt Bestätigungen zusammen.
+//      (Nonce, n) mit Finding „zweiter Vorrat“ (8435), Vereinigung führt Bestätigungen zusammen.
+//      Entscheidung und Übergabe: K1a Schritt 3 (unten), Regeln 1–3 nach Anton 18.10.2026.
 //   B5 Die Projektion unterscheidet, was handlungsrelevant ist (Schlüsselinhalt der Sicht).
 
 const t0 = '2026-10-17T08:00:00.000Z'
@@ -151,26 +151,6 @@ describe('B2: Reihenfolge und Konflikte', () => {
     expect(r.stock.length).toBe(4)
   })
 
-  it('Zustimmung gegen Ablehnung: der terminale Zustand bleibt, der Widerspruch steht im Ledger und als Finding (8325.A3/A4)', () => {
-    const run = (first: 'consent' | 'decline') => {
-      const s = withRel()
-      M.apply(s, op({ kind: 'allocate', rel: 'A:e1', nonce: 'n1', keys: [key('n1', 1)] }))
-      M.apply(s, op({ kind: 'ticket-accept', act: actOf('act1', 'A:e1', 'n1-1') }))
-      const c = op({ kind: 'consent', act: 'act1', card: { anchor: 'c', keyAgreement: 'rc' }, cardKey: 'card/act1/A' }, 'A1@1')
-      const d = op({ kind: 'decline', act: 'act1' }, 'A2@1')
-      M.apply(s, first === 'consent' ? c : d)
-      M.apply(s, first === 'consent' ? d : c)
-      return s
-    }
-    const x = run('consent')
-    expect(M.act(x, 'act1').state).toBe('consented')
-    expect(x.effects.some((e) => e.id === 'decline:act1')).toBe(true)
-    expect(x.findings.some((f) => f.includes('8325'))).toBe(true)
-    const y = run('decline')
-    expect(M.act(y, 'act1').state).toBe('declined')
-    expect(y.effects.some((e) => e.id === 'consent:act1')).toBe(true)
-  })
-
   it('Verbindung nach Ablehnung: der terminale Zustand bleibt, der Widerspruch steht im Ledger (8325.A3, K1a X3)', () => {
     const s = withRel()
     M.apply(s, op({ kind: 'allocate', rel: 'A:e1', nonce: 'n1', keys: [key('n1', 1)] }))
@@ -266,5 +246,153 @@ describe('K1a Schritt 2: nebenläufige Vereinigung über eigene Tupel', () => {
     for (const o of [d1, d2, late]) M.apply(s1, o)
     for (const o of [late, d2, d1]) M.apply(s2, o)
     for (const s of [s1, s2]) expect(M.project(s, t0).duties['A:e1|A:e2']).toEqual({ state: 'united', mappingDigest: 'd-a' })
+  })
+})
+
+// K1a Schritt 3 (Anton 18.10.2026, Linie „weich“): Faltungsregeln für Entscheidung und Übergabe.
+//   Regel 1: dieselbe Entscheidung von zwei Geräten ist eine Wirkung (kleinste Operation).
+//   Regel 2: Zustimmung gegen Ablehnung: eingereichte eigene Karte (8325.0) → Zustimmung gilt, Ablehnung ist Konflikt;
+//            sonst gilt die Ablehnung, die Zustimmung ist Konflikt (8232.2, 8765).
+//   Regel 3: zwei Übergaben eines Akts: die kleinere Kennung gewinnt; O je Übergabe.
+// Jede Reihenfolge, die die Ordnung je Schreiber wahrt (das Journal sichert sie über die Köpfe), ergibt dieselbe
+// Projektion und dieselben Wirkungen; doppelt angewandte Operationen ändern nichts.
+describe('K1a Schritt 3: Entscheidung und Übergabe', () => {
+  const card = { anchor: 'card-a', keyAgreement: 'rk/card-a' }
+  const base = () => {
+    const s = withRel()
+    M.apply(s, op({ kind: 'allocate', rel: 'A:e1', nonce: 'n1', keys: [key('n1', 1)] }, 'A0@0'))
+    M.apply(s, op({ kind: 'ticket-accept', act: actOf('act1', 'A:e1', 'n1-1') }, 'A0@0'))
+    return s
+  }
+  const consent = (w: string) => op({ kind: 'consent', act: 'act1', card, cardKey: 'card/act1/A' }, w)
+  const decline = (w: string) => op({ kind: 'decline', act: 'act1' }, w)
+  const handOver = (w: string, o: M.HandOver, digest: string) => op({ kind: 'hand-over', act: 'act1', o, digest }, w)
+  /** Alle Verschränkungen zweier Folgen, die die Reihenfolge innerhalb jeder Folge wahren. */
+  const interleavings = (a: M.Op[], b: M.Op[]): M.Op[][] => (!a.length ? [b] : !b.length ? [a] : [...interleavings(a.slice(1), b).map((r) => [a[0]!, ...r]), ...interleavings(a, b.slice(1)).map((r) => [b[0]!, ...r])])
+  const fold = (ops: M.Op[], twice = false) => {
+    const s = base()
+    for (const o of ops) {
+      M.apply(s, o)
+      if (twice) M.apply(s, o) // Duplikat derselben Operation
+    }
+    return s
+  }
+  const actEffects = (s: M.HolderState) => s.effects.filter((e) => e.id.includes('act1') && !e.id.startsWith('accept:')).map((e) => `${e.id}@${e.op}`).sort()
+  /** Faltet jede Verschränkung (einfach und mit Duplikaten), prüft gleiche Projektion und gleiche Wirkungen, liefert eine. */
+  const allOrders = (a: M.Op[], b: M.Op[]) => {
+    const runs = interleavings(a, b).flatMap((o) => [fold(o), fold(o, true), fold([...o, ...o])])
+    const p0 = M.canonical(M.project(runs[0]!, t0))
+    const e0 = actEffects(runs[0]!)
+    for (const s of runs) {
+      expect(M.canonical(M.project(s, t0))).toBe(p0)
+      expect(actEffects(s)).toEqual(e0)
+    }
+    expect(runs.length).toBeGreaterThan(3)
+    return runs[0]!
+  }
+
+  it('Regel 1: zwei Zustimmungen sind eine Entscheidung und eine Wirkung (kleinste Operation), in jeder Reihenfolge', () => {
+    const c1 = consent('A1@x')
+    const c2 = consent('A2@y')
+    const s = allOrders([c1], [c2])
+    expect(M.act(s, 'act1').state).toBe('consented')
+    expect(actEffects(s)).toEqual([`consent:act1@${M.opKey(c1.id)}`])
+    expect(M.act(s, 'act1').o).toBe('intent')
+  })
+  it('Regel 1: zwei Ablehnungen sind eine Entscheidung und eine Wirkung, in jeder Reihenfolge; nichts gesendet, P verdeckt', () => {
+    const d1 = decline('A1@x')
+    const d2 = decline('A2@y')
+    const s = allOrders([d1], [d2])
+    expect(M.act(s, 'act1').state).toBe('declined')
+    expect(actEffects(s)).toEqual([`decline:act1@${M.opKey(d1.id)}`])
+    expect(M.project(s, t0).acts.act1!.pending).toBeNull()
+  })
+  it('Regel 2: Zustimmung mit übergebener, nicht eingereichter Karte gegen Ablehnung: die Ablehnung gilt, die Zustimmung ist Konflikt, in jeder Reihenfolge', () => {
+    const c1 = consent('A1@x')
+    const h1 = handOver('A1@x', 'handed', 'dA')
+    const d2 = decline('A2@y')
+    const s = allOrders([c1, h1], [d2])
+    expect(M.act(s, 'act1').state).toBe('declined')
+    expect(actEffects(s)).toEqual([`conflict:consent:act1@${M.opKey(c1.id)}`, `decline:act1@${M.opKey(d2.id)}`])
+    expect(s.findings.filter((f) => f.includes('Regel 2') && f.includes('Ablehnung gilt')).length).toBe(1)
+    // Die Rücknahme der Karte (Holder, nach dem Falten der Ablehnung) ist eine weitere Operation des erzeugenden Geräts.
+    const x1 = handOver('A1@x', 'cancelled', 'dA')
+    const t = allOrders([c1, h1, x1], [d2])
+    expect(M.project(t, t0).acts.act1).toMatchObject({ state: 'declined', o: 'cancelled', ownCardDigest: 'dA' })
+  })
+  it('Regel 2: Zustimmung mit eingereichter Karte (O = taken) gegen Ablehnung: die Zustimmung gilt, die Ablehnung ist Konflikt, in jeder Reihenfolge', () => {
+    const c1 = consent('A1@x')
+    const h1 = handOver('A1@x', 'handed', 'dA')
+    const t1 = handOver('A1@x', 'taken', 'dA')
+    const d2 = decline('A2@y')
+    const s = allOrders([c1, h1, t1], [d2])
+    expect(M.act(s, 'act1').state).toBe('consented')
+    expect(actEffects(s)).toEqual([`card:act1:card-a@${M.opKey(t1.id)}`, `conflict:decline:act1@${M.opKey(d2.id)}`, `consent:act1@${M.opKey(c1.id)}`])
+    expect(s.findings.filter((f) => f.includes('Regel 2') && f.includes('Zustimmung gilt')).length).toBe(1)
+    // Ausdrücklich: erst die Ablehnung, dann Zustimmung und Einreichung (die Faltung verlässt `declined`).
+    const late = fold([d2, c1, h1, t1])
+    expect(M.act(late, 'act1').state).toBe('consented')
+    // Dieselben Operationen ohne Einreichung: die Ablehnung gilt.
+    expect(M.act(fold([d2, c1, h1]), 'act1').state).toBe('declined')
+  })
+  it('Regel 2: eine wartende Gegenkarte bleibt unter einer vorläufigen Ablehnung erhalten und gilt wieder, wenn die Einreichung die Zustimmung entscheidet (8325.A5c)', () => {
+    const c1 = consent('A1@x')
+    const p1 = op({ kind: 'card-pending', act: 'act1', card: { anchor: 'cb', keyAgreement: 'rk/cb' }, v: 'v1' }, 'A1@x')
+    const h1 = handOver('A1@x', 'handed', 'dA')
+    const t1 = handOver('A1@x', 'taken', 'dA')
+    const d2 = decline('A2@y')
+    const s = fold([c1, p1, h1, d2])
+    expect(M.project(s, t0).acts.act1!.pending).toBeNull()
+    M.apply(s, t1)
+    expect(M.project(s, t0).acts.act1).toMatchObject({ state: 'consented', pending: { anchor: 'cb' }, o: 'taken' })
+  })
+  it('Regel 3: zwei Übergaben eines Akts: die kleinere Kennung gewinnt auf jedem Gerät, O je Übergabe, eine Kartenwirkung, in jeder Reihenfolge', () => {
+    const c1 = consent('A1@x')
+    const h1 = handOver('A1@x', 'handed', 'dB')
+    const c2 = consent('A2@y')
+    const h2 = handOver('A2@y', 'handed', 'dA')
+    const s = allOrders([c1, h1], [c2, h2])
+    expect(M.project(s, t0).acts.act1).toMatchObject({ state: 'consented', o: 'handed', ownCardDigest: 'dA' })
+    expect(M.act(s, 'act1').cards).toEqual({ dA: 'handed', dB: 'handed' })
+    // Die verlierende Übergabe wird zurückgenommen (nicht eingereicht): der Akt trägt die gewinnende.
+    const x1 = handOver('A1@x', 'cancelled', 'dB')
+    expect(M.project(allOrders([c1, h1, x1], [c2, h2]), t0).acts.act1).toMatchObject({ o: 'handed', ownCardDigest: 'dA' })
+    // Beide schon eingereicht: beide Karten gehen hinaus, eine Kartenwirkung (kleinste Operation), eine Zustimmung.
+    const t1 = handOver('A1@x', 'taken', 'dB')
+    const t2 = handOver('A2@y', 'taken', 'dA')
+    const b = allOrders([c1, h1, t1], [c2, h2, t2])
+    expect(M.project(b, t0).acts.act1).toMatchObject({ state: 'consented', o: 'taken', ownCardDigest: 'dA' })
+    expect(actEffects(b)).toEqual([`card:act1:card-a@${M.opKey(t1.id)}`, `consent:act1@${M.opKey(c1.id)}`])
+  })
+  it('Regel 1 für die Verbindung: verbinden beide Geräte den Akt je für sich, ist das eine Verbindung (kleinste Operation), in jeder Reihenfolge', () => {
+    const c1 = consent('A1@x')
+    const h1 = handOver('A1@x', 'taken', 'dA')
+    const k1 = op({ kind: 'connect', act: 'act1', rel: 'A:act:act1', tuple: tuple('A:act:act1', 'card-a', 'cb') }, 'A1@x')
+    const c2 = consent('A2@y')
+    const h2 = handOver('A2@y', 'taken', 'dB')
+    const k2 = op({ kind: 'connect', act: 'act1', rel: 'A:act:act1', tuple: tuple('A:act:act1', 'card-a', 'cb') }, 'A2@y')
+    const s = allOrders([c1, h1, k1], [c2, h2, k2])
+    expect(M.act(s, 'act1').state).toBe('connected')
+    expect(s.relationships.length).toBe(2)
+    expect(actEffects(s).filter((e) => e.startsWith('connect:'))).toEqual([`connect:act1@${M.opKey(k1.id)}`])
+  })
+  it('Gegenlauf: ohne Regel 1 tragen Zustimmung und Verbindung zwei Operationen; ohne Regel 3 hängt der Übergabedigest an der Reihenfolge; ohne Regel 2 bleibt jedes Gerät bei seinem ersten Zustand', () => {
+    const c1 = consent('A1@x')
+    const c2 = consent('A2@y')
+    const h1 = handOver('A1@x', 'handed', 'dB')
+    const h2 = handOver('A2@y', 'handed', 'dA')
+    const d2 = decline('A2@y')
+    try {
+      M.FOLD.sameDecision = false
+      expect(fold([c1, c2]).effects.filter((e) => e.id === 'consent:act1').length).toBe(2)
+      M.FOLD.sameDecision = true
+      M.FOLD.handOver = false
+      expect(M.act(fold([c1, h1, c2, h2]), 'act1').ownCardDigest).not.toBe(M.act(fold([c2, h2, c1, h1]), 'act1').ownCardDigest)
+      M.FOLD.handOver = true
+      M.FOLD.consentVsDecline = false
+      expect(M.act(fold([c1, h1, d2]), 'act1').state).not.toBe(M.act(fold([d2, c1, h1]), 'act1').state)
+    } finally {
+      Object.assign(M.FOLD, { sameDecision: true, consentVsDecline: true, handOver: true })
+    }
   })
 })
