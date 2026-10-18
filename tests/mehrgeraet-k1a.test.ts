@@ -1205,3 +1205,112 @@ describe('K1a Schritt 4: pseudonyme Schreiberkennung je Beziehung (Entscheidung 
     expect(w.agree('M').agree, w.agree('M').diff).toBe(true)
   }, 300_000)
 })
+
+// Tor-Review 21 (Astra, 78809e2): B1 gemeinsame Schlüsselnummern mit abweichendem Ablauf, B2 X16-Orakel je Akt statt je Schlüssel.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type EmitBody = any
+describe('K1a Review 21: Nummern je Restklasse des ausgebenden Geräts, Befund bei gleichem Anker mit anderem Wert, Verbrauch je Schlüssel', () => {
+  const keyValue = (f: string) => f.startsWith('conflict:key-value:')
+  const allFindings = (w: Welt15) => [...w.of('A'), ...w.of('M')].flatMap((d) => d.state.findings)
+  /**
+   * Astras Gegenlauf (review21/expiry.mjs) nachgebaut: in X17 rückt die Uhr nach A1s Nachfüll-Zuteilung um eine Stunde vor,
+   * A2 füllt getrennt nach. Liefert das Ergebnis und je Gerät die Nummern seiner eigenen Zuteilungen.
+   */
+  async function skewedRefill(opts: Parameters<typeof k1a>[0] = {}) {
+    const proto = HolderDevice.prototype as unknown as { emit: (body: EmitBody) => M.Op }
+    const original = proto.emit
+    const allocated = new Map<string, number[]>()
+    let injected = 0
+    const spy = vi.spyOn(proto, 'emit').mockImplementation(function (this: HolderDevice, body: EmitBody) {
+      const result = original.call(this, body)
+      if (body.kind === 'allocate' && this.person === 'A') {
+        allocated.set(this.name, [...(allocated.get(this.name) ?? []), ...body.keys.map((k: { n: number }) => k.n)])
+        if (this.name === 'A1' && body.keys.some((k: { n: number }) => k.n >= 6) && !injected) {
+          injected++
+          const clock = this.clock as unknown as { advance(ms: number): void }
+          clock.advance(3600_000)
+        }
+      }
+      return result
+    })
+    try {
+      const r = byId(await runX15(k1a(opts), false, ['X17'])).X17!
+      return { r, injected, allocated }
+    } finally {
+      spy.mockRestore()
+    }
+  }
+
+  it('B1. Uhr um eine Stunde zwischen den Nachfüllungen vorgerückt, beide Geräte füllen getrennt nach: disjunkte Nummern, gleiche Projektionen, kein 6270, kein Befund gleicher Anker/anderer Wert', async () => {
+    const { r, injected, allocated } = await skewedRefill()
+    expect(injected).toBe(1)
+    const a1 = allocated.get('A1') ?? []
+    const a2 = allocated.get('A2') ?? []
+    expect(a2.length, r.detail).toBeGreaterThan(0) // A2 hat getrennt nachgefüllt
+    expect(a1.filter((n) => a2.includes(n))).toEqual([])
+    expect(r.outcome, r.detail).toBe('bestanden')
+    expect(r.measures).toMatchObject({ projectionAgrees: 1, mediatorDevicesAgree: 1, equivocations: 0, keyValueConflicts: 0 })
+    // Gegenprobe (Faltregel): dieselbe Uhrverschiebung ohne Aufteilung erzeugt gleiche Anker mit anderem Ablauf; A und M falten
+    // deterministisch auf den kanonisch kleinsten Wert und melden conflict:key-value, die Projektionen bleiben gleich.
+    const forced = await skewedRefill({ allocationSplit: false })
+    expect(forced.injected).toBe(1)
+    expect(forced.r.measures.keyValueConflicts as number, forced.r.detail).toBeGreaterThan(0)
+    expect(forced.r.measures).toMatchObject({ projectionAgrees: 1, mediatorDevicesAgree: 1 })
+  }, 300_000)
+
+  it('B1. Ein Gerät offline: das andere hält M allein aus seiner Restklasse versorgt (Nachfüllziel zählt die aktiven Schlüssel der Person, nicht je Klasse)', async () => {
+    const w = new Welt15(k1a())
+    const A = await w.person('A', 'A1')
+    const B = await w.person('B', 'B1')
+    const Mm = await w.person('M', 'M1')
+    const am = await w.encounter(A, Mm)
+    const bm = await w.encounter(B, Mm)
+    await w.rounds(2)
+    const A2 = await w.enrol(A, 'A2')
+    const M2 = await w.enrol(Mm, 'M2')
+    await w.rounds(3)
+    A2.online = false
+    expect(await A.setClass(am.x.id, true)).toBe('ok')
+    await B.setClass(bm.x.id, true)
+    await w.rounds(4)
+    const share = Math.floor(M.PARAM.budget / 2) // A1s Annahmekontingent
+    const accepted: string[] = []
+    const viewSizes: number[] = []
+    for (let i = 0; i < share; i++) {
+      let r = await Mm.introduce(am.y.id, bm.y.id)
+      if (!('act' in r)) r = await M2.introduce(am.y.id, bm.y.id)
+      expect('act' in r, `Vorstellung ${i + 1}: ${'refused' in r ? r.refused : ''}`).toBe(true)
+      await w.rounds(4)
+      if ('act' in r && A.state.acts.some((a) => a.id === r.act)) accepted.push(r.act)
+      viewSizes.push(Math.min(...[Mm, M2].map((m) => M.rel(m.state, am.y.id).view!.keys.filter((k) => !m.state.consumed.includes(k.anchor)).length)))
+    }
+    expect(accepted.length).toBe(share)
+    expect(Math.min(...viewSizes), viewSizes.join('/')).toBeGreaterThanOrEqual(M.PARAM.refillBelow - 1)
+    const own = M.rel(A.state, am.x.id).stock.map((k) => k.n)
+    expect(own.every((n) => (A.cand as K1aDevice).mayAllocate(n)), own.join(',')).toBe(true)
+    expect(allFindings(w).filter(keyValue)).toEqual([])
+  }, 300_000)
+
+  it('B2. Mutation: eine zweite ticket-accept-Operation auf denselben Schlüssel unter anderer Akt-Id lässt X16 scheitern (Verbrauch je Schlüssel über alle Akte)', async () => {
+    const proto = HolderDevice.prototype as unknown as { emit: (body: EmitBody) => M.Op }
+    const original = proto.emit
+    let injected = 0
+    const spy = vi.spyOn(proto, 'emit').mockImplementation(function (this: HolderDevice, body: EmitBody) {
+      const result = original.call(this, body)
+      if (body.kind === 'ticket-accept' && this.person === 'A' && !injected) {
+        injected++
+        original.call(this, { ...body, act: { ...structuredClone(body.act), id: `${body.act.id}-duplicate` } })
+      }
+      return result
+    })
+    try {
+      const r = byId(await runX15(k1a(), false, ['X16'])).X16!
+      expect(injected).toBe(1)
+      expect(r.outcome, r.detail).toBe('nicht bestanden')
+      expect(r.measures.acceptOperations as number).toBeGreaterThan(1)
+      expect(r.measures.doubleFinalEffects as number).toBeGreaterThan(0)
+    } finally {
+      spy.mockRestore()
+    }
+  }, 300_000)
+})

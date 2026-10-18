@@ -107,6 +107,13 @@ function finalEffects(w: Welt15, person: string) {
     if (!keyActs.has(m[2]!)) keyActs.set(m[2]!, new Set())
     keyActs.get(m[2]!)!.add(m[1]!)
   }
+  // Review 21 B2: auf der Seite des Vorrats-Inhabers entstehen `accept:<Akt>`-Effekte; der Schlüssel ist der eigene Anker des
+  // Akts. Verbrauch je Schlüssel über alle Akt-Ids der Person, nicht je Akt.
+  for (const d of w.of(person)) for (const a of d.state.acts) {
+    if (!l.has(`accept:${a.id}`)) continue
+    if (!keyActs.has(a.own)) keyActs.set(a.own, new Set())
+    keyActs.get(a.own)!.add(a.id)
+  }
   const doubleConsumption = [...keyActs.values()].filter((s) => s.size > 1).length
   const contradictions = [...l.keys()].filter((id) => id.startsWith('decline:') && l.has(`consent:${id.slice(8)}`)).length
   return { doubles: doubles.length, doubleIds: doubles, doubleConsumption, contradictions, total: doubles.length + doubleConsumption + contradictions }
@@ -844,7 +851,10 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const devices = s.w.of('A').length
       const keyStates = s.w.of('A').map((d) => M.rel(d.state, s.am).stock.find((k) => k.anchor === named)?.state ?? '–')
       const keyState = s.w.of('A').map((d, i) => `${d.name}: ${keyStates[i]}`)
-      const acceptOps = ledger(s.w, 'A').get(`accept:${act}`)?.size ?? 0
+      // Review 21 B2: Annahme-Operationen auf den benannten Schlüssel über alle Akt-Ids (nicht nur die des Akts).
+      const ownActs = new Set(s.w.of('A').flatMap((d) => d.state.acts.filter((a) => a.own === named).map((a) => a.id)))
+      const acceptLedger = ledger(s.w, 'A')
+      const acceptOps = [...ownActs].reduce((sum, id) => sum + (acceptLedger.get(`accept:${id}`)?.size ?? 0), 0)
       const viewKeys = s.w.of('M').map((d) => M.rel(d.state, s.ma).view?.keys.length ?? 0)
       const equivocation = s.w.of('M').flatMap((d) => d.state.findings).filter((f) => f.includes('Equivokation')).length
       const classOn = s.w.of('A').filter((d) => M.rel(d.state, s.am).classOn).length
@@ -888,6 +898,8 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const reused = [...ledger(s.w, 'A').entries()].filter(([id, ops]) => id.startsWith('revision:') && ops.size > 1).length
       const equivocation = s.w.of('M').flatMap((d) => d.state.findings).filter((f) => f.includes('Equivokation') || f.includes('6270')).length
       const secondStock = s.w.of('A').flatMap((d) => d.state.findings).filter((f) => f.includes('8435')).length
+      // Review 21 B1: gleicher Anker mit anderem Schlüsselwert, bei A (Vorrat) oder M (Sicht über Schreiber).
+      const keyValueConflicts = [...s.w.of('A'), ...s.w.of('M')].flatMap((d) => d.state.findings).filter((f) => f.startsWith('conflict:key-value:')).length
       // Fortschritt danach: eine weitere Vorstellung muss angenommen werden (Ms Sicht darf keinen verbrauchten Schlüssel enthalten).
       const r = await introduceAny(s, s.ma, mc, serial)
       await s.w.rounds(4)
@@ -903,9 +915,9 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const seen = writerTagsSeen(s.w, 'M')
       const tagsAtM = seen.perRelationship.get(M.resolveId(s.Mm.state, s.ma))?.size ?? 0
       const tagged = aWriters.size > 0
-      const ok = reused === 0 && equivocation === 0 && progress === 1 && conformance === 0 && agree.agree && mAgree.agree && n > 0 && (!tagged || (accepted === aWriters.size && seen.linked === 0))
+      const ok = reused === 0 && equivocation === 0 && keyValueConflicts === 0 && progress === 1 && conformance === 0 && agree.agree && mAgree.agree && n > 0 && (!tagged || (accepted === aWriters.size && seen.linked === 0))
       const tagDetail = tagged ? `; Schreiber bei A ${aWriters.size}, davon mit ihrer letzten Revision in Ms Sicht (alle M-Geräte) ${accepted}; Ms Sicht ${mViews.map((v) => `${Object.keys(v?.writers ?? {}).length} Schreiber/${v?.keys.length ?? 0} Schlüssel`).join(', ')}; was M lernt: ${tagsAtM} Schreiberkennung(en) auf der Beziehung zu A, ${[...seen.perRelationship.values()].map((x) => x.size).join('/')} je Beziehung von M, über Beziehungen verknüpfbar ${seen.linked}` : ''
-      return { outcome: mark(ok), detail: `Revision vorher ${rev0}, getrennt je Gerät ${revs.join('/')}; Revisionsnummern mit mehr als einer Operation: ${reused}; Befunde 6270 bei M: ${equivocation}; zweiter Vorrat (8435) bei A: ${secondStock}; nächste Vorstellung ${'act' in r ? (progress ? 'angenommen' : 'nicht angenommen') : 'verweigert'}, Konformitätsfehler bei A: ${conformance}; Projektion gleich nach ${n} Runden: ${agree.agree ? 'ja' : 'nein'}, M-Geräte gleich: ${mAgree.agree ? 'ja' : 'nein'}${tagDetail}; Probe-Sequenz (6680) und Mapping-Revision sind im Prüfstand nicht modelliert`, measures: { revisionNumbersReused: reused, equivocations: equivocation, secondStockFindings: secondStock, progressAfterHeal: progress, mediatorConformanceFailures: conformance, projectionAgrees: agree.agree ? 1 : 0, mediatorDevicesAgree: mAgree.agree ? 1 : 0, roundsToConverge: n, ...(tagged ? { writersAtA: aWriters.size, writersAcceptedByM: accepted, writerTagsSeenByM: tagsAtM, writerTagsLinkedAcrossRelationships: seen.linked } : {}) } }
+      return { outcome: mark(ok), detail: `Revision vorher ${rev0}, getrennt je Gerät ${revs.join('/')}; Revisionsnummern mit mehr als einer Operation: ${reused}; Befunde 6270 bei M: ${equivocation}; zweiter Vorrat (8435) bei A: ${secondStock}; gleicher Anker mit anderem Wert: ${keyValueConflicts}; nächste Vorstellung ${'act' in r ? (progress ? 'angenommen' : 'nicht angenommen') : 'verweigert'}, Konformitätsfehler bei A: ${conformance}; Projektion gleich nach ${n} Runden: ${agree.agree ? 'ja' : 'nein'}, M-Geräte gleich: ${mAgree.agree ? 'ja' : 'nein'}${tagDetail}; Probe-Sequenz (6680) und Mapping-Revision sind im Prüfstand nicht modelliert`, measures: { revisionNumbersReused: reused, equivocations: equivocation, secondStockFindings: secondStock, keyValueConflicts, progressAfterHeal: progress, mediatorConformanceFailures: conformance, projectionAgrees: agree.agree ? 1 : 0, mediatorDevicesAgree: mAgree.agree ? 1 : 0, roundsToConverge: n, ...(tagged ? { writersAtA: aWriters.size, writersAcceptedByM: accepted, writerTagsSeenByM: tagsAtM, writerTagsLinkedAcrossRelationships: seen.linked } : {}) } }
     },
   },
   {

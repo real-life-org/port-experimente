@@ -125,6 +125,12 @@ export interface CandidateDevice {
   authorize?(op: M.Op, state: M.HolderState): boolean
   /** Darf dieses Gerät diesen fremden Vorrats-Schlüssel in einer Vorstellung benennen (K1a: vorab verteilte Schlüssel)? Rein. Ohne Methode: alle. */
   mayName?(anchor: string, rel: string, state: M.HolderState): boolean
+  /**
+   * Darf dieses Gerät die Vorrats-Nummer n (8445) zuteilen (K1a, Tor-Review 21 B1)? Rein. Teilen sich Geräte eines Seeds
+   * die Nummern, ergeben getrennte Zuteilungen derselben Nummer denselben Anker mit anderem Wert (Ablauf); mit Methode
+   * überspringt das Nachfüllen jede Nummer, die nicht diesem Gerät gehört. Ohne Methode: alle.
+   */
+  mayAllocate?(n: number, rel: string, state: M.HolderState): boolean
   /** Ein Schritt ist gelungen und committet: der Kandidat zeichnet ihn als Einheit auf, verbreitet ihn (oder nicht) und verbraucht hier, was er kostet. */
   commit(tx: Transaction): void
   /** Rahmen an die eigenen Geräte (Journal), an die eigene Adresse der Person (Plan Runde 3). */
@@ -711,7 +717,10 @@ export class HolderDevice {
     if (active.length >= M.PARAM.refillBelow) return
     const nonce = r.nonce ?? Buffer.from(derive(enc.encode(`${this.person}/${r.id}/${this.cand.writer}/${this.counter}`), 'nonce')).toString('base64')
     const keys: M.StockKey[] = []
+    // Das Ziel zählt die aktiven Schlüssel der Person (alle Geräte, über das Journal), nicht je Restklasse: ein Gerät allein
+    // hält M aus seinen eigenen Nummern versorgt (Review 21 B1).
     for (let n = r.nextN; keys.length < M.PARAM.refillTo - active.length; n++) {
+      if (this.cand.mayAllocate && !this.cand.mayAllocate(n, r.id, this.state)) continue
       const ctx = `introduction/${nonce}/${n}`
       const k = await this.listen(ctx)
       keys.push({ n, nonce, anchor: k.anchor, keyAgreement: k.rkid, key: ctx, expiresAt: new Date(Date.parse(this.clock.now()) + M.PARAM.prekeyLifetimeMs).toISOString(), state: 'active' })

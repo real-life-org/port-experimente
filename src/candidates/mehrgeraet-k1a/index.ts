@@ -63,6 +63,14 @@ export interface K1aOptions {
   devices?: number
   /** Step 4: pseudonymous writer tag per device and relationship (default on). Off = one writer per relationship as before step 4 (counter-run). */
   writerTags?: boolean
+  /**
+   * Review 21 B1: every device allocates stock numbers n (8445) only from its own class, ⌊n / devices⌋ mod devices = its
+   * index (blocks of `devices` consecutive numbers, dealt in turn), so two writers never list the same anchor (default on).
+   * Not n mod devices: the counterpart names by n mod devices (`mayName`, step 1), and with equal splits every mediator
+   * device could name the keys of exactly one issuer device. Off = shared numbers as before (counter-run: same anchor,
+   * different expiry; the fold reports it).
+   */
+  allocationSplit?: boolean
 }
 
 /** Step 4: the writer tag of a device in a relationship; the counterpart sees it, cannot compute it (seed) and cannot link it across relationships. */
@@ -94,6 +102,7 @@ export class K1aDevice implements CandidateDevice {
     slots: number,
     private readonly budget: number,
     tags = true,
+    private readonly split = true,
   ) {
     this.keys = seedScheme(seed)
     this.index = index
@@ -123,6 +132,15 @@ export class K1aDevice implements CandidateDevice {
     const k = r?.view?.keys.find((x) => x.anchor === anchor)
     if (!k) return false
     return k.n % this.slots === this.index
+  }
+  /**
+   * Review 21 B1: eigene Vorrats-Nummern nur aus der eigenen Klasse, disjunkt über die Schreiber. Die Klasse ist die
+   * Restklasse des Blocks, ⌊n / Geräte⌋ mod Geräte = Platz, nicht n mod Geräte: die Gegenseite benennt nach n mod Geräte
+   * (`mayName`, Schritt 1); fielen beide Teilungen zusammen, benennte je ein Mediatorgerät nur die Schlüssel genau eines
+   * Ausgebers (mit einem Gerät offline hätte das andere Mediatorgerät nichts). So enthält jede Klasse jeden Rest.
+   */
+  mayAllocate(n: number): boolean {
+    return !this.split || Math.floor(n / this.slots) % this.slots === this.index
   }
   authorize(op: M.Op, state: M.HolderState): boolean {
     if (op.kind === 'ticket-accept') return this.ownAccepted(op.act.mediator, state, op.at) < this.share
@@ -215,6 +233,7 @@ export function k1a(opts: K1aOptions = {}): MultiDeviceCandidate {
   const budget = opts.budget ?? M.PARAM.budget
   const slots = opts.devices ?? 2
   const tags = opts.writerTags ?? true
+  const split = opts.allocationSplit ?? true
   const seeds = new Map<string, Uint8Array>()
   const devices = new Map<string, K1aDevice[]>() // person → Geräte in Enrollment-Reihenfolge
   return {
@@ -223,19 +242,19 @@ export function k1a(opts: K1aOptions = {}): MultiDeviceCandidate {
     capabilities: new Set(tags ? (['journal', 'rights', 'writer-tags'] as const) : (['journal', 'rights'] as const)),
     async first(person, name, seed) {
       seeds.set(person, seed)
-      const d = new K1aDevice(person, name, seed, 0, slots, budget, tags)
+      const d = new K1aDevice(person, name, seed, 0, slots, budget, tags, split)
       devices.set(person, [d]) // eine neue Welt dieser Person: die Liste beginnt mit diesem Gerät
       return d
     },
     async instance(person, name, seed) {
       // Kein Gerät der Person (Dieb aus einem Abbild, X9): unregistriert; Platz und Plätze kommen aus dem Abbild beim `reload`.
-      return new K1aDevice(person, name, seed, 0, slots, budget, tags)
+      return new K1aDevice(person, name, seed, 0, slots, budget, tags, split)
     },
     async enrol(from: HolderDevice, name) {
       const list = devices.get(from.person) ?? []
       // Feste Gerätezahl (B4): die Plätze stehen von Anfang an fest, nichts wird umverteilt; darüber hinaus wird verweigert (versionierte Rechte = K1b).
       if (list.length >= slots) throw new EnrolmentRefused(`K1a: Gerätezahl fest auf ${slots}; Enrollment von ${name} verweigert`)
-      const d = new K1aDevice(from.person, name, seeds.get(from.person)!, list.length, slots, budget, tags)
+      const d = new K1aDevice(from.person, name, seeds.get(from.person)!, list.length, slots, budget, tags, split)
       d.adopt((from.cand as K1aDevice).journal())
       // Beide Seiten des Enrollments merken sich das andere Gerät (Teil des Abbilds): wer nach einem Restore nachholen muss,
       // weiß, dass eine Schwester antworten kann (Tor-Review 18 B1a).

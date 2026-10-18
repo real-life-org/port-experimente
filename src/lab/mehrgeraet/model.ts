@@ -469,18 +469,39 @@ function applyWriterView(s: HolderState, r: Relationship, op: Op & { kind: 'view
     take = canonical(keys) < canonical(held.keys) // in jeder Reihenfolge dasselbe
   }
   if (take) writers[w] = { revision: op.revision, keys }
-  r.view = { scope: op.scope, revision: Math.max(0, ...Object.values(writers).map((x) => x.revision)), keys: viewKeys(writers, clears), writers, clears }
+  const v2 = viewKeys(writers, clears)
+  for (const anchor of v2.conflicts) keyValueConflict(s, anchor)
+  r.view = { scope: op.scope, revision: Math.max(0, ...Object.values(writers).map((x) => x.revision)), keys: v2.keys, writers, clears }
 }
 
-/** Die geltende Sicht über Schreiber: Vereinigung (nach Anker) der Schreiber mit einer Revision über ihrer Aufhebungsmarke. */
-export function viewKeys(writers: Record<string, { revision: number; keys: ListedKey[] }>, clears: Record<string, number>): ListedKey[] {
+/**
+ * Die geltende Sicht über Schreiber: Vereinigung (nach Anker) der Schreiber mit einer Revision über ihrer Aufhebungsmarke.
+ * Review 21 B1: listen zwei Schreiber denselben Anker mit anderem Wert (Ablauf, Vereinbarung, Nummer), gilt der kanonisch
+ * kleinste Wert (in jeder Reihenfolge derselbe) und der Anker steht in `conflicts` (Befund, nie still). Mit der Aufteilung
+ * der Nummern je Restklasse (K1a) kommt das nicht vor.
+ */
+export function viewKeys(writers: Record<string, { revision: number; keys: ListedKey[] }>, clears: Record<string, number>): { keys: ListedKey[]; conflicts: string[] } {
   const m = new Map<string, ListedKey>()
+  const conflicts = new Set<string>()
   for (const w of Object.keys(writers).sort()) {
     const x = writers[w]!
     if (x.revision <= (clears[w] ?? 0)) continue
-    for (const k of x.keys) if (!m.has(k.anchor)) m.set(k.anchor, k)
+    for (const k of x.keys) {
+      const held = m.get(k.anchor)
+      if (!held) m.set(k.anchor, k)
+      else if (canonical(held) !== canonical(k)) {
+        conflicts.add(k.anchor)
+        if (canonical(k) < canonical(held)) m.set(k.anchor, k)
+      }
+    }
   }
-  return sortKeys([...m.values()])
+  return { keys: sortKeys([...m.values()]), conflicts: [...conflicts].sort() }
+}
+
+/** Review 21 B1: gleicher Anker, anderer Schlüsselwert; einmal je Anker als Befund festgehalten (reihenfolgeunabhängig). */
+function keyValueConflict(s: HolderState, anchor: string): void {
+  const prefix = `conflict:key-value:${anchor}`
+  if (!s.findings.some((f) => f.startsWith(prefix))) s.findings.push(`${prefix}: gleicher Anker mit anderem Schlüsselwert (8445); der kanonisch kleinste gilt`)
 }
 
 // ── Anwenden (deterministisch, idempotent je Operations-ID und je Effekt) ───
@@ -533,7 +554,17 @@ function applyBody(s: HolderState, op: Op): void {
       if (!r.nonce) r.nonce = op.nonce // 8435: die erste Nonce der Beziehung
       else if (r.nonce !== op.nonce && !r.stock.some((x) => x.nonce === op.nonce)) s.findings.push(`allocate auf ${r.id}: zweiter Vorrat unter Nonce ${op.nonce.slice(0, 8)} neben ${r.nonce.slice(0, 8)} (8435): zwei Geräte haben getrennt zugeteilt`)
       for (const k of op.keys) {
-        if (r.stock.some((x) => (x.nonce === k.nonce && x.n === k.n) || x.anchor === k.anchor)) continue // Effekt-Identität: (Nonce, n)
+        const held = r.stock.find((x) => x.anchor === k.anchor) ?? r.stock.find((x) => x.nonce === k.nonce && x.n === k.n)
+        if (held) {
+          // Effekt-Identität: (Nonce, n) bzw. der Anker. Review 21 B1: gleicher Anker mit anderem Wert (zwei Geräte haben dieselbe
+          // Nummer getrennt zugeteilt) faltet auf den kanonisch kleinsten Wert und wird als Befund festgehalten, nie still.
+          const value = (x: StockKey) => canonical({ n: x.n, nonce: x.nonce ?? op.nonce, anchor: x.anchor, keyAgreement: x.keyAgreement, key: x.key, expiresAt: x.expiresAt })
+          if (value(held) !== value(k)) {
+            keyValueConflict(s, held.anchor)
+            if (value(k) < value(held)) Object.assign(held, { n: k.n, nonce: k.nonce ?? op.nonce, anchor: k.anchor, keyAgreement: k.keyAgreement, key: k.key, expiresAt: k.expiresAt })
+          }
+          continue
+        }
         r.stock.push({ ...k, nonce: k.nonce ?? op.nonce, state: 'active' }) // Vorbereitung sofort bestätigt (Prüfstand); 8475.S3 mit der Revision
         r.nextN = Math.max(r.nextN, k.n + 1)
       }
