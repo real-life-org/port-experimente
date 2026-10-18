@@ -388,6 +388,12 @@ export interface Submission {
   sinceAccepted: number | null
   sinceDeposit: number
   deposits: number
+  /**
+   * E15 K2 Schritt 1: weitere Kopien desselben Dokuments, je an ein anderes Gerät des Empfängers versiegelt (eine Kopie je
+   * Geräteschlüssel, eigene Adresse je Gerät). Eingeliefert und wiederholt mit dem Hauptrahmen; die Quittung eines der
+   * Geräte schließt die Submission (wie bei einer gemeinsamen Adresse unter einem Seed). Ohne Feld: ein Rahmen.
+   */
+  extra?: Array<{ address: string; frame: Uint8Array }>
 }
 
 export class Zusteller {
@@ -414,8 +420,8 @@ export class Zusteller {
    * Vormerken ohne Einlieferung (Commit-Grenze vor dem Versand, E15): die Submission ist bis zur Freigabe
    * (`deposit`) nicht freigegeben; `advance` rührt sie nicht an (#56). Freigeben darf das Gerät erst nach dem Commit.
    */
-  record(digest: string, frame: Uint8Array, address: string): void {
-    this.submissions.set(digest, { digest, frame, address, report: null, transport: 'ok', rounds: 0, sinceAccepted: null, sinceDeposit: 0, deposits: 0 })
+  record(digest: string, frame: Uint8Array, address: string, extra?: Array<{ address: string; frame: Uint8Array }>): void {
+    this.submissions.set(digest, { digest, frame, address, report: null, transport: 'ok', rounds: 0, sinceAccepted: null, sinceDeposit: 0, deposits: 0, ...(extra?.length ? { extra } : {}) })
   }
   /** Freigabe: ab jetzt liefert der Zusteller ein und wiederholt. */
   deposit(digest: string): void {
@@ -444,6 +450,7 @@ export class Zusteller {
     }
     try {
       this.carrier().deposit(s.address, s.frame)
+      for (const x of s.extra ?? []) this.carrier().deposit(x.address, x.frame)
       s.transport = 'ok'
       s.deposits++
       s.sinceDeposit = 0

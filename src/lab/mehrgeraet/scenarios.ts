@@ -80,6 +80,16 @@ async function third(s: Setup, name: string): Promise<{ C: HolderDevice; cm: str
   return { C, cm: cm.x.id, mc: cm.y.id }
 }
 
+/**
+ * Die Adressen einer Person für einen Kontext über ihre Geräte (Störregeln, Messung): K0/K1a eine (ein Seed, alle Geräte
+ * dieselbe), K2 eine je Gerät (eigene Schlüssel je Gerät, Schritt 1).
+ */
+async function addressesFor(w: Welt15, person: string, ctx: string): Promise<ReadonlySet<string>> {
+  const out = new Set<string>()
+  for (const d of w.of(person)) out.add((await d.cand.keys.pair(ctx)).rkid)
+  return out
+}
+
 const mark = (ok: boolean): Outcome => (ok ? 'bestanden' : 'nicht bestanden')
 const na = (detail: string): Body => ({ outcome: 'nicht abbildbar', detail, measures: {} })
 const fail = (detail: string): Body => ({ outcome: 'nicht bestanden', detail, measures: {} })
@@ -144,7 +154,8 @@ function writerTagsSeen(w: Welt15, observer: string): { perRelationship: Map<str
   for (const d of w.of(observer)) {
     for (const e of d.log) {
       if (!e.writer) continue
-      const r = d.state.relationships.find((x) => x.tuples.some((t) => t.peer === e.from))
+      // K2: ein Schwestergerät der Gegenperson signiert unter seinem eigenen Anker; die Beziehung kommt dann aus der Empfangsadresse.
+      const r = d.state.relationships.find((x) => x.tuples.some((t) => t.peer === e.from)) ?? (e.rel ? M.findRel(d.state, e.rel) : undefined)
       if (!r) continue
       const id = M.resolveId(d.state, r.id)
       if (!per.has(id)) per.set(id, new Set())
@@ -236,14 +247,14 @@ const MAX_REREQUEST = 16
  * Backoff schweigt, aber noch wartet, ist nicht fertig. Ergebnis: erste Runde des Ruhefensters (−1 bei Grenze), die
  * am Ende noch wartenden Geräte und die Self-Rahmen während des Wartens.
  */
-async function untilRepaired(w: Welt15, person: string, self: string, quiet = MAX_REREQUEST + 1, max = 60): Promise<{ rounds: number; window: number; pending: string[]; selfFrames: number }> {
+async function untilRepaired(w: Welt15, person: string, self: ReadonlySet<string>, quiet = MAX_REREQUEST + 1, max = 60): Promise<{ rounds: number; window: number; pending: string[]; selfFrames: number }> {
   let still = 0
   let selfFrames = 0
   const pending = () => w.of(person).filter((d) => d.syncPending).map((d) => d.name)
   for (let i = 1; i <= max; i++) {
     const mark = w.carrier.carried.length
     await w.rounds(1)
-    const n = w.carrier.carried.slice(mark).filter((f) => f.address === self).length
+    const n = w.carrier.carried.slice(mark).filter((f) => self.has(f.address)).length
     selfFrames += n
     still = n === 0 && pending().length === 0 ? still + 1 : 0
     if (still >= quiet) return { rounds: i - quiet, window: still, pending: [], selfFrames }
@@ -304,12 +315,12 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
         await rounds(3)
       }
       const before = acceptedActs(s.w, 'A').size
-      const rkidA = (await s.A.cand.keys.pair(M.head(M.rel(s.A.state, s.am)).ownKey)).rkid
+      const rkidA = await addressesFor(s.w, 'A', M.head(M.rel(s.A.state, s.am)).ownKey)
       // Zehntes Ticket: nur A1 ist da; A2 bekommt es nie (für A2 verworfen). Dann ist nur A2 da und bekommt das elfte.
       s.A2.online = false
       const mark10 = s.w.carrier.carried.length
       await s.Mm.introduce(s.ma, cs[9]!)
-      const t10 = s.w.carrier.carried.slice(mark10).filter((f) => f.address === rkidA).map((f) => f.id)
+      const t10 = s.w.carrier.carried.slice(mark10).filter((f) => rkidA.has(f.address)).map((f) => f.id)
       if (!serial) s.w.carrier.faults.withhold(s.A2.name, (f) => t10.includes(f.id))
       await rounds(3)
       if (!serial) {
@@ -421,9 +432,9 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       // Zweite Begegnung: sobald As Mapping unterwegs ist (Pflicht `sent`), bleiben Rahmen an A aus; die Quittung kommt nie an.
       const e2 = await s.w.encounter(s.A, s.B)
       const n = await s.w.until(() => s.A.state.duties.some((d) => d.state === 'sent'), 10)
-      const rkid2 = (await s.A.cand.keys.pair(e2.x.ownKey)).rkid
-      const rkid1 = (await s.A.cand.keys.pair(e1.x.ownKey)).rkid
-      for (const d of s.w.of('A')) s.w.carrier.faults.withhold(d.name, (f) => f.address === rkid2 || f.address === rkid1)
+      const rkid2 = await addressesFor(s.w, 'A', e2.x.ownKey)
+      const rkid1 = await addressesFor(s.w, 'A', e1.x.ownKey)
+      for (const d of s.w.of('A')) s.w.carrier.faults.withhold(d.name, (f) => rkid2.has(f.address) || rkid1.has(f.address))
       await s.w.rounds(3)
       // Ein Gerät, das die offene Pflicht kennt: frisch aufgenommen (Zustandskopie) oder, wenn der Kandidat die Gerätezahl festhält, das vorhandene zweite (es kennt die Pflicht über das Journal).
       const A2 = serial ? s.A : await s.w.enrol(s.A, 'A2b').catch((e: unknown) => { if (e instanceof EnrolmentRefused) return s.A2; throw e })
@@ -432,7 +443,7 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       // Der Nutzer beendet den Kontakt B: jeden Eintrag, den A1 zu B hält (vor der Vereinigung können es zwei sein).
       for (const r of s.A.state.relationships.filter((r) => r.tuples.some((t) => t.peer === e1.x.peer || t.peer === e2.x.peer))) await s.A.depart(r.id)
       s.w.carrier.faults.reset()
-      const toB = new Set([e1.x.peerKeyAgreement, e2.x.peerKeyAgreement])
+      const toB = new Set([e1.x.peerKeyAgreement, e2.x.peerKeyAgreement, ...(await addressesFor(s.w, 'B', e1.y.ownKey)), ...(await addressesFor(s.w, 'B', e2.y.ownKey))])
       const mark0 = s.w.carrier.carried.length
       await s.w.rounds(2)
       A2.online = true
@@ -589,7 +600,12 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const legit = s.A.state.acts.length - before
       const legitFromB = M.rel(s.A.state, ab.x.id).view ? 1 : 0
       const ok = 'act' in r && legit === 1 && legitFromB === 1 && reads === 0
-      return { outcome: mark(ok), detail: `Vorstellung ${'act' in r ? 'ausgegeben' : 'verweigert'}; A1 erhält ${legit} Ticket(s) und ${legitFromB} Revision(en) von B; der Dieb liest ${reads} Dokument(e) und hält ${thief.state.acts.length} Akt(e)`, measures: { thiefReads: reads, legitimateDelivery: legit, legitimateDeliveryFromPeer: legitFromB } }
+      // K2 Schritt 1: die Gegenseiten lesen die Gerätemenge aus der Prüfstandsliste, der Widerruf wirkt dort sofort. Ein ✓
+      // gilt nur unter dieser Vereinfachung (Ersatz für die Mengenrevision an jede Gegenseite, Schritt 3), nie als Erfüllung.
+      const shortcut = c.capabilities.has('device-keys')
+      const promiseChanged = ok && shortcut
+      const note = promiseChanged ? `; Schritt-1-Vereinfachung: B und M erfahren den Widerruf über die Prüfstandsliste der Gerätemenge, nicht über eine Mengenrevision (Schritt 3); der Dieb hält nur die Schlüssel von A2, versiegelt wird nach dem Widerruf an A1 allein` : ''
+      return { outcome: mark(ok), ...(shortcut ? { promiseChanged } : {}), detail: `Vorstellung ${'act' in r ? 'ausgegeben' : 'verweigert'}; A1 erhält ${legit} Ticket(s) und ${legitFromB} Revision(en) von B; der Dieb liest ${reads} Dokument(e) und hält ${thief.state.acts.length} Akt(e)${note}`, measures: { thiefReads: reads, legitimateDelivery: legit, legitimateDeliveryFromPeer: legitFromB, ...(shortcut ? { step1Shortcut: 1 } : {}) } }
     },
   },
   {
@@ -754,8 +770,8 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       } else {
         // B1 und B2 sind dabei voneinander getrennt (das Journal zwischen ihnen bleibt aus, bis beide Verbindungen und die Proben durch sind):
         // so entscheidet nicht der Zufall der Reihenfolge, ob ein Gerät eine Probe mit dem ganzen Wissen der Person prüft.
-        const selfB = (await s.B.cand.keys.pair('self/B')).rkid
-        for (const d of s.w.of('B')) s.w.carrier.faults.withhold(d.name, (f) => f.address === selfB)
+        const selfB = s.w.selfAddresses('B')
+        for (const d of s.w.of('B')) s.w.carrier.faults.withhold(d.name, (f) => selfB.has(f.address))
         await s.B.consent(acts[0]!)
         await s.B2.consent(acts[1]!)
         await C.consent(acts[0]!)
@@ -789,8 +805,8 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       // B ist weg: As Karte bleibt unterwegs (consented, nicht verbunden), während A eine zweite Beziehung zu M öffnet.
       // A1 und A2 sind dabei voneinander getrennt (kein Journal): die Zustimmung auf A1 und die Vereinigung auf A2 laufen nebeneinander.
       for (const d of s.w.of('B')) d.online = false
-      const selfA = (await s.A.cand.keys.pair('self/A')).rkid
-      if (!serial) for (const d of s.w.of('A')) s.w.carrier.faults.withhold(d.name, (f) => f.address === selfA)
+      const selfA = s.w.selfAddresses('A')
+      if (!serial) for (const d of s.w.of('A')) s.w.carrier.faults.withhold(d.name, (f) => selfA.has(f.address))
       await s.A.consent(r.act)
       await s.w.rounds(1)
       const e2 = await s.w.encounter(s.A2, s.Mm) // A2 trifft M1 erneut; seriell trifft A1 M1
@@ -833,8 +849,8 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const s = await setup(c, serial)
       // Die Mediatorgeräte sind weg, bevor die leere Revision ankommt: sie halten die alte Sicht. A2 ist von A1 getrennt (kein Journal).
       for (const d of s.w.of('M')) d.online = false
-      const selfA = (await s.A.cand.keys.pair('self/A')).rkid
-      if (!serial) for (const d of s.w.of('A')) s.w.carrier.faults.withhold(d.name, (f) => f.address === selfA)
+      const selfA = s.w.selfAddresses('A')
+      if (!serial) for (const d of s.w.of('A')) s.w.carrier.faults.withhold(d.name, (f) => selfA.has(f.address))
       await s.A.setClass(s.am, false)
       await s.w.rounds(2)
       const stale = s.w.of('A').map((d) => M.rel(d.state, s.am).stock.filter((k) => k.state === 'active').length)
@@ -887,13 +903,13 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       }
       const rev0 = M.rel(s.A.state, s.am).revision
       // A1 und A2 getrennt; je eine weitere Vorstellung erreicht nur eines der beiden Geräte (seriell beide A1).
-      const selfA = (await s.A.cand.keys.pair('self/A')).rkid
+      const selfA = s.w.selfAddresses('A')
       const x1 = await framesOf(s, () => introduceAny(s, s.ma, mc, serial))
       const x2 = await framesOf(s, () => introduceAny(s, s.ma, mc, serial))
       if (!('act' in x1.r) || !('act' in x2.r)) return fail('keine zwei weiteren Vorstellungen')
       const hash = (f: { bytes: Uint8Array }) => frameHash(f.bytes)
       if (!serial) {
-        for (const d of s.w.of('A')) s.w.carrier.faults.withhold(d.name, (f) => f.address === selfA)
+        for (const d of s.w.of('A')) s.w.carrier.faults.withhold(d.name, (f) => selfA.has(f.address))
         s.w.carrier.faults.withhold(s.A2.name, (f) => x1.frames.has(hash(f)))
         s.w.carrier.faults.withhold(s.A.name, (f) => x2.frames.has(hash(f)))
       }
@@ -936,8 +952,8 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       if (!('act' in r)) return fail(`Vorstellung verweigert: ${r.refused}`)
       if ((await s.w.until(() => knowsAct(s.w, 'A', r.act) && knowsAct(s.w, 'B', r.act), 10)) < 0) return fail('Akt nicht bei A und B')
       // A1 und A2 getrennt (kein Journal): beide stimmen zu, jedes produziert seine Karte; seriell stimmt A1 zweimal zu (das zweite Mal ein Befund, keine Karte).
-      const selfA = (await s.A.cand.keys.pair('self/A')).rkid
-      if (!serial) for (const d of s.w.of('A')) s.w.carrier.faults.withhold(d.name, (f) => f.address === selfA)
+      const selfA = s.w.selfAddresses('A')
+      if (!serial) for (const d of s.w.of('A')) s.w.carrier.faults.withhold(d.name, (f) => selfA.has(f.address))
       await s.A.consent(r.act)
       await s.A2.consent(r.act)
       await s.B.consent(r.act)
@@ -981,7 +997,8 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       if (serial) return na('ein Gerät: kein Journal zwischen Geräten')
       const s = await setup(c, serial, ['C'])
       const { C, mc } = s.thirds.C!
-      const self = (await s.A.cand.keys.pair('self/A')).rkid
+      const self = (await s.A.cand.keys.pair('self/A')).rkid // die Ablage (Schritt 6) liegt an dieser Adresse
+      const selves = s.w.selfAddresses('A') // K2: eine Self-Adresse je Gerät
       const oldA2 = s.w.stores.get('A2')!.snapshot() // A2 vor beiden Akten
       // Fachlicher Verlauf: ein Akt mit Zustimmung auf A1, einer mit Zustimmung auf A2 (A2s eigene Batches stehen danach nur noch in A1s Journal).
       const acts: string[] = []
@@ -1031,7 +1048,7 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const loss = async (match: (o: { device: string; kind: string }) => boolean, log?: () => void) => {
         await restoreA2()
         s.w.carrier.faults.drop((f) => {
-          const o = f.address === self ? s.w.frameOrigin(f.bytes) : undefined
+          const o = selves.has(f.address) ? s.w.frameOrigin(f.bytes) : undefined
           return !!o && match(o)
         })
         if (s.w.selfLog) log?.()
@@ -1047,14 +1064,14 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       // Nur die benötigten Batches gehen verloren (A1s Journalrahmen an A2); Antwortkopf und Quittungen passieren (Review 11 S2).
       const batches = await loss((o) => o.device !== 'A2' && o.kind === 'journal', () => lf.dropEntries((d, e) => d === 'A2' && s.w.frameOrigin(e.bytes)?.kind === 'journal' && s.w.frameOrigin(e.bytes)?.device !== 'A2'))
       const receipts = await loss((o) => o.kind === 'delivery-ack')
-      const repair = await untilRepaired(s.w, 'A', self)
+      const repair = await untilRepaired(s.w, 'A', selves)
       const quiet = repair.rounds
       // Messung: Endstand und der ganze Reparaturverkehr seit dem ersten Restore.
       const missing = missingBatches(s.w, 'A')
       const lostState = s.w.of('A').filter((d) => M.canonical(d.projection()) !== ref).length
       const fe = finalEffects(s.w, 'A')
       const journalConflicts = s.w.of('A').flatMap((d) => d.state.findings).filter((f) => f.includes('Journal-Konflikt')).length
-      const t = s.w.deposits('A', self, start)
+      const t = s.w.deposits('A', selves, start)
       const k = (kind: string) => t.byKind[`own:${kind}`] ?? { frames: 0, bytes: 0 }
       const answersBy = (d: string) => (t.byDevice[d]?.['journal'] ?? 0) + (t.byDevice[d]?.['journal-sync-reply'] ?? 0)
       const after = s.w.of('A').map(journalOf)
