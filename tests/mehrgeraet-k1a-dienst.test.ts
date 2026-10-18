@@ -32,6 +32,8 @@ import * as M from '../src/lab/mehrgeraet/model'
 //   Review 27: B2a tiefe Formprüfung (13, 14, 16: verschachtelte Werte, beide Pfade); 17. B2b: eine Antwort ist eine Einheit.
 //   Review 28 (Klasse): reservierte Namen als Schlüssel und Kennungen auf beiden Pfaden (13, 14); 18. Schlüsseltabellen
 //   ohne Prototyp, Kennungsgrammatik, Eigenschaftstest; 19. Zufallsrahmen auf dem Briefkastenpfad; 20. Store-Abbild.
+//   CodeRabbit #71: 21. die Antwort der Ablage gilt nur ab der angefragten Position; 22. eine Operation aus dem Dokument
+//   eines Kontakts hat die Form des Journals (`emit` prüft wie `batchProblem`), sonst wird sie nie Zustand.
 
 const variant = () => k1a({ journalAtService: true })
 const byId = (rs: Awaited<ReturnType<typeof runX15>>) => Object.fromEntries(rs.map((r) => [r.scenario, r]))
@@ -808,5 +810,39 @@ describe('K1a Schritt 6 (Variante): Journal beim Dienst', () => {
     }
     await w.rounds(4)
     expect(states(w, act).every((x) => x.startsWith('consented/'))).toBe(true)
+  }, 300_000)
+
+  it('21. CodeRabbit #71: die Antwort der Ablage gilt nur ab der angefragten Position; ein Träger, der ein späteres `from` meldet, bewegt den Cursor nicht und beendet die Ablagespur nicht', async () => {
+    const { w, A } = await restoredWithLostSibling()
+    const take = w.carrier.takeLogAnswers.bind(w.carrier)
+    w.carrier.takeLogAnswers = (name) => take(name).map((a) => (name === 'A1' ? { ...a, from: a.end + 3, end: a.end + 3, entries: [] } : a))
+    const cursor = A.snapshotState().logCursor
+    const stale = A.staleSyncAnswers
+    await w.rounds(3)
+    expect(A.staleSyncAnswers).toBeGreaterThan(stale)
+    expect(A.snapshotState().logCursor).toBe(cursor)
+    expect(A.logPending).toBe(true)
+    let end = -1
+    w.carrier.takeLogAnswers = (name) => take(name).map((a) => (name === 'A1' && (end = a.end), a))
+    expect(await w.until(() => !A.logPending, 5)).toBeGreaterThan(0)
+    expect(end).toBeGreaterThan(cursor!)
+    expect(A.snapshotState().logCursor).toBe(end) // heil gelesen: bis zum Ende der echten Antwort
+  }, 300_000)
+
+  it('22. CodeRabbit #71: eine Operation aus dem Dokument eines Kontakts mit kaputter Form (Ticket mit voucher.name als Zahl) wird nie Zustand: zurückgenommen, keine Quittung, die Schwester divergiert nicht', async () => {
+    const p = await pair(() => k1a())
+    const A2 = await p.w.enrol(p.A, 'A2')
+    await p.w.rounds(3)
+    const r = await p.Mm.introduce(p.am.y.id, p.bm.y.id, 'A', 42 as unknown as string) // das Ticket an A trägt nameB
+    if (!('act' in r)) throw new Error(r.refused)
+    await p.w.until(() => p.B.state.acts.some((a) => a.id === r.act))
+    await p.w.rounds(4)
+    expect(p.A.dispositions.some((d) => d.startsWith('failed(invalid-input): ticket-accept: op.ticket-accept.act.voucher.name'))).toBe(true)
+    for (const d of [p.A, A2]) {
+      expect(d.state.acts.some((a) => a.id === r.act), d.name).toBe(false)
+      expect(d.dispositions.filter((x) => x.includes('corrupt')), d.name).toEqual([])
+    }
+    expect(M.canonical(A2.projection())).toBe(M.canonical(p.A.projection()))
+    expect(M.canonical(A2.cand.heads!())).toBe(M.canonical(p.A.cand.heads!()))
   }, 300_000)
 })

@@ -110,6 +110,12 @@ export class Blocked extends Error {}
 /** Der Kandidat verweigert ein weiteres Gerät (feste Gerätezahl, K1a): das Szenario weicht auf ein vorhandenes aus. */
 export class EnrolmentRefused extends Error {}
 /**
+ * Eine Operation, die das Gerät selbst erzeugen würde, hat nicht die Form, die das Journal annimmt (CodeRabbit #71): meist
+ * Werte aus dem Dokument eines Kontakts (Ticket, Revision). Dieselbe Eingangsprüfung wie auf beiden Journalpfaden
+ * (`M.opProblem`); der Schritt wird ganz zurückgenommen, keine Quittung, nie Zustand.
+ */
+export class InvalidInput extends Error {}
+/**
  * Ein eigener Journalrahmen ist gültig signiert, aber nicht faltbar (Tor-Review 26 B2): kaputte Form (Payload, Batch,
  * Operationen, Absichten) oder eine Ausnahme der Faltung außer `Missing` (zurückgestellt) und `Blocked`. Der Schritt wird
  * ganz zurückgenommen (`guarded`); Ablage und Briefkasten verbuchen ihn als Befund, nie als gefaltet. `ref`: Digest des
@@ -401,7 +407,7 @@ export class HolderDevice {
    * Spur der Ablage (Schritt 6): `pending` bis eine Antwort auf die laufende Leseanfrage vollständig gefaltet ist;
    * `answered`: auf die laufende Anfrage kam eine Antwort (unvollständig: Backoff; keine: nächste Runde erneut, Review 25 S2).
    */
-  private logSync: { pending: boolean; wait: number; backoff: number; id: string | null; answered: boolean } = { pending: false, wait: 0, backoff: 1, id: null, answered: false }
+  private logSync: { pending: boolean; wait: number; backoff: number; id: string | null; answered: boolean; from: number } = { pending: false, wait: 0, backoff: 1, id: null, answered: false, from: 0 }
   /** Während eine Antwort der Ablage gefaltet wird: zurückgestellte Einträge stoßen kein neues Nachholen an (die Antwort entscheidet). */
   private readingLog = false
   /** Leseanfragen an die Ablage (Messung, getrennt von den Anfragen an Schwestern `syncRequests`). */
@@ -520,6 +526,11 @@ export class HolderDevice {
   /** Entscheiden → freigeben (Kandidat) → anwenden → aufzeichnen. Wirft `Blocked`, wenn der Kandidat die Operation verweigert. */
   private emit(body: OpBody): M.Op {
     const op = this.op(body)
+    const problem = M.opProblem(op) // CodeRabbit #71: lokal und im Journal dieselbe Form, sonst divergiert die Schwester
+    if (problem) {
+      this.counter--
+      throw new InvalidInput(`${op.kind}: ${problem}`)
+    }
     if (this.cand.authorize && !this.cand.authorize(op, this.state)) {
       this.counter--
       this.measures.blocked++
@@ -604,6 +615,10 @@ export class HolderDevice {
       this.rollback(c)
       if (e instanceof Blocked) {
         this.dispositions.push(`blocked(${e.message})`)
+        return false
+      }
+      if (e instanceof InvalidInput) {
+        this.dispositions.push(`failed(invalid-input): ${e.message}`)
         return false
       }
       if (defer && e instanceof M.Missing) {
@@ -718,7 +733,7 @@ export class HolderDevice {
    */
   requestSync() {
     this.sync = { pending: true, wait: this.logMode ? 1 : 0, backoff: 1, id: null } // keine Anfrage läuft: keine Antwort beendet das Nachholen
-    if (this.logMode) this.logSync = { pending: true, wait: 0, backoff: 1, id: null, answered: false }
+    if (this.logMode) this.logSync = { pending: true, wait: 0, backoff: 1, id: null, answered: false, from: 0 }
   }
   private crash(point: CrashPoint) {
     if (this.crashAt !== point) return
@@ -1225,8 +1240,9 @@ export class HolderDevice {
     this.logRequests++
     l.id = crypto.randomUUID()
     l.answered = false
+    l.from = this.logCursor
     try {
-      this.carrier.readLog(this.name, this.ownRkid, this.logCursor, l.id)
+      this.carrier.readLog(this.name, this.ownRkid, l.from, l.id)
       l.wait = 0
     } catch (e) {
       if (!(e instanceof WireUnreachable)) throw e
@@ -1260,6 +1276,12 @@ export class HolderDevice {
       return
     }
     if (!this.logSync.pending) return
+    // CodeRabbit #71: die Antwort gilt nur ab der angefragten Position; ein anderes `from` des Trägers ist wie eine
+    // fremde Antwort (der Cursor darf nicht an Einträgen vorbei springen, die nie gefaltet wurden).
+    if (a.from !== this.logSync.from) {
+      this.staleSyncAnswers++
+      return
+    }
     this.logSync.answered = true
     const byPos = new Map<number, Uint8Array>()
     for (const e of a.entries) if (e.pos >= a.from && e.pos < a.end && !byPos.has(e.pos)) byPos.set(e.pos, e.bytes)
@@ -1334,7 +1356,7 @@ export class HolderDevice {
       }
     if (rest.length) gap = Math.min(gap, rest[0]![0])
     this.logCursor = Math.max(this.logCursor, gap)
-    if (gap === a.end) this.logSync = { pending: false, wait: 0, backoff: 1, id: this.logSync.id, answered: true }
+    if (gap === a.end) this.logSync = { pending: false, wait: 0, backoff: 1, id: this.logSync.id, answered: true, from: this.logSync.from }
     else {
       // Unvollständig: erneut ab der Lücke, mit Backoff (nicht jede Runde).
       this.logSync.wait = this.logSync.backoff
