@@ -32,13 +32,24 @@ numbers its revisions under a pseudonymous writer tag per relationship.
   an old backup thus recovers its own history (consumed keys, accepted
   acts) and the siblings' steps; X6 passes. Two requests at once, a
   restore during an answer and a double restore were checked by the
-  review. A journal frame is checked for shape before it is folded (gate
-  review 26 B2): payload an object with a string body; batch with a string
-  writer, a positive integer counter, deps an array of strings, ops and
-  intents arrays (`batchProblem`); every op with id, time, a known kind
-  and the fields the fold reads (`opProblem` in model.ts); the
-  transaction the candidate returns again (`transactionProblem` in
-  holder.ts). A frame that fails the check, or whose fold throws anything
+  review. **Input contract of the fold** (gate reviews 26 B2 and 27 B2a):
+  a journal frame is checked for form before anything is folded, deep, on
+  both journal paths (mailbox and log) with the same check. One table of
+  nested shapes in model.ts (`Shape`, `SHAPES`, `OP_FIELDS`,
+  `shapeProblem`): payload an object whose body is strict base64; batch
+  with exactly writer (string), counter (positive integer), deps (strings),
+  ops and intents (`batchProblem`); every op with id (writer, integer
+  n ≥ 0), a readable time, a known kind and exactly its fields, down to
+  every value that becomes state (`opProblem`): stock keys and listed keys
+  (anchor strings, n integer ≥ 0, readable expiry, state from the enum),
+  tuples, cards, acts and mediator acts (every field, enums, nullable and
+  optional parts), view and allocation key lists, `candidates`, `deps`,
+  anchors and act lists as arrays of strings, pairs and edges of length 2;
+  intents with a document digest of the bench's form (multibase sha-256)
+  and string fields, bytes strict base64 (length, alphabet, padding:
+  the round trip gives the same string; `INTENT_FIELDS` in holder.ts);
+  the transaction the candidate returns again (`transactionProblem`).
+  Numbers are never NaN or infinite. A frame that fails the check, or whose fold throws anything
   but `Missing` (deferred) or `Blocked`, is corrupt: the step is rolled
   back, no receipt, one finding `finding(journal:corrupt-frame@<digest>)`
   per digest, and the round goes on (the sender's deliverer repeats it,
@@ -46,6 +57,17 @@ numbers its revisions under a pseudonymous writer tag per relationship.
   order, `deps` keep causality (a batch that names the corrupt one stays
   deferred). The gate after restore is untouched: a corrupt batch never
   joins the heads, so a sibling answer that names it is not covered.
+  With the log (step 6) an answer is one unit (gate review 27 B2b): every
+  entry is opened and checked for form before any is folded, and the
+  answer folds nothing from the first malformed position on; if a later
+  pass finds a position p corrupt only while folding (the fold throws)
+  after an entry above p was already folded, all effects of the answer
+  are rolled back (one checkpoint for the answer, the same snapshot
+  machinery as a step) and only the entries below p are folded again; the
+  cursor ends at p, one finding per position. A clean answer folds in one
+  step as before. Holder State Contract follow-up: „a party MUST validate
+  the form of every journal batch before folding; a malformed batch is a
+  finding, never state“ (rltp `trust-0.32-folgepunkte-e15-2026-10-18.md`).
 - **Incarnation.** A restore from the store gives the device a fresh
   random incarnation (`A1@3f9a1c20`), never a counter from the backup, so
   two restores of the same backup never collide; a batch key seen twice
@@ -865,6 +887,10 @@ witness stays.
   cannot read); the next read starts at the corrupt position. Enrolment
   from the log uses the same path: a corrupt first entry blocks the log
   track at position 0, the sibling track still delivers and witnesses.
+  After gate review 27 the form check is deep (B2a, the input contract
+  above) and the answer is a unit (B2b): form of every entry first, and a
+  position found corrupt only in a later pass rolls the whole answer back
+  to a re-fold below it, so no effect above the cursor survives.
 - **Lost log answers (review 25 S2).** If no answer to the current read
   arrived with the next pickup (request or answer lost), the device asks
   again in that round: at most one log read per device and round, never a

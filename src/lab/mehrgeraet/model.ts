@@ -271,51 +271,147 @@ export type Op = { id: OpId; at: string } & (
 )
 
 /**
- * Form einer Operation (Tor-Review 26 B2): Kennung, Zeit, bekannte Art und die Felder, die die Faltung liest, mit ihrem
- * Grundtyp (`?` = darf fehlen oder null sein). Geprüft wird nur die Form, nicht der Inhalt (Elemente von Listen, Werte von
- * Objekten); was die Faltung darüber hinaus nicht lesen kann, wirft dort und ist für das Gerät ebenfalls `corrupt`.
- * Rückgabe: null oder was nicht stimmt.
+ * Eingangsvertrag der Faltung (Tor-Review 26 B2, Tor-Review 27 B2a): die Form jeder Operation, bis in jeden Wert, der
+ * Zustand wird. Eine Tabelle von Formen (`Shape`), verschachtelt; dieselbe Prüfung gilt für beide Journalpfade (Ablage
+ * und Briefkasten: `batchProblem` im Kandidaten, `transactionProblem` im Holder). Was nicht passt, ist ein Befund, nie
+ * Zustand. Grundformen: `string`; `boolean`; `nat` = ganze Zahl ≥ 0; `time` = Zeitstempel als String, den `Date.parse`
+ * lesen kann (Zahlen nie NaN oder unendlich); `base64` = streng (Länge, Alphabet, Auffüllung: der Rundlauf ergibt
+ * denselben String); `digest` = Dokumentdigest des Prüfstands. Zusammengesetzt: `enum`, `array` (jedes Element), `tuple` (feste Länge), `object` (genau diese
+ * Felder, keine weiteren), `record` (jeder Wert). `nullable` = vorhanden, Wert oder null; `optional` = darf fehlen.
+ * Rückgabe von `shapeProblem`: null oder der Pfad, der nicht stimmt.
  */
-type FieldType = 'string' | 'number' | 'boolean' | 'array' | 'object'
-const OP_FIELDS: { [K in Op['kind']]: Record<string, FieldType | `${FieldType}?`> } = {
-  'open-tuple': { rel: 'string?', tuple: 'object', provenance: 'string', vouchedBy: 'string?', act: 'string?' },
-  class: { rel: 'string', on: 'boolean' },
-  depart: { rel: 'string' },
-  allocate: { rel: 'string', nonce: 'string', keys: 'array' },
-  revision: { rel: 'string', revision: 'number', keys: 'array', writer: 'string?' },
-  withdraw: { rel: 'string', anchors: 'array' },
-  age: { rel: 'string', anchors: 'array' },
-  view: { rel: 'string', scope: 'string', revision: 'number', keys: 'array', writer: 'string?', clears: 'object?' },
-  introduce: { act: 'object' },
-  'ticket-accept': { act: 'object' },
-  'ticket-refuse-budget': { rel: 'string', own: 'string' },
-  finding: { text: 'string' },
-  consent: { act: 'string', card: 'object', cardKey: 'string' },
-  decline: { act: 'string' },
-  'hand-over': { act: 'string', o: 'string', digest: 'string?' },
-  'card-pending': { act: 'string', card: 'object', v: 'string' },
-  'card-refused': { act: 'string', v: 'string', k: 'boolean' },
-  connect: { act: 'string', rel: 'string', tuple: 'object' },
-  expire: { act: 'string' },
-  'budget-confirm': { rel: 'string', acts: 'array' },
-  duty: { pair: 'array', state: 'string', mappingDigest: 'string?' },
-  union: { a: 'string', b: 'string', edge: 'array' },
-  edge: { edge: 'array' },
-}
+export type Shape =
+  | 'string'
+  | 'boolean'
+  | 'nat'
+  | 'time'
+  | 'base64'
+  | 'digest'
+  | { enum: readonly string[] }
+  | { array: Shape }
+  | { tuple: readonly Shape[] }
+  | { object: { readonly [field: string]: Shape } }
+  | { record: Shape }
+  | { nullable: Shape }
+  | { optional: Shape }
 const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x)
-const hasType = (x: unknown, t: FieldType) => (t === 'array' ? Array.isArray(x) : t === 'object' ? isObj(x) : typeof x === t && (t !== 'number' || Number.isFinite(x)))
-export function opProblem(op: unknown): string | null {
-  if (!isObj(op)) return 'op'
-  if (!isObj(op.id) || typeof op.id.writer !== 'string' || !Number.isFinite(op.id.n)) return 'op.id'
-  if (typeof op.at !== 'string') return 'op.at'
-  if (typeof op.kind !== 'string' || !Object.hasOwn(OP_FIELDS, op.kind)) return `op.kind(${String(op.kind)})`
-  for (const [f, t] of Object.entries(OP_FIELDS[op.kind as Op['kind']])) {
-    const optional = t.endsWith('?')
-    const v = op[f]
-    if (optional && (v === undefined || v === null)) continue
-    if (!hasType(v, t.replace('?', '') as FieldType)) return `op.${op.kind}.${f}`
+/** Strenges base64 (Review 27 B2a): nur Alphabet und Auffüllung an der richtigen Stelle, Länge ein Vielfaches von 4, der Rundlauf ergibt denselben String. */
+export const isBase64 = (x: unknown): x is string => typeof x === 'string' && x.length % 4 === 0 && /^[A-Za-z0-9+/]*={0,2}$/.test(x) && Buffer.from(x, 'base64').toString('base64') === x
+/** Dokumentdigest wie im Prüfstand (`digestBytes`): multibase base64url (`u`) eines sha2-256-Multihash (34 Bytes, Präfix 0x12 0x20). */
+export const isDigest = (x: unknown): x is string => typeof x === 'string' && /^uEi[A-D][A-Za-z0-9_-]{43}$/.test(x)
+export function shapeProblem(x: unknown, s: Shape, path: string): string | null {
+  if (s === 'string') return typeof x === 'string' ? null : path
+  if (s === 'boolean') return typeof x === 'boolean' ? null : path
+  if (s === 'nat') return Number.isSafeInteger(x) && (x as number) >= 0 ? null : path
+  if (s === 'time') return typeof x === 'string' && Number.isFinite(Date.parse(x)) ? null : path
+  if (s === 'base64') return isBase64(x) ? null : path
+  if (s === 'digest') return isDigest(x) ? null : path
+  if ('enum' in s) return typeof x === 'string' && s.enum.includes(x) ? null : path
+  if ('nullable' in s) return x === null ? null : shapeProblem(x, s.nullable, path)
+  if ('optional' in s) return x === undefined ? null : shapeProblem(x, s.optional, path)
+  if ('array' in s) {
+    if (!Array.isArray(x)) return path
+    for (let i = 0; i < x.length; i++) {
+      const p = shapeProblem(x[i], s.array, `${path}[${i}]`)
+      if (p) return p
+    }
+    return null
+  }
+  if ('tuple' in s) {
+    if (!Array.isArray(x) || x.length !== s.tuple.length) return path
+    for (let i = 0; i < x.length; i++) {
+      const p = shapeProblem(x[i], s.tuple[i]!, `${path}[${i}]`)
+      if (p) return p
+    }
+    return null
+  }
+  if (!isObj(x)) return path
+  if ('record' in s) {
+    for (const [k, v] of Object.entries(x)) {
+      const p = shapeProblem(v, s.record, `${path}.${k}`)
+      if (p) return p
+    }
+    return null
+  }
+  for (const k of Object.keys(x)) if (!Object.hasOwn(s.object, k)) return `${path}.${k}`
+  for (const [k, f] of Object.entries(s.object)) {
+    const p = shapeProblem(x[k], f, `${path}.${k}`)
+    if (p) return p
   }
   return null
+}
+
+const str = 'string' as const
+const pair: Shape = { tuple: [str, str] }
+const handOver: Shape = { enum: ['none', 'intent', 'handed', 'taken', 'delivered', 'given-up', 'cancelled'] satisfies HandOver[] }
+/** Die Formen der Werte, die Zustand werden (Review 27 B2a), nach den Typen oben. */
+export const SHAPES = {
+  tuple: { object: { id: str, own: str, ownKey: str, peer: str, peerKeyAgreement: str, record: str, openedAt: 'time', candidates: { array: str }, deactivated: 'boolean' } },
+  stockKey: {
+    object: { n: 'nat', nonce: str, anchor: str, keyAgreement: str, key: str, expiresAt: 'time', state: { enum: ['allocated', 'registered', 'active', 'aging', 'consumed', 'withdrawn', 'tombstoned'] satisfies StockState[] } },
+  },
+  listedKey: { object: { n: 'nat', anchor: str, keyAgreement: str, expiresAt: 'time' } },
+  card: { object: { anchor: str, keyAgreement: str } },
+  act: {
+    object: {
+      id: str,
+      mediator: str,
+      own: str,
+      voucher: { object: { anchor: str, keyAgreement: str, name: str } },
+      issuedAt: 'time',
+      expiresAt: 'time',
+      state: { enum: ['offered', 'declined', 'consented', 'connected', 'expired'] satisfies ActState[] },
+      pending: { nullable: { object: { anchor: str, keyAgreement: str } } },
+      v: { nullable: str },
+      k: 'boolean',
+      ownCard: { nullable: { object: { anchor: str, keyAgreement: str } } },
+      ownCardKey: { nullable: str },
+      o: handOver,
+      ownCardDigest: { nullable: 'digest' },
+      opened: { nullable: str },
+      decisions: { optional: { array: { object: { kind: { enum: ['consent', 'decline'] }, op: str, at: 'time' } } } },
+      cards: { optional: { record: handOver } },
+      consentOp: { optional: str },
+    },
+  },
+  mediatorAct: {
+    object: { id: str, a: { object: { rel: str, key: str, keyAgreement: str } }, b: { object: { rel: str, key: str, keyAgreement: str } }, issuedAt: 'time', expiresAt: 'time' },
+  },
+} satisfies Record<string, Shape>
+/** Je Art die Felder neben `id`, `at`, `kind` (Review 26 B2: bekannte Art; Review 27 B2a: jedes Feld bis in die Elemente). */
+const OP_FIELDS: { [K in Op['kind']]: { [field: string]: Shape } } = {
+  'open-tuple': { rel: { nullable: str }, tuple: SHAPES.tuple, provenance: { enum: ['encounter', 'introduction'] }, vouchedBy: { nullable: str }, act: { nullable: str } },
+  class: { rel: str, on: 'boolean' },
+  depart: { rel: str },
+  allocate: { rel: str, nonce: str, keys: { array: SHAPES.stockKey } },
+  revision: { rel: str, revision: 'nat', keys: { array: SHAPES.listedKey }, writer: { optional: str } },
+  withdraw: { rel: str, anchors: { array: str } },
+  age: { rel: str, anchors: { array: str } },
+  view: { rel: str, scope: str, revision: 'nat', keys: { array: SHAPES.listedKey }, writer: { optional: str }, clears: { optional: { record: 'nat' } } },
+  introduce: { act: SHAPES.mediatorAct },
+  'ticket-accept': { act: SHAPES.act },
+  'ticket-refuse-budget': { rel: str, own: str },
+  finding: { text: str },
+  consent: { act: str, card: SHAPES.card, cardKey: str },
+  decline: { act: str },
+  'hand-over': { act: str, o: handOver, digest: { optional: 'digest' } },
+  'card-pending': { act: str, card: SHAPES.card, v: str },
+  'card-refused': { act: str, v: str, k: 'boolean' },
+  connect: { act: str, rel: str, tuple: SHAPES.tuple },
+  expire: { act: str },
+  'budget-confirm': { rel: str, acts: { array: str } },
+  duty: { pair, state: { enum: ['none', 'hit', 'sent', 'united', 'moot'] satisfies PairDuty['state'][] }, mappingDigest: { nullable: 'digest' } },
+  union: { a: str, b: str, edge: pair },
+  edge: { edge: pair },
+}
+const OP_SHAPES: Record<string, Shape> = Object.fromEntries(
+  Object.entries(OP_FIELDS).map(([kind, fields]): [string, Shape] => [kind, { object: { id: { object: { writer: str, n: 'nat' } }, at: 'time', kind: { enum: [kind] }, ...fields } }]),
+)
+/** Form einer Operation (Review 26 B2, Review 27 B2a): null oder der Pfad, der nicht stimmt. */
+export function opProblem(op: unknown): string | null {
+  if (!isObj(op)) return 'op'
+  if (typeof op.kind !== 'string' || !Object.hasOwn(OP_SHAPES, op.kind)) return `op.kind(${String(op.kind)})`
+  return shapeProblem(op, OP_SHAPES[op.kind]!, `op.${op.kind}`)
 }
 
 // ── Hilfen ───────────────────────────────────────────────────────────────────

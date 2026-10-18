@@ -29,6 +29,7 @@ import * as M from '../src/lab/mehrgeraet/model'
 //   10. Enrollment aus der Ablage. 11. Alle Szenarien: dieselben Ausgänge wie K1a. 12. Was der Dienst lernt; Wachstum.
 //   Review 26 B2 (Rest): 13. Ablage, 14. Briefkasten, 15. Enrollment aus der Ablage: kaputte Form oder werfende Faltung
 //   ist ein Befund, kein Abbruch; 16. Formprüfung.
+//   Review 27: B2a tiefe Formprüfung (13, 14, 16: verschachtelte Werte, beide Pfade); 17. B2b: eine Antwort ist eine Einheit.
 
 const variant = () => k1a({ journalAtService: true })
 const byId = (rs: Awaited<ReturnType<typeof runX15>>) => Object.fromEntries(rs.map((r) => [r.scenario, r]))
@@ -388,6 +389,11 @@ describe('K1a Schritt 6 (Variante): Journal beim Dienst', () => {
   // je Digest, keine Quittung, die Runde läuft weiter, spätere Rahmen falten (deps schützen die Kausalität).
   const X = 'X@feed'
   const xop = (extra: Record<string, unknown>) => ({ id: { writer: X, n: 1 }, at: '2026-10-17T08:00:00.000Z', ...extra })
+  const T0 = '2026-10-17T08:00:00.000Z'
+  const INTENT = { digest: 'uEiAtcRZCtyawRAFifKn7rDL1yFMPsZA8xNsCJYcXkhpIgQ', kind: 'k', bytes: 'AA==', address: 'a', expected: 'e', replyTo: 'r', device: 'A1', writer: 'A1@x' }
+  const SKEY = { n: 0, nonce: 'AA==', anchor: 'anc', keyAgreement: 'ka', key: 'ctx', expiresAt: T0, state: 'active' }
+  const CARD = { anchor: 'anc', keyAgreement: 'ka' }
+  const ACT = { id: 'act', mediator: 'rel', own: 'anc', voucher: { anchor: 'v', keyAgreement: 'vk', name: 'V' }, issuedAt: T0, expiresAt: T0, state: 'offered', pending: null, v: null, k: false, ownCard: null, ownCardKey: null, o: 'none', ownCardDigest: null, opened: null }
   const batch = (extra: Record<string, unknown>) => ({ b: Buffer.from(JSON.stringify({ writer: X, n: 1, deps: [], ops: [], intents: [], ...extra })).toString('base64') })
   /** Ein gültig self-signierter, versiegelter Journalrahmen an die eigene Adresse (wer den Seed hat). */
   async function selfFrame(w: Welt15, D: HolderDevice, payload: unknown): Promise<{ bytes: Uint8Array; digest: string; rkid: string }> {
@@ -408,6 +414,18 @@ describe('K1a Schritt 6 (Variante): Journal beim Dienst', () => {
       })
     return { at, heal: () => void (w.carrier.takeLogAnswers = take) }
   }
+  /** Wie `insertFirst`, mehrere Einträge vor dem ersten echten. */
+  function insertMany(w: Welt15, name: string, list: Uint8Array[]) {
+    const take = w.carrier.takeLogAnswers.bind(w.carrier)
+    const at: number[] = []
+    w.carrier.takeLogAnswers = (n) =>
+      take(n).map((a) => {
+        if (n !== name) return a
+        at.push(a.from)
+        return { ...a, end: a.end + list.length, entries: [...list.map((bytes, i) => ({ pos: a.from + i, at: w.clock.now(), bytes })), ...a.entries.map((e) => ({ ...e, pos: e.pos + list.length }))] }
+      })
+    return { at, heal: () => void (w.carrier.takeLogAnswers = take) }
+  }
   const malformed = (rel: string): Array<[string, unknown]> => [
     ['payload: null', null],
     ['ops: null', batch({ ops: null })],
@@ -418,6 +436,16 @@ describe('K1a Schritt 6 (Variante): Journal beim Dienst', () => {
     ['unbekannte Op-Art', batch({ ops: [xop({ kind: 'bogus' })] })],
     ['Op ohne id', batch({ ops: [{ at: '2026-10-17T08:00:00.000Z', kind: 'finding', text: 'x' }] })],
     ['Faltung wirft (view mit kaputten Schlüsseln)', batch({ ops: [xop({ kind: 'view', rel, scope: 's', revision: 1, keys: [null, null] })] })],
+    // Review 27 B2a: verschachtelte Werte, die Zustand würden (Astras drei Proben und weitere Formen).
+    ['allocate.keys: [{}]', batch({ ops: [xop({ kind: 'allocate', rel, nonce: 'AA==', keys: [{}] })] })],
+    ['view.keys: [7]', batch({ ops: [xop({ kind: 'view', rel, scope: 's', revision: 1, keys: [7] })] })],
+    ['Intent bytes: "!!!"', batch({ intents: [{ ...INTENT, bytes: '!!!' }] })],
+    ['NaN-Zeit (expiresAt)', batch({ ops: [xop({ kind: 'allocate', rel, nonce: 'AA==', keys: [{ ...SKEY, expiresAt: 'NaN' }] })] })],
+    ['Op-Zeit unlesbar', batch({ ops: [{ ...xop({ kind: 'finding', text: 'x' }), at: 'gestern' }] })],
+    ['negatives n', batch({ ops: [xop({ kind: 'allocate', rel, nonce: 'AA==', keys: [{ ...SKEY, n: -1 }] })] })],
+    ['unbekannter Zustand (Enum)', batch({ ops: [xop({ kind: 'allocate', rel, nonce: 'AA==', keys: [{ ...SKEY, state: 'bogus' }] })] })],
+    ['verschachteltes Nicht-Objekt (voucher: 7)', batch({ ops: [xop({ kind: 'ticket-accept', act: { ...ACT, voucher: 7 } })] })],
+    ['Intent-Digest kein Digest', batch({ intents: [{ ...INTENT, digest: 'kein digest' }] })],
   ]
 
   it('13. Review 26 B2, Ablage: kaputte Form oder werfende Faltung ist ein Befund je Position, kein Abbruch; der Cursor bleibt, Backoff, die Sperre hält; der gültige Eintrag dahinter wird nicht gefaltet, solange der kaputte blockiert', async () => {
@@ -443,6 +471,9 @@ describe('K1a Schritt 6 (Variante): Journal beim Dienst', () => {
       expect(A.logPending, what).toBe(true)
       expect(A.logRequests - r0, what).toBeLessThanOrEqual(5) // Backoff
       expect(M.act(A.state, act).o, what).toBe('handed') // die Ablehnung dahinter ist nicht gefaltet (Blockieren)
+      expect(Object.keys(A.cand.heads!()).some((k) => k.startsWith('X@')), what).toBe(false) // nichts vom kaputten Batch im Journal
+      expect(A.state.relationships.every((r) => Number.isInteger(r.nextN) && r.stock.every((k) => typeof k.anchor === 'string')), what).toBe(true)
+      expect(A.state.relationships.every((r) => !r.view || r.view.keys.every((k) => typeof k === 'object' && k !== null)), what).toBe(true)
       expect(A.gated, what).toBe(true)
       expect(a1CardDeposits(A, act), what).toBe(0)
       ins.heal()
@@ -464,9 +495,11 @@ describe('K1a Schritt 6 (Variante): Journal beim Dienst', () => {
       w.carrier.deposit(f.rkid, f.bytes)
       w.carrier.deposit(f.rkid, f.bytes) // zweimal: ein Befund
       const before = M.canonical(A.projection())
+      const headsBefore = JSON.stringify(A.cand.heads!())
       await w.rounds(1)
       expect(A.dispositions.filter((d) => d === `finding(journal:corrupt-frame@${f.digest})`).length, what).toBe(1)
       expect(M.canonical(A.projection()), what).toBe(before)
+      expect(JSON.stringify(A.cand.heads!()), what).toBe(headsBefore) // der Journalkopf wächst nicht
       expect(A.snapshotState().completed.includes(f.digest), what).toBe(false) // keine Quittung
     }
     expect(A.frameCorrupt).toBe(frames.length)
@@ -504,15 +537,92 @@ describe('K1a Schritt 6 (Variante): Journal beim Dienst', () => {
   }, 300_000)
 
   it('16. Formprüfung: Batch (K1a), Transaktion und Operation', () => {
-    const ok = { writer: X, n: 1, deps: ['A1@x#1'], ops: [xop({ kind: 'finding', text: 'x' })], intents: [{ digest: 'd', kind: 'k', bytes: 'AA==', address: 'a', expected: 'e', replyTo: 'r', device: 'A1', writer: 'A1@x' }] }
+    const ok = { writer: X, n: 1, deps: ['A1@x#1'], ops: [xop({ kind: 'finding', text: 'x' })], intents: [INTENT] }
     expect(batchProblem(ok)).toBeNull()
     for (const bad of [null, 7, [], { ...ok, writer: 7 }, { ...ok, n: 0 }, { ...ok, n: '1' }, { ...ok, deps: 'x' }, { ...ok, deps: [1] }, { ...ok, ops: null }, { ...ok, ops: {} }, { ...ok, intents: null }, { ...ok, intents: [{ ...ok.intents[0], bytes: 1 }] }, { ...ok, intents: [null] }])
       expect(batchProblem(bad), JSON.stringify(bad)).not.toBeNull()
     expect(transactionProblem({ ops: [], intents: [] })).toBeNull()
-    for (const bad of [null, { ops: null, intents: [] }, { ops: [], intents: null }, { ops: [null], intents: [] }, { ops: [], intents: [{ digest: 'd' }] }]) expect(transactionProblem(bad), JSON.stringify(bad)).not.toBeNull()
+    for (const bad of [null, { ops: null, intents: [] }, { ops: [], intents: null }, { ops: [null], intents: [] }, { ops: [], intents: [{ digest: 'd' }] }, { ops: [], intents: [{ ...INTENT, bytes: new Uint8Array(1), digest: 7 }] }]) expect(transactionProblem(bad), JSON.stringify(bad)).not.toBeNull()
     expect(M.opProblem(xop({ kind: 'class', rel: 'r', on: true }))).toBeNull()
-    expect(M.opProblem(xop({ kind: 'open-tuple', rel: null, tuple: {}, provenance: 'encounter', vouchedBy: null, act: null }))).toBeNull()
+    const TUPLE = { id: 't', own: 'o', ownKey: 'ok', peer: 'p', peerKeyAgreement: 'pk', record: 'r', openedAt: T0, candidates: ['c'], deactivated: false }
+    expect(M.opProblem(xop({ kind: 'open-tuple', rel: null, tuple: TUPLE, provenance: 'encounter', vouchedBy: null, act: null }))).toBeNull()
+    // Review 27 B2a: die Formprüfung reicht in jeden Wert, der Zustand wird.
+    for (const good of [
+      xop({ kind: 'allocate', rel: 'r', nonce: 'AA==', keys: [SKEY] }),
+      xop({ kind: 'view', rel: 'r', scope: 's', revision: 0, keys: [{ n: 1, anchor: 'a', keyAgreement: 'k', expiresAt: T0 }], clears: { w: 2 } }),
+      xop({ kind: 'ticket-accept', act: ACT }),
+      xop({ kind: 'ticket-accept', act: { ...ACT, pending: CARD, decisions: [{ kind: 'consent', op: 'o', at: T0 }], cards: { d: 'handed' }, consentOp: 'o' } }),
+      xop({ kind: 'introduce', act: { id: 'm', a: { rel: 'r', key: 'k', keyAgreement: 'ka' }, b: { rel: 'r2', key: 'k2', keyAgreement: 'kb' }, issuedAt: T0, expiresAt: T0 } }),
+      xop({ kind: 'consent', act: 'a', card: CARD, cardKey: 'k' }),
+      xop({ kind: 'duty', pair: ['a', 'b'], state: 'hit', mappingDigest: null }),
+    ])
+      expect(M.opProblem(good), JSON.stringify(good)).toBeNull()
+    for (const bad of [
+      xop({ kind: 'open-tuple', rel: null, tuple: {}, provenance: 'encounter', vouchedBy: null, act: null }),
+      xop({ kind: 'open-tuple', rel: null, tuple: { ...TUPLE, candidates: [1] }, provenance: 'encounter', vouchedBy: null, act: null }),
+      xop({ kind: 'open-tuple', rel: null, tuple: TUPLE, provenance: 'zufall', vouchedBy: null, act: null }),
+      xop({ kind: 'allocate', rel: 'r', nonce: 'AA==', keys: [{}] }),
+      xop({ kind: 'allocate', rel: 'r', nonce: 'AA==', keys: [{ ...SKEY, n: 1.5 }] }),
+      xop({ kind: 'allocate', rel: 'r', nonce: 'AA==', keys: [{ ...SKEY, extra: 1 }] }),
+      xop({ kind: 'view', rel: 'r', scope: 's', revision: 1, keys: [7] }),
+      xop({ kind: 'view', rel: 'r', scope: 's', revision: -1, keys: [] }),
+      xop({ kind: 'view', rel: 'r', scope: 's', revision: 1, keys: [], clears: { w: 'x' } }),
+      xop({ kind: 'ticket-accept', act: { ...ACT, state: 'bogus' } }),
+      xop({ kind: 'ticket-accept', act: { ...ACT, pending: 7 } }),
+      xop({ kind: 'ticket-accept', act: { ...ACT, cards: { d: 'bogus' } } }),
+      xop({ kind: 'introduce', act: { id: 'm', a: [], b: { rel: 'r2', key: 'k2', keyAgreement: 'kb' }, issuedAt: T0, expiresAt: T0 } }),
+      xop({ kind: 'hand-over', act: 'a', o: 'bogus' }),
+      xop({ kind: 'duty', pair: ['a'], state: 'hit', mappingDigest: null }),
+      xop({ kind: 'budget-confirm', rel: 'r', acts: [null] }),
+      xop({ kind: 'withdraw', rel: 'r', anchors: [{}] }),
+      { ...xop({ kind: 'finding', text: 'x' }), at: 'NaN' },
+      { ...xop({ kind: 'finding', text: 'x' }), id: { writer: X, n: -1 } },
+    ])
+      expect(M.opProblem(bad), JSON.stringify(bad)).not.toBeNull()
+    for (const bytes of ['!!!', 'AA=', 'A===', 'AAA', 'AA==\n']) expect(batchProblem({ ...ok, intents: [{ ...ok.intents[0], bytes }] }), bytes).not.toBeNull()
+    expect(batchProblem({ ...ok, intents: [{ ...ok.intents[0], digest: 'zz' }] })).not.toBeNull()
+    expect(batchProblem({ ...ok, extra: 1 })).not.toBeNull()
     for (const bad of [null, xop({ kind: 'bogus' }), { at: 'x', kind: 'finding', text: 'x' }, { id: { writer: X, n: '1' }, at: 'x', kind: 'finding', text: 'x' }, { ...xop({ kind: 'finding', text: 'x' }), at: 1 }, xop({ kind: 'class', rel: 'r', on: 'yes' }), xop({ kind: 'withdraw', rel: 'r', anchors: null }), xop({ kind: 'consent', act: 'a', cardKey: 'k' })])
       expect(M.opProblem(bad), JSON.stringify(bad)).not.toBeNull()
   })
+
+  it('17. Review 27 B2b: eine Antwort der Ablage ist eine Einheit; wird Position p erst in einem späteren Durchgang beschädigt erkannt, bleibt keine Wirkung einer Position über p; eine heile Antwort faltet in einem Schritt', async () => {
+    const frames = async (w: Welt15, D: HolderDevice) => [
+      (await selfFrame(w, D, batch({ n: 2, deps: [`${X}#1`], ops: [xop({ id: { writer: X, n: 2 }, kind: 'finding', text: 'BOOM' })] }))).bytes, // zurückgestellt, dann wirft die Faltung
+      (await selfFrame(w, D, batch({ ops: [xop({ kind: 'finding', text: 'P1' })] }))).bytes, // liefert den Vorgänger
+      (await selfFrame(w, D, batch({ writer: 'Y@feed', ops: [xop({ id: { writer: 'Y@feed', n: 1 }, kind: 'finding', text: 'MARKER' })] }))).bytes, // unabhängig
+    ]
+    for (const boom of [true, false]) {
+      const { w, A, act } = await restoredCounterRun(false)
+      if (boom) {
+        const orig = A.applyRemote.bind(A)
+        A.applyRemote = async (tx) => {
+          if (tx.ops.some((o) => o.kind === 'finding' && o.text === 'BOOM')) throw new TypeError('eingespritzt')
+          return orig(tx)
+        }
+      }
+      const ins = insertMany(w, 'A1', await frames(w, A))
+      const before = M.canonical(A.projection())
+      await w.rounds(boom ? 10 : 3)
+      const first = ins.at[0]!
+      if (boom) {
+        expect(A.logCorrupt).toBe(1)
+        expect(A.dispositions.filter((d) => d.startsWith('finding(journal:corrupt-entry@')).length).toBe(1)
+        expect(A.dispositions).toContain(`finding(journal:corrupt-entry@${first})`)
+        expect(A.snapshotState().logCursor).toBe(first)
+        expect(A.state.findings.some((f) => f === 'MARKER' || f === 'P1')).toBe(false) // nichts von Position 1 und 2 bleibt
+        expect(Object.keys(A.cand.heads!()).some((k) => k.startsWith('X@') || k.startsWith('Y@'))).toBe(false)
+        expect(M.canonical(A.projection())).toBe(before)
+        expect(M.act(A.state, act).o).toBe('handed')
+        ins.heal()
+        expect(await w.until(() => !A.logPending, 20)).toBeGreaterThan(0)
+        expect(M.act(A.state, act).o).toBe('cancelled')
+      } else {
+        expect(A.logCorrupt).toBe(0)
+        expect(A.logPending).toBe(false) // eine Antwort, ein Schritt
+        expect(A.state.findings).toEqual(expect.arrayContaining(['BOOM', 'P1', 'MARKER']))
+        expect(M.act(A.state, act).o).toBe('cancelled')
+      }
+    }
+  }, 600_000)
 })

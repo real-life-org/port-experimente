@@ -124,8 +124,13 @@ export class CorruptFrame extends Error {
   }
 }
 const isRecord = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x)
-const INTENT_FIELDS = ['digest', 'kind', 'address', 'expected', 'replyTo', 'device', 'writer'] as const
-/** Form einer Transaktion aus `receiveOwnFrame` (Review 26 B2), bevor das Gerät sie faltet: null oder was nicht stimmt. */
+/**
+ * Form einer Absicht ohne ihre Bytes (Review 27 B2a), für beide Journalpfade: der Batch trägt die Bytes als strenges base64
+ * (`batchProblem` im Kandidaten), die Transaktion als Uint8Array (`transactionProblem`).
+ */
+export const INTENT_FIELDS = { digest: 'digest', kind: 'string', address: 'string', expected: 'string', replyTo: 'string', device: 'string', writer: 'string' } as const satisfies Record<Exclude<keyof Intent, 'bytes'>, M.Shape>
+const INTENT_SHAPE: M.Shape = { object: { ...INTENT_FIELDS, bytes: 'string' } } // `bytes` hier nur Platzhalter, geprüft unten
+/** Form einer Transaktion aus `receiveOwnFrame` (Review 26 B2, Review 27 B2a), bevor das Gerät sie faltet: null oder was nicht stimmt. */
 export function transactionProblem(tx: unknown): string | null {
   if (!isRecord(tx)) return 'transaction'
   if (!Array.isArray(tx.ops)) return 'ops'
@@ -134,7 +139,12 @@ export function transactionProblem(tx: unknown): string | null {
     const p = M.opProblem(op)
     if (p) return p
   }
-  if (tx.intents.some((i) => !isRecord(i) || !(i.bytes instanceof Uint8Array) || INTENT_FIELDS.some((f) => typeof i[f] !== 'string'))) return 'intent'
+  for (let k = 0; k < tx.intents.length; k++) {
+    const i: unknown = tx.intents[k]
+    if (!isRecord(i) || !(i.bytes instanceof Uint8Array)) return `intents[${k}]`
+    const p = M.shapeProblem({ ...i, bytes: '' }, INTENT_SHAPE, `intents[${k}]`)
+    if (p) return p
+  }
   return null
 }
 
@@ -1252,35 +1262,64 @@ export class HolderDevice {
     const byPos = new Map<number, Uint8Array>()
     for (const e of a.entries) if (e.pos >= a.from && e.pos < a.end && !byPos.has(e.pos)) byPos.set(e.pos, e.bytes)
     const bad = new Set<number>()
-    let rest = [...byPos.entries()].sort((x, y) => x[0] - y[0])
+    const corrupt = (pos: number) => {
+      bad.add(pos)
+      if (this.corruptSeen.has(pos)) return
+      this.corruptSeen.add(pos)
+      this.logCorrupt++
+      this.dispositions.push(`finding(journal:corrupt-entry@${pos})`)
+    }
+    const sorted = [...byPos.entries()].sort((x, y) => x[0] - y[0])
     // Review 26 B2: ab der ersten beschädigten Position faltet diese Antwort nichts weiter (Blockieren, die Reihenfolge der
     // Ablage zählt); die nächste Leseanfrage beginnt bei ihr.
     let stop = Infinity
+    let rest: typeof sorted = []
     this.readingLog = true
     try {
-      while (rest.length) {
-        const next: typeof rest = []
-        let progress = false
-        for (const [pos, bytes] of rest) {
-          if (pos > stop) continue
-          const st = await this.replayStep(bytes)
-          if (st === 'deferred') {
-            next.push([pos, bytes])
-            continue
-          }
-          progress = true
-          if (st === 'corrupt' && !bad.has(pos)) {
-            bad.add(pos)
-            stop = Math.min(stop, pos)
-            if (!this.corruptSeen.has(pos)) {
-              this.corruptSeen.add(pos)
-              this.logCorrupt++
-              this.dispositions.push(`finding(journal:corrupt-entry@${pos})`)
+      // Review 27 B2b, (1) Form vorab: jeder Eintrag wird geöffnet und seine Form geprüft, bevor einer gefaltet wird.
+      for (const [pos, bytes] of sorted) {
+        const problem = await this.entryProblem(bytes)
+        if (problem === null) continue
+        this.dispositions.push(`failed(journal-corrupt): ${problem}`)
+        corrupt(pos)
+        stop = pos
+        break
+      }
+      // (2) Die Antwort ist eine Einheit: erkennt ein späterer Durchgang eine beschädigte Position p (die Faltung wirft),
+      // nachdem schon ein Eintrag über p gefaltet war, wird die ganze Antwort zurückgenommen und nur unter p neu gefaltet.
+      for (;;) {
+        const c = this.checkpoint()
+        const logLength = this.log.length
+        let late = false
+        const folded: number[] = []
+        rest = sorted.filter(([p]) => p < stop)
+        while (rest.length) {
+          const next: typeof rest = []
+          let progress = false
+          for (const [pos, bytes] of rest) {
+            if (pos > stop) continue
+            const st = await this.replayStep(bytes)
+            if (st === 'deferred') {
+              next.push([pos, bytes])
+              continue
             }
+            progress = true
+            if (st !== 'corrupt') {
+              folded.push(pos)
+              continue
+            }
+            if (!bad.has(pos)) corrupt(pos)
+            stop = Math.min(stop, pos)
+            if (folded.some((q) => q > pos)) late = true
           }
+          if (late) break
+          rest = next.filter(([p]) => p < stop)
+          if (!progress) break
         }
-        rest = next.filter(([p]) => p < stop)
-        if (!progress) break
+        if (!late) break
+        this.rollback(c)
+        this.log.length = logLength
+        this.dispositions.push(`rolled-back(journal-answer@${stop})`)
       }
     } finally {
       this.readingLog = false
@@ -1321,8 +1360,23 @@ export class HolderDevice {
    * zurück. Ein Prüfstandfehler in der Faltung erscheint damit als Befund mit seiner Meldung, nicht als Absturz.
    */
   private async foldOwn(payload: unknown): Promise<void> {
+    const { body, tx } = this.ownTx(payload)
+    try {
+      await this.applyRemote(tx)
+      this.cand.applied?.(body)
+    } catch (e) {
+      if (e instanceof M.Missing || e instanceof Blocked || e instanceof Crashed || e instanceof CorruptFrame) throw e
+      throw new CorruptFrame(`fold: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+  /**
+   * Eingangsvertrag (Review 26 B2, Review 27 B2a): Payload mit `b` als strengem base64, Batch im Kandidaten
+   * (`receiveOwnFrame`, `batchProblem`, tief), Transaktion (`transactionProblem`, tief). Ohne Faltung; wirft
+   * `CorruptFrame` für kaputte Form, `Missing` für einen fehlenden Vorgänger.
+   */
+  private ownTx(payload: unknown): { body: Uint8Array; tx: Transaction } {
     const b = isRecord(payload) ? payload.b : undefined
-    if (typeof b !== 'string') throw new CorruptFrame('payload')
+    if (!M.isBase64(b)) throw new CorruptFrame('payload')
     const body = new Uint8Array(Buffer.from(b, 'base64'))
     let tx: Transaction
     try {
@@ -1333,12 +1387,23 @@ export class HolderDevice {
     }
     const problem = transactionProblem(tx)
     if (problem) throw new CorruptFrame(`transaction: ${problem}`)
+    return { body, tx }
+  }
+  /**
+   * Review 27 B2b: die Form eines Eintrags der Ablage, ohne zu falten (öffnen, Signatur, Signierer, Eingangsvertrag). Null
+   * = faltbar der Form nach (auch: kein Journalrahmen, schon bekannt, Vorgänger fehlt); sonst was nicht stimmt.
+   */
+  private async entryProblem(bytes: Uint8Array): Promise<string | null> {
+    const o = await this.openEntry(bytes)
+    if (o === 'skip') return null
+    if (o === 'corrupt') return 'entry'
     try {
-      await this.applyRemote(tx)
-      this.cand.applied?.(body)
+      this.ownTx(o.payload)
+      return null
     } catch (e) {
-      if (e instanceof M.Missing || e instanceof Blocked || e instanceof Crashed || e instanceof CorruptFrame) throw e
-      throw new CorruptFrame(`fold: ${e instanceof Error ? e.message : String(e)}`)
+      if (e instanceof M.Missing) return null
+      if (e instanceof CorruptFrame) return e.message
+      throw e
     }
   }
   /** Briefkasten (Review 26 B2): Befund je Digest, einmal; keine Quittung (der Schritt ist zurückgenommen). */
@@ -1368,6 +1433,14 @@ export class HolderDevice {
    * Zustellung: keine Quittung, kein `completed`.
    */
   private async replay(bytes: Uint8Array): Promise<'folded' | 'skip' | 'corrupt'> {
+    const o = await this.openEntry(bytes)
+    if (typeof o === 'string') return o
+    await this.foldOwn(o.payload) // CorruptFrame: `replayStep`
+    this.log.push({ type: o.type.split('/').slice(-2)[0] ?? o.type, from: o.issuer, at: this.clock.now() })
+    return 'folded'
+  }
+  /** Einen Eintrag der Ablage öffnen und prüfen (ohne Wirkung): `skip`, `corrupt` oder das Journaldokument vom eigenen Self-Anker. */
+  private async openEntry(bytes: Uint8Array): Promise<'skip' | 'corrupt' | { type: string; issuer: string; payload: unknown }> {
     let env: unknown
     try {
       env = JSON.parse(dec.decode(bytes))
@@ -1391,9 +1464,7 @@ export class HolderDevice {
       this.dispositions.push('failed(journal-from-unexpected-signer)')
       return 'corrupt'
     }
-    await this.foldOwn(doc.payload) // CorruptFrame: `replayStep`
-    this.log.push({ type: doc.type.split('/').slice(-2)[0] ?? doc.type, from: doc.issuer, at: this.clock.now() })
-    return 'folded'
+    return { type: doc.type, issuer: doc.issuer, payload: doc.payload }
   }
   /** Deckt der eigene Stand die genannten Köpfe? */
   private covers(heads: Record<string, number>): boolean {

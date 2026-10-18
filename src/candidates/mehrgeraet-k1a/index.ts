@@ -42,7 +42,7 @@
 // tag (8500 per writer); the tag travels in revision, probe and mapping.
 
 import { createHmac, randomBytes } from 'node:crypto'
-import { derive, EnrolmentRefused, seedScheme, type CandidateDevice, type EnrolOptions, type HolderDevice, type Intent, type MultiDeviceCandidate, type Transaction } from '../../lab/mehrgeraet/holder'
+import { derive, EnrolmentRefused, INTENT_FIELDS, seedScheme, type CandidateDevice, type EnrolOptions, type HolderDevice, type Intent, type MultiDeviceCandidate, type Transaction } from '../../lab/mehrgeraet/holder'
 import * as M from '../../lab/mehrgeraet/model'
 
 const enc = new TextEncoder()
@@ -95,25 +95,27 @@ export function writerTagOf(seed: Uint8Array, device: string, relationship: stri
 
 const fresh = () => randomBytes(4).toString('hex')
 
-const INTENT_FIELDS = ['digest', 'kind', 'bytes', 'address', 'expected', 'replyTo', 'device', 'writer'] as const
 const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x)
 /**
- * Gate review 26 B2: the shape of a journal batch before anything is folded. Writer a string, counter a positive
- * integer, deps an array of batch keys (strings), ops an array (each op's shape: model.ts `opProblem`), intents an array
- * of objects with string fields (bytes base64). Returns null or what is wrong; `receiveOwnFrame` throws on it (the
- * device counts the frame as corrupt, never folds it).
+ * Gate review 26 B2, gate review 27 B2a: the shape of a journal batch before anything is folded, deep. Exactly the
+ * fields writer (string), n (positive integer), deps (batch keys, strings), ops (each op down to every value that becomes
+ * state: model.ts `opProblem`, the shape table) and intents (holder.ts `INTENT_FIELDS`, bytes strict base64). Returns
+ * null or the path that is wrong; `receiveOwnFrame` throws on it (the device counts the frame as corrupt, never folds it).
+ * The same check runs for both journal paths (log and mailbox).
  */
+const BATCH_SHAPE: M.Shape = {
+  object: { writer: 'string', n: 'nat', deps: { array: 'string' }, ops: { array: { object: {} } }, intents: { array: { object: { ...INTENT_FIELDS, bytes: 'base64' } } } },
+}
 export function batchProblem(b: unknown): string | null {
   if (!isObj(b)) return 'batch'
-  if (typeof b.writer !== 'string') return 'batch.writer'
-  if (!Number.isInteger(b.n) || (b.n as number) < 1) return 'batch.n'
-  if (!Array.isArray(b.deps) || b.deps.some((d) => typeof d !== 'string')) return 'batch.deps'
   if (!Array.isArray(b.ops)) return 'batch.ops'
   for (const op of b.ops) {
     const p = M.opProblem(op)
     if (p) return `batch.${p}`
   }
-  if (!Array.isArray(b.intents) || b.intents.some((i) => !isObj(i) || INTENT_FIELDS.some((f) => typeof i[f] !== 'string'))) return 'batch.intents'
+  const p = M.shapeProblem({ ...b, ops: [] }, BATCH_SHAPE, 'batch')
+  if (p) return p
+  if ((b.n as number) < 1) return 'batch.n'
   return null
 }
 /** A journal batch that cannot be read (gate review 26 B2): not `Missing`, so the device counts it as corrupt. */
