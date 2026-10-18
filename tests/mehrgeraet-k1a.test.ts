@@ -284,7 +284,7 @@ describe('K1a Schritt 1: Abnahmelauf', () => {
     const seed = new Uint8Array(32)
     const a = new K1aDevice('A', 'A1', seed, 0, 2, 10)
     const b = new K1aDevice('A', 'A2', seed, 1, 2, 10)
-    const intent = { digest: 'd1', kind: 'x', bytes: new Uint8Array([1]), address: 'adr', expected: 'e', replyTo: 'r', device: 'A1', writer: a.writer }
+    const intent = { digest: 'uEiAtcRZCtyawRAFifKn7rDL1yFMPsZA8xNsCJYcXkhpIgQ', kind: 'x', bytes: new Uint8Array([1]), address: 'adr', expected: 'e', replyTo: 'r', device: 'A1', writer: a.writer }
     a.commit({ ops: [], intents: [intent] }) // Batch 1: keine Operation, eine Absicht
     const op: M.Op = { id: { writer: a.writer, n: 1 }, at: '2026-10-17T00:00:00.000Z', kind: 'finding', text: 't' }
     a.commit({ ops: [op], intents: [] }) // Batch 2 hängt an Batch 1

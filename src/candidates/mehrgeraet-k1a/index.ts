@@ -23,6 +23,16 @@
 // when a folded batch adds own tuples (`reevaluateProbes`); a hit owes the
 // own mapping, the union itself still comes only from a verified
 // counterpart mapping (6975.1) and travels as a journal operation.
+// Step 6 (variant, Anton 18.10.: an option under study, not the default):
+// `journalAtService` selects the bench option `selfLog`; the rules stay
+// those of K1a, only the world differs. The self address of the person is
+// a log at the carrier: catch-up reads it from the device's position
+// (fast), and a new device folds the log from the start instead of copying
+// state from the old device (enrolment `fromLog`). After gate review 25
+// (Anton 18.10.: "the log at the service is an acceleration, never a
+// release ground") the gate after restore or enrolment ends as in K1a:
+// with a sibling's answer whose heads the device covers, or with the
+// revocation of every sibling; the log answer alone never ends it.
 // Step 4 (Anton 18.10., decision 3a): every device carries a pseudonymous
 // writer tag per relationship, HMAC-SHA256 over the relationship id and
 // the device name under a key derived from the seed, truncated to 12
@@ -32,7 +42,7 @@
 // tag (8500 per writer); the tag travels in revision, probe and mapping.
 
 import { createHmac, randomBytes } from 'node:crypto'
-import { derive, EnrolmentRefused, seedScheme, type CandidateDevice, type HolderDevice, type Intent, type MultiDeviceCandidate, type Transaction } from '../../lab/mehrgeraet/holder'
+import { derive, EnrolmentRefused, INTENT_FIELDS, seedScheme, type CandidateDevice, type EnrolOptions, type HolderDevice, type Intent, type MultiDeviceCandidate, type Transaction } from '../../lab/mehrgeraet/holder'
 import * as M from '../../lab/mehrgeraet/model'
 
 const enc = new TextEncoder()
@@ -71,6 +81,11 @@ export interface K1aOptions {
    * different expiry; the fold reports it).
    */
   allocationSplit?: boolean
+  /**
+   * Step 6 (variant): journal retained at the self address (the service). The same rules; the world turns the person's
+   * self address into a log (`Welt15Options.selfLog`), catch-up and enrolment read from it. Default off (K1a as before).
+   */
+  journalAtService?: boolean
 }
 
 /** Step 4: the writer tag of a device in a relationship; the counterpart sees it, cannot compute it (seed) and cannot link it across relationships. */
@@ -79,6 +94,33 @@ export function writerTagOf(seed: Uint8Array, device: string, relationship: stri
 }
 
 const fresh = () => randomBytes(4).toString('hex')
+
+const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x)
+/**
+ * Gate review 26 B2, gate review 27 B2a: the shape of a journal batch before anything is folded, deep. Exactly the
+ * fields writer (`<device>@<incarnation>`), n (positive integer), deps (batch keys `<writer>#<n>`; gate review 28: every
+ * identifier matches its grammar and is never a reserved name such as `__proto__` or `constructor`), ops (each op down to every value that becomes
+ * state: model.ts `opProblem`, the shape table) and intents (holder.ts `INTENT_FIELDS`, bytes strict base64). Returns
+ * null or the path that is wrong; `receiveOwnFrame` throws on it (the device counts the frame as corrupt, never folds it).
+ * The same check runs for both journal paths (log and mailbox).
+ */
+const BATCH_SHAPE: M.Shape = {
+  object: { writer: 'writer', n: 'nat', deps: { array: 'dep' }, ops: { array: { object: {} } }, intents: { array: { object: { ...INTENT_FIELDS, bytes: 'base64' } } } },
+}
+export function batchProblem(b: unknown): string | null {
+  if (!isObj(b)) return 'batch'
+  if (!Array.isArray(b.ops)) return 'batch.ops'
+  for (const op of b.ops) {
+    const p = M.opProblem(op)
+    if (p) return `batch.${p}`
+  }
+  const p = M.shapeProblem({ ...b, ops: [] }, BATCH_SHAPE, 'batch')
+  if (p) return p
+  if ((b.n as number) < 1) return 'batch.n'
+  return null
+}
+/** A journal batch that cannot be read (gate review 26 B2): not `Missing`, so the device counts it as corrupt. */
+export class MalformedBatch extends Error {}
 
 export class K1aDevice implements CandidateDevice {
   readonly keys
@@ -149,13 +191,13 @@ export class K1aDevice implements CandidateDevice {
   }
   /** The last batch seen from every writer. */
   heads(): Record<string, number> {
-    const h: Record<string, number> = {}
-    for (const b of this.batches) if ((h[b.writer] ?? 0) < b.n) h[b.writer] = b.n
-    return h
+    const h = new Map<string, number>()
+    for (const b of this.batches) if ((h.get(b.writer) ?? 0) < b.n) h.set(b.writer, b.n)
+    return M.table(h) // review 28: a keyed table without prototype
   }
   /** What a device with these heads has not seen yet, oldest first (the sync answer). */
   batchesAfter(heads: Record<string, number>) {
-    return this.batches.filter((b) => b.n > (heads[b.writer] ?? 0)).map((b) => ({ body: enc.encode(JSON.stringify(b)) }))
+    return this.batches.filter((b) => b.n > (M.own(heads, b.writer) ?? 0)).map((b) => ({ body: enc.encode(JSON.stringify(b)) }))
   }
   commit(tx: Transaction): void {
     const deps = Object.entries(this.heads()).map(([w, n]) => `${w}#${n}`)
@@ -167,7 +209,10 @@ export class K1aDevice implements CandidateDevice {
     return this.out.splice(0).map((b) => ({ body: enc.encode(JSON.stringify(b)) }))
   }
   receiveOwnFrame(body: Uint8Array): Transaction {
-    const b = JSON.parse(dec.decode(body)) as Batch
+    const raw: unknown = JSON.parse(dec.decode(body))
+    const problem = batchProblem(raw)
+    if (problem) throw new MalformedBatch(problem) // review 26 B2: shape before anything else
+    const b = raw as Batch
     const known = this.batches.find((x) => x.writer === b.writer && x.n === b.n)
     if (known) {
       if (JSON.stringify(known.ops) === JSON.stringify(b.ops) && JSON.stringify(known.intents) === JSON.stringify(b.intents) && JSON.stringify(known.deps) === JSON.stringify(b.deps)) return { ops: [], intents: [] } // schon bekannt: nichts Neues (Inhalt samt Abhängigkeiten, Review 9)
@@ -234,11 +279,13 @@ export function k1a(opts: K1aOptions = {}): MultiDeviceCandidate {
   const slots = opts.devices ?? 2
   const tags = opts.writerTags ?? true
   const split = opts.allocationSplit ?? true
+  const atService = opts.journalAtService ?? false
   const seeds = new Map<string, Uint8Array>()
   const devices = new Map<string, K1aDevice[]>() // person → Geräte in Enrollment-Reihenfolge
   return {
-    id: 'k1a-static',
-    title: 'K1a: one seed, operation journal, static rights per device',
+    id: atService ? 'k1a-journal-service' : 'k1a-static',
+    title: atService ? 'K1a + journal at the service: the self address keeps the journal as a log' : 'K1a: one seed, operation journal, static rights per device',
+    ...(atService ? { bench: { selfLog: true } } : {}),
     capabilities: new Set(tags ? (['journal', 'rights', 'writer-tags'] as const) : (['journal', 'rights'] as const)),
     async first(person, name, seed) {
       seeds.set(person, seed)
@@ -250,12 +297,13 @@ export function k1a(opts: K1aOptions = {}): MultiDeviceCandidate {
       // Kein Gerät der Person (Dieb aus einem Abbild, X9): unregistriert; Platz und Plätze kommen aus dem Abbild beim `reload`.
       return new K1aDevice(person, name, seed, 0, slots, budget, tags, split)
     },
-    async enrol(from: HolderDevice, name) {
+    async enrol(from: HolderDevice, name, eo?: EnrolOptions) {
       const list = devices.get(from.person) ?? []
       // Feste Gerätezahl (B4): die Plätze stehen von Anfang an fest, nichts wird umverteilt; darüber hinaus wird verweigert (versionierte Rechte = K1b).
       if (list.length >= slots) throw new EnrolmentRefused(`K1a: Gerätezahl fest auf ${slots}; Enrollment von ${name} verweigert`)
       const d = new K1aDevice(from.person, name, seeds.get(from.person)!, list.length, slots, budget, tags, split)
-      d.adopt((from.cand as K1aDevice).journal())
+      // Step 6: from the log the new device starts with an empty journal and folds the log; otherwise the journal is copied.
+      if (!eo?.fromLog) d.adopt((from.cand as K1aDevice).journal())
       // Beide Seiten des Enrollments merken sich das andere Gerät (Teil des Abbilds): wer nach einem Restore nachholen muss,
       // weiß, dass eine Schwester antworten kann (Tor-Review 18 B1a).
       for (const s of (from.cand as K1aDevice).siblings()) d.meet(s)
@@ -266,7 +314,8 @@ export function k1a(opts: K1aOptions = {}): MultiDeviceCandidate {
       // Zustand, Journal, Absichten und behaltene Proben wandern mit (das Abbild des Geräts): das neue Gerät kennt jede
       // offene Produktion, produziert nichts neu und kann die Proben neu auswerten, auch wenn `from` danach fehlt (Review 16 S2).
       const probes = [...from.keptProbes()].map(([id, e]): [string, string[]] => [id, [...e]])
-      return { cand: d, state: structuredClone(from.state), intents: [...from.intents.values()], probes }
+      if (eo?.fromLog) return { cand: d, state: M.emptyState(from.person), probes } // step 6: state and intents come from the log
+      return { cand: d, state: M.cloneState(from.state), intents: [...from.intents.values()], probes }
     },
     release(person, name) {
       const list = devices.get(person)

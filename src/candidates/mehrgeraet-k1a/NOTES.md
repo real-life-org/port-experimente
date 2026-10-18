@@ -32,7 +32,57 @@ numbers its revisions under a pseudonymous writer tag per relationship.
   an old backup thus recovers its own history (consumed keys, accepted
   acts) and the siblings' steps; X6 passes. Two requests at once, a
   restore during an answer and a double restore were checked by the
-  review.
+  review. **Input contract of the fold** (gate reviews 26 B2 and 27 B2a):
+  a journal frame is checked for form before anything is folded, deep, on
+  both journal paths (mailbox and log) with the same check. One table of
+  nested shapes in model.ts (`Shape`, `SHAPES`, `OP_FIELDS`,
+  `shapeProblem`): payload an object whose body is strict base64; batch
+  with exactly writer, counter (positive integer), deps (batch keys),
+  ops and intents (`batchProblem`); every op with id (writer, integer
+  n ≥ 0), a readable time, a known kind and exactly its fields, down to
+  every value that becomes state (`opProblem`): stock keys and listed keys
+  (anchor strings, n integer ≥ 0, readable expiry, state from the enum),
+  tuples, cards, acts and mediator acts (every field, enums, nullable and
+  optional parts), view and allocation key lists, `candidates`, `deps`,
+  anchors and act lists as arrays of strings, pairs and edges of length 2;
+  intents with a document digest of the bench's form (multibase sha-256)
+  and string fields, bytes strict base64 (length, alphabet, padding:
+  the round trip gives the same string; `INTENT_FIELDS` in holder.ts);
+  the transaction the candidate returns again (`transactionProblem`).
+  Numbers are never NaN or infinite. Gate review 28 closed the class of
+  inherited keys: **keyed tables never carry a prototype; reads use own
+  properties only** (model.ts `table`, `own`, `put`; `aliases`, the
+  writers of a relationship, the writers and clears of a view, the cards
+  of an act, the clears of a view op, the journal heads), and a store
+  image or clone is rebuilt into such tables on load (`fromJson`,
+  `cloneState`, used by `reload`, checkpoints and enrolment). On top, the
+  shape table gives every identifier and every table key its grammar
+  (`GRAMMAR`: `ident` for ids, anchors, rkids and context names, `tag`
+  for writer tags as 16 base64url characters, `writer` for
+  `<device>@<incarnation>`, `dep` for `<writer>#<n>`, digests and nonces
+  in their alphabets) and rejects reserved names (`RESERVED`: the
+  properties of `Object.prototype` such as `__proto__`, `constructor`,
+  `toString`, and `prototype`) as keys and identifiers at any depth; the
+  heads of a `journal-sync` and the writer tag of a counterpart's
+  revision are checked the same way. A frame that fails the check, or whose fold throws anything
+  but `Missing` (deferred) or `Blocked`, is corrupt: the step is rolled
+  back, no receipt, one finding `finding(journal:corrupt-frame@<digest>)`
+  per digest, and the round goes on (the sender's deliverer repeats it,
+  the finding stays one). Later frames fold as before: the mailbox has no
+  order, `deps` keep causality (a batch that names the corrupt one stays
+  deferred). The gate after restore is untouched: a corrupt batch never
+  joins the heads, so a sibling answer that names it is not covered.
+  With the log (step 6) an answer is one unit (gate review 27 B2b): every
+  entry is opened and checked for form before any is folded, and the
+  answer folds nothing from the first malformed position on; if a later
+  pass finds a position p corrupt only while folding (the fold throws)
+  after an entry above p was already folded, all effects of the answer
+  are rolled back (one checkpoint for the answer, the same snapshot
+  machinery as a step) and only the entries below p are folded again; the
+  cursor ends at p, one finding per position. A clean answer folds in one
+  step as before. Holder State Contract follow-up: „a party MUST validate
+  the form of every journal batch before folding; a malformed batch is a
+  finding, never state“ (rltp `trust-0.32-folgepunkte-e15-2026-10-18.md`).
 - **Incarnation.** A restore from the store gives the device a fresh
   random incarnation (`A1@3f9a1c20`), never a counter from the backup, so
   two restores of the same backup never collide; a batch key seen twice
@@ -535,11 +585,12 @@ and X7b do).
   re-evaluation is involved: A2's new tuple has the old one in its
   snapshot.
 - **Revocation and production are not rights (X16, X17).** A device that
-  did not see the class revocation accepts a ticket on a withdrawn key,
-  and the fold then marks the key consumed on every device. Two devices
-  refilling apart send the same revision number with different keys, and
-  M records the conflict (6270). Static rights cover consumption (budget,
-  nameable keys), not changes of the class or of revision numbers.
+  did not see the class revocation accepts a ticket on a withdrawn key;
+  under decision 4a the ticket holds, and the fold marks the key consumed
+  once on every device (step 5). Two devices refilling apart number their
+  revisions under their own writer tags (step 4), so M accepts both and
+  records no 6270. Static rights cover consumption (budget, nameable
+  keys), not changes of the class; revision numbers are per writer.
 - **Two hand-overs of one act fold by rules 1 and 3 (X18, step 3).** Both
   devices consent and send a card while separated. Before step 3 A's
   ledger held consent and connect each from two operations and A's
@@ -776,3 +827,214 @@ can infer that the person uses more than one device.
   every loss phase starts from a fresh restore of A2 only.
 - Every scenario runs one person per role with two devices; X19, X20, X22
   and X23 are not built, X10 needs rights per app.
+
+## Step 6 (variant): journal retained at the self address
+
+Anton, 18 October: "journal at the service is an option to study, not a
+decision". This step builds it as a comparable variant and measures it
+against K1a. It is an option under study, not the default: `k1a()` is
+unchanged, the variant is `k1a({ journalAtService: true })`, listed as
+the second multi-device entry `k1a-journal-service` ("K1a + journal at
+the service") and run against the same scenarios.
+
+### Principle (Anton, 18 October, after gate review 25)
+
+**The log at the service is an acceleration, never a release ground.**
+Withholding by the carrier must never cause a release (Replication door
+D1). Gate review 25 showed why the first build broke this: the gate after
+restore ended with the log answer, and the service decides that answer
+alone. An empty answer `{req, from, end: from, entries: []}` or entries
+replaced by garbage released a withdrawn card to B (B1, B2).
+
+Log beschleunigt das Nachholen; die Freigabe bezeugt die Schwester oder
+der Widerruf.
+
+The lockout question (a restored device whose only sibling is lost stays
+gated until the user revokes that sibling) has no answer without trusting
+the service: whatever ends the gate on the service's word alone, the
+service can trigger by withholding. The gate until revocation or sibling
+witness stays.
+
+### Design (hybrid)
+
+- **Carrier (`zustellung.ts`).** An address can be retained
+  (`retain`): deposits there are kept as an ordered log with position
+  and deposit time, in addition to the mailbox delivery to registered
+  devices; receipts unchanged. `readLog(device, address, from, req)`
+  serves registered devices only (a revoked device is unregistered), the
+  answer `{ req, from, end, entries }` is collected with the next pickup.
+  Faults for the log: request lost, answer lost, single entries lost
+  with the answer head delivered. A dropped deposit is missing from the
+  log too. All other addresses stay mailboxes.
+- **World (`Welt15Options.selfLog`).** Default from the candidate's
+  bench option (`bench.selfLog`); every device of a person retains its
+  self address.
+- **Two tracks in the holder.** Data: the device reads the log from its
+  own position (`logCursor`, part of the store image) and folds every
+  entry through the same path as a delivered journal frame
+  (`receiveOwnFrame`, `applyRemote`, `applied`), in passes until nothing
+  is deferred (track `logSync`, request id bound, MV-5). Release: the
+  sibling track of K1a, unchanged (`journal-sync` to the self address, an
+  answer from a sibling bound to the current request id whose heads the
+  device covers, HSC-440, MV-6); its first request goes out one round
+  after the log request, with the heads folded from the log, so the
+  sibling sends only what the log did not bring and witnesses the rest.
+- **Gate after restore (MV-6), as in K1a.** It applies when the device
+  has a sibling and ends only on (i) a sibling's answer covering the
+  device's heads or (ii) the revocation of every sibling
+  (`deviceRevoked`). The log answer never ends it. Reading is not
+  delivery: no receipt, no `completed`.
+- **Corrupt entries (review 25 B2).** `replay` returns `folded`, `skip`
+  (verified and without effect: own or known frame, receipt or other
+  valid traffic at the self address) or `corrupt` (undecodable, cannot be
+  opened, invalid signature, foreign signer, broken journal body). A
+  corrupt entry never counts as folded: the cursor stops before it, a
+  finding `finding(journal:corrupt-entry@<pos>)` is recorded once per
+  position, the next read starts at it, with backoff (1, 2, 4, up to 16
+  rounds). The gate is untouched by it. After gate review 26 (B2 rest) the
+  body is checked for shape before folding, as in the mailbox path
+  (payload object with a string body, `batchProblem`, `opProblem`,
+  `transactionProblem`), and any exception from the fold other than
+  `Missing` or `Blocked` is corrupt as well (`CorruptFrame`, step rolled
+  back): a validly self-signed frame with `payload: null` or a batch with
+  `ops: null` no longer aborts the round. Policy: block. From the first
+  corrupt position on, the answer folds nothing further (the log is
+  ordered; skipping would fold later entries ahead of a step the device
+  cannot read); the next read starts at the corrupt position. Enrolment
+  from the log uses the same path: a corrupt first entry blocks the log
+  track at position 0, the sibling track still delivers and witnesses.
+  After gate review 27 the form check is deep (B2a, the input contract
+  above) and the answer is a unit (B2b): form of every entry first, and a
+  position found corrupt only in a later pass rolls the whole answer back
+  to a re-fold below it, so no effect above the cursor survives.
+- **Lost log answers (review 25 S2).** If no answer to the current read
+  arrived with the next pickup (request or answer lost), the device asks
+  again in that round: at most one log read per device and round, never a
+  frame at the self address. An incomplete answer (gap, corrupt entry) or
+  an unreachable carrier waits with backoff.
+- **Enrolment from the log.** The new device starts with empty state and
+  an empty journal and folds the log from position 0 (no snapshot, no
+  compaction). The ceremony gives only slot, sibling knowledge and the
+  kept probes (device state, not journal, MV-18), adopted when the gate
+  ends; the release is the enrolling device's witness. `selfLog: false`
+  keeps the state copy.
+
+### Results, both variants side by side
+
+Full run of X1–X18, X7b and X21 with two devices, same scenarios. Under
+controlled randomness (UUIDs, `randomBytes`, `getRandomValues` seeded)
+all 40 result objects of K0 and K1a, including every measure and detail,
+are identical to main b13706b.
+
+| | K1a | K1a + journal at the service (hybrid) |
+|---|---|---|
+| outcomes | 17 passed (X3, X18 promise changed), 2 failed (X7 strict, X9), 1 n/a (X10) | identical in every cell |
+| X6 restore from backup | passed, converged after 1 round | passed, converged after 1 round |
+| X8 enrolment | state copy 3 546 B; connected after 1 round | folded from the log after 2 rounds: 8 entries, 50 131 B read; gated 2 rounds until A1's witness; state afterwards 3 546 B; connected after 1 round |
+| X9 revocation | failed, thief reads 5 documents | failed, thief reads 5 documents; with a fresh registration the thief can also read the log (one seed = capability, unchanged) |
+| X11, X12 | passed | passed |
+| X21 repair, restore / request / answer / batch loss | 7 / 1 / 1 / 1 rounds | 1 / 1 / 1 / 1 rounds |
+| X21 self address | 813 frames, 2.16 MB (journal 395 frames, 1.66 MB) | 578 frames, 1.52 MB (journal 279 frames, 1.16 MB; 38 requests, 29 answers, A1 answers 305) |
+| X21 service | – | 42 log reads sent, 27 reached the carrier; sent 4 429 entries / 7.24 MB, arrived 1 771 entries / 2.66 MB; requests 3.1 kB, answer heads 1.5 kB; log 351 entries, 631 kB |
+
+Counter-runs (`tests/mehrgeraet-k1a-dienst.test.ts`), before (first
+build, 383bbc8) and after (hybrid):
+
+| | before | after |
+|---|---|---|
+| Review-18 counter-run, A2 lost, not revoked | gated 1 round, then released by the log answer | folded and current (declined/cancelled) after 2 rounds, gated until revocation (22 of 22 rounds in the test); card never reaches B |
+| same, A2 reachable | – | gated 2 rounds until A2's witness (K1a mailbox: 1 round); card never reaches B |
+| Astra's empty answer (B1) | released, B `connected` | A2 lost: gated, state stays `handed` (the service withheld everything), card 0; A2 reachable: A2 witnesses and delivers, `cancelled`, card 0 |
+| truncated tail, reordered log | – | same as empty: no release; folded what came |
+| corrupt entries (B2) | cursor 40, released, B `connected` | cursor stays 0, one finding per position, at most 5 reads in 20 rounds (backoff), gated, card 0; folded once the entries are intact |
+| restore with lost sibling, valid card | released after 1 gated round | folded after 2 rounds, gated 20 of 20 rounds like K1a; after revocation the card goes out and B connects |
+| 10 rounds of lost log answers, then healed (S2) | next read on the backoff schedule (round 16) | one read per round (10), folded 2 rounds after healing |
+| X21 repair after loss phases | 5 / 5 / 5 | 1 / 1 / 1 |
+| X21 service volume (S3) | 999 entries, 1.84 MB counted before the faults | sent 7.24 MB, arrived 2.66 MB, plus requests and heads |
+
+Revoking the lost sibling after the service withheld everything releases
+from the device's own state, exactly as in K1a: the release comes from
+the user's revocation, not from withholding.
+
+### What the service learns (200-round long run)
+
+Long run (`journalGrowth`): A, B, M with two devices each and four more
+counterparts at M, the clock advances 4 h per round (33.3 days), every 10
+rounds M introduces A to the next counterpart, one A device (alternating)
+and the counterpart consent, A1 confirms the budget every 50 rounds; 20
+acts issued, 19 connected, both A devices agree.
+
+- The service holds 1 266 entries, 2.15 MB, at A's self address; sizes
+  1 184 / 1 185 / 17 758 B (min / median / max), 80 distinct sizes, the
+  two most frequent (1 185 B: 778 entries, 1 184 B: 228) are receipts;
+  196 distinct deposit times over 33 days; 2 collecting devices.
+- Per reader it sees the cursor positions, read times and backlog: here
+  one reader, A2 at enrolment, cursor 0, backlog 8 entries (60.7 kB),
+  request 116 B, answer head 124 B. After a restore it would see which
+  position the backup had, how long the device was away and how much it
+  lacked.
+- It does not see kinds; by world knowledge 258 entries (952 kB) are
+  journal frames and 1 006 entries (1.19 MB, 56 %) receipts. Size and
+  timing still show them apart, and deposit times show when the person
+  acts. Cross-relationship linking at the service does not arise (one
+  self address per person), the person's activity profile does.
+- A separate receipt address for journal frames would reuse `replyTo`
+  (no wire change: other addressing and registration); not built.
+
+### Growth (numbers only, no compaction built)
+
+At round 200 the journal holds 252 batches, 348 kB (K1a 347 679 B, the
+variant 347 680 B): operations 121.5 kB (35 %), production intents
+203.0 kB (58 %), the rest is batch framing. Removable, if a rule allowed
+it (review 25 S1: an intent counts only if it is delivered or withdrawn
+AND every device of the fixed device list has folded its batch):
+
+- both devices live: 81 of 81 intents (202.5 kB) removable now; 252 of
+  252 batches below the minimum head;
+- A2 lost from day 5 (round 30, offline, not revoked): 81 intents done,
+  removable now 5 (13.1 kB); if A2 were revoked 81 (202.5 kB); batches
+  below the minimum head 11 (22.5 kB) of 224, without A2 224 (340 kB).
+  The same numbers for K1a with the mailbox;
+- batches older than the longest window (28 days, 8510): 15 batches,
+  36.1 kB.
+
+A restore from an older backup, enrolment from position 0 and the missing
+snapshot still need the history; the numbers are a ceiling for a
+snapshot rule, not a deletion rule. The log at the service grows to
+2.15 MB in 200 rounds; with A2 lost from day 5 it holds 913 entries,
+3.38 MB, of which 867 are journal frames for 224 batches: A1's deliverer
+repeats every journal frame A2 does not acknowledge, and the log keeps
+every repeat.
+
+### Limits
+
+- **Not equivocation-safe at the service.** The service can reorder,
+  drop the tail, answer with a shorter `end` or keep a foreign writer
+  branch from a reader; nothing in the log reveals it. `deps` detects
+  inner gaps only (a batch whose predecessor is missing is deferred). This
+  is exactly why the log is not a release ground.
+- The lockout stays: a restored device whose only sibling is lost is
+  gated until the user revokes it, as in K1a; the log makes it current
+  meanwhile, but releases nothing.
+- Cost of the hybrid: both tracks run; the sibling still sends batches
+  for stale requests its deliverer repeats (X21: 279 journal frames,
+  1.16 MB), and the per-round re-read after a lost answer re-sends the
+  whole log tail (X21: 7.24 MB sent for 2.66 MB arrived).
+- No compaction, no snapshot: the log is unbounded and keeps repeats.
+- A permanently corrupt entry keeps the log track pending (re-read with
+  backoff) and, by the block policy, nothing behind it is folded from the
+  log; the sibling track still repairs and releases. Only a holder of the
+  seed can write a validly self-signed corrupt entry.
+- A bench error inside the fold now shows as a corrupt finding with its
+  message (`failed(journal-corrupt): fold: …`), not as a crash.
+- One seed stays a capability (X9): a thief with the image registers and
+  reads the log.
+- The service learns the person's activity profile (count, size and time
+  of steps, cursor, read times and backlog per reader); hiding it
+  (padding, batching, cover traffic) is not built.
+
+### Conclusion
+
+Journal beim Dienst = Beschleunigung, kein Freigabegrund; die Sperre bis
+Widerruf oder Schwesterzeugnis bleibt; der Dienst kann zurückhalten, aber
+nichts bewirken.
