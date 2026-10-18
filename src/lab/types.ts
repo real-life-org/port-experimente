@@ -98,10 +98,50 @@ export interface EnforcingService {
   status(): string
 }
 
+/**
+ * Ein Münzwurf im Kandidaten, den der Prüfstand erzwingt (Anton 18.10.: eine Zelle gilt nur, wenn sie in jedem
+ * Zweig hält). Der Kandidat entscheidet an einer Stelle nach Zufall (etwa: welcher von zwei gleichzeitigen Commits
+ * den kleineren Hash hat); der Prüfstand legt je Entscheidung fest, welche Seite fällt, und zählt die Zweige auf
+ * (src/lab/zweige.ts). Entscheidungen sind in der Reihenfolge nummeriert, in der der Kandidat sie trifft.
+ */
+export interface CoinBranches {
+  /** Was der Zufall ist, für die Ausgabe (z. B. „Hash-Gleichstand“). */
+  readonly coin: string
+  /** Name der beiden Seiten einer Entscheidung (0, 1). */
+  readonly sides: readonly [string, string]
+  /** Vor einem Lauf: die ersten Entscheidungen erzwingen (fehlende = Seite 0). */
+  force(decisions: readonly number[]): void | Promise<void>
+  /** Nach dem Lauf: wie viele Entscheidungen fielen, und ob die Aufzählung je Entscheidung alle Zweige trifft. */
+  trace(): { decisions: number; complete: boolean }
+  /** Den Zufall wieder dem Kandidaten überlassen. */
+  release(): void
+}
+
+/**
+ * Zeitabhängige Szenarien (Anton 18.10.): hängt der Ausgang von Zustellzeiten ab, läuft das Szenario `runs`-mal
+ * auf je einem frischen Kandidaten, und der Prüfstand misst eine Verteilung statt eines Einzelergebnisses
+ * (src/lab/zeit.ts). Bestanden nur, wenn jeder Lauf besteht und innerhalb der Schranke zustellt.
+ */
+export interface TimingSpec {
+  /** Szenarien, die wiederholt laufen. */
+  readonly scenarios: readonly string[]
+  readonly runs: number
+  /** Was die Zeit bestimmt, für „abhängig von: …“. */
+  readonly cause: string
+  /** Schranke in ms; der Kandidat leitet sie aus seinen eigenen Parametern her (Kommentar am Kandidaten). */
+  readonly boundMs: number
+  /** Nach einem Lauf: die längste Zustellzeit dieses Laufs in ms, `undefined`, wenn eine Zustellung ausblieb. */
+  measure(): number | undefined
+}
+
 /** Ein Kandidat hinter dem Prüfstand. Eine Instanz = eine Gruppe. */
 export interface Candidate {
   readonly id: string
   readonly capabilities: ReadonlySet<Capability>
+  /** Gesetzt, wenn der Kandidat nach Zufall entscheidet und der Prüfstand jede Seite erzwingen kann. */
+  readonly branches?: CoinBranches
+  /** Gesetzt, wenn Szenarien von Zustellzeiten abhängen und als Verteilung gemessen werden. */
+  readonly timing?: TimingSpec
   /** Gesetzt, wenn der Kandidat seinen eigenen Transport mitbringt. */
   readonly transport?: OwnTransport
   /** Gesetzt, wenn ein durchsetzender Dienst am Relay sitzt (Fähigkeit 'service'). */

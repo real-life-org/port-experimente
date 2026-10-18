@@ -24,6 +24,16 @@ workshop repository (`rltp/design/port-experimente-2026-10.md`).
   passes. "Not applicable" means the candidate has no capability for the
   scenario, or the carrier fault never touched a frame of that kind. That
   is a gap in coverage, never a pass.
+- **Every branch.** A cell is kept only if it holds in every branch.
+  Where a candidate decides by chance (two concurrent MLS commits: the
+  smaller hash wins), the bench forces each side of every such decision and
+  runs the scenario in all branches (`src/lab/zweige.ts`); where a result
+  depends on delivery time (the Subduction server in `keyhive-ark`), the
+  scenario runs several times and the bench reports the distribution
+  against a bound the candidate derives from its own parameters
+  (`src/lab/zeit.ts`). A cell that holds only sometimes is not kept, and
+  its result says what it depends on ("abhängig von …"). There is no
+  "nondeterministic" marker and no oracle is widened to make a run pass.
 - The bench itself speaks German: scenario titles, status lines and the
   recorded results are German strings in the code. The notes and this
   README are English.

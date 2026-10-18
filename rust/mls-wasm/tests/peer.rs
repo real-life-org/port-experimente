@@ -412,3 +412,37 @@ fn willkommen_ersetzt_verfallenen_zweig() {
         assert_eq!(dave.decrypt(&s.ciphertext).unwrap().0, b"an-dave");
     }
 }
+
+/// Prüfstandsregel (Anton 18.10.): der Prüfstand erzwingt jede Seite des Münzwurfs. Bei erzwungener Entscheidung
+/// gewinnt der früher (0) oder der später (1) erzeugte Commit, unabhängig von den Hashes, in jeder Wiederholung und
+/// bei beiden Repliken gleich; ohne Zwang gilt wieder der kleinste Hash.
+#[test]
+fn erzwungener_gleichstand_jede_seite() {
+    use mls_wasm::peer::{force_tiebreak, tiebreak_trace, Error};
+    for decision in [0u8, 1] {
+        for round in 0..5 {
+            force_tiebreak(Some(vec![decision]));
+            let mut alice = Peer::new().unwrap();
+            let mut bob = Peer::new().unwrap();
+            alice.create(format!("gruppe-z{decision}{round}").as_bytes()).unwrap();
+            let (_, w) = alice.add(bob.share_key()).unwrap();
+            bob.receive(&w).unwrap();
+            let earlier = alice.rotate().unwrap();
+            let later = bob.rotate().unwrap();
+            let a = alice.receive(&later);
+            let b = bob.receive(&earlier);
+            if decision == 0 {
+                assert!(matches!(a, Err(Error::Stale(_))), "{a:?}");
+                assert!(matches!(b, Err(Error::LostTiebreak)), "{b:?}");
+            } else {
+                assert!(matches!(a, Err(Error::LostTiebreak)), "{a:?}");
+                assert!(matches!(b, Err(Error::Stale(_))), "{b:?}");
+            }
+            assert_eq!(tiebreak_trace(), (1, true));
+            let s = alice.encrypt(b"r", b"danach").unwrap();
+            assert_eq!(bob.decrypt(&s.ciphertext).unwrap().0, b"danach");
+        }
+    }
+    force_tiebreak(None);
+    assert_eq!(tiebreak_trace(), (0, true));
+}

@@ -1,5 +1,5 @@
 import type { Candidate, Capability, Device, Msg, Person } from '../../lab/types'
-import { mlsPort, type KeyPeer } from '../rltp-beekem/keyport'
+import { mlsPort, mlsTiebreak, type KeyPeer } from '../rltp-beekem/keyport'
 import { openFrom, sealTo } from '../rltp-beekem/index'
 import { x25519 } from '@noble/curves/ed25519.js'
 
@@ -198,6 +198,8 @@ export function consensualMls(options: { committer?: Committer } = {}): Candidat
   return {
     id: `consensual-mls-${mode}`,
     capabilities: new Set<Capability>(['roles', 'rotate', 'steal', 'multi-device', 'device-remove']),
+    // Wer bei gleichzeitigen Commits gewinnt, ist ein Münzwurf (kleinster Hash); der Prüfstand läuft jede Seite.
+    branches: mlsTiebreak,
 
     async addDevice(person, device) {
       await port.load()

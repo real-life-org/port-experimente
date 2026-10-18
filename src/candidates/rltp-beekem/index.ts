@@ -1,6 +1,6 @@
 import type { Candidate, Capability, Device, EnforcingService, Msg, Person } from '../../lab/types'
 import { AuthorityLog, Signer, promoteInPolicy, wellFormed, type AuthOp, type Policy } from './authority'
-import { beekemPort, mlsPort, type KeyPeer, type KeyPort } from './keyport'
+import { beekemPort, mlsPort, mlsTiebreak, type KeyPeer, type KeyPort } from './keyport'
 import { LogReplicaService, ViewService, signView, targetDigest, verifyTarget, viewHash, type Challenge, type ChallengeAnswer, type MRule, type Target, type ViewAck, type ViewProposal } from './service'
 import { x25519 } from '@noble/curves/ed25519.js'
 import { hkdf } from '@noble/hashes/hkdf.js'
@@ -1027,6 +1027,8 @@ export function rltpBeekem(options: { dienst?: DienstVariante; mRule?: MRule; kl
   return {
     id: options.dienst ? `rltp-beekem-${options.dienst}${options.mRule === 'new' ? '-m-neu' : ''}` : 'rltp-beekem',
     capabilities: new Set<Capability>(['roles', 'policy', 'rotate', 'steal', 'forge-key-op', 'multi-device', 'device-remove', ...(service ? (['service'] as Capability[]) : [])]),
+    // MLS: gleichzeitige Commits entscheidet der kleinste Hash, ein Münzwurf; der Prüfstand läuft jede Seite.
+    ...(port.name === 'mls' ? { branches: mlsTiebreak } : {}),
     service,
 
     async addDevice(person, device) {
