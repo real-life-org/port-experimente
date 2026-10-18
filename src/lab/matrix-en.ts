@@ -411,5 +411,9 @@ export const candidateEn: Record<string, { name: string; desc: string }> = {
   "k1a-static": {
     "name": "K1a: journal, static rights",
     "desc": "one seed; every committed step travels as a journal batch with its production intents; acceptance budget and nameable stock keys split statically across devices; a received probe is evaluated again when the journal adds own tuples; a hit owes the own mapping, the union comes from the counterpart's mapping"
+  },
+  "k1a-journal-service": {
+    "name": "K1a + journal at the service",
+    "desc": "K1a's rules unchanged; the person's self address at the carrier keeps the journal as an ordered log: catch-up reads the log from the device's position instead of asking siblings, the gate after restore ends with the service's answer, a new device folds the log from the start; the service holds availability, not authority (an option under study, not the default)"
   }
 }

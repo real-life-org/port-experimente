@@ -551,12 +551,15 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       if (!('act' in r)) return fail(r.refused)
       await s.w.until(() => s.A.state.acts.length === 1 && s.B.state.acts.length === 1)
       const A2 = await s.w.enrol(s.A, 'A2')
+      // Schritt 6: mit Ablage beginnt A2 leer und faltet die Ablage ab Beginn; „sofort“ heißt dann: nach der Antwort des Dienstes.
+      const fold = s.w.selfLog ? await s.w.until(() => !A2.syncPending, 10) : 0
       const bytes = Buffer.byteLength(JSON.stringify(A2.state), 'utf8') // Größe der Zustandskopie; K0 kennt keinen Enrollment-Verkehr
       const same = M.canonical(A2.projection()) === M.canonical(s.A.projection())
       await A2.consent(r.act)
       await s.B.consent(r.act)
       const n = await s.w.until(() => M.act(A2.state, r.act).state === 'connected' && M.act(s.B.state, r.act).state === 'connected')
-      const ok = same && n > 0
+      const ok = same && n > 0 && fold >= 0
+      if (s.w.selfLog) return { outcome: mark(ok), detail: `aus der Ablage gefaltet nach ${fold} Runde(n): ${A2.logEntriesRead} Einträge, ${A2.logBytesRead} B gelesen (keine Zustandskopie; Zustand danach ${bytes} B UTF-8); Projektion gleich: ${same ? 'ja' : 'nein'}; A2 verbunden nach ${n} Runden`, measures: { enrolRounds: fold, enrolLogEntries: A2.logEntriesRead, enrolLogBytes: A2.logBytesRead, stateBytes: bytes, rounds: n } }
       return { outcome: mark(ok), detail: `Projektion nach Enrollment gleich: ${same ? 'ja' : 'nein'}; A2 verbunden nach ${n} Runden; Zustandskopie ${bytes} B UTF-8 (K0: Kopie, kein gemessener Enrollment-Verkehr)`, measures: { stateCopyBytes: bytes, rounds: n } }
     },
   },
@@ -991,6 +994,7 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const ref = M.canonical(s.A.projection())
       const before = s.w.of('A').map(journalOf)
       const start = s.w.carrier.carried.length
+      const reads0 = s.w.carrier.logReads.length
       const req0 = s.w.of('A').reduce((n, d) => n + d.syncRequests, 0)
       const restoreA2 = async () => {
         s.w.stores.get('A2')!.restore(oldA2)
@@ -1017,22 +1021,26 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const afterRestore = settled()
       s.w.carrier.faults.reset()
       // Phasen 2–5: je ein frischer Restore von A2, dann 15 Runden Verlust einer Art auf der Self-Adresse, dann ohne Fachoperation weiter.
-      const loss = async (match: (o: { device: string; kind: string }) => boolean) => {
+      // Schritt 6 (Ablage an der Self-Adresse): Anfrage und Antwort gehen an den Träger, nicht als Rahmen an die Schwester;
+      // die Verlustphasen treffen dort dieselben Dinge (Anfrage, ganze Antwort, nur die Batches bei zugestellter Antwort).
+      const loss = async (match: (o: { device: string; kind: string }) => boolean, log?: () => void) => {
         await restoreA2()
         s.w.carrier.faults.drop((f) => {
           const o = f.address === self ? s.w.frameOrigin(f.bytes) : undefined
           return !!o && match(o)
         })
+        if (s.w.selfLog) log?.()
         await s.w.rounds(15)
         const b = behind()
         s.w.carrier.faults.reset()
         const rounds = await untilStable(s.w, 'A', 40)
         return { behind: b, rounds, ...settled() }
       }
-      const requests = await loss((o) => o.device === 'A2' && o.kind === 'journal-sync')
-      const answers = await loss((o) => o.device !== 'A2' && (o.kind === 'journal' || o.kind === 'journal-sync-reply'))
+      const lf = s.w.carrier.logFaults
+      const requests = await loss((o) => o.device === 'A2' && o.kind === 'journal-sync', () => lf.dropRequest((d) => d === 'A2'))
+      const answers = await loss((o) => o.device !== 'A2' && (o.kind === 'journal' || o.kind === 'journal-sync-reply'), () => lf.dropAnswer((d) => d === 'A2'))
       // Nur die benötigten Batches gehen verloren (A1s Journalrahmen an A2); Antwortkopf und Quittungen passieren (Review 11 S2).
-      const batches = await loss((o) => o.device !== 'A2' && o.kind === 'journal')
+      const batches = await loss((o) => o.device !== 'A2' && o.kind === 'journal', () => lf.dropEntries((d, e) => d === 'A2' && s.w.frameOrigin(e.bytes)?.kind === 'journal' && s.w.frameOrigin(e.bytes)?.device !== 'A2'))
       const receipts = await loss((o) => o.kind === 'delivery-ack')
       const repair = await untilRepaired(s.w, 'A', self)
       const quiet = repair.rounds
@@ -1082,6 +1090,15 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
         crashes: crashed,
       }
       if (missing !== null) measures.missingBatches = missing
+      // Schritt 6: ein Antwortender, der Dienst. Leseanfragen der A-Geräte seit dem ersten Restore, gelieferte Einträge und Bytes.
+      if (s.w.selfLog) {
+        const reads = s.w.carrier.logReads.slice(reads0).filter((r) => r.address === self)
+        measures.answersService = reads.length
+        measures.serviceEntriesServed = reads.reduce((n, r) => n + r.entries, 0)
+        measures.serviceBytesServed = reads.reduce((n, r) => n + r.bytes, 0)
+        measures.logEntries = s.w.carrier.log(self).length
+        measures.logBytes = s.w.carrier.log(self).reduce((n, e) => n + e.bytes.length, 0)
+      }
       for (const [k, v] of Object.entries(perPhase)) {
         measures[`missingBatchesAfter${k}`] = v.missing
         measures[`lostStateAfter${k}`] = v.lost
@@ -1100,12 +1117,181 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
         : `Reparatur nicht beendet: nach 60 Runden Nachholen ausstehend auf ${repair.pending.join(', ') || 'keinem Gerät'}, ${repair.selfFrames} Self-Rahmen in dieser Zeit, zuletzt still über ${repair.window} Runden`
       return {
         outcome: mark(ok),
-        detail: `Reparatur in Runden: Restore ${restore}, Anfrageverlust ${requests.rounds}, Antwortverlust ${answers.rounds}, Batchverlust bei zugestelltem Antwortkopf ${batches.rounds}, Quittungsverlust ${receipts.rounds} (zurück nach dem Verlust: ${[requests.behind, answers.behind, batches.behind, receipts.behind].join('/')}); je Phase danach fehlende Batches ${Object.values(perPhase).map((v) => v.missing).join('/')}, Geräte nicht auf der Referenz ${Object.values(perPhase).map((v) => v.lost).join('/')}; ${end}; fehlende Batches ${missing ?? 'nicht messbar (kein Nachholen)'}; Geräte mit anderem Stand als vorher ${lostState}; doppelte Wirkungen ${measures.doubleFinalEffects}, Konflikte ${measures.remainingConflicts}; Self-Adresse ${t.own.frames} Rahmen / ${t.own.bytes} B (Journal ${k('journal').frames}/${k('journal').bytes} B, Anfragen ${k('journal-sync').frames}, Antworten ${k('journal-sync-reply').frames}, Quittungen ${k('delivery-ack').frames}); Wiederholungen ${t.repeats}: ${t.repeatsOwn} auf der Self-Adresse, ${t.repeatsToPeer} an Gegenseiten; Antworten A1 ${answersBy('A1')}, A2 ${answersBy('A2')}; an Gegenseiten ${t.toPeer.frames} Rahmen; Journal ${measures.journalBatchesBefore ?? '–'} → ${measures.journalBatchesAfter ?? '–'} Batches`,
+        detail: `Reparatur in Runden: Restore ${restore}, Anfrageverlust ${requests.rounds}, Antwortverlust ${answers.rounds}, Batchverlust bei zugestelltem Antwortkopf ${batches.rounds}, Quittungsverlust ${receipts.rounds} (zurück nach dem Verlust: ${[requests.behind, answers.behind, batches.behind, receipts.behind].join('/')}); je Phase danach fehlende Batches ${Object.values(perPhase).map((v) => v.missing).join('/')}, Geräte nicht auf der Referenz ${Object.values(perPhase).map((v) => v.lost).join('/')}; ${end}; fehlende Batches ${missing ?? 'nicht messbar (kein Nachholen)'}; Geräte mit anderem Stand als vorher ${lostState}; doppelte Wirkungen ${measures.doubleFinalEffects}, Konflikte ${measures.remainingConflicts}; Self-Adresse ${t.own.frames} Rahmen / ${t.own.bytes} B (Journal ${k('journal').frames}/${k('journal').bytes} B, Anfragen ${k('journal-sync').frames}, Antworten ${k('journal-sync-reply').frames}, Quittungen ${k('delivery-ack').frames}); Wiederholungen ${t.repeats}: ${t.repeatsOwn} auf der Self-Adresse, ${t.repeatsToPeer} an Gegenseiten; Antworten A1 ${answersBy('A1')}, A2 ${answersBy('A2')}${s.w.selfLog ? `, Dienst ${measures.answersService} (${measures.serviceEntriesServed} Einträge, ${measures.serviceBytesServed} B; Ablage ${measures.logEntries} Einträge, ${measures.logBytes} B)` : ''}; an Gegenseiten ${t.toPeer.frames} Rahmen; Journal ${measures.journalBatchesBefore ?? '–'} → ${measures.journalBatchesAfter ?? '–'} Batches`,
         measures,
       }
     },
   },
 ]
+
+// ── Schritt 6 (Variante „Journal beim Dienst“): Messungen außerhalb der Matrix ──────────────────────────────
+
+/**
+ * Was der Dienst an einer Ablage lernt (Plan Abschnitt 5, „was der Träger lernt“): Zahl und Größen der behaltenen
+ * Einträge, ihre Einlieferungszeiten, wer liest (Leseanfragen je Gerät) und wer abholt (registrierte Geräte). Der Dienst
+ * sieht nur versiegelte Bytes; Art (Journal, Quittung) unterscheidet er nicht, die Spalte `kinds` ist Weltwissen.
+ */
+export function serviceLearns(w: Welt15, address: string) {
+  const log = w.carrier.log(address)
+  const sizes = log.map((e) => e.bytes.length).sort((a, b) => a - b)
+  const reads = w.carrier.logReads.filter((r) => r.address === address)
+  const kinds: Record<string, { entries: number; bytes: number }> = {}
+  for (const e of log) {
+    const k = (kinds[w.frameOrigin(e.bytes)?.kind ?? 'unknown'] ??= { entries: 0, bytes: 0 })
+    k.entries++
+    k.bytes += e.bytes.length
+  }
+  return {
+    entries: log.length,
+    bytes: sizes.reduce((n, x) => n + x, 0),
+    sizeMin: sizes[0] ?? 0,
+    sizeMedian: sizes[Math.floor(sizes.length / 2)] ?? 0,
+    sizeMax: sizes[sizes.length - 1] ?? 0,
+    distinctTimes: new Set(log.map((e) => e.at)).size,
+    firstAt: log[0]?.at ?? '',
+    lastAt: log[log.length - 1]?.at ?? '',
+    reads: reads.length,
+    readers: [...new Set(reads.map((r) => r.device))].sort(),
+    entriesServed: reads.reduce((n, r) => n + r.entries, 0),
+    bytesServed: reads.reduce((n, r) => n + r.bytes, 0),
+    collectors: w.carrier.registeredAt(address),
+    kinds,
+  }
+}
+
+interface JournalBatch {
+  writer: string
+  n: number
+  ops: Array<{ at: string }>
+  intents: Array<{ digest: string; kind: string }>
+}
+
+/**
+ * Wachstum (Schritt 6, nur Zahlen, keine Kompaktierung): Langlauf mit periodischen Akten. A, B, M mit je zwei Geräten,
+ * vier weitere Gegenpersonen C0–C3 an M; jede Runde rückt die Uhr um `stepMs` vor; alle `every` Runden stellt M A einer
+ * Gegenperson vor (reihum), ein A-Gerät (abwechselnd) und die Gegenperson stimmen zu, sobald beide den Akt kennen; alle
+ * 50 Runden bestätigt A1 das Budget (8515). Gemessen: Journal (Batches, Bytes, davon Operationen und Absichten) und
+ * Ablage (Einträge, Bytes) über die Zeit, und was davon entfernbar wäre: Absichten zugestellter oder zurückgenommener
+ * Dokumente, Batches, die jedes Gerät der Person kennt (unter dem kleinsten Kopf), Batches älter als das längste Fenster
+ * (28 Tage, 8510).
+ */
+export async function journalGrowth(candidate: MultiDeviceCandidate, opts: { rounds?: number; every?: number; stepMs?: number; sample?: number } = {}) {
+  const rounds = opts.rounds ?? 200
+  const every = opts.every ?? 10
+  const stepMs = opts.stepMs ?? 4 * 3600 * 1000
+  const sample = opts.sample ?? 20
+  const names = ['C0', 'C1', 'C2', 'C3']
+  const s = await setup(candidate, false, names)
+  const self = (await s.A.cand.keys.pair('self/A')).rkid
+  const open: Array<{ act: string; C: HolderDevice; dev: HolderDevice }> = []
+  let issued = 0
+  let connected = 0
+  const journal = (d: HolderDevice) => ((d.cand as { journal?: () => JournalBatch[] }).journal?.() ?? []) as JournalBatch[]
+  const size = (x: unknown) => Buffer.byteLength(JSON.stringify(x), 'utf8')
+  const series: Array<{ round: number; at: string; batches: number; journalBytes: number; logEntries: number; logBytes: number }> = []
+  const acts: string[] = []
+  for (let i = 1; i <= rounds; i++) {
+    s.w.clock.advance(stepMs)
+    if (i % every === 0) {
+      const k = (i / every) % names.length
+      const c = s.thirds[names[k]!]!
+      const r = await introduceAny(s, s.ma, c.mc, false)
+      if ('act' in r) {
+        issued++
+        acts.push(r.act)
+        open.push({ act: r.act, C: c.C, dev: (i / every) % 2 ? s.A : s.A2 })
+      }
+    }
+    if (i % 50 === 0) await s.A.confirmBudget(s.am)
+    for (const o of open.slice()) {
+      if (!knowsAct(s.w, 'A', o.act) || !o.C.state.acts.some((a) => a.id === o.act)) continue
+      await o.dev.consent(o.act)
+      await o.C.consent(o.act)
+      open.splice(open.indexOf(o), 1)
+    }
+    await s.w.rounds(1)
+    if (i % sample === 0) {
+      const j = journal(s.A)
+      const log = s.w.carrier.log(self)
+      series.push({ round: i, at: s.w.clock.now(), batches: j.length, journalBytes: j.reduce((n, b) => n + size(b), 0), logEntries: log.length, logBytes: log.reduce((n, e) => n + e.bytes.length, 0) })
+    }
+  }
+  await s.w.rounds(5)
+  for (const a of acts) if (s.w.of('A').every((d) => d.state.acts.find((x) => x.id === a)?.state === 'connected')) connected++
+  const ds = s.w.of('A')
+  const j = journal(s.A)
+  const heads = ds.map((d) => d.cand.heads?.() ?? {})
+  const now = Date.parse(s.w.clock.now())
+  const window = M.PARAM.budgetWindowMs
+  /** Erledigt: zugestellt (Quittung) auf einem Gerät, Karte zurückgenommen oder zugestellt, Mapping vereinigt. */
+  const done = (digest: string) => {
+    for (const d of ds) {
+      if (d.zusteller.report(digest)?.state === 'delivered') return true
+      for (const a of d.state.acts) {
+        const o = a.cards?.[digest]
+        if (o === 'delivered' || o === 'cancelled') return true
+      }
+      if (d.state.duties.some((x) => x.mappingDigest === digest && x.state === 'united')) return true
+    }
+    return false
+  }
+  let ops = 0
+  let intents = 0
+  let total = 0
+  let removableIntents = 0
+  let removableIntentCount = 0
+  let belowMin = 0
+  let belowMinBytes = 0
+  let old = 0
+  let oldBytes = 0
+  let intentCount = 0
+  for (const b of j) {
+    const sz = size(b)
+    total += sz
+    ops += size(b.ops)
+    intents += size(b.intents)
+    for (const it of b.intents) {
+      intentCount++
+      if (done(it.digest)) {
+        removableIntentCount++
+        removableIntents += size(it)
+      }
+    }
+    if (heads.every((h) => (h[b.writer] ?? 0) >= b.n)) {
+      belowMin++
+      belowMinBytes += sz
+    }
+    const at = Math.max(0, ...b.ops.map((o) => Date.parse(o.at)))
+    if (at > 0 && at < now - window) {
+      old++
+      oldBytes += sz
+    }
+  }
+  const log = s.w.carrier.log(self)
+  return {
+    rounds,
+    days: (rounds * stepMs) / (24 * 3600 * 1000),
+    issued,
+    connected,
+    blocked: ds.reduce((n, d) => n + d.measures.blocked, 0),
+    agree: s.w.agree('A').agree,
+    batches: j.length,
+    journalBytes: total,
+    opsBytes: ops,
+    intentBytes: intents,
+    intents: intentCount,
+    removableIntents: removableIntentCount,
+    removableIntentBytes: removableIntents,
+    batchesBelowMinHead: belowMin,
+    bytesBelowMinHead: belowMinBytes,
+    batchesOlderThanWindow: old,
+    bytesOlderThanWindow: oldBytes,
+    logEntries: log.length,
+    logBytes: log.reduce((n, e) => n + e.bytes.length, 0),
+    service: serviceLearns(s.w, self),
+    series,
+  }
+}
 
 export async function runX15(candidate: MultiDeviceCandidate, serial = false, only?: string[]): Promise<X15Result[]> {
   const out: X15Result[] = []

@@ -128,6 +128,36 @@ export interface Frame {
 
 export class WireUnreachable extends Error {}
 
+/** Ein Eintrag der Ablage (E15 Schritt 6): der eingelieferte Rahmen mit seiner Position im Log und der Einlieferungszeit, wie der Träger sie sieht. */
+export interface LogEntry {
+  pos: number
+  bytes: Uint8Array
+  at: string
+}
+
+/**
+ * Antwort des Trägers auf eine Leseanfrage an eine Ablage (E15 Schritt 6): die Kennung der Anfrage, ab welcher Position
+ * gelesen wurde, die Länge des Logs beim Lesen (`end`) und die Einträge `from … end-1`. Fehlen Einträge (Störung), sieht
+ * das Gerät es an den Positionen.
+ */
+export interface LogAnswer {
+  req: string
+  address: string
+  from: number
+  end: number
+  entries: LogEntry[]
+}
+
+/** Was der Träger über eine Ablage weiß und tut (Messung): jede Leseanfrage mit Gerät, Position, gelieferten Einträgen und Bytes. */
+export interface LogRead {
+  device: string
+  address: string
+  from: number
+  entries: number
+  bytes: number
+  at: string
+}
+
 /**
  * Fehlerinjektion am Träger nach dem Muster von `CarrierFaults` (E10/E15):
  * jede Regel gilt ab dem Aufruf, bis `reset()`. Die Flags am Carrier
@@ -162,6 +192,27 @@ export class Carrier {
   private withholdRules: Array<{ device: string; match: (f: Frame) => boolean }> = []
   private reverseOrder = false
   private duplicateAll = false
+  /**
+   * E15 Schritt 6 (Variante „Journal beim Dienst“, Anton 18.10.: Option untersuchen, nicht festlegen): Adressen, an denen
+   * der Träger eingelieferte Rahmen als geordnetes Log behält statt sie nach der Abholung zu löschen. Die Zustellung an
+   * registrierte Geräte bleibt wie beim Briefkasten; zusätzlich ist das Log ab einer Position lesbar. Quittungen
+   * unverändert. Der Träger sieht nur versiegelte Bytes, Größe, Zeitpunkt und wer liest (Replication Tür D1: er kann nur
+   * zerstören, nicht fälschen). Alle anderen Adressen bleiben Briefkästen.
+   */
+  private logs = new Map<string, LogEntry[]>()
+  private logAnswers = new Map<string, LogAnswer[]>()
+  readonly logReads: LogRead[] = []
+  /** Uhr des Trägers für die Einlieferungszeit im Log (Messung: was der Dienst lernt); die Welt setzt sie. */
+  now: () => string = () => new Date(0).toISOString()
+  private logRequestDrops: Array<(device: string) => boolean> = []
+  private logAnswerDrops: Array<(device: string) => boolean> = []
+  private logEntryDrops: Array<(device: string, e: LogEntry) => boolean> = []
+  /** Störungen der Ablage (E15 Schritt 6, X21): Anfrage verloren, ganze Antwort verloren, einzelne Einträge der Antwort verloren (Antwortkopf zugestellt). */
+  readonly logFaults = {
+    dropRequest: (match: (device: string) => boolean) => void this.logRequestDrops.push(match),
+    dropAnswer: (match: (device: string) => boolean) => void this.logAnswerDrops.push(match),
+    dropEntries: (match: (device: string, e: LogEntry) => boolean) => void this.logEntryDrops.push(match),
+  }
 
   readonly faults: CarrierFaultRules = {
     drop: (match) => void this.dropRules.push(match),
@@ -173,6 +224,9 @@ export class Carrier {
       this.withholdRules = []
       this.reverseOrder = false
       this.duplicateAll = false
+      this.logRequestDrops = []
+      this.logAnswerDrops = []
+      this.logEntryDrops = []
     },
   }
 
@@ -192,6 +246,10 @@ export class Carrier {
       }
     }
   }
+  /** Geräte, die an dieser Adresse registriert sind (Messung: wer abholt, was der Träger über Leser weiß). */
+  registeredAt(address: string): string[] {
+    return [...(this.registered.get(address) ?? [])].sort()
+  }
   /** Rahmen, die an dieser Adresse noch liegen (auf mindestens ein registriertes Gerät warten). */
   pending(address: string): number {
     return this.queues.get(address)?.length ?? 0
@@ -210,6 +268,48 @@ export class Carrier {
     }
     if (!this.queues.has(address)) this.queues.set(address, [])
     this.queues.get(address)!.push(f)
+    const log = this.logs.get(address)
+    if (log) log.push({ pos: log.length, bytes: f.bytes, at: this.now() })
+  }
+
+  // ── Ablage (E15 Schritt 6, Variante) ──
+  /** Diese Adresse wird eine Ablage: was ab jetzt eingeliefert wird, bleibt geordnet erhalten. Idempotent. */
+  retain(address: string) {
+    if (!this.logs.has(address)) this.logs.set(address, [])
+  }
+  isLog(address: string): boolean {
+    return this.logs.has(address)
+  }
+  /** Das Log einer Ablage (Messung: was der Dienst hält). */
+  log(address: string): readonly LogEntry[] {
+    return this.logs.get(address) ?? []
+  }
+  /**
+   * Leseanfrage eines Geräts an eine Ablage ab Position `from`, mit der Kennung `req` des Geräts. Bedient werden nur an
+   * der Adresse registrierte Geräte (wie die Zustellung; ein widerrufenes Gerät ist abgemeldet). Die Antwort liegt ab der
+   * nächsten Abholung bereit (`takeLogAnswers`). Unerreichbar oder offline: `WireUnreachable`, das Gerät fragt später neu.
+   */
+  readLog(device: string, address: string, from: number, req: string) {
+    if (this.unreachable || this.offline.has(device)) throw new WireUnreachable('Träger unerreichbar')
+    const log = this.logs.get(address)
+    if (!log || !this.registered.get(address)?.has(device)) return
+    if (this.logRequestDrops.some((r) => r(device))) return
+    const entries = log.slice(from)
+    this.logReads.push({ device, address, from, entries: entries.length, bytes: entries.reduce((n, e) => n + e.bytes.length, 0), at: this.now() })
+    if (this.logAnswerDrops.some((r) => r(device))) return
+    const delivered = entries.filter((e) => !this.logEntryDrops.some((r) => r(device, e)))
+    let out = delivered.slice()
+    if (this.reverseOrder) out.reverse()
+    if (this.duplicateAll) out = out.flatMap((e) => [e, e])
+    if (!this.logAnswers.has(device)) this.logAnswers.set(device, [])
+    this.logAnswers.get(device)!.push({ req, address, from, end: log.length, entries: out })
+  }
+  /** Die bereitliegenden Antworten auf Leseanfragen dieses Geräts (mit der Abholung; unerreichbar oder offline: keine). */
+  takeLogAnswers(device: string): LogAnswer[] {
+    if (this.unreachable || this.offline.has(device)) return []
+    const a = this.logAnswers.get(device) ?? []
+    this.logAnswers.delete(device)
+    return a
   }
   /** Liefert einem Gerät, was für seine Adressen liegt; das Gerät bestätigt mit `conclude`. */
   collect(device: string): Frame[] {

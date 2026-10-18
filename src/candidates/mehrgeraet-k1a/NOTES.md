@@ -776,3 +776,148 @@ can infer that the person uses more than one device.
   every loss phase starts from a fresh restore of A2 only.
 - Every scenario runs one person per role with two devices; X19, X20, X22
   and X23 are not built, X10 needs rights per app.
+
+## Step 6 (variant): journal retained at the self address
+
+Anton, 18 October: "journal at the service is an option to study, not a
+decision". This step builds it as a comparable variant and measures it
+against K1a. It is an option under study, not the default: `k1a()` is
+unchanged, the variant is `k1a({ journalAtService: true })`, listed as
+the second multi-device entry `k1a-journal-service` ("K1a + journal at
+the service") and run against the same scenarios.
+
+Picture: local-first with the carrier as mailbox; step 6 gives the
+carrier a storage role at the self address only. The service gives
+availability, not authority (Replication door D1: the carrier can only
+destroy, never forge; every entry is a sealed, signed journal frame that
+the devices verify and fold as before). Exit: any device can set the
+storage up again from its own journal (the design's exit; re-seeding a
+new log is not built in the bench).
+
+### Design
+
+- **Carrier (`zustellung.ts`).** An address can be retained
+  (`retain`): deposits there are kept as an ordered log with position
+  and deposit time, in addition to the mailbox delivery to registered
+  devices; receipts unchanged. `readLog(device, address, from, req)`
+  serves registered devices only (a revoked device is unregistered), the
+  answer `{ req, from, end, entries }` is collected with the next pickup.
+  Faults for the log: request lost, answer lost, single entries lost
+  with the answer head delivered. A dropped deposit is missing from the
+  log too. All other addresses stay mailboxes.
+- **World (`Welt15Options.selfLog`).** Default from the candidate's
+  bench option (`bench.selfLog`); every device of a person retains its
+  self address.
+- **Catch-up (HSC-440, folgepunkt 32: "After restore, enrollment or a
+  deferred batch a device MUST catch up …").** `journal-sync` is answered
+  by the log, not by siblings: the device reads from its own position
+  (`logCursor`, part of the store image); the request id binding stays
+  (MV-5, a stale answer is counted and dropped); retry with the same
+  backoff while no complete answer came (carrier unreachable, answer
+  lost). The answer is folded entry by entry through the same path as a
+  delivered journal frame (`receiveOwnFrame`, `applyRemote`, `applied`),
+  in passes until nothing is deferred; complete means every position
+  from `from` to `end − 1` arrived and folded. Reading is not delivery: no
+  receipt, no `completed`; the mailbox copy is still acknowledged as
+  before. Siblings get new batches by mailbox as today.
+- **Gate after restore (MV-6).** With the log the gate applies after
+  every restore of a journal device and ends when the log answer is read
+  and folded ("wait for the service"), independent of siblings.
+  `deviceRevoked` stays for X9 but no longer lifts the gate.
+- **Enrolment from the log.** The new device starts with empty state and
+  an empty journal and folds the log from position 0 (no snapshot, no
+  compaction). The ceremony gives only slot, sibling knowledge and the
+  kept probes (device state, not journal, MV-18), adopted when the fold
+  is done; the device is gated until then. `selfLog: false` keeps the
+  state copy.
+
+### Results, both variants side by side
+
+Full run of X1–X18, X7b and X21 with two devices, same scenarios:
+
+| | K1a | K1a + journal at the service |
+|---|---|---|
+| outcomes | 17 passed (X3, X18 promise changed), 2 failed (X7 strict, X9), 1 n/a (X10) | identical in every cell |
+| X6 restore from backup | passed, converged after 1 round | passed, converged after 1 round |
+| X8 enrolment | state copy 3 546 B; connected after 1 round | folded from the log after 2 rounds (request, then answer): 8 entries, 50 133 B read; state afterwards 3 546 B; connected after 1 round |
+| X9 revocation | failed, thief reads 5 documents | failed, thief reads 4 documents; with a fresh registration the thief can also read the log from the image's position (one seed = capability, unchanged) |
+| X11 long separation | stable after 3 rounds, journal 22.9 kB | stable after 3 rounds, journal 22.9 kB |
+| X12 delivery per device | passed | passed |
+| X21 repair, restore phase | 7 rounds | 1 round |
+| X21 repair after 15 rounds of request / answer / batch loss | 1 / 1 / 1 rounds | 5 / 5 / 5 rounds (backoff: lost log answers are not repeated by a sibling's deliverer, the device asks again at 1, 2, 4, 8, 16) |
+| X21 answerers | A1 423, A2 2 (journal and reply frames) | the service: 17 reads, 999 entries, 1.84 MB served; no sibling answer, no `journal-sync` frame |
+| X21 self-address traffic | 813 frames, 2.16 MB (395 journal frames, 1.66 MB) | 32 frames, 37.9 kB (receipts only) |
+| X21 log at the service | – | 79 entries, 172 kB |
+
+Restore counter-run (gate review 18) without a sibling gate: A1 consents
+offline (card at the adapter), backup; A2 declines and its batch reaches
+the log; the devices heal (both declined, card withdrawn). Then A2 is
+lost (offline, not revoked) and A1 is restored from the backup with the
+card `handed`. With the log: gated for 1 round, the log answer brings
+A2's decline, the fold withdraws the card; it never reaches B, B stays
+consented without A's card, A1 ends `declined/cancelled`. K1a with the
+mailbox stays gated in the same situation until A2 is revoked.
+
+Restore with a lost sibling and a valid card: release after 1 gated round
+(the card goes out, B connects); K1a with the mailbox: 20 of 20 rounds
+gated in the counter-check, never without revocation (step 3, test 8:
+70 of 70).
+
+### What the service learns (200-round long run)
+
+Long run (`journalGrowth`): A, B, M with two devices each and four more
+counterparts at M, the clock advances 4 h per round (33.3 days), every 10
+rounds M introduces A to the next counterpart, one A device (alternating)
+and the counterpart consent, A1 confirms the budget every 50 rounds; 20
+acts issued, 19 connected, both A devices agree.
+
+- The service holds 1 256 entries, 2.13 MB, at A's self address; sizes
+  1 184 / 1 185 / 17 764 B (min / median / max), 192 distinct deposit
+  times over 33 days, 2 collecting devices, 1 reader (A2 at enrolment:
+  8 entries, 60.7 kB). It does not see kinds; by world knowledge 258
+  entries (952 kB) are journal frames and 998 entries (1.18 MB, 55 %) are
+  receipts that the sibling and the repeating deliverer send to the self
+  address. A receipt never needs to be retained, but the carrier cannot
+  tell it from a journal frame.
+- Size and timing are visible: one entry per committed step, the size
+  shows journal frames versus receipts, deposit times show when the
+  person acts. Cross-relationship linking at the service does not arise
+  (one self address per person), the person's activity profile does.
+
+### Growth (numbers only, no compaction built)
+
+At round 200 the journal holds 252 batches, 348 kB (both variants; K1a
+347.7 kB, the variant 347.7 kB): operations 121.5 kB (35 %), production
+intents 203.0 kB (58 %), the rest is batch framing. Removable, if a
+rule allowed it:
+
+- intents of delivered or withdrawn documents: 81 of 81 intents,
+  202.5 kB (every intent was delivered by the end);
+- batches below the minimum head of all devices: 252 of 252 (348 kB),
+  both devices hold everything; a restore from an older backup would
+  still need them, which is why this number is only a ceiling for a
+  snapshot rule;
+- batches older than the longest window (28 days, 8510): 15 batches,
+  36.1 kB.
+
+The log at the service grows at about 2.7 times the journal bytes for
+the journal frames (sealing and base64) plus the receipts: 107 kB after
+20 rounds, 682 kB after 100, 2.12 MB after 200.
+
+### Limits
+
+- No compaction, no snapshot: the log is unbounded and every restore from
+  an old backup re-reads everything after its position (X21: 999
+  entries served for 79 in the log).
+- Service availability: while the carrier is unreachable a restored or
+  new device stays gated (test 5); there is no sibling fallback in this
+  variant (could be added: answer from whichever comes first).
+- Receipts at the self address are retained with the journal (55 % of
+  the log bytes in the long run); a separate receipt address for journal
+  frames would avoid it and is not built.
+- Lost log answers are not repeated by anyone: repair after a loss phase
+  waits for the next request (backoff up to 16 rounds).
+- One seed stays a capability (X9): a thief with the image registers and
+  reads the log.
+- The service learns the person's activity profile (count, size and time
+  of steps); hiding it (padding, batching, cover traffic) is not built.

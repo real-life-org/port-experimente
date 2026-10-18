@@ -30,7 +30,7 @@
 import { seal, receive, edFromSeed, xFromSeed, anchorOfEd, mkOfX, diSign, diVerify, jcs, digestBytes } from '@real-life/trust-protocol'
 import type { Json, KeyPair } from '@real-life/trust-protocol'
 import { createHash, createHmac } from 'node:crypto'
-import { Carrier, Zusteller, realClock, type Clock, type Store, type Submission, Crashed, type CrashPoint } from '../zustellung'
+import { Carrier, Zusteller, realClock, type Clock, type Store, type Submission, Crashed, type CrashPoint, WireUnreachable, type LogAnswer } from '../zustellung'
 import * as M from './model'
 
 const enc = new TextEncoder()
@@ -175,11 +175,21 @@ export interface MultiDeviceCandidate {
   /** Eine Instanz, die kein Gerät der Person ist (Dieb aus einem Abbild, X9): unabhängig, ohne Eintrag in der Geräteliste des Kandidaten. Ohne Methode nimmt der Prüfstand `first`. */
   instance?(person: string, device: string, seed: Uint8Array): Promise<CandidateDevice>
   /** Weiteres Gerät: Enrollment aus einem bestehenden Gerät (X8). Liefert den Kandidatenteil, den Zustand und die Absichten, mit denen das neue Gerät beginnt (ohne Absichten produziert es offene Pflichten neu, K0). */
-  enrol(from: HolderDevice, device: string): Promise<{ cand: CandidateDevice; state: M.HolderState; intents?: Intent[]; probes?: Array<[string, string[]]> }>
+  enrol(from: HolderDevice, device: string, opts?: EnrolOptions): Promise<{ cand: CandidateDevice; state: M.HolderState; intents?: Intent[]; probes?: Array<[string, string[]]> }>
   /** Widerruf eines Geräts (X9, K2): was die übrigen Geräte und die Gegenseiten davon erfahren. Ohne Methode geschieht nichts. */
   revoke?(from: HolderDevice, device: string): Promise<void>
   /** Ein Enrollment ist nach `enrol` am Gerät gescheitert (kein Holder entstanden): der Kandidat gibt den Platz wieder frei. */
   release?(person: string, device: string): void
+  /**
+   * Prüfstandsoptionen der Welt, die diese Variante wählt (E15 Schritt 6): `selfLog` macht die Self-Adresse jeder Person
+   * zur Ablage („Journal beim Dienst“). Dieselben Regeln, dieselben Szenarien; nur die Welt unterscheidet sich.
+   */
+  readonly bench?: { selfLog?: boolean }
+}
+
+/** Wie das neue Gerät seinen Stand bekommt (E15 Schritt 6): `fromLog` = aus der Ablage falten statt Zustandskopie vom alten Gerät. */
+export interface EnrolOptions {
+  fromLog?: boolean
 }
 
 // ── Dokumente ────────────────────────────────────────────────────────────────
@@ -247,6 +257,10 @@ export interface DeviceState {
   revoked?: string[]
   /** Beziehungen, deren Revision während des Nachholens fällig wurde (Schritt 4): sie geht erst danach mit der dann nächsten Nummer hinaus. */
   owed?: string[]
+  /** Schritt 6 (Variante): bis zu welcher Position das Gerät die Ablage an der Self-Adresse gelesen und gefaltet hat. */
+  logCursor?: number
+  /** Schritt 6 (Variante): behaltene Proben aus der Enrollment-Zeremonie, übernommen, wenn das Falten der Ablage fertig ist. */
+  deferredProbes?: Array<[string, string[]]>
 }
 
 export interface Measures {
@@ -330,6 +344,26 @@ export class HolderDevice {
    * Nummer wieder, 8500/6270); die Revision geht nach dem Nachholen mit der dann nächsten Nummer hinaus. Teil des Abbilds.
    */
   private owed = new Set<string>()
+  /**
+   * E15 Schritt 6 (Variante „Journal beim Dienst“, Anton 18.10.: Option untersuchen, nicht festlegen). Mit `selfLog` ist
+   * die Self-Adresse der Person beim Träger eine Ablage (zustellung.ts `retain`): eingelieferte Journalrahmen bleiben dort
+   * geordnet erhalten. Das Nachholen (HSC-440: „catch-up“) fragt dann nicht die Schwestergeräte, sondern liest die Ablage ab
+   * der eigenen Position (`logCursor`); eine Antwort, an die Anfragekennung gebunden (MV-5); Wiederholung mit Backoff nur,
+   * solange keine vollständige Antwort kam (Träger unerreichbar, Antwort verloren). Die Sperre nach Restore (MV-6) endet,
+   * wenn die Antwort gelesen und gefaltet ist, unabhängig von Schwestern („warten auf den Dienst“); `deviceRevoked` hebt sie
+   * nicht mehr. Identity §6.1/§6.3 (Zustand beim Speicherdienst, ID-STATE-1): der Dienst hält Verfügbarkeit, nicht
+   * Autorität; er sieht versiegelte Bytes, Größe, Zeit, Leser (Tür D1: er kann nur zerstören). Ohne Journal (K0) wirkungslos.
+   */
+  selfLog = false
+  private logCursor = 0
+  private deferredProbes: Array<[string, string[]]> | null = null
+  /** Messung (Schritt 6): Einträge und Bytes, die dieses Gerät aus der Ablage gelesen hat. */
+  logEntriesRead = 0
+  logBytesRead = 0
+  /** Nachholen über die Ablage statt über Schwestergeräte (Schritt 6). */
+  get logMode(): boolean {
+    return this.selfLog && !!this.cand.heads
+  }
   /** Steht noch Nachholarbeit aus (Messung, Review 11 B2)? Erst ohne sie ist eine Reparatur beendet, nicht schon, wenn das Gerät im Backoff schweigt. */
   get syncPending(): boolean {
     return this.sync.pending
@@ -396,6 +430,7 @@ export class HolderDevice {
   /** Nach Enrollment oder Neuaufbau: alle Adressen aus dem Zustand neu registrieren, offene Pflichten wieder aufnehmen. */
   async relisten(): Promise<void> {
     this.ownRkid = (await this.listen(`self/${this.person}`)).rkid
+    if (this.selfLog) this.carrierRef.retain(this.ownRkid) // Schritt 6: die Self-Adresse ist eine Ablage
     for (const r of this.state.relationships) {
       for (const t of r.tuples) await this.listen(t.ownKey)
       for (const k of r.stock) await this.listen(k.key)
@@ -529,6 +564,8 @@ export class HolderDevice {
       probes: [...this.probes],
       ...(this.revoked.size ? { revoked: [...this.revoked] } : {}),
       ...(this.owed.size ? { owed: [...this.owed] } : {}),
+      ...(this.logMode ? { logCursor: this.logCursor } : {}),
+      ...(this.deferredProbes ? { deferredProbes: this.deferredProbes.map(([id, e]): [string, string[]] => [id, [...e]]) } : {}),
     }
   }
   commit() {
@@ -550,6 +587,8 @@ export class HolderDevice {
     this.probes = new Map(s?.probes ?? [])
     this.revoked = new Set(s?.revoked ?? [])
     this.owed = new Set(s?.owed ?? [])
+    this.logCursor = s?.logCursor ?? 0
+    this.deferredProbes = s?.deferredProbes ?? null
     this.dropDeparted()
     // Was im Store steht, ist committet: vorgemerkte, nie freigegebene Submissions gehen nach dem nächsten Commit hinaus.
     this.held = this.zusteller.unreleased()
@@ -557,7 +596,9 @@ export class HolderDevice {
     this.down = false
     this.parked = []
     await this.relisten()
-    this.catchUp = this.hasSibling() // B1a: vor dem Nachholen nichts an Gegenseiten freigeben
+    // B1a: vor dem Nachholen nichts an Gegenseiten freigeben. Schritt 6: mit Ablage immer, denn der Dienst antwortet auch
+    // ohne Schwester (die Sperre ist „warten auf den Dienst“, nicht „warten auf die Schwester“).
+    this.catchUp = this.logMode || this.hasSibling()
     this.requestSync()
   }
   /**
@@ -578,7 +619,8 @@ export class HolderDevice {
    */
   deviceRevoked(device: string): void {
     this.revoked.add(device)
-    if (this.catchUp && !this.hasSibling()) this.sync = { pending: false, wait: 0, backoff: 1, id: null }
+    // Schritt 6: mit Ablage hebt der Widerruf die Sperre nicht; sie endet mit der Antwort des Dienstes (X9 bleibt).
+    if (this.catchUp && !this.logMode && !this.hasSibling()) this.sync = { pending: false, wait: 0, backoff: 1, id: null }
     this.commit()
   }
   /** Freigeben (nach dem Commit): während des Nachholens nach einem Neuaufbau nur Verkehr an die eigene Adresse (B1a). */
@@ -588,6 +630,18 @@ export class HolderDevice {
         if (!this.parked.includes(d)) this.parked.push(d)
       } else this.zusteller.deposit(d)
     }
+  }
+  /**
+   * Enrollment aus der Ablage (Schritt 6): das neue Gerät beginnt leer und faltet die Ablage ab Position 0 (kein
+   * Schnappschuss, keine Kompaktierung); bis dahin gibt es nichts an Gegenseiten frei (wie nach einem Restore) und teilt
+   * nichts zu. Die behaltenen Proben (Gerätezustand, nicht Journal, MV-18) kommen aus der Zeremonie und werden übernommen,
+   * wenn das Falten fertig ist (vorher kennt das Gerät ihre Tupel nicht).
+   */
+  startFromLog(probes: Array<[string, string[]]>): void {
+    this.catchUp = true
+    this.logCursor = 0
+    this.deferredProbes = probes.length ? probes.map(([id, e]): [string, string[]] => [id, [...e]]) : null
+    this.requestSync()
   }
   /** Nachholen anstoßen: nach Neuaufbau, Enrollment oder wenn ein Rahmen zurückgestellt wurde (HSC-440). */
   requestSync() {
@@ -1003,6 +1057,7 @@ export class HolderDevice {
       if (this.online) {
         const frames = this.carrier.collect(this.name)
         for (const f of frames) await this.guarded(() => this.handle(f.bytes, f.address), true)
+        if (this.logMode) for (const a of this.carrier.takeLogAnswers(this.name)) await this.readLogAnswer(a)
         // B1a: das Nachholen ist abgeschlossen; die Faltung entscheidet, was von dem Zurückgehaltenen noch gilt (eine
         // zurückgenommene Karte bleibt zurückgenommen), der Rest geht nach dem Commit dieser Runde hinaus.
         if (this.catchUp && !this.sync.pending && (await this.guarded(() => this.withdrawLosingCards()))) {
@@ -1012,6 +1067,12 @@ export class HolderDevice {
           for (const id of [...this.owed]) {
             this.owed.delete(id)
             if (M.findRel(this.state, id)) await this.guarded(() => this.sendRevision(id))
+          }
+          // Schritt 6, Enrollment aus der Ablage: jetzt kennt das Gerät die Tupel, die Proben der Zeremonie gelten.
+          if (this.deferredProbes) {
+            this.adoptProbes(this.deferredProbes)
+            this.deferredProbes = null
+            await this.guarded(() => this.reevaluate())
           }
         }
         if (this.catchUp) this.gatedRounds++
@@ -1063,6 +1124,15 @@ export class HolderDevice {
     this.sync.backoff = Math.min(16, this.sync.backoff * 2)
     this.syncRequests++
     this.sync.id = crypto.randomUUID() // frisch je Anfrage: nur die Antwort darauf zählt (Review 19 B1a)
+    if (this.logMode) {
+      // Schritt 6: die Ablage antwortet, nicht die Schwestergeräte; unerreichbar heißt: später erneut (Backoff).
+      try {
+        this.carrier.readLog(this.name, this.ownRkid, this.logCursor, this.sync.id)
+      } catch (e) {
+        if (!(e instanceof WireUnreachable)) throw e
+      }
+      return
+    }
     await this.sendSelf(TYPES.journalSync, { heads: this.cand.heads(), reply: false, req: this.sync.id })
   }
   /** Ein Dokument an die eigene Adresse der Person (Journal, Nachholen), gezählt als eigener Verkehr. */
@@ -1074,6 +1144,75 @@ export class HolderDevice {
     this.measures.ownBytesOut += bytes.length
     this.measures.framesOut--
     this.measures.bytesOut -= bytes.length
+  }
+  /**
+   * Schritt 6: eine Antwort der Ablage lesen. Nur die Antwort auf die laufende Anfrage zählt (MV-5); jeder Eintrag wird
+   * wie ein Journalrahmen gefaltet (dieselbe Faltung, `replay`), in Durchgängen, bis nichts mehr zurückgestellt wird
+   * (Umordnung). Vollständig ist die Antwort, wenn jede Position von `from` bis `end − 1` da ist und gefaltet wurde; dann
+   * steht die eigene Position auf `end` und das Nachholen ist abgeschlossen. Fehlt etwas (zerstört oder verloren), rückt
+   * die Position bis zur ersten Lücke vor und das Gerät fragt mit Backoff erneut.
+   */
+  private async readLogAnswer(a: LogAnswer): Promise<void> {
+    this.logEntriesRead += a.entries.length
+    this.logBytesRead += a.entries.reduce((n, e) => n + e.bytes.length, 0)
+    if (a.req !== this.sync.id) {
+      this.staleSyncAnswers++
+      return
+    }
+    if (!this.sync.pending) return
+    const byPos = new Map<number, Uint8Array>()
+    for (const e of a.entries) if (!byPos.has(e.pos)) byPos.set(e.pos, e.bytes)
+    let rest = [...byPos.entries()].sort((x, y) => x[0] - y[0])
+    while (rest.length) {
+      const next: typeof rest = []
+      for (const [pos, bytes] of rest) if (!(await this.guarded(() => this.replay(bytes), true))) next.push([pos, bytes])
+      if (next.length === rest.length) break
+      rest = next
+    }
+    let gap = a.end
+    for (let p = a.from; p < a.end; p++) if (!byPos.has(p)) {
+      gap = p
+      break
+    }
+    if (rest.length) gap = Math.min(gap, rest[0]![0])
+    this.logCursor = Math.max(this.logCursor, gap)
+    if (gap === a.end) this.sync = { pending: false, wait: 0, backoff: 1, id: this.sync.id }
+  }
+  /**
+   * Ein Eintrag der Ablage: ein versiegelter Rahmen an die Self-Adresse. Journalrahmen vom eigenen Self-Anker werden
+   * gefaltet wie bei der Zustellung (`receiveOwnFrame`, `applyRemote`, `applied`); was das Gerät schon hat (eigener
+   * Rahmen, bekannter Batch), wirkt nicht. Quittungen und anderer Verkehr an der Self-Adresse liegen auch in der Ablage
+   * (der Träger unterscheidet nicht) und werden übergangen. Lesen ist keine Zustellung: keine Quittung, kein `completed`
+   * (kommt derselbe Rahmen noch per Briefkasten, quittiert das Gerät ihn dort wie bisher).
+   */
+  private async replay(bytes: Uint8Array): Promise<void> {
+    let env: unknown
+    try {
+      env = JSON.parse(dec.decode(bytes))
+    } catch {
+      return
+    }
+    const ctx = `self/${this.person}`
+    const self = (await this.keysFor(ctx)).anchor
+    let v: Awaited<ReturnType<typeof receive>>
+    try {
+      v = await receive(env, this.resolve, this.completed)
+    } catch {
+      return
+    }
+    if (v.disposition !== 'unique' || this.zusteller.submissions.has(v.digest!)) return
+    const doc = v.document as unknown as Doc & { proof: unknown }
+    if (doc.type !== TYPES.journal) return
+    if (doc.issuer !== self || !(await diVerify(doc, doc.issuer))) {
+      this.dispositions.push('failed(journal-from-unexpected-signer)')
+      return
+    }
+    const b = (doc.payload as { b?: string }).b
+    if (typeof b !== 'string') return
+    const body = new Uint8Array(Buffer.from(b, 'base64'))
+    await this.applyRemote(this.cand.receiveOwnFrame(body)) // Missing → zurückgestellt (guarded, defer)
+    this.cand.applied?.(body)
+    this.log.push({ type: doc.type.split('/').slice(-2)[0] ?? doc.type, from: doc.issuer, at: this.clock.now() })
   }
   /** Deckt der eigene Stand die genannten Köpfe? */
   private covers(heads: Record<string, number>): boolean {

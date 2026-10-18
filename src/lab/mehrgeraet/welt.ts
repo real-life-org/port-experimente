@@ -10,6 +10,12 @@ export interface Welt15Options {
   clock?: VirtualClock
   /** Store je Gerät (Commit-Grenzen, Absturz, Backup). Default an. */
   stores?: boolean
+  /**
+   * E15 Schritt 6 (Variante „Journal beim Dienst“): die Self-Adresse jeder Person ist beim Träger eine Ablage statt eines
+   * Briefkastens; Nachholen, Sperre nach Restore und Enrollment lesen aus ihr (holder.ts `selfLog`). Default: was der
+   * Kandidat als Prüfstandsoption wählt (`bench.selfLog`), sonst aus.
+   */
+  selfLog?: boolean
 }
 
 export class Welt15 {
@@ -19,12 +25,15 @@ export class Welt15 {
   readonly stores = new Map<string, MemoryStore<DeviceState>>()
   private readonly seeds = new Map<string, Uint8Array>()
   private readonly withStores: boolean
+  readonly selfLog: boolean
   constructor(
     readonly candidate: MultiDeviceCandidate,
     opts: Welt15Options = {},
   ) {
     this.clock = opts.clock ?? new VirtualClock('2026-10-17T08:00:00.000Z')
     this.withStores = opts.stores ?? true
+    this.selfLog = opts.selfLog ?? candidate.bench?.selfLog ?? false
+    this.carrier.now = () => this.clock.now()
   }
 
   private store(name: string) {
@@ -40,21 +49,30 @@ export class Welt15 {
     this.seeds.set(person, seed)
     const cand = await this.candidate.first(person, device, seed)
     const d = new HolderDevice(device, person, cand, this.carrier, this.clock, this.store(device))
+    d.selfLog = this.selfLog
     await d.relisten()
     d.commit()
     this.devices.push(d)
     return d
   }
 
-  /** Weiteres Gerät: Enrollment aus einem bestehenden (X8). */
+  /**
+   * Weiteres Gerät: Enrollment aus einem bestehenden (X8). Mit Ablage (Schritt 6) faltet das neue Gerät die Ablage ab
+   * Beginn statt einer Zustandskopie; aus der Zeremonie kommen nur Platz, Schwesterwissen und die behaltenen Proben.
+   */
   async enrol(from: HolderDevice, device: string): Promise<HolderDevice> {
-    const { cand, state, intents, probes } = await this.candidate.enrol(from, device)
-    const d = new HolderDevice(device, from.person, cand, this.carrier, this.clock, this.store(device), state)
-    for (const i of intents ?? []) d.intents.set(i.digest, i)
-    if (probes) d.adoptProbes(probes) // behaltene Proben aus dem Abbild (Tor-Review 16 S2)
+    const fromLog = this.selfLog && !!from.cand.heads
+    const { cand, state, intents, probes } = await this.candidate.enrol(from, device, fromLog ? { fromLog } : undefined)
+    const d = new HolderDevice(device, from.person, cand, this.carrier, this.clock, this.store(device), fromLog ? M.emptyState(from.person) : state)
+    d.selfLog = this.selfLog
+    if (!fromLog) {
+      for (const i of intents ?? []) d.intents.set(i.digest, i)
+      if (probes) d.adoptProbes(probes) // behaltene Proben aus dem Abbild (Tor-Review 16 S2)
+    }
     try {
       await d.relisten()
-      d.requestSync() // was seit der Kopie geschah, holt das neue Gerät nach
+      if (fromLog) d.startFromLog(probes ?? [])
+      else d.requestSync() // was seit der Kopie geschah, holt das neue Gerät nach
       d.commit()
     } catch (e) {
       this.candidate.release?.(from.person, device) // der Platz bleibt nicht belegt, wenn das Gerät nie entstand
@@ -112,6 +130,7 @@ export class Welt15 {
     const seed = this.seeds.get(victim.person)!
     const cand = await (this.candidate.instance ?? this.candidate.first).call(this.candidate, victim.person, name, seed)
     const d = new HolderDevice(name, victim.person, cand, this.carrier, this.clock, store)
+    d.selfLog = this.selfLog
     await d.reload()
     return d
   }
