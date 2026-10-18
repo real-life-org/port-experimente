@@ -345,7 +345,7 @@ export const scenarioEn: Record<string, string> = {
   "X14": "A1 and A2 separately introduce the same person C to B (two acts, one purpose): double introduction, union of the acts at B and C (6975, I-6)",
   "X15": "Union of two relationships with M (6975) while an act runs on one (consented, card in transit): A1 consents, A2, separated from A1, meets M again and unites (6987.5/.6/.10/.12/.14)",
   "X16": "A1 revokes the class, A2, separated, holds the old stock; a mediator device with the old view still introduces, A2 accepts the ticket (old stock after class revocation, 8535, 8475.S6, 8640.6)",
-  "X17": "A1 and A2, separated, each produce a revision with the same previous number (each accepts another ticket and refills): parallel production, 8500, 6270; probe sequence 6680 not modelled",
+  "X17": "A1 and A2, separated, each produce a revision (each accepts another ticket and refills): parallel production; with a writer tag per relationship M accepts both, the stock is the union (8500 and 6270 per writer, decision 3a); measured what M learns about the devices; probe sequence 6680 not modelled",
   "X18": "A1 and A2, separated, consent to the same act and each produce a card: two cards of one act, what B sees (8325.A4, 8910.7, 8910.8)",
   "X21": "Journal duplicated, reordered, incomplete: completed batches after an old and a double restore, concurrent requests, crashes before and after commit; loss of request, answer, batches alone (reply head delivered) and receipt, each for more than 12 rounds; repair ends only with no pending catch-up (HSC-440, reviews 9 and 11)"
 }

@@ -413,3 +413,56 @@ describe('K1a Schritt 3: Entscheidung und Übergabe', () => {
     }
   })
 })
+
+describe('K1a Schritt 4: Ms Sicht über pseudonyme Schreiber (8500 und 6270 je Schreiber, 8535 über alle)', () => {
+  const lk = (a: string, n = 1) => ({ n, anchor: a, keyAgreement: `r${a}`, expiresAt: t0 })
+  const view = (writer: string, revision: number, anchors: string[], clears?: Record<string, number>) => op({ kind: 'view', rel: 'A:e1', scope: 'A:e1', revision, keys: anchors.map((a) => lk(a)), writer, ...(clears ? { clears } : {}) })
+  const fold = (ops: M.Op[]) => {
+    const s = withRel()
+    for (const o of ops) M.apply(s, o)
+    return s
+  }
+  const perms = <T,>(xs: T[]): T[][] => (xs.length <= 1 ? [xs] : xs.flatMap((x, i) => perms([...xs.slice(0, i), ...xs.slice(i + 1)]).map((p) => [x, ...p])))
+
+  it('zwei Schreiber mit derselben Nummer: beide gelten, die Sicht ist die Vereinigung, kein Befund; die höhere Revision eines Schreibers ersetzt nur seine eigenen Schlüssel', () => {
+    const ops = [view('w1', 2, ['a', 'b']), view('w2', 2, ['b', 'c']), view('w1', 3, ['d'])]
+    const want = M.canonical(M.rel(fold(ops), 'A:e1').view)
+    for (const p of perms(ops)) {
+      const s = fold(p)
+      expect(M.canonical(M.rel(s, 'A:e1').view)).toBe(want)
+      expect(s.findings).toEqual([])
+    }
+    expect(M.rel(fold(ops), 'A:e1').view!.keys.map((k) => k.anchor)).toEqual(['b', 'c', 'd'])
+  })
+
+  it('Gegenlauf: derselbe Schreiber verwendet eine Nummer mit anderem Inhalt wieder: Equivokation (6270), in jeder Reihenfolge dasselbe Ergebnis', () => {
+    const x = fold([view('w1', 2, ['a']), view('w1', 2, ['z'])])
+    const y = fold([view('w1', 2, ['z']), view('w1', 2, ['a'])])
+    expect(x.findings.filter((f) => f.includes('Equivokation (6270)')).length).toBe(1)
+    expect(y.findings.filter((f) => f.includes('Equivokation (6270)')).length).toBe(1)
+    expect(M.canonical(M.rel(x, 'A:e1').view)).toBe(M.canonical(M.rel(y, 'A:e1').view))
+    // Wiederholung mit gleichem Inhalt und niedrigere Nummer: kein Befund, keine Änderung.
+    const z = fold([view('w1', 2, ['a']), view('w1', 2, ['a']), view('w1', 1, ['q'])])
+    expect(z.findings).toEqual([])
+    expect(M.rel(z, 'A:e1').view!.keys.map((k) => k.anchor)).toEqual(['a'])
+  })
+
+  it('leere Revision (8535) hebt die Schlüssel aller Schreiber auf, die das empfangende Gerät hielt; eine spätere Revision eines Schreibers gilt wieder; jede Reihenfolge gleich', () => {
+    const ops = [view('w1', 1, ['a']), view('w2', 1, ['b']), view('w1', 2, [], { w1: 1, w2: 1 })]
+    for (const p of perms(ops)) expect(M.rel(fold(p), 'A:e1').view!.keys).toEqual([])
+    const later = [...ops, view('w2', 2, ['c'])]
+    for (const p of perms(later)) expect(M.rel(fold(p), 'A:e1').view!.keys.map((k) => k.anchor)).toEqual(['c'])
+    // Leert w2 danach auch, ist die Sicht wieder leer, gleich in welcher Reihenfolge die Marken ankommen.
+    const both = [...later, view('w2', 3, [], { w1: 2, w2: 2 })]
+    for (const p of perms(both)) expect(M.rel(fold(p), 'A:e1').view!.keys).toEqual([])
+  })
+
+  it('As Seite: Revisionen je Schreiber, die höchste zählt, Effekte je Schreiber und Nummer (keine Wiederverwendung über Schreiber hinweg)', () => {
+    const s = withRel()
+    M.apply(s, op({ kind: 'revision', rel: 'A:e1', revision: 2, keys: [lk('a')], writer: 'w1' }))
+    M.apply(s, op({ kind: 'revision', rel: 'A:e1', revision: 2, keys: [lk('b')], writer: 'w2' }))
+    M.apply(s, op({ kind: 'revision', rel: 'A:e1', revision: 1, keys: [], writer: 'w2' }))
+    expect(M.rel(s, 'A:e1').writers).toEqual({ w1: { revision: 2, empty: false }, w2: { revision: 2, empty: false } })
+    expect(s.effects.map((e) => e.id).filter((id) => id.startsWith('revision:')).sort()).toEqual(['revision:A:e1:w1:2', 'revision:A:e1:w2:1', 'revision:A:e1:w2:2'])
+  })
+})

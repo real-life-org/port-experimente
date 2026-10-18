@@ -148,6 +148,12 @@ export interface CandidateDevice {
    * (`reevaluate` im Holder). Ohne Feld (K0, kein Journal) behält das Gerät nichts.
    */
   readonly reevaluateProbes?: boolean
+  /**
+   * Pseudonyme Schreiberkennung (K1a Schritt 4, Anton 18.10., 3a): je Gerät und Beziehung eine stabile Kennung, die die
+   * Gegenseite nicht über Beziehungen verknüpfen kann. Mit Methode nummeriert das Gerät Revisionen je Kennung (8500 je
+   * Schreiber) und trägt die Kennung in Revision, Probe und Mapping. Rein. Ohne Methode (K0) gibt es einen Schreiber.
+   */
+  writerTag?(relationship: string): string
   /** Was der Kandidat dauerhaft hält (Journal); Teil des Store-Abbilds. */
   persist(): unknown
   /** Neuaufbau aus dem Store; ein Kandidat mit Inkarnationen wechselt hier die Inkarnation. */
@@ -157,7 +163,7 @@ export interface CandidateDevice {
 export interface MultiDeviceCandidate {
   readonly id: string
   readonly title: string
-  readonly capabilities: ReadonlySet<'journal' | 'rights' | 'device-keys' | 'restricted-app'>
+  readonly capabilities: ReadonlySet<'journal' | 'rights' | 'device-keys' | 'restricted-app' | 'writer-tags'>
   /** Erstes Gerät einer Person. */
   first(person: string, device: string, seed: Uint8Array): Promise<CandidateDevice>
   /** Eine Instanz, die kein Gerät der Person ist (Dieb aus einem Abbild, X9): unabhängig, ohne Eintrag in der Geräteliste des Kandidaten. Ohne Methode nimmt der Prüfstand `first`. */
@@ -233,6 +239,8 @@ export interface DeviceState {
   expected: Array<[string, string]>
   /** Geräte der Person, die dieses Gerät widerrufen hat (Review 19, Frage 3): sie antworten auf kein Nachholen mehr. */
   revoked?: string[]
+  /** Beziehungen, deren Revision während des Nachholens fällig wurde (Schritt 4): sie geht erst danach mit der dann nächsten Nummer hinaus. */
+  owed?: string[]
 }
 
 export interface Measures {
@@ -255,7 +263,7 @@ export class HolderDevice {
   acks = new Map<string, { frame: Uint8Array; digest: string; address: string }>()
   dispositions: string[] = []
   /** Empfangene Dokumente (Typ, Absender) für die Auswertung. */
-  readonly log: Array<{ type: string; from: string; at: string }> = []
+  readonly log: Array<{ type: string; from: string; at: string; writer?: string }> = []
   online = true
   crashAt: CrashPoint | null = null
   readonly crashes: CrashPoint[] = []
@@ -310,6 +318,12 @@ export class HolderDevice {
   gatedRounds = 0
   /** Widerrufene Geräte der Person (Teil des Abbilds): zählen nicht als Schwester, die nachholen hilft (Review 19 Frage 3). */
   private revoked = new Set<string>()
+  /**
+   * Schritt 4: Revisionen, die während des Nachholens nach einem Neuaufbau fällig wurden. Mit Schreiberkennung nummeriert
+   * das Gerät erst, wenn es die Revisionen seiner früheren Inkarnationen aus dem Journal kennt (sonst verwendete es eine
+   * Nummer wieder, 8500/6270); die Revision geht nach dem Nachholen mit der dann nächsten Nummer hinaus. Teil des Abbilds.
+   */
+  private owed = new Set<string>()
   /** Steht noch Nachholarbeit aus (Messung, Review 11 B2)? Erst ohne sie ist eine Reparatur beendet, nicht schon, wenn das Gerät im Backoff schweigt. */
   get syncPending(): boolean {
     return this.sync.pending
@@ -432,6 +446,7 @@ export class HolderDevice {
       expected: new Map(this.expected),
       intents: new Map(this.intents),
       probes: new Map(this.probes),
+      owed: new Set(this.owed),
       cand: this.cand.snapshot?.(),
       held: this.held.slice(),
       framesOut: this.measures.framesOut,
@@ -449,6 +464,7 @@ export class HolderDevice {
     this.expected = c.expected
     this.intents = c.intents
     this.probes = c.probes
+    this.owed = c.owed
     this.cand.rollback?.(c.cand)
     this.held = c.held
     this.measures.framesOut = c.framesOut
@@ -506,6 +522,7 @@ export class HolderDevice {
       intents: [...this.intents],
       probes: [...this.probes],
       ...(this.revoked.size ? { revoked: [...this.revoked] } : {}),
+      ...(this.owed.size ? { owed: [...this.owed] } : {}),
     }
   }
   commit() {
@@ -526,6 +543,7 @@ export class HolderDevice {
     this.intents = new Map(s?.intents ?? [])
     this.probes = new Map(s?.probes ?? [])
     this.revoked = new Set(s?.revoked ?? [])
+    this.owed = new Set(s?.owed ?? [])
     this.dropDeparted()
     // Was im Store steht, ist committet: vorgemerkte, nie freigegebene Submissions gehen nach dem nächsten Commit hinaus.
     this.held = this.zusteller.unreleased()
@@ -683,6 +701,10 @@ export class HolderDevice {
 
   /** 8485: unter drei aktiven auf fünf nachfüllen, Revision senden; nur bei Klasse an und Budget nicht erschöpft (8512). */
   private async refill(relId: string): Promise<void> {
+    // Schritt 4: mit Schreiberkennung teilt ein Gerät während des Nachholens nach einem Neuaufbau nichts zu und nummeriert
+    // nichts (Schlüsselnummern 8445 und Revisionsnummern 8500 seiner früheren Inkarnationen kennt es erst danach); das
+    // Nachfüllen ist fällige Arbeit aus dem Zustand (B6) und läuft in der ersten Runde nach dem Nachholen.
+    if (this.cand.writerTag && this.catchUp) return
     const r = M.rel(this.state, relId)
     if (!r.classOn || r.departed || M.budgetExhausted(r, this.clock.now())) return
     const active = r.stock.filter((k) => k.state === 'active')
@@ -699,17 +721,54 @@ export class HolderDevice {
   }
   private async refillAll(): Promise<void> {
     for (const r of this.state.relationships) if (r.classOn && !r.departed) await this.guarded(() => this.refill(r.id))
+    await this.withdrawAfterClassOff()
+  }
+  /**
+   * Schritt 4, Klasse aus über Schreiber (8475.S6, 8535): faltet ein Gerät die Klasse-aus eines Schwestergeräts, zieht es
+   * zurück, was in seinem Zustand noch aktiv ist (Schlüssel, die es selbst getrennt zugeteilt hat und die der Widerruf des
+   * anderen Geräts nicht nannte), und sendet unter der eigenen Kennung eine leere Revision, wenn seine eigene jüngste
+   * Revision Schlüssel listet: M hebt mit jeder leeren Revision die Schlüssel aller Schreiber auf, die es hält, aber eine
+   * Revision dieses Schreibers, die M erst danach erreicht, gälte wieder. Fällige Arbeit aus dem Zustand (B6). Nur mit
+   * Schreiberkennung; ohne (K0) bleibt alles wie vorher.
+   */
+  private async withdrawAfterClassOff(): Promise<void> {
+    if (!this.cand.writerTag) return
+    for (const r of this.state.relationships) {
+      if (r.classOn || r.departed) continue
+      const live = r.stock.filter((k) => k.state === 'active' || k.state === 'aging' || k.state === 'allocated' || k.state === 'registered').map((k) => k.anchor)
+      const own = r.writers?.[this.cand.writerTag(r.id)]
+      if (!live.length && !(own && !own.empty)) continue
+      await this.guarded(async () => {
+        if (live.length) this.emit({ kind: 'withdraw', rel: r.id, anchors: live })
+        if (own && !own.empty) await this.sendRevision(r.id)
+      })
+    }
   }
 
-  /** 8495/8500: Revision des aktuellen Zustands auf dem Kopf an den Mediator. */
+  /**
+   * 8495/8500: Revision des aktuellen Zustands auf dem Kopf an den Mediator. Mit Schreiberkennung (Schritt 4): die Nummer
+   * ist eins über der höchsten Revision dieses Schreibers im Zustand (8500 je Schreiber), die Kennung reist im Dokument;
+   * während des Nachholens nach einem Neuaufbau wird nicht nummeriert, sondern vorgemerkt (`owed`).
+   */
   private async sendRevision(relId: string): Promise<void> {
     const r = M.rel(this.state, relId)
     if (r.departed) return
+    const tag = this.cand.writerTag?.(r.id)
+    if (tag && this.catchUp) {
+      this.owed.add(r.id)
+      return
+    }
     const h = M.head(r)
-    const revision = r.revision + 1
+    const revision = tag ? (r.writers?.[tag]?.revision ?? 0) + 1 : r.revision + 1
     const keys = r.stock.filter((k) => k.state === 'active').map((k) => ({ n: k.n, anchor: k.anchor, keyAgreement: k.keyAgreement, expiresAt: k.expiresAt }))
-    this.emit({ kind: 'revision', rel: r.id, revision, keys })
-    await this.sendDoc(TYPES.revision, h.ownKey, h.peer, h.peerKeyAgreement, (await this.keysFor(h.ownKey)).rkid, { revision, keys })
+    this.emit({ kind: 'revision', rel: r.id, revision, keys, ...(tag ? { writer: tag } : {}) })
+    await this.sendDoc(TYPES.revision, h.ownKey, h.peer, h.peerKeyAgreement, (await this.keysFor(h.ownKey)).rkid, { revision, keys, ...(tag ? { writer: tag } : {}) })
+  }
+  /** Die Schreiberkennung dieses Geräts für die Beziehung eines Tupels (Schritt 4), als Nutzlastfeld; ohne Kennung leer. */
+  private tagField(tupleId: string): { writer?: string } {
+    const r = M.relOfTuple(this.state, tupleId)
+    const tag = r ? this.cand.writerTag?.(r.id) : undefined
+    return tag ? { writer: tag } : {}
   }
 
   /** M: zwei Seiten vorstellen (8605, 8570). Liefert die Akt-Id oder den Grund, warum nichts ging. */
@@ -841,7 +900,7 @@ export class HolderDevice {
   private async sendProbe(t: M.Tuple): Promise<void> {
     const entries = t.candidates.filter((c) => c !== t.peer).map((c) => this.blind(t, c))
     if (!entries.length) return
-    await this.sendDoc(TYPES.probe, t.ownKey, t.peer, t.peerKeyAgreement, (await this.keysFor(t.ownKey)).rkid, { entries })
+    await this.sendDoc(TYPES.probe, t.ownKey, t.peer, t.peerKeyAgreement, (await this.keysFor(t.ownKey)).rkid, { entries, ...this.tagField(t.id) })
   }
   /**
    * 6800/6806: eine Probe auf dem eigenen Tupel `t` auswerten. Jeder Eintrag, der `HMAC(k_p, a)` über den eigenen Paar-Anker
@@ -896,7 +955,7 @@ export class HolderDevice {
   }
   private async sendMapping(arrival: M.Tuple, other: M.Tuple): Promise<void> {
     const pair = M.pairKey(arrival.id, other.id)
-    const { digest, bytes } = await this.sendDoc(TYPES.mapping, arrival.ownKey, arrival.peer, arrival.peerKeyAgreement, (await this.keysFor(arrival.ownKey)).rkid, { entry: this.blind(arrival, other.own) })
+    const { digest, bytes } = await this.sendDoc(TYPES.mapping, arrival.ownKey, arrival.peer, arrival.peerKeyAgreement, (await this.keysFor(arrival.ownKey)).rkid, { entry: this.blind(arrival, other.own), ...this.tagField(arrival.id) })
     this.sent.set(digest, { kind: 'mapping', pair, frame: bytes, address: arrival.peerKeyAgreement })
     this.emit({ kind: 'duty', pair, state: 'hit', mappingDigest: digest })
   }
@@ -940,6 +999,11 @@ export class HolderDevice {
         if (this.catchUp && !this.sync.pending && (await this.guarded(() => this.withdrawLosingCards()))) {
           this.catchUp = false
           for (const d of this.parked.splice(0)) if (this.zusteller.submissions.has(d) && !this.held.includes(d)) this.held.push(d)
+          // Schritt 4: jetzt kennt das Gerät die Revisionen seiner früheren Inkarnationen; die vorgemerkten gehen mit der nächsten Nummer hinaus.
+          for (const id of [...this.owed]) {
+            this.owed.delete(id)
+            if (M.findRel(this.state, id)) await this.guarded(() => this.sendRevision(id))
+          }
         }
         if (this.catchUp) this.gatedRounds++
         await this.journalOut()
@@ -1093,7 +1157,8 @@ export class HolderDevice {
       this.dispositions.push('failed(proof-invalid)')
       return
     }
-    this.log.push({ type: doc.type.split('/').slice(-2)[0] ?? doc.type, from: doc.issuer, at: this.clock.now() })
+    const writer = (doc.payload as { writer?: unknown }).writer
+    this.log.push({ type: doc.type.split('/').slice(-2)[0] ?? doc.type, from: doc.issuer, at: this.clock.now(), ...(typeof writer === 'string' ? { writer } : {}) })
     if (doc.type === TYPES.ack) {
       const p = doc.payload as { ref?: string }
       if (typeof p.ref !== 'string') return
@@ -1209,7 +1274,8 @@ export class HolderDevice {
         const t = this.tupleOfAddress(address)
         if (!t || doc.issuer !== t.peer) return false
         const r = M.relOfTuple(this.state, t.id)!
-        const p = doc.payload as unknown as { revision: number; keys: Array<{ n: number; anchor: string; keyAgreement: string; expiresAt: string }> }
+        const p = doc.payload as unknown as { revision: number; keys: Array<{ n: number; anchor: string; keyAgreement: string; expiresAt: string }>; writer?: string }
+        if (typeof p.writer === 'string') return this.acceptWriterRevision(r, t, doc.issuer, p as typeof p & { writer: string })
         if (r.view && r.view.scope === t.id && p.revision <= r.view.revision) {
           const same = p.revision === r.view.revision
           // Wiederholung nur bei gleichem ganzen Schlüsselwert (Anker, Vereinbarung, Ablauf); sonst Equivokation (6270; Review 5).
@@ -1344,6 +1410,27 @@ export class HolderDevice {
       default:
         return false
     }
+  }
+
+  /**
+   * M liest mehrere Schreiber (Schritt 4): 6270 je Schreiberkennung im Scope des Tupels (6280). Höher als die gehaltene
+   * Revision dieses Schreibers: angenommen (Lücken sind erlaubt, 8500: Nummern aufgehobener Revisionen bleiben verbraucht);
+   * gleich und gleich: Wiederholung; gleich und abweichend: Equivokation; niedriger: abgewiesen. Eine leere Revision
+   * (8535) trägt als Aufhebungsmarke die jüngste Revision jedes Schreibers, die dieses Gerät hält.
+   */
+  private acceptWriterRevision(r: M.Relationship, t: M.Tuple, issuer: string, p: { revision: number; keys: M.ListedKey[]; writer: string }): boolean {
+    const same = r.view && r.view.scope === t.id ? r.view : null
+    const held = same?.writers?.[p.writer]
+    if (held && p.revision <= held.revision) {
+      const whole = (ks: M.ListedKey[]) => M.canonical([...ks].sort((a, b) => a.anchor.localeCompare(b.anchor)))
+      if (p.revision === held.revision && whole(p.keys) === whole(held.keys)) return true
+      this.emit({ kind: 'finding', text: p.revision === held.revision ? `revision ${p.revision} von ${issuer.slice(-8)} (Schreiber ${p.writer.slice(0, 8)}): gleiche Nummer, andere Schlüssel: Equivokation (6270)` : `revision ${p.revision} von ${issuer.slice(-8)} (Schreiber ${p.writer.slice(0, 8)}) unter der gehaltenen ${held.revision}: abgewiesen (6270)` })
+      return false
+    }
+    if (r.view && r.view.scope !== t.id && t.record < M.tuple(this.state, r.view.scope).record) return false // älterer Kopf
+    const clears = p.keys.length === 0 && same?.writers ? Object.fromEntries(Object.entries(same.writers).map(([w, x]) => [w, x.revision])) : undefined
+    this.emit({ kind: 'view', rel: r.id, scope: t.id, revision: p.revision, keys: p.keys, writer: p.writer, ...(clears ? { clears } : {}) })
+    return true
   }
 
   // ── Sicht ──

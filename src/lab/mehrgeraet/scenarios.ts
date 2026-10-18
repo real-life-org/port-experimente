@@ -127,6 +127,28 @@ function cardFramesOut(w: Welt15, person: string, actId: string): number {
   return out.size
 }
 
+/**
+ * Was eine Gegenperson über die Schreiber einer anderen lernt (K1a Schritt 4, Plan Abschnitt 5 „was M lernt“): je eigener
+ * Beziehung der Gegenperson die verschiedenen Schreiberkennungen in empfangenen Revisionen, Proben und Mappings (aus dem
+ * Empfangsprotokoll aller ihrer Geräte), und wie viele Kennungen in mehr als einer Beziehung auftauchen (verknüpfbar).
+ */
+function writerTagsSeen(w: Welt15, observer: string): { perRelationship: Map<string, Set<string>>; linked: number } {
+  const per = new Map<string, Set<string>>()
+  for (const d of w.of(observer)) {
+    for (const e of d.log) {
+      if (!e.writer) continue
+      const r = d.state.relationships.find((x) => x.tuples.some((t) => t.peer === e.from))
+      if (!r) continue
+      const id = M.resolveId(d.state, r.id)
+      if (!per.has(id)) per.set(id, new Set())
+      per.get(id)!.add(e.writer)
+    }
+  }
+  const where = new Map<string, number>()
+  for (const tags of per.values()) for (const t of tags) where.set(t, (where.get(t) ?? 0) + 1)
+  return { perRelationship: per, linked: [...where.values()].filter((n) => n > 1).length }
+}
+
 /** Angenommene Akte einer Person über alle Geräte (verschiedene Akt-Ids). */
 function acceptedActs(w: Welt15, person: string): Set<string> {
   const ids = new Set<string>()
@@ -826,7 +848,7 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
   },
   {
     id: 'X17',
-    title: 'A1 und A2 produzieren getrennt je eine Revision mit derselben bisherigen Nummer (jedes nimmt ein anderes Ticket an und füllt nach): parallele Produktion, 8500, 6270; Probe-Sequenz 6680 nicht modelliert',
+    title: 'A1 und A2 produzieren getrennt je eine Revision (jedes nimmt ein anderes Ticket an und füllt nach): parallele Produktion; mit Schreiberkennung je Beziehung nimmt M beide an, der Vorrat ist die Vereinigung (8500 und 6270 je Schreiber, Entscheidung 3a); gemessen, was M über die Geräte lernt; Probe-Sequenz 6680 nicht modelliert',
     async run(c, serial) {
       const s = await setup(c, serial, ['C'])
       const { mc } = s.thirds.C!
@@ -861,8 +883,18 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const progress = 'act' in r && s.w.of('A').every((d) => d.state.acts.some((a) => a.id === r.act)) ? 1 : 0
       const conformance = s.w.of('A').flatMap((d) => d.state.findings).filter((f) => f.includes('8640.12')).length
       const agree = s.w.agree('A')
-      const ok = reused === 0 && equivocation === 0 && progress === 1 && conformance === 0 && agree.agree && n > 0
-      return { outcome: mark(ok), detail: `Revision vorher ${rev0}, getrennt je Gerät ${revs.join('/')}; Revisionsnummern mit mehr als einer Operation: ${reused}; Befunde 6270 bei M: ${equivocation}; zweiter Vorrat (8435) bei A: ${secondStock}; nächste Vorstellung ${'act' in r ? (progress ? 'angenommen' : 'nicht angenommen') : 'verweigert'}, Konformitätsfehler bei A: ${conformance}; Projektion gleich nach ${n} Runden: ${agree.agree ? 'ja' : 'nein'}; Probe-Sequenz (6680) und Mapping-Revision sind im Prüfstand nicht modelliert`, measures: { revisionNumbersReused: reused, equivocations: equivocation, secondStockFindings: secondStock, progressAfterHeal: progress, mediatorConformanceFailures: conformance, projectionAgrees: agree.agree ? 1 : 0, roundsToConverge: n } }
+      const mAgree = s.w.agree('M')
+      // Schritt 4: As Schreiber (Kennung → höchste Revision im Zustand) gegen das, was Ms Sicht je Schreiber hält.
+      const aWriters = new Map<string, number>()
+      for (const d of s.w.of('A')) for (const [t, x] of Object.entries(M.rel(d.state, s.am).writers ?? {})) aWriters.set(t, Math.max(aWriters.get(t) ?? 0, x.revision))
+      const mViews = s.w.of('M').map((d) => M.rel(d.state, s.ma).view)
+      const accepted = [...aWriters].filter(([t, rev]) => mViews.every((v) => v?.writers?.[t]?.revision === rev)).length
+      const seen = writerTagsSeen(s.w, 'M')
+      const tagsAtM = seen.perRelationship.get(M.resolveId(s.Mm.state, s.ma))?.size ?? 0
+      const tagged = aWriters.size > 0
+      const ok = reused === 0 && equivocation === 0 && progress === 1 && conformance === 0 && agree.agree && mAgree.agree && n > 0 && (!tagged || (accepted === aWriters.size && seen.linked === 0))
+      const tagDetail = tagged ? `; Schreiber bei A ${aWriters.size}, davon mit ihrer letzten Revision in Ms Sicht (alle M-Geräte) ${accepted}; Ms Sicht ${mViews.map((v) => `${Object.keys(v?.writers ?? {}).length} Schreiber/${v?.keys.length ?? 0} Schlüssel`).join(', ')}; was M lernt: ${tagsAtM} Schreiberkennung(en) auf der Beziehung zu A, ${[...seen.perRelationship.values()].map((x) => x.size).join('/')} je Beziehung von M, über Beziehungen verknüpfbar ${seen.linked}` : ''
+      return { outcome: mark(ok), detail: `Revision vorher ${rev0}, getrennt je Gerät ${revs.join('/')}; Revisionsnummern mit mehr als einer Operation: ${reused}; Befunde 6270 bei M: ${equivocation}; zweiter Vorrat (8435) bei A: ${secondStock}; nächste Vorstellung ${'act' in r ? (progress ? 'angenommen' : 'nicht angenommen') : 'verweigert'}, Konformitätsfehler bei A: ${conformance}; Projektion gleich nach ${n} Runden: ${agree.agree ? 'ja' : 'nein'}, M-Geräte gleich: ${mAgree.agree ? 'ja' : 'nein'}${tagDetail}; Probe-Sequenz (6680) und Mapping-Revision sind im Prüfstand nicht modelliert`, measures: { revisionNumbersReused: reused, equivocations: equivocation, secondStockFindings: secondStock, progressAfterHeal: progress, mediatorConformanceFailures: conformance, projectionAgrees: agree.agree ? 1 : 0, mediatorDevicesAgree: mAgree.agree ? 1 : 0, roundsToConverge: n, ...(tagged ? { writersAtA: aWriters.size, writersAcceptedByM: accepted, writerTagsSeenByM: tagsAtM, writerTagsLinkedAcrossRelationships: seen.linked } : {}) } }
     },
   },
   {

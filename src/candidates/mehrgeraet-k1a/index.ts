@@ -23,9 +23,16 @@
 // when a folded batch adds own tuples (`reevaluateProbes`); a hit owes the
 // own mapping, the union itself still comes only from a verified
 // counterpart mapping (6975.1) and travels as a journal operation.
+// Step 4 (Anton 18.10., decision 3a): every device carries a pseudonymous
+// writer tag per relationship, HMAC-SHA256 over the relationship id and
+// the device name under a key derived from the seed, truncated to 12
+// bytes. The tag is per device, not per incarnation: stable across a
+// restore (the writer's revision counter continues from the journal after
+// catch-up), different in every relationship. Revisions are numbered per
+// tag (8500 per writer); the tag travels in revision, probe and mapping.
 
-import { randomBytes } from 'node:crypto'
-import { EnrolmentRefused, seedScheme, type CandidateDevice, type HolderDevice, type Intent, type MultiDeviceCandidate, type Transaction } from '../../lab/mehrgeraet/holder'
+import { createHmac, randomBytes } from 'node:crypto'
+import { derive, EnrolmentRefused, seedScheme, type CandidateDevice, type HolderDevice, type Intent, type MultiDeviceCandidate, type Transaction } from '../../lab/mehrgeraet/holder'
 import * as M from '../../lab/mehrgeraet/model'
 
 const enc = new TextEncoder()
@@ -54,6 +61,13 @@ export interface K1aOptions {
   budget?: number
   /** Devices per person, fixed (B4): rights are split by this number from the first device on; enrollment beyond it is refused. */
   devices?: number
+  /** Step 4: pseudonymous writer tag per device and relationship (default on). Off = one writer per relationship as before step 4 (counter-run). */
+  writerTags?: boolean
+}
+
+/** Step 4: the writer tag of a device in a relationship; the counterpart sees it, cannot compute it (seed) and cannot link it across relationships. */
+export function writerTagOf(seed: Uint8Array, device: string, relationship: string): string {
+  return createHmac('sha256', derive(seed, 'writer-tag')).update(`${relationship}|${device}`).digest().subarray(0, 12).toString('base64url')
 }
 
 const fresh = () => randomBytes(4).toString('hex')
@@ -79,11 +93,15 @@ export class K1aDevice implements CandidateDevice {
     index: number,
     slots: number,
     private readonly budget: number,
+    tags = true,
   ) {
     this.keys = seedScheme(seed)
     this.index = index
     this.slots = slots
+    if (tags) this.writerTag = (relationship: string) => writerTagOf(seed, this.name, relationship)
   }
+  /** Step 4: per device (the name), not per incarnation; see the header. */
+  writerTag?: (relationship: string) => string
   get writer() {
     return `${this.name}@${this.inc}`
   }
@@ -196,27 +214,28 @@ export class K1aDevice implements CandidateDevice {
 export function k1a(opts: K1aOptions = {}): MultiDeviceCandidate {
   const budget = opts.budget ?? M.PARAM.budget
   const slots = opts.devices ?? 2
+  const tags = opts.writerTags ?? true
   const seeds = new Map<string, Uint8Array>()
   const devices = new Map<string, K1aDevice[]>() // person → Geräte in Enrollment-Reihenfolge
   return {
     id: 'k1a-static',
     title: 'K1a: one seed, operation journal, static rights per device',
-    capabilities: new Set(['journal', 'rights']),
+    capabilities: new Set(tags ? (['journal', 'rights', 'writer-tags'] as const) : (['journal', 'rights'] as const)),
     async first(person, name, seed) {
       seeds.set(person, seed)
-      const d = new K1aDevice(person, name, seed, 0, slots, budget)
+      const d = new K1aDevice(person, name, seed, 0, slots, budget, tags)
       devices.set(person, [d]) // eine neue Welt dieser Person: die Liste beginnt mit diesem Gerät
       return d
     },
     async instance(person, name, seed) {
       // Kein Gerät der Person (Dieb aus einem Abbild, X9): unregistriert; Platz und Plätze kommen aus dem Abbild beim `reload`.
-      return new K1aDevice(person, name, seed, 0, slots, budget)
+      return new K1aDevice(person, name, seed, 0, slots, budget, tags)
     },
     async enrol(from: HolderDevice, name) {
       const list = devices.get(from.person) ?? []
       // Feste Gerätezahl (B4): die Plätze stehen von Anfang an fest, nichts wird umverteilt; darüber hinaus wird verweigert (versionierte Rechte = K1b).
       if (list.length >= slots) throw new EnrolmentRefused(`K1a: Gerätezahl fest auf ${slots}; Enrollment von ${name} verweigert`)
-      const d = new K1aDevice(from.person, name, seeds.get(from.person)!, list.length, slots, budget)
+      const d = new K1aDevice(from.person, name, seeds.get(from.person)!, list.length, slots, budget, tags)
       d.adopt((from.cand as K1aDevice).journal())
       // Beide Seiten des Enrollments merken sich das andere Gerät (Teil des Abbilds): wer nach einem Restore nachholen muss,
       // weiß, dass eine Schwester antworten kann (Tor-Review 18 B1a).
