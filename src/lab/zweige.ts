@@ -81,7 +81,7 @@ export function foldBranches(b: CoinBranches, runs: readonly BranchRun[], exhaus
     return texts.length === 1 ? texts[0]! : rs.map((r) => `[${name(r)}] ${pick(r.result)}`).join(' · ')
   }
   if (runs.every((r) => r.result.outcome === 'nicht abbildbar')) return { outcome: 'nicht abbildbar', authority: uniform((r) => r.authority, runs), keys: uniform((r) => r.keys, runs) }
-  const gap = incomplete ? `; Zweige nicht vollständig aufgezählt (${exhausted ? `mehr als ${MAX_BRANCHES}` : `ein Commit in mehreren Gleichständen`}): ein Bestehen ist nicht belegt` : ''
+  const gap = incomplete ? `; Zweige nicht vollständig aufgezählt (${exhausted ? `mehr als ${MAX_BRANCHES}` : `ein Commit in mehreren Gleichständen oder ohne bekannte Erzeugungsreihenfolge`}): ein Bestehen ist nicht belegt` : ''
   if (fail.length && pass.length) {
     return {
       outcome: 'nicht bestanden',

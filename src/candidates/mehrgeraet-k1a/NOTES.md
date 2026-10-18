@@ -585,11 +585,12 @@ and X7b do).
   re-evaluation is involved: A2's new tuple has the old one in its
   snapshot.
 - **Revocation and production are not rights (X16, X17).** A device that
-  did not see the class revocation accepts a ticket on a withdrawn key,
-  and the fold then marks the key consumed on every device. Two devices
-  refilling apart send the same revision number with different keys, and
-  M records the conflict (6270). Static rights cover consumption (budget,
-  nameable keys), not changes of the class or of revision numbers.
+  did not see the class revocation accepts a ticket on a withdrawn key;
+  under decision 4a the ticket holds, and the fold marks the key consumed
+  once on every device (step 5). Two devices refilling apart number their
+  revisions under their own writer tags (step 4), so M accepts both and
+  records no 6270. Static rights cover consumption (budget, nameable
+  keys), not changes of the class; revision numbers are per writer.
 - **Two hand-overs of one act fold by rules 1 and 3 (X18, step 3).** Both
   devices consent and send a card while separated. Before step 3 A's
   ledger held consent and connect each from two operations and A's
