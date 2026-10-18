@@ -16,13 +16,16 @@ import * as M from '../src/lab/mehrgeraet/model'
 //   hält versiegelte Bytes, Position, Zeit; er entscheidet nichts.
 //   1. Träger: nur Ablage-Adressen behalten, geordnet; Lesen ab Position nur für registrierte Geräte; Antwort mit der
 //      nächsten Abholung; Störungen je Anfrage, Antwort, Eintrag.
-//   2. Restore-Gegenlauf (Review 18) ohne Schwester-Sperre: die zurückgenommene Karte erreicht B nie.
-//   3. Restore mit verlorener Schwester: Freigabe nach einer Runde (K1a: nie, ohne Widerruf).
-//   4. Bindung (MV-5): eine Antwort auf eine frühere Anfrage beendet das Nachholen nicht.
-//   5. Träger unerreichbar: die Sperre bleibt, bis die Antwort kommt.
-//   6. Enrollment aus der Ablage: das neue Gerät beginnt leer und faltet ab Beginn.
-//   7. Alle Szenarien: dieselben Ausgänge wie K1a; X21 mit einem Antwortenden.
-//   8. Was der Dienst lernt; Wachstum im Langlauf (nur Zahlen).
+//   Hybrid nach Tor-Review 25 (Anton 18.10.: „das Log beim Dienst ist Beschleunigung, nie Freigabegrund“; Replication D1:
+//   Zurückhalten durch den Träger darf nie eine Freigabe bewirken): Daten aus der Ablage, Freigabe nach Restore nur mit dem
+//   Zeugnis einer Schwester oder dem Widerruf aller Schwestern, wie im Default.
+//   2. Restore-Gegenlauf, Schwester verloren: gefaltet nach 2 Runden, gesperrt bis zum Widerruf; Karte erreicht B nie.
+//   3. Schwester erreichbar: Sperre endet mit ihrem Zeugnis (eine Runde nach dem Default).
+//   4. B1: leere, verkürzte, umgeordnete Antwort gibt nichts frei.
+//   5. B2: beschädigte Einträge: Befund, Cursor bleibt, Backoff, Sperre hält.
+//   6. Restore mit verlorener Schwester und gültiger Karte: gesperrt bis Widerruf wie K1a.
+//   7. Bindung (MV-5). 8. Träger unerreichbar. 9. S2: verlorene Antwort, nächste Runde neu.
+//   10. Enrollment aus der Ablage. 11. Alle Szenarien: dieselben Ausgänge wie K1a. 12. Was der Dienst lernt; Wachstum.
 
 const variant = () => k1a({ journalAtService: true })
 const byId = (rs: Awaited<ReturnType<typeof runX15>>) => Object.fromEntries(rs.map((r) => [r.scenario, r]))
@@ -123,9 +126,14 @@ describe('K1a Schritt 6 (Variante): Journal beim Dienst', () => {
     expect(c.logReads.map((r) => [r.device, r.from, r.entries])).toEqual([['d1', 1, 2], ['d1', 0, 3], ['d1', 0, 3]])
   })
 
-  it('2. Restore-Gegenlauf (Review 18) ohne Schwester-Sperre: A2 ist verloren und nicht widerrufen; die zurückgenommene Karte erreicht B nie, A1 ist nach der Antwort des Dienstes frei', async () => {
-    const { w, A, A2, B, act } = await withA2()
-    // Astras Gegenlauf: A1 stimmt offline zu (Karte beim Adapter, nie beim Träger), Backup; A2 lehnt ab, B stimmt zu.
+  /**
+   * Astras Gegenlauf (Review 18, Review 25): A1 stimmt offline zu (Karte beim Adapter, nie beim Träger), Backup; A2 lehnt
+   * ab, B stimmt zu; die Geräte heilen (beide abgelehnt, Karte zurückgenommen). Dann kommt A1 aus dem Backup mit der Karte
+   * `handed` zurück; A2 ist verloren (offline, nicht widerrufen) oder erreichbar.
+   */
+  async function restoredCounterRun(siblingLive: boolean, make = variant) {
+    const p = await withA2(make)
+    const { w, A, A2, B, act } = p
     A.online = A2.online = false
     expect(await A.consent(act)).toBe('ok')
     A.commit()
@@ -138,19 +146,96 @@ describe('K1a Schritt 6 (Variante): Journal beim Dienst', () => {
     await w.rounds(20)
     expect(states(w, act)).toEqual(['declined/cancelled', 'declined/cancelled'])
     expect(a1CardDeposits(A, act)).toBe(0)
-    // A2 geht verloren (offline für immer, nicht widerrufen); A1 kommt aus dem Backup vor der Rücknahme zurück.
-    A2.online = false
+    if (!siblingLive) A2.online = false
     w.stores.get('A1')!.restore(backup)
     await A.reload()
     expect(M.act(A.state, act).o).toBe('handed') // der Stand des Backups
-    const gated0 = A.gatedRounds
-    expect(await w.until(() => !A.syncPending, 5)).toBeGreaterThan(0)
-    await w.rounds(30)
-    expect(A.gatedRounds - gated0).toBe(1)
+    return p
+  }
+  /** Antworten der Ablage an A1 verfälschen (der Dienst kann zurückhalten, verkürzen, umordnen, beschädigen). */
+  function tamper(w: Welt15, mode: 'empty' | 'truncated' | 'corrupt' | 'reverse') {
+    const take = w.carrier.takeLogAnswers.bind(w.carrier)
+    w.carrier.takeLogAnswers = (name) =>
+      take(name).map((a) => {
+        if (name !== 'A1') return a
+        const half = a.from + Math.floor((a.end - a.from) / 2)
+        if (mode === 'empty') return { ...a, end: a.from, entries: [] }
+        if (mode === 'truncated') return { ...a, end: half, entries: a.entries.filter((e) => e.pos < half) }
+        if (mode === 'corrupt') return { ...a, entries: a.entries.map((e) => ({ ...e, bytes: new Uint8Array([0]) })) }
+        return { ...a, entries: [...a.entries].reverse() }
+      })
+    return () => void (w.carrier.takeLogAnswers = take)
+  }
+
+  it('2. Hybrid (Anton 18.10., Review 25 B1): A2 verloren und nicht widerrufen; die Ablage bringt die Ablehnung schnell (gefaltet, einig), die Sperre bleibt bis zum Widerruf wie im Default; die zurückgenommene Karte erreicht B nie', async () => {
+    const { w, A, B, act } = await restoredCounterRun(false)
+    const g0 = A.gatedRounds
+    const folded = await w.until(() => !A.logPending && M.act(A.state, act).o === 'cancelled', 5)
+    expect(folded).toBe(2) // Leseanfrage in Runde 1, Antwort gelesen und gefaltet in Runde 2
+    await w.rounds(20)
+    expect(A.gated).toBe(true) // die Antwort der Ablage beendet die Sperre nicht
+    expect(A.witnessPending).toBe(true)
+    expect(A.gatedRounds - g0).toBe(22)
+    expect(M.act(A.state, act)).toMatchObject({ state: 'declined', o: 'cancelled' }) // aktuell aus der Ablage, obwohl gesperrt
+    expect(a1CardDeposits(A, act)).toBe(0)
+    A.deviceRevoked('A2') // „Gerät entfernen“: erst jetzt fällt die Sperre
+    await w.rounds(3)
+    expect(A.gated).toBe(false)
     expect(a1CardDeposits(A, act)).toBe(0)
     expect(M.act(B.state, act)).toMatchObject({ state: 'consented', pending: null })
-    expect(M.act(A.state, act)).toMatchObject({ state: 'declined', o: 'cancelled' })
-    // Mit dem Briefkasten (K1a) bliebe A1 hier gesperrt, bis A2 widerrufen ist (K1a Schritt 3, Test 8).
+  }, 300_000)
+
+  it('3. Hybrid mit erreichbarer Schwester: die Sperre endet erst mit dem Zeugnis von A2 (Antwort auf die laufende Anfrage, Köpfe gedeckt); die Daten kamen schon aus der Ablage; gleich viele gesperrte Runden wie der Default', async () => {
+    const { w, A, B, act } = await restoredCounterRun(true)
+    const g0 = A.gatedRounds
+    const folded = await w.until(() => !A.logPending, 5)
+    expect(folded).toBe(2)
+    expect(A.gated).toBe(true) // gefaltet, aber noch kein Zeugnis
+    expect(M.act(A.state, act).o).toBe('cancelled')
+    expect(await w.until(() => !A.gated, 10)).toBeGreaterThan(0)
+    const gated = A.gatedRounds - g0
+    expect(a1CardDeposits(A, act)).toBe(0)
+    expect(M.act(B.state, act).state).toBe('consented')
+    // Gegenprobe Default (Briefkasten): derselbe Ablauf.
+    const mb = await restoredCounterRun(true, () => k1a())
+    const m0 = mb.A.gatedRounds
+    expect(await mb.w.until(() => !mb.A.gated, 10)).toBeGreaterThan(0)
+    expect(gated).toBe(mb.A.gatedRounds - m0 + 1) // eine Runde mehr: die Anfrage an die Schwester geht nach dem Falten hinaus
+    expect(a1CardDeposits(mb.A, mb.act)).toBe(0)
+  }, 300_000)
+
+  for (const mode of ['empty', 'truncated', 'reverse'] as const)
+    it(`4. Review 25 B1 (${mode}): eine leere, verkürzte oder umgeordnete Antwort der Ablage gibt nichts frei; mit verlorener Schwester bleibt die Sperre, mit erreichbarer bezeugt A2 und liefert, was fehlt`, async () => {
+      for (const live of [false, true]) {
+        const { w, A, B, act } = await restoredCounterRun(live)
+        tamper(w, mode)
+        await w.rounds(25)
+        expect(A.gated, `live=${live}`).toBe(!live)
+        expect(a1CardDeposits(A, act), `live=${live}`).toBe(0)
+        expect(M.act(B.state, act).state).toBe('consented')
+        if (live || mode !== 'empty') expect(M.act(A.state, act).o, `live=${live}`).toBe('cancelled')
+        else expect(M.act(A.state, act).o).toBe('handed') // der Dienst hielt alles zurück, die Sperre hält
+      }
+    }, 300_000)
+
+  it('5. Review 25 B2: beschädigte Einträge zählen nie als gefaltet; Befund journal:corrupt-entry je Position, der Cursor bleibt davor, erneut mit Backoff; die Sperre hält; heil gelesen geht es weiter', async () => {
+    const { w, A, B, act } = await restoredCounterRun(false)
+    const heal = tamper(w, 'corrupt')
+    const r0 = A.logRequests
+    await w.rounds(20)
+    expect(A.logPending).toBe(true)
+    expect(A.snapshotState().logCursor).toBe(0)
+    expect(A.logCorrupt).toBeGreaterThan(0)
+    expect(A.dispositions.filter((d) => d.startsWith('finding(journal:corrupt-entry@')).length).toBe(A.logCorrupt) // je Position einmal
+    expect(A.logRequests - r0).toBeLessThanOrEqual(5) // Backoff 1, 2, 4, 8 statt jede Runde
+    expect(A.gated).toBe(true)
+    expect(a1CardDeposits(A, act)).toBe(0)
+    expect(M.act(A.state, act).o).toBe('handed')
+    heal()
+    expect(await w.until(() => !A.logPending, 20)).toBeGreaterThan(0)
+    expect(M.act(A.state, act).o).toBe('cancelled')
+    expect(A.gated).toBe(true)
+    expect(M.act(B.state, act).state).toBe('consented')
   }, 300_000)
 
   /** Restore A1 aus einem Backup mit gültiger Zustimmung (Karte nie beim Träger), A2 verloren (offline, antwortet nie, nicht widerrufen). */
@@ -168,46 +253,57 @@ describe('K1a Schritt 6 (Variante): Journal beim Dienst', () => {
     return p
   }
 
-  it('3. Restore mit verlorener Schwester: die Sperre fällt nach einer Runde (Antwort des Dienstes), die Karte geht hinaus, B verbindet; K1a bleibt ohne Widerruf gesperrt', async () => {
+  it('6. Restore mit verlorener Schwester und gültiger Karte: gefaltet und einig nach 2 Runden, gesperrt bis zum Widerruf wie K1a (20 von 20); danach geht die Karte hinaus', async () => {
     const { w, A, B, act } = await restoredWithLostSibling()
-    const n = await w.until(() => a1CardDeposits(A, act) === 1 && M.act(B.state, act).state === 'connected', 20)
-    expect(n).toBeGreaterThan(0)
-    expect(A.gatedRounds).toBe(1)
-    expect(A.syncPending).toBe(false)
-    expect(M.act(A.state, act).state).toBe('connected')
-    // Gegenprobe: derselbe Ablauf mit Briefkasten.
+    expect(await w.until(() => !A.logPending, 5)).toBe(2)
+    await w.rounds(18)
+    expect(A.gatedRounds).toBe(20)
+    expect(a1CardDeposits(A, act)).toBe(0)
     const mb = await restoredWithLostSibling(() => k1a())
     await mb.w.rounds(20)
     expect(mb.A.gatedRounds).toBe(20)
     expect(a1CardDeposits(mb.A, mb.act)).toBe(0)
+    A.deviceRevoked('A2')
+    expect(await w.until(() => a1CardDeposits(A, act) === 1 && M.act(B.state, act).state === 'connected', 20)).toBeGreaterThan(0)
   }, 300_000)
 
-  it('4. Bindung (MV-5): eine Antwort auf eine frühere Anfrage beendet das Nachholen nicht; erst die Antwort auf die laufende', async () => {
+  it('7. Bindung (MV-5): eine Antwort der Ablage auf eine frühere Leseanfrage zählt nicht; erst die Antwort auf die laufende', async () => {
     const { w, A, act } = await restoredWithLostSibling()
-    // Die erste Anfrage geht hinaus (Runde 1); vor dem Lesen der Antwort baut sich A1 noch einmal aus dem Store auf.
     const self = (await A.cand.keys.pair('self/A')).rkid
     await A.round()
     expect(w.carrier.logReads.filter((r) => r.device === 'A1' && r.address === self).length).toBe(1)
     await A.reload() // neue Inkarnation, keine laufende Anfrage: die bereitliegende Antwort ist alt
     await A.round()
     expect(A.staleSyncAnswers).toBe(1)
-    expect(A.syncPending).toBe(true)
+    expect(A.logPending).toBe(true)
     expect(a1CardDeposits(A, act)).toBe(0)
-    expect(await w.until(() => !A.syncPending, 5)).toBeGreaterThan(0)
+    expect(await w.until(() => !A.logPending, 5)).toBeGreaterThan(0)
   }, 300_000)
 
-  it('5. Träger unerreichbar: Anfrage wirft nicht durch, die Sperre bleibt mit Backoff, bis der Dienst antwortet', async () => {
+  it('8. Träger unerreichbar: Leseanfragen mit Backoff, gesperrt; danach gefaltet, die Freigabe wartet weiter auf Zeugnis oder Widerruf', async () => {
     const { w, A, act } = await restoredWithLostSibling()
     w.carrier.unreachable = true
     await w.rounds(6)
-    expect(A.syncPending).toBe(true)
+    expect(A.logPending).toBe(true)
+    expect(A.logRequests).toBeLessThanOrEqual(3) // 1, 2, 4
     expect(a1CardDeposits(A, act)).toBe(0)
     w.carrier.unreachable = false
-    expect(await w.until(() => !A.syncPending, 20)).toBeGreaterThan(0)
-    expect(await w.until(() => a1CardDeposits(A, act) === 1, 5)).toBeGreaterThan(0)
+    expect(await w.until(() => !A.logPending, 20)).toBeGreaterThan(0)
+    expect(A.gated).toBe(true)
+    expect(a1CardDeposits(A, act)).toBe(0)
   }, 300_000)
 
-  it('6. Enrollment aus der Ablage: A2 beginnt leer (keine Zustandskopie), faltet die Ablage ab Beginn und hat danach dieselbe Projektion, die Absichten aus dem Journal und die behaltenen Proben', async () => {
+  it('9. Review 25 S2: eine verlorene Antwort der Ablage wird in der nächsten Runde neu angefragt (höchstens eine Leseanfrage je Runde); nach der Verlustphase gefaltet in einer Runde', async () => {
+    const { w, A } = await restoredWithLostSibling()
+    w.carrier.logFaults.dropAnswer((d) => d === 'A1')
+    await w.rounds(10)
+    expect(A.logPending).toBe(true)
+    expect(A.logRequests).toBe(10)
+    w.carrier.faults.reset()
+    expect(await w.until(() => !A.logPending, 5)).toBe(2) // Anfrage in der ersten Runde nach der Heilung, Antwort in der zweiten
+  }, 300_000)
+
+  it('10. Enrollment aus der Ablage: A2 beginnt leer (keine Zustandskopie), faltet die Ablage ab Beginn, die Freigabe bezeugt A1; danach dieselbe Projektion, die Absichten aus dem Journal und die behaltenen Proben', async () => {
     const { w, A, Mm, am, bm } = await pair()
     const r = await Mm.introduce(am.y.id, bm.y.id)
     if (!('act' in r)) throw new Error(r.refused)
@@ -215,14 +311,14 @@ describe('K1a Schritt 6 (Variante): Journal beim Dienst', () => {
     const A2 = await w.enrol(A, 'A2')
     expect(A2.state.relationships).toEqual([])
     expect(A2.intents.size).toBe(0)
-    expect(A2.syncPending).toBe(true)
-    const n = await w.until(() => !A2.syncPending, 5)
+    expect(A2.logPending).toBe(true)
+    const n = await w.until(() => !A2.logPending, 5)
     expect(n).toBe(2) // Anfrage am Ende der ersten Runde, Antwort gelesen in der zweiten
     expect(M.canonical(A2.projection())).toBe(M.canonical(A.projection()))
     expect([...A2.intents.keys()].sort()).toEqual([...A.intents.keys()].sort())
     expect(A2.logEntriesRead).toBeGreaterThan(0)
-    expect(A2.gatedRounds).toBe(1)
-    // A2 handelt danach wie nach einer Kopie.
+    expect(await w.until(() => !A2.gated, 5)).toBeGreaterThan(0) // Zeugnis von A1
+    expect(A2.gatedRounds).toBeGreaterThanOrEqual(2)
     expect(await A2.consent(r.act)).toBe('ok')
     // Gegenprobe: ohne Ablage bleibt der alte Weg (Zustandskopie).
     const mb = await pair(() => k1a())
@@ -230,7 +326,7 @@ describe('K1a Schritt 6 (Variante): Journal beim Dienst', () => {
     expect(B2.state.relationships.length).toBe(mb.A.state.relationships.length)
   }, 300_000)
 
-  it('7. alle Szenarien mit zwei Geräten: dieselben Ausgänge wie K1a; X21 mit einem Antwortenden (dem Dienst), alle Verlustphasen wirksam', async () => {
+  it('11. alle Szenarien mit zwei Geräten: dieselben Ausgänge wie K1a; X21: Daten aus der Ablage, Zeugnis der Schwester, Reparatur nach jedem Verlust in einer Runde (S2), Dienstvolumen nach Störungen getrennt (S3)', async () => {
     const r = byId(await runX15(variant(), false))
     for (const x of Object.values(r)) expect(x.crashed, `${x.scenario}: ${x.detail}`).toBeFalsy()
     const want: Record<string, string> = {
@@ -241,22 +337,26 @@ describe('K1a Schritt 6 (Variante): Journal beim Dienst', () => {
     expect(Object.values(r).filter((x) => x.promiseChanged).map((x) => x.scenario).sort()).toEqual(['X18', 'X3'])
     const x = r.X21!.measures
     for (const k of ['RequestLoss', 'AnswerLoss', 'JournalLoss']) expect(x[`behindAfter${k}`], k).toBe(1)
-    expect(x.answersA1).toBe(0)
-    expect(x.answersA2).toBe(0)
-    expect(x.syncRequestFrames).toBe(0)
-    expect(x.syncReplyFrames).toBe(0)
+    for (const k of ['Restore', 'RequestLoss', 'AnswerLoss', 'JournalLoss']) expect(x[`repairRounds${k}`], k).toBe(1)
+    expect(x.syncReplyFrames as number).toBeGreaterThan(0) // die Schwester bezeugt
     expect(x.answersService as number).toBeGreaterThan(0)
+    expect(x.logRequests as number).toBeGreaterThanOrEqual(x.answersService as number) // verlorene Anfragen erreichen den Träger nicht
+    expect(x.serviceBytesServed as number).toBeLessThan(x.serviceBytesSent as number) // Antwort- und Eintragsverlust
+    expect(x.serviceRequestBytes as number).toBeGreaterThan(0)
+    expect(x.serviceHeadBytes as number).toBeGreaterThan(0)
     expect(x.devicesPendingSync).toBe(0)
     expect(r.X8!.measures.enrolRounds).toBe(2)
+    expect(r.X8!.measures.enrolGatedRounds as number).toBeGreaterThanOrEqual(2)
   }, 1_800_000)
 
-  it('8. was der Dienst lernt und Wachstum im Langlauf: Zahlen, keine Kompaktierung', async () => {
+  it('12. was der Dienst lernt und Wachstum im Langlauf: Zahlen, keine Kompaktierung', async () => {
     const g = await journalGrowth(variant(), { rounds: 200 })
     expect(g.agree).toBe(true)
     expect(g.issued).toBeGreaterThan(5)
     expect(g.connected).toBeGreaterThan(0)
     expect(g.opsBytes + g.intentBytes).toBeLessThanOrEqual(g.journalBytes)
-    expect(g.removableIntents).toBeLessThanOrEqual(g.intents)
+    expect(g.removableIntents).toBeLessThanOrEqual(g.doneIntents)
+    expect(g.doneIntents).toBeLessThanOrEqual(g.intents)
     expect(g.batchesBelowMinHead).toBeLessThanOrEqual(g.batches)
     expect(g.batchesOlderThanWindow).toBeGreaterThan(0) // 200 × 4 h > 28 d
     expect(g.series.length).toBe(10)
@@ -264,6 +364,13 @@ describe('K1a Schritt 6 (Variante): Journal beim Dienst', () => {
     expect(g.service.readers.length).toBeGreaterThan(0)
     expect(g.service.collectors.length).toBe(2)
     expect(g.service.entries).toBe(g.logEntries)
+    expect(g.service.perReader.A2!.cursors[0]).toBe(0) // der Dienst sieht Cursor, Zeit und Rückstand je Leser
+    expect(g.service.sizePattern.distinct).toBeGreaterThan(1)
+    // Review 25 S1: ein verlorenes, nicht widerrufenes Gerät blockiert „entfernbar“; erst sein Widerruf gäbe frei.
+    const gl = await journalGrowth(variant(), { rounds: 60, lose: { round: 20 } })
+    expect(gl.lost).toEqual(['A2'])
+    expect(gl.removableIntents).toBeLessThan(gl.removableIntentsIfLostRevoked)
+    expect(gl.batchesBelowMinHead).toBeLessThan(gl.batchesBelowLiveHead)
     // Ohne Ablage hält der Dienst nichts.
     const mb = await pair(() => k1a())
     const self = (await mb.A.cand.keys.pair('self/A')).rkid

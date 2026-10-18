@@ -552,14 +552,18 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       await s.w.until(() => s.A.state.acts.length === 1 && s.B.state.acts.length === 1)
       const A2 = await s.w.enrol(s.A, 'A2')
       // Schritt 6: mit Ablage beginnt A2 leer und faltet die Ablage ab Beginn; „sofort“ heißt dann: nach der Antwort des Dienstes.
-      const fold = s.w.selfLog ? await s.w.until(() => !A2.syncPending, 10) : 0
+      // Die Freigabe (Hybrid, Review 25 B1) bezeugt die Schwester: gezählt getrennt, bis A2 nicht mehr gesperrt ist.
+      const g0 = s.w.selfLog ? A2.gatedRounds : 0
+      const fold = s.w.selfLog ? await s.w.until(() => !A2.logPending, 10) : 0
+      if (s.w.selfLog) await s.w.until(() => !A2.gated, 10)
+      const gated = s.w.selfLog ? A2.gatedRounds - g0 : 0
       const bytes = Buffer.byteLength(JSON.stringify(A2.state), 'utf8') // Größe der Zustandskopie; K0 kennt keinen Enrollment-Verkehr
       const same = M.canonical(A2.projection()) === M.canonical(s.A.projection())
       await A2.consent(r.act)
       await s.B.consent(r.act)
       const n = await s.w.until(() => M.act(A2.state, r.act).state === 'connected' && M.act(s.B.state, r.act).state === 'connected')
       const ok = same && n > 0 && fold >= 0
-      if (s.w.selfLog) return { outcome: mark(ok), detail: `aus der Ablage gefaltet nach ${fold} Runde(n): ${A2.logEntriesRead} Einträge, ${A2.logBytesRead} B gelesen (keine Zustandskopie; Zustand danach ${bytes} B UTF-8); Projektion gleich: ${same ? 'ja' : 'nein'}; A2 verbunden nach ${n} Runden`, measures: { enrolRounds: fold, enrolLogEntries: A2.logEntriesRead, enrolLogBytes: A2.logBytesRead, stateBytes: bytes, rounds: n } }
+      if (s.w.selfLog) return { outcome: mark(ok), detail: `aus der Ablage gefaltet nach ${fold} Runde(n): ${A2.logEntriesRead} Einträge, ${A2.logBytesRead} B gelesen (keine Zustandskopie; Zustand danach ${bytes} B UTF-8); Freigabe nach dem Zeugnis von A1: ${gated} Runde(n) gesperrt; Projektion gleich: ${same ? 'ja' : 'nein'}; A2 verbunden nach ${n} Runden`, measures: { enrolRounds: fold, enrolGatedRounds: gated, enrolLogEntries: A2.logEntriesRead, enrolLogBytes: A2.logBytesRead, stateBytes: bytes, rounds: n } }
       return { outcome: mark(ok), detail: `Projektion nach Enrollment gleich: ${same ? 'ja' : 'nein'}; A2 verbunden nach ${n} Runden; Zustandskopie ${bytes} B UTF-8 (K0: Kopie, kein gemessener Enrollment-Verkehr)`, measures: { stateCopyBytes: bytes, rounds: n } }
     },
   },
@@ -996,6 +1000,7 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const start = s.w.carrier.carried.length
       const reads0 = s.w.carrier.logReads.length
       const req0 = s.w.of('A').reduce((n, d) => n + d.syncRequests, 0)
+      const lreq0 = s.w.of('A').reduce((n, d) => n + d.logRequests, 0)
       const restoreA2 = async () => {
         s.w.stores.get('A2')!.restore(oldA2)
         await s.A2.reload()
@@ -1090,12 +1095,18 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
         crashes: crashed,
       }
       if (missing !== null) measures.missingBatches = missing
-      // Schritt 6: ein Antwortender, der Dienst. Leseanfragen der A-Geräte seit dem ersten Restore, gelieferte Einträge und Bytes.
+      // Schritt 6: Leseanfragen der A-Geräte an den Dienst seit dem ersten Restore (gesendet), davon beim Träger
+      // angekommen; was der Träger abgeschickt hat und was beim Gerät ankam, samt Anfrage- und Kopfbytes (Review 25 S3).
       if (s.w.selfLog) {
         const reads = s.w.carrier.logReads.slice(reads0).filter((r) => r.address === self)
+        measures.logRequests = s.w.of('A').reduce((n, d) => n + d.logRequests, 0) - lreq0
         measures.answersService = reads.length
-        measures.serviceEntriesServed = reads.reduce((n, r) => n + r.entries, 0)
-        measures.serviceBytesServed = reads.reduce((n, r) => n + r.bytes, 0)
+        measures.serviceEntriesSent = reads.reduce((n, r) => n + r.entries, 0)
+        measures.serviceBytesSent = reads.reduce((n, r) => n + r.bytes, 0)
+        measures.serviceEntriesServed = reads.reduce((n, r) => n + r.servedEntries, 0)
+        measures.serviceBytesServed = reads.reduce((n, r) => n + r.servedBytes, 0)
+        measures.serviceRequestBytes = reads.reduce((n, r) => n + r.requestBytes, 0)
+        measures.serviceHeadBytes = reads.reduce((n, r) => n + r.headBytes, 0)
         measures.logEntries = s.w.carrier.log(self).length
         measures.logBytes = s.w.carrier.log(self).reduce((n, e) => n + e.bytes.length, 0)
       }
@@ -1117,7 +1128,7 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
         : `Reparatur nicht beendet: nach 60 Runden Nachholen ausstehend auf ${repair.pending.join(', ') || 'keinem Gerät'}, ${repair.selfFrames} Self-Rahmen in dieser Zeit, zuletzt still über ${repair.window} Runden`
       return {
         outcome: mark(ok),
-        detail: `Reparatur in Runden: Restore ${restore}, Anfrageverlust ${requests.rounds}, Antwortverlust ${answers.rounds}, Batchverlust bei zugestelltem Antwortkopf ${batches.rounds}, Quittungsverlust ${receipts.rounds} (zurück nach dem Verlust: ${[requests.behind, answers.behind, batches.behind, receipts.behind].join('/')}); je Phase danach fehlende Batches ${Object.values(perPhase).map((v) => v.missing).join('/')}, Geräte nicht auf der Referenz ${Object.values(perPhase).map((v) => v.lost).join('/')}; ${end}; fehlende Batches ${missing ?? 'nicht messbar (kein Nachholen)'}; Geräte mit anderem Stand als vorher ${lostState}; doppelte Wirkungen ${measures.doubleFinalEffects}, Konflikte ${measures.remainingConflicts}; Self-Adresse ${t.own.frames} Rahmen / ${t.own.bytes} B (Journal ${k('journal').frames}/${k('journal').bytes} B, Anfragen ${k('journal-sync').frames}, Antworten ${k('journal-sync-reply').frames}, Quittungen ${k('delivery-ack').frames}); Wiederholungen ${t.repeats}: ${t.repeatsOwn} auf der Self-Adresse, ${t.repeatsToPeer} an Gegenseiten; Antworten A1 ${answersBy('A1')}, A2 ${answersBy('A2')}${s.w.selfLog ? `, Dienst ${measures.answersService} (${measures.serviceEntriesServed} Einträge, ${measures.serviceBytesServed} B; Ablage ${measures.logEntries} Einträge, ${measures.logBytes} B)` : ''}; an Gegenseiten ${t.toPeer.frames} Rahmen; Journal ${measures.journalBatchesBefore ?? '–'} → ${measures.journalBatchesAfter ?? '–'} Batches`,
+        detail: `Reparatur in Runden: Restore ${restore}, Anfrageverlust ${requests.rounds}, Antwortverlust ${answers.rounds}, Batchverlust bei zugestelltem Antwortkopf ${batches.rounds}, Quittungsverlust ${receipts.rounds} (zurück nach dem Verlust: ${[requests.behind, answers.behind, batches.behind, receipts.behind].join('/')}); je Phase danach fehlende Batches ${Object.values(perPhase).map((v) => v.missing).join('/')}, Geräte nicht auf der Referenz ${Object.values(perPhase).map((v) => v.lost).join('/')}; ${end}; fehlende Batches ${missing ?? 'nicht messbar (kein Nachholen)'}; Geräte mit anderem Stand als vorher ${lostState}; doppelte Wirkungen ${measures.doubleFinalEffects}, Konflikte ${measures.remainingConflicts}; Self-Adresse ${t.own.frames} Rahmen / ${t.own.bytes} B (Journal ${k('journal').frames}/${k('journal').bytes} B, Anfragen ${k('journal-sync').frames}, Antworten ${k('journal-sync-reply').frames}, Quittungen ${k('delivery-ack').frames}); Wiederholungen ${t.repeats}: ${t.repeatsOwn} auf der Self-Adresse, ${t.repeatsToPeer} an Gegenseiten; Antworten A1 ${answersBy('A1')}, A2 ${answersBy('A2')}${s.w.selfLog ? `, Dienst: ${measures.logRequests} Leseanfragen, ${measures.answersService} beim Träger, abgeschickt ${measures.serviceEntriesSent} Einträge / ${measures.serviceBytesSent} B, angekommen ${measures.serviceEntriesServed} / ${measures.serviceBytesServed} B, Anfragen ${measures.serviceRequestBytes} B, Köpfe ${measures.serviceHeadBytes} B; Ablage ${measures.logEntries} Einträge, ${measures.logBytes} B` : ''}; an Gegenseiten ${t.toPeer.frames} Rahmen; Journal ${measures.journalBatchesBefore ?? '–'} → ${measures.journalBatchesAfter ?? '–'} Batches`,
         measures,
       }
     },
@@ -1127,9 +1138,11 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
 // ── Schritt 6 (Variante „Journal beim Dienst“): Messungen außerhalb der Matrix ──────────────────────────────
 
 /**
- * Was der Dienst an einer Ablage lernt (Plan Abschnitt 5, „was der Träger lernt“): Zahl und Größen der behaltenen
- * Einträge, ihre Einlieferungszeiten, wer liest (Leseanfragen je Gerät) und wer abholt (registrierte Geräte). Der Dienst
- * sieht nur versiegelte Bytes; Art (Journal, Quittung) unterscheidet er nicht, die Spalte `kinds` ist Weltwissen.
+ * Was der Dienst an einer Ablage lernt (Plan Abschnitt 5, „was der Träger lernt“; Review 25 (f)): Zahl und Größen der
+ * behaltenen Einträge samt Größenmuster (häufigste Größen), ihre Einlieferungszeiten, wer abholt (registrierte Geräte),
+ * und je Leser: Leseanfragen, gelesene Positionen (Cursor), Lesezeitpunkte und Rückstand beim Lesen (Einträge ab dem
+ * Cursor). Getrennt: abgeschickt, angekommen, Anfrage- und Kopfbytes (S3). Der Dienst sieht nur versiegelte Bytes; Art
+ * (Journal, Quittung) unterscheidet er nicht, die Spalte `kinds` ist Weltwissen.
  */
 export function serviceLearns(w: Welt15, address: string) {
   const log = w.carrier.log(address)
@@ -1152,8 +1165,23 @@ export function serviceLearns(w: Welt15, address: string) {
     lastAt: log[log.length - 1]?.at ?? '',
     reads: reads.length,
     readers: [...new Set(reads.map((r) => r.device))].sort(),
-    entriesServed: reads.reduce((n, r) => n + r.entries, 0),
-    bytesServed: reads.reduce((n, r) => n + r.bytes, 0),
+    entriesSent: reads.reduce((n, r) => n + r.entries, 0),
+    bytesSent: reads.reduce((n, r) => n + r.bytes, 0),
+    entriesServed: reads.reduce((n, r) => n + r.servedEntries, 0),
+    bytesServed: reads.reduce((n, r) => n + r.servedBytes, 0),
+    requestBytes: reads.reduce((n, r) => n + r.requestBytes, 0),
+    headBytes: reads.reduce((n, r) => n + r.headBytes, 0),
+    perReader: Object.fromEntries(
+      [...new Set(reads.map((r) => r.device))].sort().map((d) => {
+        const rs = reads.filter((r) => r.device === d)
+        return [d, { reads: rs.length, cursors: rs.map((r) => r.from), times: rs.map((r) => r.at), backlog: rs.map((r) => r.entries) }]
+      }),
+    ),
+    sizePattern: (() => {
+      const c = new Map<number, number>()
+      for (const x of sizes) c.set(x, (c.get(x) ?? 0) + 1)
+      return { distinct: c.size, top: [...c.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0]).slice(0, 5) }
+    })(),
     collectors: w.carrier.registeredAt(address),
     kinds,
   }
@@ -1175,7 +1203,7 @@ interface JournalBatch {
  * Dokumente, Batches, die jedes Gerät der Person kennt (unter dem kleinsten Kopf), Batches älter als das längste Fenster
  * (28 Tage, 8510).
  */
-export async function journalGrowth(candidate: MultiDeviceCandidate, opts: { rounds?: number; every?: number; stepMs?: number; sample?: number } = {}) {
+export async function journalGrowth(candidate: MultiDeviceCandidate, opts: { rounds?: number; every?: number; stepMs?: number; sample?: number; lose?: { round: number } } = {}) {
   const rounds = opts.rounds ?? 200
   const every = opts.every ?? 10
   const stepMs = opts.stepMs ?? 4 * 3600 * 1000
@@ -1192,6 +1220,7 @@ export async function journalGrowth(candidate: MultiDeviceCandidate, opts: { rou
   const acts: string[] = []
   for (let i = 1; i <= rounds; i++) {
     s.w.clock.advance(stepMs)
+    if (opts.lose && i === opts.lose.round) s.A2.online = false // A2 verloren: offline, nicht widerrufen (Review 25 S1)
     if (i % every === 0) {
       const k = (i / every) % names.length
       const c = s.thirds[names[k]!]!
@@ -1199,12 +1228,12 @@ export async function journalGrowth(candidate: MultiDeviceCandidate, opts: { rou
       if ('act' in r) {
         issued++
         acts.push(r.act)
-        open.push({ act: r.act, C: c.C, dev: (i / every) % 2 ? s.A : s.A2 })
+        open.push({ act: r.act, C: c.C, dev: (i / every) % 2 || !s.A2.online ? s.A : s.A2 })
       }
     }
     if (i % 50 === 0) await s.A.confirmBudget(s.am)
     for (const o of open.slice()) {
-      if (!knowsAct(s.w, 'A', o.act) || !o.C.state.acts.some((a) => a.id === o.act)) continue
+      if (!s.w.of('A').filter((d) => d.online).every((d) => d.state.acts.some((a) => a.id === o.act)) || !o.C.state.acts.some((a) => a.id === o.act)) continue
       await o.dev.consent(o.act)
       await o.C.consent(o.act)
       open.splice(open.indexOf(o), 1)
@@ -1217,12 +1246,20 @@ export async function journalGrowth(candidate: MultiDeviceCandidate, opts: { rou
     }
   }
   await s.w.rounds(5)
-  for (const a of acts) if (s.w.of('A').every((d) => d.state.acts.find((x) => x.id === a)?.state === 'connected')) connected++
+  for (const a of acts) if (s.w.of('A').filter((d) => d.online).every((d) => d.state.acts.find((x) => x.id === a)?.state === 'connected')) connected++
   const ds = s.w.of('A')
   const j = journal(s.A)
   const heads = ds.map((d) => d.cand.heads?.() ?? {})
   const now = Date.parse(s.w.clock.now())
   const window = M.PARAM.budgetWindowMs
+  /**
+   * Review 25 S1: entfernbar ist eine Absicht nur, wenn sie erledigt ist UND jedes Gerät der festen Geräteliste ihren
+   * Batch gefaltet hat (kleinster Kopf über alle Geräte). Ein verlorenes, nicht widerrufenes Gerät blockiert: „jetzt“
+   * zählt es mit, „wenn widerrufen“ ohne die verlorenen (offline) Geräte.
+   */
+  const live = ds.filter((d) => d.online)
+  const liveHeads = live.map((d) => d.cand.heads?.() ?? {})
+  const foldedBy = (hs: Array<Record<string, number>>, b: JournalBatch) => hs.every((h) => (h[b.writer] ?? 0) >= b.n)
   /** Erledigt: zugestellt (Quittung) auf einem Gerät, Karte zurückgenommen oder zugestellt, Mapping vereinigt. */
   const done = (digest: string) => {
     for (const d of ds) {
@@ -1240,6 +1277,11 @@ export async function journalGrowth(candidate: MultiDeviceCandidate, opts: { rou
   let total = 0
   let removableIntents = 0
   let removableIntentCount = 0
+  let doneIntents = 0
+  let removableIfRevoked = 0
+  let removableIfRevokedBytes = 0
+  let belowLive = 0
+  let belowLiveBytes = 0
   let belowMin = 0
   let belowMinBytes = 0
   let old = 0
@@ -1252,14 +1294,24 @@ export async function journalGrowth(candidate: MultiDeviceCandidate, opts: { rou
     intents += size(b.intents)
     for (const it of b.intents) {
       intentCount++
-      if (done(it.digest)) {
+      if (!done(it.digest)) continue
+      doneIntents++
+      if (foldedBy(heads, b)) {
         removableIntentCount++
         removableIntents += size(it)
       }
+      if (foldedBy(liveHeads, b)) {
+        removableIfRevoked++
+        removableIfRevokedBytes += size(it)
+      }
     }
-    if (heads.every((h) => (h[b.writer] ?? 0) >= b.n)) {
+    if (foldedBy(heads, b)) {
       belowMin++
       belowMinBytes += sz
+    }
+    if (foldedBy(liveHeads, b)) {
+      belowLive++
+      belowLiveBytes += sz
     }
     const at = Math.max(0, ...b.ops.map((o) => Date.parse(o.at)))
     if (at > 0 && at < now - window) {
@@ -1280,8 +1332,15 @@ export async function journalGrowth(candidate: MultiDeviceCandidate, opts: { rou
     opsBytes: ops,
     intentBytes: intents,
     intents: intentCount,
+    devices: ds.map((d) => d.name),
+    lost: ds.filter((d) => !d.online).map((d) => d.name),
+    doneIntents,
     removableIntents: removableIntentCount,
     removableIntentBytes: removableIntents,
+    removableIntentsIfLostRevoked: removableIfRevoked,
+    removableIntentBytesIfLostRevoked: removableIfRevokedBytes,
+    batchesBelowLiveHead: belowLive,
+    bytesBelowLiveHead: belowLiveBytes,
     batchesBelowMinHead: belowMin,
     bytesBelowMinHead: belowMinBytes,
     batchesOlderThanWindow: old,

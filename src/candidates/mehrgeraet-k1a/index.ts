@@ -27,9 +27,12 @@
 // `journalAtService` selects the bench option `selfLog`; the rules stay
 // those of K1a, only the world differs. The self address of the person is
 // a log at the carrier: catch-up reads it from the device's position
-// instead of asking siblings, the gate after restore ends with the
-// service's answer, and a new device folds the log from the start instead
-// of copying state from the old device (enrolment `fromLog`).
+// (fast), and a new device folds the log from the start instead of copying
+// state from the old device (enrolment `fromLog`). After gate review 25
+// (Anton 18.10.: "the log at the service is an acceleration, never a
+// release ground") the gate after restore or enrolment ends as in K1a:
+// with a sibling's answer whose heads the device covers, or with the
+// revocation of every sibling; the log answer alone never ends it.
 // Step 4 (Anton 18.10., decision 3a): every device carries a pseudonymous
 // writer tag per relationship, HMAC-SHA256 over the relationship id and
 // the device name under a key derived from the seed, truncated to 12

@@ -12,7 +12,8 @@ export interface Welt15Options {
   stores?: boolean
   /**
    * E15 Schritt 6 (Variante „Journal beim Dienst“): die Self-Adresse jeder Person ist beim Träger eine Ablage statt eines
-   * Briefkastens; Nachholen, Sperre nach Restore und Enrollment lesen aus ihr (holder.ts `selfLog`). Default: was der
+   * Briefkastens; Nachholen und Enrollment lesen aus ihr, die Freigabe nach Restore bezeugt weiter eine Schwester oder der
+   * Widerruf (holder.ts `selfLog`, Hybrid nach Tor-Review 25). Default: was der
    * Kandidat als Prüfstandsoption wählt (`bench.selfLog`), sonst aus.
    */
   selfLog?: boolean

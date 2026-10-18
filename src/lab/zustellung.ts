@@ -148,13 +148,23 @@ export interface LogAnswer {
   entries: LogEntry[]
 }
 
-/** Was der Träger über eine Ablage weiß und tut (Messung): jede Leseanfrage mit Gerät, Position, gelieferten Einträgen und Bytes. */
+/**
+ * Was der Träger über eine Ablage weiß und tut (Messung, Review 25 S3): jede Leseanfrage, die den Träger erreicht hat, mit
+ * Gerät, Position und Zeit. Getrennt gezählt: `entries`/`bytes` = was der Träger für die Antwort gelesen und abgeschickt
+ * hat (versucht), `servedEntries`/`servedBytes` = was beim Gerät ankam (nach Antwort- und Eintragsverlust), `requestBytes`
+ * und `headBytes` = Anfrage und Antwortkopf (`{req, address, from, end}`) als JSON, `headBytes` 0 bei verlorener Antwort.
+ * Eine verlorene Anfrage erreicht den Träger nicht und steht hier nicht.
+ */
 export interface LogRead {
   device: string
   address: string
   from: number
   entries: number
   bytes: number
+  servedEntries: number
+  servedBytes: number
+  requestBytes: number
+  headBytes: number
   at: string
 }
 
@@ -295,9 +305,15 @@ export class Carrier {
     if (!log || !this.registered.get(address)?.has(device)) return
     if (this.logRequestDrops.some((r) => r(device))) return
     const entries = log.slice(from)
-    this.logReads.push({ device, address, from, entries: entries.length, bytes: entries.reduce((n, e) => n + e.bytes.length, 0), at: this.now() })
+    const size = (es: readonly LogEntry[]) => es.reduce((n, e) => n + e.bytes.length, 0)
+    const json = (x: unknown) => new TextEncoder().encode(JSON.stringify(x)).length
+    const read: LogRead = { device, address, from, entries: entries.length, bytes: size(entries), servedEntries: 0, servedBytes: 0, requestBytes: json({ address, from, req }), headBytes: 0, at: this.now() }
+    this.logReads.push(read)
     if (this.logAnswerDrops.some((r) => r(device))) return
     const delivered = entries.filter((e) => !this.logEntryDrops.some((r) => r(device, e)))
+    read.servedEntries = delivered.length
+    read.servedBytes = size(delivered)
+    read.headBytes = json({ req, address, from, end: log.length })
     let out = delivered.slice()
     if (this.reverseOrder) out.reverse()
     if (this.duplicateAll) out = out.flatMap((e) => [e, e])

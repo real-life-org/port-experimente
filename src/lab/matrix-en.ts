@@ -414,6 +414,6 @@ export const candidateEn: Record<string, { name: string; desc: string }> = {
   },
   "k1a-journal-service": {
     "name": "K1a + journal at the service",
-    "desc": "K1a's rules unchanged; the person's self address at the carrier keeps the journal as an ordered log: catch-up reads the log from the device's position instead of asking siblings, the gate after restore ends with the service's answer, a new device folds the log from the start; the service holds availability, not authority (an option under study, not the default)"
+    "desc": "K1a's rules unchanged; the person's self address at the carrier keeps the journal as an ordered log: catch-up reads the log from the device's position (fast), a new device folds the log from the start; the gate after restore still ends only with a sibling's witness or the revocation of every sibling, never with the log answer (withholding by the service never causes a release); an option under study, not the default"
   }
 }

@@ -345,17 +345,30 @@ export class HolderDevice {
    */
   private owed = new Set<string>()
   /**
-   * E15 Schritt 6 (Variante „Journal beim Dienst“, Anton 18.10.: Option untersuchen, nicht festlegen). Mit `selfLog` ist
-   * die Self-Adresse der Person beim Träger eine Ablage (zustellung.ts `retain`): eingelieferte Journalrahmen bleiben dort
-   * geordnet erhalten. Das Nachholen (HSC-440: „catch-up“) fragt dann nicht die Schwestergeräte, sondern liest die Ablage ab
-   * der eigenen Position (`logCursor`); eine Antwort, an die Anfragekennung gebunden (MV-5); Wiederholung mit Backoff nur,
-   * solange keine vollständige Antwort kam (Träger unerreichbar, Antwort verloren). Die Sperre nach Restore (MV-6) endet,
-   * wenn die Antwort gelesen und gefaltet ist, unabhängig von Schwestern („warten auf den Dienst“); `deviceRevoked` hebt sie
-   * nicht mehr. Identity §6.1/§6.3 (Zustand beim Speicherdienst, ID-STATE-1): der Dienst hält Verfügbarkeit, nicht
-   * Autorität; er sieht versiegelte Bytes, Größe, Zeit, Leser (Tür D1: er kann nur zerstören). Ohne Journal (K0) wirkungslos.
+   * E15 Schritt 6 (Variante „Journal beim Dienst“, Anton 18.10.: Option untersuchen, nicht festlegen; nach Tor-Review 25
+   * Anton 18.10.: „das Log beim Dienst ist Beschleunigung, nie Freigabegrund“). Mit `selfLog` ist die Self-Adresse der
+   * Person beim Träger eine Ablage (zustellung.ts `retain`). Zwei Spuren: die Daten holt das Gerät schnell aus der Ablage
+   * ab der eigenen Position (`logCursor`, Spur `logSync`, an die Anfragekennung gebunden, MV-5); die Freigabe nach Restore
+   * (MV-6) bleibt wie im Default: sie endet nur mit der Antwort eines Schwestergeräts, deren Köpfe der eigene Stand deckt
+   * (`journal-sync`, Spur `sync`), oder mit dem Widerruf aller Schwestern (`deviceRevoked`). Die Antwort der Ablage allein
+   * beendet die Sperre nie (Replication D1: Zurückhalten durch den Träger darf nie eine Freigabe bewirken; der Dienst kann
+   * eine leere, verkürzte oder umgeordnete Antwort liefern, das Gerät kann deren Vollständigkeit nicht prüfen). „Log
+   * beschleunigt das Nachholen; die Freigabe bezeugt die Schwester oder der Widerruf.“ Ohne Journal (K0) wirkungslos.
    */
   selfLog = false
   private logCursor = 0
+  /**
+   * Spur der Ablage (Schritt 6): `pending` bis eine Antwort auf die laufende Leseanfrage vollständig gefaltet ist;
+   * `answered`: auf die laufende Anfrage kam eine Antwort (unvollständig: Backoff; keine: nächste Runde erneut, Review 25 S2).
+   */
+  private logSync: { pending: boolean; wait: number; backoff: number; id: string | null; answered: boolean } = { pending: false, wait: 0, backoff: 1, id: null, answered: false }
+  /** Während eine Antwort der Ablage gefaltet wird: zurückgestellte Einträge stoßen kein neues Nachholen an (die Antwort entscheidet). */
+  private readingLog = false
+  /** Leseanfragen an die Ablage (Messung, getrennt von den Anfragen an Schwestern `syncRequests`). */
+  logRequests = 0
+  /** Unlesbare oder ungültige Einträge der Ablage (Review 25 B2): nie gefaltet gezählt, der Cursor bleibt davor; je Position ein Befund. */
+  logCorrupt = 0
+  private corruptSeen = new Set<number>()
   private deferredProbes: Array<[string, string[]]> | null = null
   /** Messung (Schritt 6): Einträge und Bytes, die dieses Gerät aus der Ablage gelesen hat. */
   logEntriesRead = 0
@@ -364,9 +377,21 @@ export class HolderDevice {
   get logMode(): boolean {
     return this.selfLog && !!this.cand.heads
   }
-  /** Steht noch Nachholarbeit aus (Messung, Review 11 B2)? Erst ohne sie ist eine Reparatur beendet, nicht schon, wenn das Gerät im Backoff schweigt. */
+  /** Steht noch Nachholarbeit aus (Messung, Review 11 B2)? Erst ohne sie ist eine Reparatur beendet, nicht schon, wenn das Gerät im Backoff schweigt. Mit Ablage: beide Spuren. */
   get syncPending(): boolean {
+    return this.sync.pending || this.logSync.pending
+  }
+  /** Schritt 6: steht das Falten der Ablage noch aus (Daten), unabhängig von der Freigabe? */
+  get logPending(): boolean {
+    return this.logSync.pending
+  }
+  /** Schritt 6: wartet das Gerät noch auf das Zeugnis einer Schwester (Freigabe), unabhängig von der Ablage? */
+  get witnessPending(): boolean {
     return this.sync.pending
+  }
+  /** Gibt das Gerät gerade nichts an Gegenseiten frei (Sperre nach Restore oder Enrollment, MV-6)? */
+  get gated(): boolean {
+    return this.catchUp
   }
   /**
    * Messung (X21, Plan Abschnitt 5): Art jedes Rahmens, den dieses Gerät erzeugt hat, je SHA-256 der versiegelten
@@ -540,7 +565,7 @@ export class HolderDevice {
       }
       if (defer && e instanceof M.Missing) {
         this.dispositions.push(`deferred(${e.what}:${e.ref})`)
-        if (e.what === 'batch' && !this.sync.pending) this.requestSync() // der Vorgänger fehlt: nachholen lassen
+        if (e.what === 'batch' && !this.sync.pending && !this.readingLog) this.requestSync() // der Vorgänger fehlt: nachholen lassen
         return false
       }
       throw e
@@ -596,9 +621,9 @@ export class HolderDevice {
     this.down = false
     this.parked = []
     await this.relisten()
-    // B1a: vor dem Nachholen nichts an Gegenseiten freigeben. Schritt 6: mit Ablage immer, denn der Dienst antwortet auch
-    // ohne Schwester (die Sperre ist „warten auf den Dienst“, nicht „warten auf die Schwester“).
-    this.catchUp = this.logMode || this.hasSibling()
+    // B1a: vor dem Nachholen nichts an Gegenseiten freigeben. Schritt 6 (Hybrid, Review 25 B1): auch mit Ablage nur, wenn
+    // eine Schwester antworten kann, und die Sperre endet wie im Default (Zeugnis der Schwester oder Widerruf).
+    this.catchUp = this.hasSibling()
     this.requestSync()
   }
   /**
@@ -619,8 +644,8 @@ export class HolderDevice {
    */
   deviceRevoked(device: string): void {
     this.revoked.add(device)
-    // Schritt 6: mit Ablage hebt der Widerruf die Sperre nicht; sie endet mit der Antwort des Dienstes (X9 bleibt).
-    if (this.catchUp && !this.logMode && !this.hasSibling()) this.sync = { pending: false, wait: 0, backoff: 1, id: null }
+    // Schritt 6 (Hybrid): mit Ablage genauso; die Ablage faltet weiter (Daten), die Freigabe hängt nicht an ihr.
+    if (this.catchUp && !this.hasSibling()) this.sync = { pending: false, wait: 0, backoff: 1, id: null }
     this.commit()
   }
   /** Freigeben (nach dem Commit): während des Nachholens nach einem Neuaufbau nur Verkehr an die eigene Adresse (B1a). */
@@ -643,9 +668,14 @@ export class HolderDevice {
     this.deferredProbes = probes.length ? probes.map(([id, e]): [string, string[]] => [id, [...e]]) : null
     this.requestSync()
   }
-  /** Nachholen anstoßen: nach Neuaufbau, Enrollment oder wenn ein Rahmen zurückgestellt wurde (HSC-440). */
+  /**
+   * Nachholen anstoßen: nach Neuaufbau, Enrollment oder wenn ein Rahmen zurückgestellt wurde (HSC-440). Schritt 6
+   * (Hybrid): zuerst liest das Gerät die Ablage; die Anfrage an die Schwestern geht eine Runde später mit den dann
+   * gefalteten Köpfen hinaus (die Schwester liefert nur, was die Ablage nicht brachte, und bezeugt den Stand).
+   */
   requestSync() {
-    this.sync = { pending: true, wait: 0, backoff: 1, id: null } // keine Anfrage läuft: keine Antwort beendet das Nachholen
+    this.sync = { pending: true, wait: this.logMode ? 1 : 0, backoff: 1, id: null } // keine Anfrage läuft: keine Antwort beendet das Nachholen
+    if (this.logMode) this.logSync = { pending: true, wait: 0, backoff: 1, id: null, answered: false }
   }
   private crash(point: CrashPoint) {
     if (this.crashAt !== point) return
@@ -1115,6 +1145,7 @@ export class HolderDevice {
    * zeigt, dass die eigenen Köpfe die des Antwortenden decken.
    */
   private async syncOut(): Promise<void> {
+    if (this.logMode) this.logOut()
     if (!this.sync.pending || !this.ownRkid || !this.cand.heads) return
     if (this.sync.wait > 0) {
       this.sync.wait--
@@ -1124,16 +1155,32 @@ export class HolderDevice {
     this.sync.backoff = Math.min(16, this.sync.backoff * 2)
     this.syncRequests++
     this.sync.id = crypto.randomUUID() // frisch je Anfrage: nur die Antwort darauf zählt (Review 19 B1a)
-    if (this.logMode) {
-      // Schritt 6: die Ablage antwortet, nicht die Schwestergeräte; unerreichbar heißt: später erneut (Backoff).
-      try {
-        this.carrier.readLog(this.name, this.ownRkid, this.logCursor, this.sync.id)
-      } catch (e) {
-        if (!(e instanceof WireUnreachable)) throw e
-      }
+    await this.sendSelf(TYPES.journalSync, { heads: this.cand.heads(), reply: false, req: this.sync.id })
+  }
+  /**
+   * Schritt 6: Leseanfrage an die Ablage ab der eigenen Position. Die Antwort liegt mit der nächsten Abholung bereit; kam
+   * auf die laufende Anfrage bis dahin keine (Anfrage oder Antwort verloren), fragt das Gerät in dieser Runde erneut
+   * (Review 25 S2: höchstens eine Leseanfrage je Runde, keine an die Self-Adresse). Kam eine unvollständige Antwort
+   * (Lücke, ungültiger Eintrag) oder ist der Träger unerreichbar, wartet es mit Backoff (1, 2, 4, … höchstens 16 Runden).
+   */
+  private logOut(): void {
+    const l = this.logSync
+    if (!l.pending || !this.ownRkid) return
+    if (l.wait > 0) {
+      l.wait--
       return
     }
-    await this.sendSelf(TYPES.journalSync, { heads: this.cand.heads(), reply: false, req: this.sync.id })
+    this.logRequests++
+    l.id = crypto.randomUUID()
+    l.answered = false
+    try {
+      this.carrier.readLog(this.name, this.ownRkid, this.logCursor, l.id)
+      l.wait = 0
+    } catch (e) {
+      if (!(e instanceof WireUnreachable)) throw e
+      l.wait = l.backoff
+      l.backoff = Math.min(16, l.backoff * 2)
+    }
   }
   /** Ein Dokument an die eigene Adresse der Person (Journal, Nachholen), gezählt als eigener Verkehr. */
   private async sendSelf(type: string, payload: Record<string, Json>): Promise<void> {
@@ -1146,51 +1193,78 @@ export class HolderDevice {
     this.measures.bytesOut -= bytes.length
   }
   /**
-   * Schritt 6: eine Antwort der Ablage lesen. Nur die Antwort auf die laufende Anfrage zählt (MV-5); jeder Eintrag wird
+   * Schritt 6: eine Antwort der Ablage lesen. Nur die Antwort auf die laufende Leseanfrage zählt (MV-5); jeder Eintrag wird
    * wie ein Journalrahmen gefaltet (dieselbe Faltung, `replay`), in Durchgängen, bis nichts mehr zurückgestellt wird
-   * (Umordnung). Vollständig ist die Antwort, wenn jede Position von `from` bis `end − 1` da ist und gefaltet wurde; dann
-   * steht die eigene Position auf `end` und das Nachholen ist abgeschlossen. Fehlt etwas (zerstört oder verloren), rückt
-   * die Position bis zur ersten Lücke vor und das Gerät fragt mit Backoff erneut.
+   * (Umordnung). Die Position rückt bis zur ersten Lücke vor: fehlend, zurückgestellt oder ungültig (Review 25 B2: ein
+   * unlesbarer oder ungültiger Eintrag zählt nie als gefaltet, er ist ein Befund `journal:corrupt-entry`, die nächste
+   * Leseanfrage beginnt bei ihm). Vollständig heißt nur: die Ablage hat nichts mehr, was das Gerät noch nicht hat; die
+   * Freigabe entscheidet diese Antwort nicht (Review 25 B1: der Dienst bestimmt `end` und die Einträge ungesichert).
    */
   private async readLogAnswer(a: LogAnswer): Promise<void> {
     this.logEntriesRead += a.entries.length
     this.logBytesRead += a.entries.reduce((n, e) => n + e.bytes.length, 0)
-    if (a.req !== this.sync.id) {
+    if (a.req !== this.logSync.id) {
       this.staleSyncAnswers++
       return
     }
-    if (!this.sync.pending) return
+    if (!this.logSync.pending) return
+    this.logSync.answered = true
     const byPos = new Map<number, Uint8Array>()
-    for (const e of a.entries) if (!byPos.has(e.pos)) byPos.set(e.pos, e.bytes)
+    for (const e of a.entries) if (e.pos >= a.from && e.pos < a.end && !byPos.has(e.pos)) byPos.set(e.pos, e.bytes)
+    const bad = new Set<number>()
     let rest = [...byPos.entries()].sort((x, y) => x[0] - y[0])
-    while (rest.length) {
-      const next: typeof rest = []
-      for (const [pos, bytes] of rest) if (!(await this.guarded(() => this.replay(bytes), true))) next.push([pos, bytes])
-      if (next.length === rest.length) break
-      rest = next
+    this.readingLog = true
+    try {
+      while (rest.length) {
+        const next: typeof rest = []
+        for (const [pos, bytes] of rest) {
+          const r: { st: 'folded' | 'skip' | 'corrupt' } = { st: 'skip' }
+          const ok = await this.guarded(async () => void (r.st = await this.replay(bytes)), true)
+          if (!ok) next.push([pos, bytes])
+          else if (r.st === 'corrupt' && !bad.has(pos)) {
+            bad.add(pos)
+            if (!this.corruptSeen.has(pos)) {
+              this.corruptSeen.add(pos)
+              this.logCorrupt++
+              this.dispositions.push(`finding(journal:corrupt-entry@${pos})`)
+            }
+          }
+        }
+        if (next.length === rest.length) break
+        rest = next
+      }
+    } finally {
+      this.readingLog = false
     }
     let gap = a.end
-    for (let p = a.from; p < a.end; p++) if (!byPos.has(p)) {
-      gap = p
-      break
-    }
+    for (let p = a.from; p < a.end; p++)
+      if (!byPos.has(p) || bad.has(p)) {
+        gap = p
+        break
+      }
     if (rest.length) gap = Math.min(gap, rest[0]![0])
     this.logCursor = Math.max(this.logCursor, gap)
-    if (gap === a.end) this.sync = { pending: false, wait: 0, backoff: 1, id: this.sync.id }
+    if (gap === a.end) this.logSync = { pending: false, wait: 0, backoff: 1, id: this.logSync.id, answered: true }
+    else {
+      // Unvollständig: erneut ab der Lücke, mit Backoff (nicht jede Runde).
+      this.logSync.wait = this.logSync.backoff
+      this.logSync.backoff = Math.min(16, this.logSync.backoff * 2)
+    }
   }
   /**
    * Ein Eintrag der Ablage: ein versiegelter Rahmen an die Self-Adresse. Journalrahmen vom eigenen Self-Anker werden
-   * gefaltet wie bei der Zustellung (`receiveOwnFrame`, `applyRemote`, `applied`); was das Gerät schon hat (eigener
-   * Rahmen, bekannter Batch), wirkt nicht. Quittungen und anderer Verkehr an der Self-Adresse liegen auch in der Ablage
-   * (der Träger unterscheidet nicht) und werden übergangen. Lesen ist keine Zustellung: keine Quittung, kein `completed`
-   * (kommt derselbe Rahmen noch per Briefkasten, quittiert das Gerät ihn dort wie bisher).
+   * gefaltet wie bei der Zustellung (`receiveOwnFrame`, `applyRemote`, `applied`). Rückgabe (Review 25 B2): `folded`;
+   * `skip` = geprüft und ohne Wirkung (eigener oder schon bekannter Rahmen, Quittung oder anderer gültiger Verkehr an der
+   * Self-Adresse, den der Träger nicht unterscheidet); `corrupt` = nicht lesbar, nicht zu öffnen, ungültig signiert, fremder
+   * Signierer oder kaputter Journalinhalt. Ein fehlender Vorgänger wirft `Missing` (zurückgestellt). Lesen ist keine
+   * Zustellung: keine Quittung, kein `completed`.
    */
-  private async replay(bytes: Uint8Array): Promise<void> {
+  private async replay(bytes: Uint8Array): Promise<'folded' | 'skip' | 'corrupt'> {
     let env: unknown
     try {
       env = JSON.parse(dec.decode(bytes))
     } catch {
-      return
+      return 'corrupt'
     }
     const ctx = `self/${this.person}`
     const self = (await this.keysFor(ctx)).anchor
@@ -1198,21 +1272,31 @@ export class HolderDevice {
     try {
       v = await receive(env, this.resolve, this.completed)
     } catch {
-      return
+      return 'corrupt'
     }
-    if (v.disposition !== 'unique' || this.zusteller.submissions.has(v.digest!)) return
+    if (v.disposition !== 'unique') return v.disposition === 'duplicate-known' ? 'skip' : 'corrupt'
+    if (this.zusteller.submissions.has(v.digest!)) return 'skip'
     const doc = v.document as unknown as Doc & { proof: unknown }
-    if (doc.type !== TYPES.journal) return
-    if (doc.issuer !== self || !(await diVerify(doc, doc.issuer))) {
+    if (!(await diVerify(doc, doc.issuer))) return 'corrupt'
+    if (doc.type !== TYPES.journal) return 'skip'
+    if (doc.issuer !== self) {
       this.dispositions.push('failed(journal-from-unexpected-signer)')
-      return
+      return 'corrupt'
     }
     const b = (doc.payload as { b?: string }).b
-    if (typeof b !== 'string') return
+    if (typeof b !== 'string') return 'corrupt'
     const body = new Uint8Array(Buffer.from(b, 'base64'))
-    await this.applyRemote(this.cand.receiveOwnFrame(body)) // Missing → zurückgestellt (guarded, defer)
+    let frame: ReturnType<CandidateDevice['receiveOwnFrame']>
+    try {
+      frame = this.cand.receiveOwnFrame(body)
+    } catch (e) {
+      if (e instanceof M.Missing) throw e // zurückgestellt (guarded, defer)
+      return 'corrupt'
+    }
+    await this.applyRemote(frame)
     this.cand.applied?.(body)
     this.log.push({ type: doc.type.split('/').slice(-2)[0] ?? doc.type, from: doc.issuer, at: this.clock.now() })
+    return 'folded'
   }
   /** Deckt der eigene Stand die genannten Köpfe? */
   private covers(heads: Record<string, number>): boolean {
