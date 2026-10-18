@@ -42,6 +42,20 @@ says which branch breaks it. Before, the same cells flipped between report
 runs. For comparison `rltp-mls` (log + MLS), also in every branch: all S/T
 passed except S10 blind, T6b blind, T8/T11.
 
+**Limit of the enumeration.** The bench hook
+`force_tiebreak` (`rust/mls-wasm/src/peer.rs`) enumerates exactly one kind
+of chance: which of two sibling commits on the same epoch wins the
+tiebreak. Other orders that depend on random values are not enumerated,
+for example in `rltp-mls` the topological sort of the authority log,
+which breaks ties by operation ids that contain a fresh random nonce
+(`../rltp-beekem/authority.ts`, `make` and the sort in the fold). This
+candidate has no such log; any other random-dependent order inside OpenMLS
+or the candidate is not enumerated either. No
+changing outcome was observed from that (two report runs, all 132 scenario
+outcomes of the four MLS candidates identical), but that is an observation,
+not an enumeration: a cell that depended on it would not be caught by the
+bench.
+
 | | any-staged | owner | rltp-mls | Reason |
 |---|---|---|---|---|
 | S1–S3 | passed | passed | passed | |

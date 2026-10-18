@@ -132,26 +132,22 @@ const hexToBase64 = (hex: string) => btoa(String.fromCharCode(...hex.match(/../g
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 // Zustellzeit als Verteilung (Anton 18.10.: Zeitabhängigkeit wird gemessen, nie als Einzelergebnis). S6 und S6b
-// hängen davon ab, wann der Server einem neuen Mitglied das Dokument samt Historie gibt; sie laufen
-// ARK_TIMING_RUNS-mal, die Zelle besteht nur, wenn jeder Lauf innerhalb ARK_DELIVERY_BOUND_MS zustellt.
-//
-// Herleitung der Schranke aus den Parametern des Kandidaten (keine geschätzte Zahl), ab der Aufnahme:
-//   1. Alices Keyhive-Ereignis erreicht den Server: Sync-Anfrage alle syncRequestInterval = 200 ms (unten), aber
-//      höchstens alle minSyncRequestInterval = 1000 ms (ARK keyhive-subduction-adapter.js)          ≤ 1000 ms
-//   2. der Server übernimmt es in seinen Keyhive-Cache (keyhive-cache-refresh, 2-s-Takt)         ≤ 2000 ms
-//   3. Daves Keyhive-Sync holt es (wie 1.)                                                       ≤ 1000 ms
-//   4. ARK meldet die neue Freigabe (shareConfigDebounceMs = 50 ms, unten)                        ≤   50 ms
-//   5. eine Sync-Runde des Dokuments; ein Aufruf beim Server endet spätestens nach dessen
-//      Rundreise-Frist (subduction server --timeout, Vorgabe 5 s)                                ≤ 5000 ms
-//   6. scheitert die Runde, weil der Server die Freigabe noch nicht kennt: die erste
-//      Heilung (automerge-repo SyncScheduler DEFAULT_HEAL_INITIAL_DELAY_MS = 2 s) und
-//      eine weitere Runde (wie 5.)                                                                ≤ 7000 ms
-//   7. Abfrage-Raster des Prüfstands (settle beobachtet alle 100 ms)                             ≤  100 ms
-// Summe 16 150 ms. Mehr gibt der Kandidat sich selbst nicht vor: weitere Heilungen verdoppeln den Abstand bis 60 s,
-// nach zehn Versuchen gibt er auf, und eine Runde, die „gelingt“, aber Blobs ohne Schlüssel zurücklässt, wiederholt
-// er gar nicht mehr (NOTES.md, Befund Lebendigkeit). Fünf Läufe halten die Datei in der CI unter etwa zehn Minuten.
+// hängen davon ab, wann der Server einem neuen Mitglied das Dokument samt Historie gibt. Eine Zustellschranke gibt der
+// Stack nicht zu (Review 23 B2): die Sync-Runde eines Clients hat 60 s Frist (automerge-repo
+// src/subduction/source.ts DEFAULT_SYNC_TIMEOUT_MS), auch für Heilungen; die Heilung verdoppelt ihren Abstand bis 60 s
+// und gibt nach zehn Versuchen auf (SyncScheduler.ts DEFAULT_HEAL_MAX_DELAY_MS, DEFAULT_HEAL_MAX_ATTEMPTS); eine Runde,
+// die „gelingt“, aber Blobs ohne Schlüssel zurücklässt, wird gar nicht wiederholt. In der CI blieb die Zustellung
+// mehrfach aus (Läufe 39106289737, 39084511143, 38800864482). Deshalb stehen S6 und S6b fest „nicht bestanden,
+// abhängig von …“ (src/lab/zeit.ts); jeder Lauf wird trotzdem gemessen und streng geprüft
+// (tests/keyhive-ark.test.ts), die Verteilung steht in den Details.
 export const ARK_TIMING_RUNS = 5
-export const ARK_DELIVERY_BOUND_MS = 1000 + 2000 + 1000 + 50 + 5000 + 2000 + 5000 + 100
+/**
+ * Beobachtungsfenster, keine Schranke: so lange wartet settle() auf die Zustellung an ein frisch aufgenommenes Gerät;
+ * eine längere Zustellung zählt als „nicht innerhalb des Fensters“. Am Ausgang der Zelle ändert es nichts.
+ */
+export const ARK_OBSERVATION_WINDOW_MS = 20_000
+export const ARK_NO_BOUND =
+  'keine Zustellschranke im Stack (Sync-Frist 60 s, Heilung gibt nach 10 Versuchen auf; CI-Hänger beobachtet)'
 
 export function keyhiveArk(): Candidate {
   const devices = new Map<Device, DeviceState>()
@@ -309,8 +305,8 @@ export function keyhiveArk(): Candidate {
           pendingDelivery.delete(d)
         }
       }
-      // Frische Geräte: gewartet wird bis zur hergeleiteten Zustellschranke (oben), geschriebene Einträge bis 12 s.
-      const expectationsDone = (unmet.length === 0 || Date.now() > start + 12_000) && (freshUnmet.length === 0 || Date.now() > start + ARK_DELIVERY_BOUND_MS)
+      // Frische Geräte: gewartet wird bis zum Beobachtungsfenster (oben, keine Schranke), geschriebene Einträge bis 12 s.
+      const expectationsDone = (unmet.length === 0 || Date.now() > start + 12_000) && (freshUnmet.length === 0 || Date.now() > start + ARK_OBSERVATION_WINDOW_MS)
       const fp = JSON.stringify(views)
       stable = fp === last ? stable + 1 : 0
       last = fp
@@ -332,7 +328,8 @@ export function keyhiveArk(): Candidate {
       scenarios: ['S6', 'S6b'],
       runs: ARK_TIMING_RUNS,
       cause: 'Zustellzeit des Subduction-Servers',
-      boundMs: ARK_DELIVERY_BOUND_MS,
+      noBound: ARK_NO_BOUND,
+      windowMs: ARK_OBSERVATION_WINDOW_MS,
       // Die längste Zustellung des Laufs; blieb eine aus (Gerät aufgenommen, liest nie alles), gibt es keine Zeit.
       measure: () => (pendingDelivery.size ? undefined : Math.max(0, ...deliveries.values())),
     },

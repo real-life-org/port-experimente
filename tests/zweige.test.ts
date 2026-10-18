@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { enumerateBranches, foldBranches, MAX_BRANCHES, type RunOutcome } from '../src/lab/zweige'
-import { foldTiming } from '../src/lab/zeit'
+import { foldTiming, measureRuns, runFaults } from '../src/lab/zeit'
 import type { Candidate, CoinBranches } from '../src/lab/types'
 
 // Prüfstandsregel (Anton 18.10.): eine Zelle gilt nur, wenn sie in jedem Zweig hält. Ein gespielter Münzwurf:
@@ -76,17 +76,64 @@ describe('Zweige eines Münzwurfs', () => {
 })
 
 describe('Zeit als Verteilung', () => {
-  const t = { scenarios: ['S6'], runs: 3, cause: 'Zustellzeit', boundMs: 10_000, measure: () => undefined }
+  // Ohne Zustellschranke im Stack steht die Zelle fest rot (Anton 18.10., Review 23 B1/B2); gemessen wird eine
+  // Verteilung innerhalb eines Beobachtungsfensters, die nur in den Details steht.
+  const t = { scenarios: ['S6'], runs: 3, cause: 'Zustellzeit', noBound: 'keine Zustellschranke im Stack', windowMs: 10_000, measure: () => undefined }
   const ok = { outcome: 'bestanden' as const, authority: 'Dave Mitglied: ja', keys: 'k' }
-  it('bestanden nur, wenn jeder Lauf innerhalb der Schranke zustellt', () => {
+  const fail = { outcome: 'nicht bestanden' as const, authority: 'Dave Mitglied: ja', keys: 'leer' }
+  it('jeder Lauf schnell zugestellt: trotzdem nicht bestanden, die Verteilung steht in den Details', () => {
     const r = foldTiming(t, [{ result: ok, ms: 2000 }, { result: ok, ms: 3000 }, { result: ok, ms: 2500 }])
-    expect(r).toEqual({ outcome: 'bestanden', authority: 'Dave Mitglied: ja; 3/3 innerhalb 10.0 s (Zustellung min 2.0 / Median 2.5 / max 3.0 s)', keys: 'k' })
+    expect(r.outcome).toBe('nicht bestanden')
+    expect(r.authority).toBe(
+      'abhängig von: Zustellzeit; keine Zustellschranke im Stack; Verteilung: 3/3 innerhalb des Beobachtungsfensters 10.0 s (Zustellung min 2.0 / Median 2.5 / max 3.0 s); Dave Mitglied: ja',
+    )
+    expect(r.keys).toBe('k')
   })
-  it('ein später oder ausgebliebener Lauf: nicht bestanden, „abhängig von“ mit k/N', () => {
-    const fail = { outcome: 'nicht bestanden' as const, authority: 'Dave Mitglied: ja', keys: 'leer' }
+  it('ein später oder ausgebliebener Lauf: derselbe Ausgang, nur die Verteilung ändert sich', () => {
     const r = foldTiming(t, [{ result: ok, ms: 2000 }, { result: ok, ms: 12_000 }, { result: fail, ms: undefined }])
     expect(r.outcome).toBe('nicht bestanden')
-    expect(r.authority).toBe('abhängig von: Zustellzeit, 1/3 innerhalb 10.0 s (Zustellung min 2.0 / Median 2.0 / max 12.0 s; 1× ausgeblieben); Dave Mitglied: ja')
+    expect(r.authority).toBe(
+      'abhängig von: Zustellzeit; keine Zustellschranke im Stack; Verteilung: 1/3 innerhalb des Beobachtungsfensters 10.0 s (Zustellung min 2.0 / Median 2.0 / max 12.0 s; 1× ausgeblieben); Dave Mitglied: ja',
+    )
     expect(r.keys).toBe('[Lauf 2] k · [Lauf 3] leer')
+  })
+  it('der Ausgang hängt nicht von den Zeiten ab', () => {
+    const fast = foldTiming(t, [{ result: ok, ms: 100 }, { result: ok, ms: 100 }, { result: ok, ms: 100 }])
+    const slow = foldTiming(t, [{ result: fail, ms: undefined }, { result: fail, ms: undefined }, { result: fail, ms: undefined }])
+    expect(fast.outcome).toBe(slow.outcome)
+  })
+  it('jeder Lauf steht strukturiert im Ergebnis', () => {
+    const r = foldTiming(t, [{ result: ok, ms: 2000 }, { result: fail, ms: undefined, error: 'boom' }])
+    expect(r.runs).toEqual([
+      { outcome: 'bestanden', authority: 'Dave Mitglied: ja', keys: 'k', ms: 2000 },
+      { outcome: 'nicht bestanden', authority: 'Dave Mitglied: ja', keys: 'leer', ms: undefined, error: 'boom' },
+    ])
+  })
+  it('streng je Lauf: eine Ausnahme oder eine fehlende Aussage in einem Lauf ist ein Befund (Review 23 B3)', () => {
+    const good = { outcome: 'bestanden' as const, authority: 'Dave Mitglied: ja; x', keys: 'k', ms: 2000 }
+    const runs = [good, good, good, good, { outcome: 'nicht bestanden' as const, authority: 'Fehler: boom', keys: '—', ms: undefined, error: 'boom' }]
+    expect(runFaults(runs, 'Dave Mitglied: ja')).toEqual(['Lauf 5: Ausnahme: boom', 'Lauf 5: ohne „Dave Mitglied: ja“'])
+    expect(runFaults([good, { ...good, authority: 'Dave Mitglied: nein' }], 'Dave Mitglied: ja')).toEqual(['Lauf 2: ohne „Dave Mitglied: ja“'])
+    expect(runFaults([good, good], 'Dave Mitglied: ja')).toEqual([])
+  })
+})
+
+describe('measureRuns', () => {
+  it('eine Ausnahme in einem Lauf wird festgehalten, nicht verschluckt; jeder Lauf baut frisch und räumt auf', async () => {
+    let built = 0
+    let disposed = 0
+    const mk = (): Candidate => {
+      built++
+      return { id: 'z', capabilities: new Set(), dispose: async () => void disposed++, timing: { scenarios: ['S6'], runs: 3, cause: 'c', noBound: 'n', windowMs: 1000, measure: () => 500 } } as unknown as Candidate
+    }
+    let i = 0
+    const runs = await measureRuns(mk(), async () => mk(), async () => {
+      if (++i === 2) throw new Error('boom')
+      return { outcome: 'bestanden', authority: 'Dave Mitglied: ja', keys: 'k' }
+    })
+    expect(built).toBe(3)
+    expect(disposed).toBe(3)
+    expect(runs.map((r) => r.error)).toEqual([undefined, 'boom', undefined])
+    expect(runs[1]!.result).toEqual({ outcome: 'nicht bestanden', authority: 'Fehler: boom', keys: '—' })
   })
 })

@@ -118,9 +118,9 @@ export interface CoinBranches {
 }
 
 /**
- * Zeitabhängige Szenarien (Anton 18.10.): hängt der Ausgang von Zustellzeiten ab, läuft das Szenario `runs`-mal
- * auf je einem frischen Kandidaten, und der Prüfstand misst eine Verteilung statt eines Einzelergebnisses
- * (src/lab/zeit.ts). Bestanden nur, wenn jeder Lauf besteht und innerhalb der Schranke zustellt.
+ * Zeitabhängige Szenarien (Anton 18.10.): hängt der Ausgang von Zustellzeiten ab und gibt der Stack keine
+ * Zustellschranke zu, steht die Zelle fest „nicht bestanden, abhängig von …“ (src/lab/zeit.ts). Gemessen wird die
+ * Verteilung: das Szenario läuft `runs`-mal auf je einem frischen Kandidaten; sie steht nur in den Details.
  */
 export interface TimingSpec {
   /** Szenarien, die wiederholt laufen. */
@@ -128,10 +128,23 @@ export interface TimingSpec {
   readonly runs: number
   /** Was die Zeit bestimmt, für „abhängig von: …“. */
   readonly cause: string
-  /** Schranke in ms; der Kandidat leitet sie aus seinen eigenen Parametern her (Kommentar am Kandidaten). */
-  readonly boundMs: number
+  /** Warum der Stack keine Zustellschranke hat (Beleg), für die Details. */
+  readonly noBound: string
+  /** Beobachtungsfenster in ms: so lange wartet der Prüfstand je Lauf auf die Zustellung. Keine Schranke des Stacks. */
+  readonly windowMs: number
   /** Nach einem Lauf: die längste Zustellzeit dieses Laufs in ms, `undefined`, wenn eine Zustellung ausblieb. */
   measure(): number | undefined
+}
+
+/** Ein einzelner Lauf eines wiederholt gemessenen Szenarios, strukturiert (für die strenge Prüfung je Lauf). */
+export interface RunReport {
+  readonly outcome: Outcome
+  readonly authority: string
+  readonly keys: string
+  /** Gemessene Zustellzeit in ms, `undefined`: ausgeblieben. */
+  readonly ms: number | undefined
+  /** Ausnahme des Laufs, falls er abbrach. */
+  readonly error?: string
 }
 
 /** Ein Kandidat hinter dem Prüfstand. Eine Instanz = eine Gruppe. */
@@ -223,4 +236,6 @@ export interface ScenarioResult {
   /** Ebene Schlüssel: wer liest was. */
   readonly keys: string
   readonly ms: number
+  /** Nur bei wiederholt gemessenen Szenarien (`Candidate.timing`): jeder Lauf einzeln. */
+  readonly runs?: readonly RunReport[]
 }

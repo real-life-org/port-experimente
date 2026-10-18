@@ -686,14 +686,8 @@ export async function runScenario(make: CandidateFactory, s: Scenario): Promise<
   }
   // Hängt das Szenario von Zustellzeiten ab, misst der Prüfstand eine Verteilung über mehrere Läufe (src/lab/zeit.ts).
   if (candidate.timing?.scenarios.includes(s.id)) {
-    const once = async (c: typeof candidate) => {
-      try {
-        return await s.run(new World(c))
-      } catch (e) {
-        return { outcome: 'nicht bestanden' as const, authority: `Fehler: ${(e as Error).message}`, keys: '—' }
-      }
-    }
-    const runs = await measureRuns(candidate, make, once)
+    // Ausnahmen fängt measureRuns je Lauf und hält sie fest (`runs[i].error`), damit die Prüfung je Lauf sie sieht.
+    const runs = await measureRuns(candidate, make, (c) => s.run(new World(c)))
     return { scenario: s.id, title: s.title, ms: performance.now() - t0, ...foldTiming(candidate.timing, runs) }
   }
   try {
