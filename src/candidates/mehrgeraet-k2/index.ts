@@ -40,8 +40,9 @@
 // - Writer of a revision = the signing device key of the relationship (8500 and
 //   6270 per signer, `signerId` in holder.ts); no writer tag in the document.
 //   Stock: every device numbers its own keys under its own nonce (8430/8445
-//   per device); the person's stock is the union. M may name any key (no
-//   `n mod devices` split; the per-device stock at M is step 5).
+//   per device); the person's stock is the union. Interim rule until step 5:
+//   M keeps K1a's `n mod devices` split of the keys it may name (switch
+//   `mediatorSplit`, default on; off = M names any key, counter-run).
 // - Incarnation stays: a restore brings the same device keys back from the
 //   image with an older journal, so the batch key must change (MV-3).
 
@@ -66,8 +67,9 @@ export interface K2Options {
    */
   counterpartRevocation?: boolean
   /**
-   * Counter-run: keep K1a's split of the keys a mediator device may name (n mod devices, `mayName`). Default off (K2 step 1:
-   * M names any key of the person's stock; the per-device allocation at M, 4.5 (b), is step 5).
+   * Interim rule until step 5: keep K1a's split of the keys a mediator device may name (n mod devices, `mayName`). Default
+   * on; nothing in step 1 replaces it (the per-device allocation at M, 4.5 (b), is step 5). Off = counter-run, M names any
+   * key of the person's stock (X1, X13, X14 fail).
    */
   mediatorSplit?: boolean
 }
@@ -194,7 +196,7 @@ export class K2Device extends K1aDevice {
     slots: number,
     budget: number,
     private readonly dir: DeviceDirectory,
-    private readonly nameSplit = false,
+    private readonly nameSplit = true,
   ) {
     super(person, name, new Uint8Array(32), index, slots, budget, false, false) // no writer tags, no number classes
     this.secret = secret
@@ -204,7 +206,7 @@ export class K2Device extends K1aDevice {
   get public(): Member {
     return this.member
   }
-  /** M names any key of the person's stock (no `n mod devices` split in K2; the per-device stock at M is step 5). */
+  /** Interim rule: K1a's `n mod devices` split until step 5; off (counter-run) M names any key of the person's stock. */
   override mayName(anchor: string, rel: string, state: M.HolderState): boolean {
     return this.nameSplit ? super.mayName(anchor, rel, state) : true
   }
@@ -260,7 +262,7 @@ export function k2(opts: K2Options = {}): MultiDeviceCandidate & { readonly dire
   const budget = opts.budget ?? M.PARAM.budget
   const slots = opts.devices ?? 2
   const counterparts = opts.counterpartRevocation ?? true
-  const split = opts.mediatorSplit ?? false
+  const split = opts.mediatorSplit ?? true
   const dir = new DeviceDirectory()
   const devices = new Map<string, K2Device[]>()
   const ceremonies: Array<{ person: string; device: string; bytesNewToOld: number; bytesOldToNew: number }> = []
@@ -271,7 +273,7 @@ export function k2(opts: K2Options = {}): MultiDeviceCandidate & { readonly dire
     return Buffer.byteLength(JSON.stringify({ device: m.name, anchor: k.anchor, rkid: k.rkid, journal: m.journal.raw }), 'utf8')
   }
   return {
-    id: split ? 'k2-device-keys-split' : 'k2-device-keys',
+    id: split ? 'k2-device-keys' : 'k2-device-keys-no-split',
     title: 'K2 step 1: device keys, registration per device, device-signed journal',
     capabilities: new Set(['journal', 'rights', 'device-keys'] as const),
     directory: dir,

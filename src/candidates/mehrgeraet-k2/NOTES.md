@@ -121,8 +121,14 @@ devices, the set revision and its fan-out are steps 2 and 3.
   (nonce, n) and the anchor differs anyway. The model still reports a
   second nonce on a relationship (8435, "zweiter Vorrat"): that finding
   now marks the normal case (X17: 2) and is a spec follow-up.
-- M names any key of the person's stock. Switch: `mediatorSplit: true`
-  brings K1a's `n mod devices` split back (counter-run).
+- **Interim rule until step 5: `mediatorSplit` on (default).** M keeps
+  K1a's `n mod devices` split of the keys a mediator device may name.
+  Nothing in step 1 replaces it: per-device keys remove writer tags and
+  number classes, but not the case that two M devices name the same key
+  of A's stock. The allocation per M device that A enforces (4.5 (b)) is
+  step 5 and replaces the interim rule there. Counter-run
+  `mediatorSplit: false` (`k2-device-keys-no-split`): M names any key,
+  X1, X13 and X14 fail (measured, "Results").
 
 ### Incarnation: kept
 
@@ -151,7 +157,7 @@ simplification); `device-set@1` and its fan-out are step 2.
 | writer tags (step 4, HMAC under a seed key, `writer` field in revision, probe, mapping) | removed; writer = signing device key, no field | with keys per device the signer is already a pseudonym per relationship |
 | number classes ⌊n/devices⌋ mod devices (review 21 B1) | removed (`allocationSplit` off) | own nonce per device: two devices never produce the same (nonce, n) anchor |
 | shared n under one nonce | removed | as above |
-| `n mod devices` split for M (`mayName`) | removed (switch `mediatorSplit`) | instruction for step 1: M names any key; the allocation per M device that A enforces (4.5 (b)) is step 5 |
+| `n mod devices` split for M (`mayName`) | **kept as interim rule** (`mediatorSplit`, default on; off = counter-run) | nothing in step 1 replaces it; the allocation per M device that A enforces (4.5 (b)) is step 5 |
 | shared self anchor as signer of journal frames, one self address | removed | journal signed per device, one self address per device |
 | `conflict:key-value` | stays in the model, never fires | an anchor belongs to one device |
 
@@ -165,12 +171,12 @@ device, prototype-free tables, the shape table and the form checks.
 
 | | K1a | K2 step 1 | difference |
 |---|---|---|---|
-| X1 double consumption | ✓ | ✗ | M1 and M2 name the same key once (no split): one double consumption at M, 12 × 8640.12 at A. With `mediatorSplit` ✓ |
+| X1 double consumption | ✓ | ✓ | same (interim rule). Without it: M1 and M2 name the same key once, one double consumption at M, 12 × 8640.12 at A (✗) |
 | X2 budget at 9 | ✓ | ✓ | 5 blocked acceptances instead of 7 |
 | X3 consent ∥ decline | ≈ | ≈ | same |
 | X4 class off ∥ send | ✓ | ✓ | same |
 | X5 departure ∥ replay | ✓ | ✓ | 0 new frames to B; 4 repeats (K1a 3): the copies to B2's addresses count |
-| X6 restore from backup | ✓ | ✓ | same keys from the image, new incarnation, converged after 1 round; the next ticket is issued (M names any key; K1a's split refused it) |
+| X6 restore from backup | ✓ | ✓ | same keys from the image, new incarnation, converged after 1 round; the next ticket is refused as in K1a (split); without the interim rule it is issued |
 | X7 strict | ✗ | ✗ | same (device sets do not change frozen candidate lists) |
 | X7b | ✓ | ✓ | same |
 | X8 enrolment | ✓ | ✓ | state copy 3 545 B (K1a 3 546); QR 197 B each way |
@@ -178,17 +184,20 @@ device, prototype-free tables, the shape table and the form checks.
 | X10 | – | – | no rights per app (K2b, step 4) |
 | X11 long separation | ✓ | ✓ | journal 28 086 B (K1a 22 920) |
 | X12 delivery per device | ✓ | ✓ | 24 × duplicate-known at B (K1a 30) |
-| X13 mediator devices against the budget | ✓ | ✗ | budget holds (10, no overrun), but one key named twice at M (no split). With `mediatorSplit` ✓ |
-| X14 double introduction | ✓ | ✗ | A1 and A2 (A as mediator) name the same keys of B and C: 2 double consumptions, B and C refuse (8640.12). With `mediatorSplit` ✓ |
+| X13 mediator devices against the budget | ✓ | ✓ | same (interim rule). Without it: budget holds (10, no overrun), but one key named twice at M (✗) |
+| X14 double introduction | ✓ | ✓ | same (interim rule). Without it: A1 and A2 (A as mediator) name the same keys of B and C, 2 double consumptions, B and C refuse (8640.12) (✗) |
 | X15 union ∥ running act | ✓ | ✓ | same |
 | X16 old stock after class revocation | ✓ | ✓ | same |
 | X17 parallel production | ✓ | ✓ | M takes both writers (signers), 0 linkable; 2 findings 8435 at A (two nonces, the normal case now) |
 | X18 two cards of one act | ≈ | ✗ | the two devices' cards differ (card keys per device), B marks K (8910.8) on both B devices; still one consent, one connect, no double effect. Decision 6o.5 no. 7 (step 2) |
 | X21 journal robustness | ✓ | ✓ | repair 7/1/1/1/1 rounds as K1a; self addresses 781 frames / 2.54 MB (K1a 813 / 2.16 MB), journal frames 395 / 2.07 MB (K1a 395 / 1.66 MB), journal 27.6 kB (K1a 22.5 kB), receipts 323 (K1a 355) |
 
-Counts: **K2 step 1: 14 kept (X3 and X9 under a changed promise), 5 not
-kept (X1, X7, X13, X14, X18), 1 n/a (X10).** With `mediatorSplit: true`:
-17 / 2 / 1 like K1a, red X7 and X18 instead of X7 and X9. Serial control
+Counts: **K2 step 1 (interim rule `mediatorSplit` on): 17 kept (X3 and
+X9 under a changed promise), 2 not kept (X7 strict, X18), 1 n/a (X10)**:
+the K1a count, red X7 and X18 instead of X7 and X9. Counter-run without
+the interim rule (`mediatorSplit: false`): 14 / 5 / 1, red X1, X7, X13,
+X14, X18. X18 stays red in step 1 by design: decision 6o.5 no. 7 (two
+cards of one act from the current set are a repetition) is step 2. Serial control
 (`k2({ devices: 1 })`): every cell with a control run passes, as K1a.
 K1a: 17 / 2 / 1 unchanged; K0: 1 / 18 / 1 unchanged.
 
@@ -253,14 +262,16 @@ throwaway script, numbers from one run; the frame counts are asserted in
   for contexts another device opened; in step 2 a device gets its
   siblings' public keys from a stock exchanged at enrolment and over the
   journal.
-- Revoked writers: every batch of a device outside the current set is
-  rejected, also its batches from before the revocation that a sibling
-  relays later (a device enrolled after a revocation gets the journal by
-  copy, so no scenario hits it); step 3 needs a revocation mark per
-  writer.
+- Revoked writers (open question 3): every batch of a device outside the
+  current set is rejected, also its batches from before the revocation
+  that a sibling relays later (a device enrolled after a revocation gets
+  the journal by copy, so no scenario hits it). This retroactive
+  rejection is recorded as input for step 3: a revocation mark per writer
+  (Widerrufsmarke je Schreiber) that separates the batches signed before
+  the mark from those after it. No change in step 1.
 - Fixed device count and static rights as in K1a (assumption no. 5).
-- X1, X13, X14 fail until step 5 builds the allocation per M device (or
-  until `mediatorSplit` is kept as the interim rule).
+- X1, X13, X14 pass only through the interim rule (K1a's static split
+  at M) until step 5 builds the allocation per M device.
 - X18 fails until decision 6o.5 no. 7 (step 2).
 - No variant with the journal at the service for K2.
 - The carrier sees one registration set per device; whether it can link

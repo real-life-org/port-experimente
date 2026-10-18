@@ -418,6 +418,6 @@ export const candidateEn: Record<string, { name: string; desc: string }> = {
   },
   "k2-device-keys": {
     "name": "K2 step 1: device keys",
-    "desc": "K1a's journal and fold rules with keys per device: every device has its own secret (no person seed on any device), registers its own addresses, signs its journal batches and seals them once per sibling; the fold rejects a batch whose writer is not in the device set; revisions are numbered per signing device key; mediators may name any stock key. Step-1 simplification: counterparts read the device set from a bench list (seal to every device, accept every device's signature, revocation takes effect there at once)"
+    "desc": "K1a's journal and fold rules with keys per device: every device has its own secret (no person seed on any device), registers its own addresses, signs its journal batches and seals them once per sibling; the fold rejects a batch whose writer is not in the device set; revisions are numbered per signing device key; interim rule until step 5: mediators keep K1a's static split of the nameable stock keys. Step-1 simplification: counterparts read the device set from a bench list (seal to every device, accept every device's signature, revocation takes effect there at once)"
   }
 }

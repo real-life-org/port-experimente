@@ -9,7 +9,8 @@ import * as M from '../src/lab/mehrgeraet/model'
 // E15 K2 step 1: device keys (plan 6o.4 step 1, assumptions 6o.5 no. 1–5).
 //   1. Two devices hold distinct keys and register their own addresses; the journal is signed by the producing device and
 //      sealed once per sibling; the fold verifies the batch signature against the device set; an unknown writer is rejected.
-//   2. X1–X18, X7b, X21 with two devices: K1a's pattern except where device keys change semantics (NOTES, "Results").
+//   2. X1–X18, X7b, X21 with two devices: K1a's pattern (interim rule `mediatorSplit` on until step 5) except where device
+//      keys change semantics (NOTES, "Results"); counter-run without the interim rule: X1, X13, X14 fail.
 //   3. A thief with A2's image reads only what A2's keys open; after the revocation it reads nothing new (step-1 measure).
 //   4. A restored device keeps its keys, gets a fresh incarnation and catches up.
 //   5. K1a never fans out (one frame per document, no copies in intents).
@@ -128,22 +129,23 @@ describe('K2 Schritt 1: Geräteschlüssel', () => {
 })
 
 describe('K2 Schritt 1: Matrix', () => {
-  it('2. X1–X18, X7b, X21 mit zwei Geräten: bestanden wie K1a außer X1, X13, X14 (M benennt jeden Schlüssel, Schritt 5) und X18 (Gerätekarten verschieden, 8910.8, Schritt 2); X9 bestanden unter der Schritt-1-Vereinfachung', async () => {
-    const r = byId(await runX15(k2()))
-    const passed = ['X2', 'X3', 'X4', 'X5', 'X6', 'X7b', 'X8', 'X9', 'X11', 'X12', 'X15', 'X16', 'X17', 'X21']
+  it('2. X1–X18, X7b, X21 mit zwei Geräten: Zwischenregel `mediatorSplit` an (K1as Benennungsteilung bis Schritt 5), 17/2/1; rot X7 und X18 (Gerätekarten verschieden, 8910.8, Schritt 2); X9 bestanden unter der Schritt-1-Vereinfachung', async () => {
+    const c = k2()
+    expect(c.id).toBe('k2-device-keys')
+    const r = byId(await runX15(c))
+    const passed = ['X1', 'X2', 'X3', 'X4', 'X5', 'X6', 'X7b', 'X8', 'X9', 'X11', 'X12', 'X13', 'X14', 'X15', 'X16', 'X17', 'X21']
     for (const x of passed) expect(r[x]!.outcome, `${x}: ${r[x]!.detail}`).toBe('bestanden')
-    for (const x of ['X1', 'X7', 'X13', 'X14', 'X18']) expect(r[x]!.outcome, `${x}: ${r[x]!.detail}`).toBe('nicht bestanden')
+    for (const x of ['X7', 'X18']) expect(r[x]!.outcome, `${x}: ${r[x]!.detail}`).toBe('nicht bestanden')
     expect(r.X10!.outcome).toBe('nicht abbildbar')
     expect(Object.values(r).some((x) => x.crashed)).toBe(false)
+    const n = (o: string) => Object.values(r).filter((x) => x.outcome === o).length
+    expect([n('bestanden'), n('nicht bestanden'), n('nicht abbildbar')]).toEqual([17, 2, 1])
     // X3 promise changed (rule 2, as K1a); X9 passes only under the step-1 simplification (never a silent pass).
     expect(r.X3!.promiseChanged).toBe(true)
     expect(r.X9!.promiseChanged).toBe(true)
     expect(r.X9!.detail).toContain('Schritt-1-Vereinfachung')
     expect(r.X9!.measures.thiefReads).toBe(0)
-    // Why X1/X13/X14 fail: a key named twice by the mediator devices (no `n mod devices` split in K2).
-    expect(r.X1!.measures.doubleFinalEffects).toBeGreaterThan(0)
-    expect(r.X13!.measures.doubleFinalEffects).toBeGreaterThan(0)
-    // Why X18 fails: two cards of one act from two devices differ (8910.8), B marks K; no double effect.
+    // Why X18 fails: two cards of one act from two devices differ (8910.8), B marks K; no double effect (decision 6o.5 no. 7 is step 2).
     expect(r.X18!.measures.cardConflictsAtB).toBeGreaterThan(0)
     expect(r.X18!.measures.doubleFinalEffects).toBe(0)
     // Writers are the signing device keys: M takes both, no 6270, not linkable across relationships.
@@ -151,13 +153,16 @@ describe('K2 Schritt 1: Matrix', () => {
     expect(r.X17!.measures.writerTagsLinkedAcrossRelationships).toBe(0)
   }, 300_000)
 
-  it('2b. Gegenlauf: mit K1as Benennungsteilung (`mediatorSplit`) bestehen X1, X13 und X14 wieder; 17/2/1 wie K1a, rot X7 und X18 statt X7 und X9', async () => {
-    const r = byId(await runX15(k2({ mediatorSplit: true })))
-    for (const x of ['X1', 'X13', 'X14']) expect(r[x]!.outcome, `${x}: ${r[x]!.detail}`).toBe('bestanden')
+  it('2b. Gegenlauf ohne Zwischenregel (`mediatorSplit: false`): M benennt jeden Schlüssel, X1, X13 und X14 fallen; 14/5/1', async () => {
+    const c = k2({ mediatorSplit: false })
+    expect(c.id).toBe('k2-device-keys-no-split')
+    const r = byId(await runX15(c))
+    for (const x of ['X1', 'X7', 'X13', 'X14', 'X18']) expect(r[x]!.outcome, `${x}: ${r[x]!.detail}`).toBe('nicht bestanden')
     const n = (o: string) => Object.values(r).filter((x) => x.outcome === o).length
-    expect([n('bestanden'), n('nicht bestanden'), n('nicht abbildbar')]).toEqual([17, 2, 1])
-    expect(r.X7!.outcome).toBe('nicht bestanden')
-    expect(r.X18!.outcome).toBe('nicht bestanden')
+    expect([n('bestanden'), n('nicht bestanden'), n('nicht abbildbar')]).toEqual([14, 5, 1])
+    // Why X1/X13 fail: a key named twice by the mediator devices (no `n mod devices` split).
+    expect(r.X1!.measures.doubleFinalEffects).toBeGreaterThan(0)
+    expect(r.X13!.measures.doubleFinalEffects).toBeGreaterThan(0)
   }, 300_000)
 
   it('2c. Kontrolllauf seriell (ein Gerät, ungeteilte Rechte): jede Zelle mit Kontrolllauf besteht, wie K1a', async () => {
