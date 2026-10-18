@@ -419,22 +419,22 @@ describe('K1a breite Matrix', () => {
     expect(one.outcome, one.detail).toBe('bestanden')
   }, 600_000)
 
-  it('X16: A1 widerruft die Klasse, A2 hält getrennt den alten Vorrat und nimmt noch ein Ticket an (der Widerruf ist in K1a kein Recht)', async () => {
+  it('X16 (Schritt 5, Entscheidung 4a): A1 widerruft die Klasse, A2 nimmt getrennt noch ein Ticket auf den alten Vorrat an; das Ticket gilt, nach der Heilung einig, Schlüssel einmal verbraucht, Ms Sicht leer', async () => {
     const two = byId(await runX15(k1a(), false, ['X16'])).X16!
     expect(two.crashed, two.detail).toBeFalsy()
-    expect(two.outcome, two.detail).toBe('nicht bestanden')
-    expect(two.measures.acceptedAfterRevocation).toBe(1)
+    expect(two.outcome, two.detail).toBe('bestanden')
+    expect(two.measures).toMatchObject({ acceptedAfterRevocation: 1, devicesWithAct: 2, acceptOperations: 1, mediatorViewKeys: 0, equivocations: 0, devicesWithClassOn: 0, doubleFinalEffects: 0, projectionAgrees: 1 })
     const one = byId(await runX15(k1a({ devices: 1 }), true, ['X16'])).X16!
     expect(one.crashed, one.detail).toBeFalsy()
     expect(one.outcome, one.detail).toBe('bestanden')
-    expect(one.measures.acceptedAfterRevocation).toBe(0)
+    expect(one.measures).toMatchObject({ acceptedAfterRevocation: 0, devicesWithAct: 0, acceptOperations: 0 })
   }, 600_000)
 
-  it('X17: A1 und A2 füllen getrennt nach und senden je eine Revision mit derselben Nummer: Equivokation bei M (8500, 6270)', async () => {
+  it('X17 (Schritt 4): A1 und A2 füllen getrennt nach; mit Schreiberkennung je Beziehung nimmt M beide Revisionen an, keine Equivokation (8500, 6270 je Schreiber)', async () => {
     const two = byId(await runX15(k1a(), false, ['X17'])).X17!
     expect(two.crashed, two.detail).toBeFalsy()
-    expect(two.outcome, two.detail).toBe('nicht bestanden')
-    expect(two.measures.revisionNumbersReused as number).toBeGreaterThan(0)
+    expect(two.outcome, two.detail).toBe('bestanden')
+    expect(two.measures.revisionNumbersReused).toBe(0)
     const one = byId(await runX15(k1a({ devices: 1 }), true, ['X17'])).X17!
     expect(one.crashed, one.detail).toBeFalsy()
     expect(one.outcome, one.detail).toBe('bestanden')
@@ -865,12 +865,12 @@ describe('K1a Schritt 2: Vereinigung eigener Tupel durch Neuauswertung empfangen
     expect(one.outcome, one.detail).toBe('bestanden')
   }, 600_000)
 
-  it('3. alle Szenarien mit zwei Geräten: X14 und X7b bestanden, X7 streng nicht, X3 und X18 bestanden mit „Zusage geändert“ (Schritt 3), der Rest wie in NOTES', async () => {
+  it('3. alle Szenarien mit zwei Geräten: X14 und X7b bestanden, X7 streng nicht, X3 und X18 bestanden mit „Zusage geändert“ (Schritt 3), X17 bestanden (Schritt 4), X16 bestanden (Schritt 5, Orakel nach 4a), der Rest wie in NOTES', async () => {
     const r = byId(await runX15(k1a(), false))
     for (const x of Object.values(r)) expect(x.crashed, `${x.scenario}: ${x.detail}`).toBeFalsy()
     const want: Record<string, string> = {
       X1: 'bestanden', X2: 'bestanden', X3: 'bestanden', X4: 'bestanden', X5: 'bestanden', X6: 'bestanden', X7: 'nicht bestanden', X7b: 'bestanden', X8: 'bestanden', X9: 'nicht bestanden', X10: 'nicht abbildbar', X11: 'bestanden', X12: 'bestanden',
-      X13: 'bestanden', X14: 'bestanden', X15: 'bestanden', X16: 'nicht bestanden', X17: 'nicht bestanden', X18: 'bestanden', X21: 'bestanden',
+      X13: 'bestanden', X14: 'bestanden', X15: 'bestanden', X16: 'bestanden', X17: 'bestanden', X18: 'bestanden', X21: 'bestanden',
     }
     for (const [id, outcome] of Object.entries(want)) expect(r[id]?.outcome, `${id}: ${r[id]?.detail}`).toBe(outcome)
     // Zusage geändert (Schritt 3) genau bei X3 und X18; jede andere Zelle unverändert ohne Marke.
@@ -1067,4 +1067,250 @@ describe('K1a Schritt 2: Vereinigung eigener Tupel durch Neuauswertung empfangen
     expect(r.X7!.measures.duplicates as number).toBeGreaterThan(0)
     expect(r.X14!.outcome, r.X14!.detail).toBe('nicht bestanden')
   }, 600_000)
+})
+
+describe('K1a Schritt 4: pseudonyme Schreiberkennung je Beziehung (Entscheidung 3a)', () => {
+  const sixty = (f: string) => f.includes('6270')
+  const mFindings = (w: Welt15) => w.of('M').flatMap((d) => d.state.findings).filter(sixty)
+  const tagOf = (d: HolderDevice, rel: string) => d.cand.writerTag!(M.rel(d.state, rel).id)
+  async function world() {
+    const p = await pair()
+    const A2 = await p.w.enrol(p.A, 'A2')
+    const M2 = await p.w.enrol(p.Mm, 'M2')
+    await p.w.rounds(3)
+    const ma = p.am.y.id
+    const mb = p.bm.y.id
+    const intro = async () => {
+      let r = await p.Mm.introduce(ma, mb)
+      if (!('act' in r)) r = await M2.introduce(ma, mb)
+      return r
+    }
+    return { ...p, A2, M2, ma, mb, intro }
+  }
+
+  it('1. X17: beide Geräte füllen getrennt nach, M nimmt beide Revisionen an, Vorrat = Vereinigung, kein 6270; M lernt zwei Kennungen, nicht verknüpfbar; seriell eine; ohne Kennung (Gegenlauf) wie vor Schritt 4', async () => {
+    const two = byId(await runX15(k1a(), false, ['X17'])).X17!
+    expect(two.crashed, two.detail).toBeFalsy()
+    expect(two.outcome, two.detail).toBe('bestanden')
+    expect(two.measures).toMatchObject({ revisionNumbersReused: 0, equivocations: 0, mediatorDevicesAgree: 1, projectionAgrees: 1, writersAtA: 2, writersAcceptedByM: 2, writerTagsSeenByM: 2, writerTagsLinkedAcrossRelationships: 0 })
+    const one = byId(await runX15(k1a({ devices: 1 }), true, ['X17'])).X17!
+    expect(one.outcome, one.detail).toBe('bestanden')
+    expect(one.measures).toMatchObject({ writersAtA: 1, writerTagsSeenByM: 1 })
+    const untagged = byId(await runX15(k1a({ writerTags: false }), false, ['X17'])).X17!
+    expect(untagged.outcome, untagged.detail).toBe('nicht bestanden')
+    expect(untagged.measures.revisionNumbersReused as number).toBeGreaterThan(0)
+    expect(untagged.measures.writersAtA).toBeUndefined()
+  }, 600_000)
+
+  it('2. Kennung je Gerät und Beziehung: zwei Beziehungen ergeben zwei Kennungen desselben Geräts, die Gegenseiten sehen verschiedene; ein Restore behält die Kennung (je Gerät, nicht je Inkarnation)', async () => {
+    const { w, A, A2, B, Mm } = await world()
+    const ab = await w.encounter(A, B)
+    await w.rounds(4)
+    const am = A.state.relationships.find((r) => r.tuples.some((t) => w.personOf(t.peer) === 'M'))!.id
+    expect(tagOf(A, am)).not.toBe(tagOf(A, ab.x.id))
+    expect(tagOf(A, am)).not.toBe(tagOf(A2, am))
+    // Was die Gegenseiten im Empfangsprotokoll sehen: M auf der Beziehung zu A nur Kennungen von A auf am, B nur die auf ab.
+    const seenBy = (d: HolderDevice) => new Set(d.log.filter((e) => e.writer && w.personOf(e.from) === 'A').map((e) => e.writer!))
+    expect([...seenBy(Mm)]).toEqual([tagOf(A, am)])
+    expect([...seenBy(B)]).toContain(tagOf(A, ab.x.id))
+    expect([...seenBy(B)]).not.toContain(tagOf(A, am))
+    const before = tagOf(A, am)
+    A.commit()
+    await A.reload()
+    expect(tagOf(A, am)).toBe(before)
+  }, 300_000)
+
+  it('3. Gegenlauf: derselbe Schreiber verwendet eine Nummer mit anderem Inhalt wieder (Restore ohne Schwester, der Zähler ist verloren): M meldet Equivokation (6270)', async () => {
+    const { w, A, Mm, am } = await pair()
+    expect(await A.setClass(am.x.id, false)).toBe('ok') // Revision 2 (leer)
+    await w.rounds(3)
+    A.commit()
+    const backup = w.stores.get('A1')!.snapshot()
+    expect(await A.setClass(am.x.id, true)).toBe('ok') // Revision 3 mit Schlüsseln
+    await w.rounds(3)
+    w.clock.advance(3600_000)
+    w.stores.get('A1')!.restore(backup)
+    await A.reload() // keine Schwester: kein Nachholen, der Zähler steht auf 2
+    expect(await A.setClass(am.x.id, true)).toBe('ok') // wieder Revision 3, andere Ablaufzeiten
+    await w.rounds(4)
+    expect(mFindings(w).some((f) => f.includes('Equivokation')), mFindings(w).join(' | ')).toBe(true)
+    expect(M.rel(Mm.state, am.y.id).view!.writers![tagOf(A, am.x.id)]!.revision).toBe(3)
+  }, 300_000)
+
+  it('4. Restore mit Schwester: die Kennung bleibt, der Zähler setzt nach dem Nachholen fort (keine Lücke, keine Wiederverwendung); während des Nachholens wird nichts zugeteilt und nichts nummeriert', async () => {
+    const { w, A, A2, Mm, M2, am, ma } = await world()
+    const tag = tagOf(A, am.x.id)
+    const revs = (d: HolderDevice) => M.rel(d.state, am.x.id).writers![tag]!.revision
+    expect(await A.setClass(am.x.id, false)).toBe('ok') // Revision 2 (leer)
+    await w.rounds(4)
+    A.commit()
+    const backup = w.stores.get('A1')!.snapshot()
+    expect(await A.setClass(am.x.id, true)).toBe('ok') // Revision 3: fünf neue Schlüssel
+    await w.rounds(6)
+    expect([revs(A), revs(A2)]).toEqual([3, 3])
+    w.clock.advance(3600_000)
+    // Restore auf A1 aus dem Stand vor Revision 3, das Self-Journal zurückgehalten; der Nutzer schaltet die Klasse (wieder) an.
+    w.stores.get('A1')!.restore(backup)
+    await A.reload()
+    const self = (await A.cand.keys.pair('self/A')).rkid
+    w.carrier.faults.withhold('A1', (f) => f.address === self)
+    expect(await A.setClass(am.x.id, true)).toBe('ok')
+    await w.rounds(3)
+    expect(A.syncPending).toBe(true)
+    // Nichts zugeteilt (die Nummern 8445 der früheren Inkarnation fehlen noch) und nichts nummeriert (8500).
+    expect(M.rel(A.state, am.x.id).stock.filter((k) => k.state === 'active')).toEqual([])
+    expect(revs(A)).toBe(2)
+    w.carrier.faults.reset()
+    expect(await w.until(() => !A.syncPending, 30)).toBeGreaterThan(0)
+    await w.rounds(8)
+    expect([revs(A), revs(A2)]).toEqual([3, 3]) // Revision 3 der früheren Inkarnation gilt; der Vorrat ist voll, nichts nachzufüllen
+    expect(await A.setClass(am.x.id, false)).toBe('ok') // die nächste Revision dieses Schreibers ist 4
+    await w.rounds(6)
+    expect([revs(A), revs(A2)]).toEqual([4, 4])
+    for (const m of [Mm, M2]) expect(M.rel(m.state, ma).view!.writers![tag]!.revision).toBe(4)
+    expect(mFindings(w)).toEqual([])
+    expect(doubles(w, 'A').filter((id) => id.startsWith('revision:'))).toEqual([])
+    expect(w.agree('A').agree, w.agree('A').diff).toBe(true)
+  }, 300_000)
+
+  it('5. Klasse aus auf A1, während A2 getrennt nachfüllt: M hält zeitweise A2s Schlüssel; nach der Heilung sendet A2 unter seiner Kennung eine leere Revision, Ms Sicht ist leer, keine alten Schlüssel (8535 über Schreiber)', async () => {
+    const { w, A, A2, Mm, M2, am, ma, intro } = await world()
+    for (let i = 0; i < 2; i++) {
+      expect('act' in (await intro())).toBe(true)
+      await w.rounds(3)
+    }
+    const selfA = (await A.cand.keys.pair('self/A')).rkid
+    for (const d of [A, A2]) w.carrier.faults.withhold(d.name, (f) => f.address === selfA)
+    Mm.online = M2.online = false
+    expect(await A.setClass(am.x.id, false)).toBe('ok')
+    await w.rounds(2)
+    const r = await intro() // alte Sicht: Ms Geräte haben die leere Revision noch nicht
+    expect('act' in r).toBe(true)
+    Mm.online = M2.online = true
+    await w.rounds(5)
+    const tag2 = tagOf(A2, am.x.id)
+    expect(M.rel(A2.state, am.x.id).writers?.[tag2]).toMatchObject({ empty: false }) // A2 hat getrennt nachgefüllt
+    const mid = Math.max(...[Mm, M2].map((m) => M.rel(m.state, ma).view?.keys.length ?? 0))
+    expect(mid).toBeGreaterThan(0) // A2s Revision kam nach der leeren an: ihre Schlüssel gelten bei M zunächst
+    w.carrier.faults.reset()
+    await w.rounds(10)
+    expect(M.rel(A2.state, am.x.id).writers![tag2]).toMatchObject({ empty: true })
+    for (const m of [Mm, M2]) expect(M.rel(m.state, ma).view?.keys ?? []).toEqual([])
+    for (const d of [A, A2]) {
+      expect(M.rel(d.state, am.x.id).classOn).toBe(false)
+      expect(M.rel(d.state, am.x.id).stock.filter((k) => k.state === 'active' || k.state === 'aging')).toEqual([])
+    }
+    expect(mFindings(w)).toEqual([])
+    expect(w.agree('A').agree, w.agree('A').diff).toBe(true)
+    expect(w.agree('M').agree, w.agree('M').diff).toBe(true)
+  }, 300_000)
+})
+
+// Tor-Review 21 (Astra, 78809e2): B1 gemeinsame Schlüsselnummern mit abweichendem Ablauf, B2 X16-Orakel je Akt statt je Schlüssel.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type EmitBody = any
+describe('K1a Review 21: Nummern je Restklasse des ausgebenden Geräts, Befund bei gleichem Anker mit anderem Wert, Verbrauch je Schlüssel', () => {
+  const keyValue = (f: string) => f.startsWith('conflict:key-value:')
+  const allFindings = (w: Welt15) => [...w.of('A'), ...w.of('M')].flatMap((d) => d.state.findings)
+  /**
+   * Astras Gegenlauf (review21/expiry.mjs) nachgebaut: in X17 rückt die Uhr nach A1s Nachfüll-Zuteilung um eine Stunde vor,
+   * A2 füllt getrennt nach. Liefert das Ergebnis und je Gerät die Nummern seiner eigenen Zuteilungen.
+   */
+  async function skewedRefill(opts: Parameters<typeof k1a>[0] = {}) {
+    const proto = HolderDevice.prototype as unknown as { emit: (body: EmitBody) => M.Op }
+    const original = proto.emit
+    const allocated = new Map<string, number[]>()
+    let injected = 0
+    const spy = vi.spyOn(proto, 'emit').mockImplementation(function (this: HolderDevice, body: EmitBody) {
+      const result = original.call(this, body)
+      if (body.kind === 'allocate' && this.person === 'A') {
+        allocated.set(this.name, [...(allocated.get(this.name) ?? []), ...body.keys.map((k: { n: number }) => k.n)])
+        if (this.name === 'A1' && body.keys.some((k: { n: number }) => k.n >= 6) && !injected) {
+          injected++
+          const clock = this.clock as unknown as { advance(ms: number): void }
+          clock.advance(3600_000)
+        }
+      }
+      return result
+    })
+    try {
+      const r = byId(await runX15(k1a(opts), false, ['X17'])).X17!
+      return { r, injected, allocated }
+    } finally {
+      spy.mockRestore()
+    }
+  }
+
+  it('B1. Uhr um eine Stunde zwischen den Nachfüllungen vorgerückt, beide Geräte füllen getrennt nach: disjunkte Nummern, gleiche Projektionen, kein 6270, kein Befund gleicher Anker/anderer Wert', async () => {
+    const { r, injected, allocated } = await skewedRefill()
+    expect(injected).toBe(1)
+    const a1 = allocated.get('A1') ?? []
+    const a2 = allocated.get('A2') ?? []
+    expect(a2.length, r.detail).toBeGreaterThan(0) // A2 hat getrennt nachgefüllt
+    expect(a1.filter((n) => a2.includes(n))).toEqual([])
+    expect(r.outcome, r.detail).toBe('bestanden')
+    expect(r.measures).toMatchObject({ projectionAgrees: 1, mediatorDevicesAgree: 1, equivocations: 0, keyValueConflicts: 0 })
+    // Gegenprobe (Faltregel): dieselbe Uhrverschiebung ohne Aufteilung erzeugt gleiche Anker mit anderem Ablauf; A und M falten
+    // deterministisch auf den kanonisch kleinsten Wert und melden conflict:key-value, die Projektionen bleiben gleich.
+    const forced = await skewedRefill({ allocationSplit: false })
+    expect(forced.injected).toBe(1)
+    expect(forced.r.measures.keyValueConflicts as number, forced.r.detail).toBeGreaterThan(0)
+    expect(forced.r.measures).toMatchObject({ projectionAgrees: 1, mediatorDevicesAgree: 1 })
+  }, 300_000)
+
+  it('B1. Ein Gerät offline: das andere hält M allein aus seiner Restklasse versorgt (Nachfüllziel zählt die aktiven Schlüssel der Person, nicht je Klasse)', async () => {
+    const w = new Welt15(k1a())
+    const A = await w.person('A', 'A1')
+    const B = await w.person('B', 'B1')
+    const Mm = await w.person('M', 'M1')
+    const am = await w.encounter(A, Mm)
+    const bm = await w.encounter(B, Mm)
+    await w.rounds(2)
+    const A2 = await w.enrol(A, 'A2')
+    const M2 = await w.enrol(Mm, 'M2')
+    await w.rounds(3)
+    A2.online = false
+    expect(await A.setClass(am.x.id, true)).toBe('ok')
+    await B.setClass(bm.x.id, true)
+    await w.rounds(4)
+    const share = Math.floor(M.PARAM.budget / 2) // A1s Annahmekontingent
+    const accepted: string[] = []
+    const viewSizes: number[] = []
+    for (let i = 0; i < share; i++) {
+      let r = await Mm.introduce(am.y.id, bm.y.id)
+      if (!('act' in r)) r = await M2.introduce(am.y.id, bm.y.id)
+      expect('act' in r, `Vorstellung ${i + 1}: ${'refused' in r ? r.refused : ''}`).toBe(true)
+      await w.rounds(4)
+      if ('act' in r && A.state.acts.some((a) => a.id === r.act)) accepted.push(r.act)
+      viewSizes.push(Math.min(...[Mm, M2].map((m) => M.rel(m.state, am.y.id).view!.keys.filter((k) => !m.state.consumed.includes(k.anchor)).length)))
+    }
+    expect(accepted.length).toBe(share)
+    expect(Math.min(...viewSizes), viewSizes.join('/')).toBeGreaterThanOrEqual(M.PARAM.refillBelow - 1)
+    const own = M.rel(A.state, am.x.id).stock.map((k) => k.n)
+    expect(own.every((n) => (A.cand as K1aDevice).mayAllocate(n)), own.join(',')).toBe(true)
+    expect(allFindings(w).filter(keyValue)).toEqual([])
+  }, 300_000)
+
+  it('B2. Mutation: eine zweite ticket-accept-Operation auf denselben Schlüssel unter anderer Akt-Id lässt X16 scheitern (Verbrauch je Schlüssel über alle Akte)', async () => {
+    const proto = HolderDevice.prototype as unknown as { emit: (body: EmitBody) => M.Op }
+    const original = proto.emit
+    let injected = 0
+    const spy = vi.spyOn(proto, 'emit').mockImplementation(function (this: HolderDevice, body: EmitBody) {
+      const result = original.call(this, body)
+      if (body.kind === 'ticket-accept' && this.person === 'A' && !injected) {
+        injected++
+        original.call(this, { ...body, act: { ...structuredClone(body.act), id: `${body.act.id}-duplicate` } })
+      }
+      return result
+    })
+    try {
+      const r = byId(await runX15(k1a(), false, ['X16'])).X16!
+      expect(injected).toBe(1)
+      expect(r.outcome, r.detail).toBe('nicht bestanden')
+      expect(r.measures.acceptOperations as number).toBeGreaterThan(1)
+      expect(r.measures.doubleFinalEffects as number).toBeGreaterThan(0)
+    } finally {
+      spy.mockRestore()
+    }
+  }, 300_000)
 })

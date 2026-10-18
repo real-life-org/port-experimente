@@ -1,10 +1,11 @@
-# Port notes: K1a, one seed, operation journal, static rights (E15 steps 1 to 3)
+# Port notes: K1a, one seed, operation journal, static rights (E15 steps 1 to 5)
 
 As of 18 October 2026. K1a is the first positive candidate of the
 multi-device experiment: every device derives all keys from the same seed
 (like K0), but every committed step of a device travels as one journal
 batch to the person's own address, and the rights that consume a hard
-limit are assigned to one device in advance.
+limit are assigned to one device in advance. Since step 4 every device
+numbers its revisions under a pseudonymous writer tag per relationship.
 
 ## What the candidate does
 
@@ -259,6 +260,134 @@ device's own decision was overridden, or two devices each consented, as
 `promiseChanged` ("promise changed", ≈ in the matrix): terminality of
 8325 holds for the person only after the devices have united.
 
+## Step 4: pseudonymous writer tags per relationship
+
+Anton's decision (18 October, question 3, answer 3a): both devices
+refill and send revisions without waiting for a right or for each other;
+numbers are monotonic per writer; the counterpart reads two writers; the
+writer id is pseudonymous per relationship.
+
+**Derivation.** `writerTagOf(seed, device, relationship)` =
+HMAC-SHA256 under `derive(seed, 'writer-tag')` over
+`<relationship id>|<device name>`, first 12 bytes, base64url. The
+relationship id is the resolved id in the holder state (the same on all
+devices of the person). M does not hold the seed, so it can neither
+compute a tag nor link the tags of one device across relationships. The
+tag is per device, not per incarnation: a per-incarnation tag would make
+every restore look like a new device to M (one more writer per restore,
+an inflated device count, a dead writer's keys left in M's view). The
+device's own counter is recovered instead: after a restore the device
+neither allocates keys nor numbers revisions until its catch-up has ended
+(the step-3 hold on release already waits for it); a revision that
+falls due meanwhile is recorded (`owed`, part of the device image) and
+goes out after catch-up with the then next number. Capability
+`writer-tags`, option `k1a({ writerTags: false })` for the counter-run;
+K0 has no tag and is unchanged.
+
+**Numbering.** 8500 (0.32): "A sender MUST number each revision of a
+relationship one above the highest revision of that relationship its
+persistent state holds." The bench applies it per writer: the holder
+state keeps per relationship and tag the highest revision and whether it
+was empty (`Relationship.writers`); a revision is numbered one above that
+writer's highest; the effect is `revision:<rel>:<tag>:<n>`. The tag
+travels in the revision payload and, without a function on the bench, in
+probe and mapping payloads (the bench numbers neither, see limits).
+
+**M's rule.** 6270 per writer in the scope of the tuple (6280): a
+revision above the writer's held revision is accepted (gaps allowed:
+numbers of cancelled revisions stay consumed, 8500); equal number and
+equal keys is a repetition; equal number and different keys is an
+equivocation finding (6270); lower is refused. M's view keeps per tag the
+latest revision; that revision replaces the writer's previous keys; the
+effective view is the union by anchor over the writers whose latest
+revision lies above their clear mark. Class off: 8535 "On a withdrawal by
+the class turning off (8475.S6), the sender MUST send a revision with an
+empty `keys` list on the relationship, whether or not it lags." Any device
+may send it; M, on accepting an empty revision, records as clear marks
+the latest revision of every writer it holds in that scope, so the empty
+revision withdraws the keys of all writers. Clear marks fold as a
+maximum and the writer entries per revision number, so M's devices reach
+the same view in any fold order. A head change (8557) starts a new view.
+
+**Class off across writers.** A writer's revision that reaches M after
+another writer's empty revision lists keys again. Therefore a device that
+folds a sibling's class off withdraws every key still live in its state
+(keys it allocated itself while separated, which the sibling's withdrawal
+did not name; 8475.S6) and, if its own latest revision listed keys,
+sends an empty revision under its own tag. Due work from the state (B6),
+checked in every refill pass; only with tags.
+
+**Acceptance tests** (`tests/mehrgeraet-k1a.test.ts`, "K1a Schritt 4";
+`tests/mehrgeraet-modell.test.ts`, "K1a Schritt 4"): X17 two devices and
+serial, counter-run without tags (fails as before); one device in two
+relationships has two tags and the counterparts see different ones; the
+tag survives a restore; a writer that reuses a number with different
+content (restore without a sibling, counter lost) gets a 6270 finding at
+M; restore with a sibling: nothing allocated or numbered during catch-up,
+the counter continues after it (3 → 4, no gap, no reuse); class off on
+A1 while A2 refills separated: M holds A2's keys for a while, after
+healing A2 sends an empty revision under its tag, M's view is empty on
+both M devices, no live keys on A, no 6270. Model: union of two writers
+with the same number in every order, 6270 per writer, clear marks in
+every order, per-writer effects on A's side.
+
+**Stock numbers per device (gate review 21 B1).** With shared numbers two
+devices refilling separated allocate the same `(nonce, n)`; under one seed
+that is the same anchor, but each device stamps its own expiry. Review 21
+advanced the clock one hour between A1's and A2's refill in X17: the same
+anchors for n = 6–8 with expiry 08:00 and 09:00, A's devices never agreed,
+M took the value of the lexicographically first writer, and nothing was
+reported. Fix: every device allocates numbers only from its own class
+(`mayAllocate`): ⌊n / devices⌋ mod devices = its index, i.e. blocks of
+`devices` consecutive numbers dealt in turn (two devices: 1, 4, 5, 8, 9, …
+and 2, 3, 6, 7, …). Not the plain residue n mod devices: the counterpart
+names by n mod devices since step 1 (`mayName`), and with both splits equal
+each mediator device could name the keys of exactly one issuer device
+(measured: X2 and X13 fail with the plain residue, M2 names nothing while
+A2 has not refilled). With the block class every issuer class holds both
+residues. The refill target still counts the person's active keys at the
+relationship (all devices, through the journal), not per class, so one
+device keeps M supplied alone. Measured with A2 offline the whole time
+(A1 accepts its full share of five tickets): M's usable view after each
+introduction 4, 3, 5, 4, 3 keys, exactly as with shared numbers; no
+refusal, no 6270, no finding. The other class just stays unused.
+Option `k1a({ allocationSplit: false })` for the counter-run.
+
+As a defensive fold rule, the same anchor with a different value (expiry,
+key agreement, number) never folds silently: A's stock and M's union over
+writers both keep the canonically smallest value (the same in every fold
+order) and record `conflict:key-value:<anchor>` once per anchor. X17
+measures it (`keyValueConflicts`, must be 0). Tests ("K1a Review 21"):
+review 21's clock-skew refill gives disjoint numbers, equal projections,
+no 6270 and no conflict; the same run without the split records the
+conflict on A and M and both persons' projections still agree; A2 offline:
+A1 alone accepts its share, M never falls below two usable keys, every
+stock number lies in A1's class.
+
+## Step 5: X16 oracle per decision 4a
+
+Anton's decision (18 October, question 4, answer 4a): a ticket on a key
+that was withdrawn meanwhile holds; the withdrawal takes effect when the
+empty revision reaches M (8535). The X16 oracle no longer fails on the
+accepted ticket. After healing it requires: (a) the A devices agree;
+(b) the key is consumed at most once across the person, exactly once if a
+device accepted the ticket (one `accept:<act>` operation, the key
+`consumed` on every device); (c) the act is held on every device if any
+device accepted it, otherwise on none (serial: the only device knows the
+withdrawal and refuses by 8640.6); (d) M's view is empty on every M
+device; (e) no double final effect; (f) no equivocation at M. The number
+of tickets accepted on withdrawn keys stays a measure
+(`acceptedAfterRevocation`, information). Single consumption counts per
+key, not per act (gate review 21 B2): on the holder's side the effects are
+`accept:<act>`, so the ledger check maps every accepted act to its own
+stock key and counts the acts per key across all act ids (`finalEffects`),
+and `acceptOperations` sums the accept operations of every act on the named
+key. Mutation test: a second `ticket-accept` on the same key under another
+act id makes X16 fail (two accept operations, one double consumption). This is an oracle change, not a
+candidate change: K1a passed every new condition already after step 4.
+K0 with two devices still fails X16, now because A1 never learns the act
+and A2 keeps the class on (devices disagree), not because of the ticket.
+
 ## Results (18 October, K1a against X1–X18, X7b and X21)
 
 See the matrix (`matrix.md`, multi-device port) for the cells; the table
@@ -280,20 +409,21 @@ scenario that has one.
 | X8 enrollment | passed | n/a | state, journal and intents copied; A2 consents and connects at once |
 | X9 device revocation | failed | n/a | the thief with the image reads four documents and holds an act (one seed) |
 | X10 restricted app | n/a | n/a | step 1 has no rights profile per app |
-| X11 long separation | passed | n/a | both devices connected after reunion, stable after three rounds, no double effects, journal about 22 kB |
+| X11 long separation | passed | n/a | both devices connected after reunion, stable after three rounds, no double effects, journal about 23 kB |
 | X12 delivery per device | passed | passed | B's effect once, A1 delivered after two rounds, A2 equal after one round |
 | X13 mediator devices against the shared budget | passed | passed | M1 and M2 each issue one introduction offline at budget 9, A1 sees one ticket, A2 the other: ten acts, no overrun, five blocked acceptances, no key named twice |
 | X14 double introduction | passed | passed | two acts, both connected; with B1 and B2 separated while consenting, C's probe on its second tuple (which holds the first) misses at the B device that lacks B's other tuple; after B's journal heals, that device re-evaluates the kept probe, hits and maps; B1, B2 and C1 each hold one entry with both tuples, no double effect |
 | X15 union ∥ running act | passed | passed | A2, separated from A1, unites the two relationships to M while A1's card is in transit; one entry with two tuples on both devices, the act connected, its mediator and acceptance on the united relationship, M's view on the united head |
-| X16 old stock after class revocation | failed | passed | A2, separated, accepts a ticket on a key A1 withdrew; after healing both devices hold the act and the key is consumed |
-| X17 parallel production | failed | passed | both devices refill and send revision 2 with different keys; one revision number from two operations, M records 6270 findings; probe sequence (6680) not modelled |
+| X16 old stock after class revocation | passed (oracle after 4a, step 5) | passed | A2, separated, accepts a ticket on a key A1 withdrew (holds under 4a); after healing both devices hold the act, one acceptance operation, the key consumed on both, class off on both, M's view empty on both M devices, no double effect, no equivocation, equal after one round; serial: A1 refuses the ticket (8640.6), key withdrawn |
+| X17 parallel production | passed (step 4) | passed | A1 and A2, separated, each accept a ticket and refill; A1 sends revision 2 of its tag, A2 revision 1 of its tag; M accepts both, no 6270, no number from two operations; M's view on both M devices: 2 writers, 6 keys (the union); the next introduction is accepted; A's and M's devices each agree after one round; M learns 2 writer tags on the relationship to A (1 serial), tags per M relationship 2/1/1 (A, B, C), 0 linkable across relationships; probe sequence (6680) not modelled |
 | X18 two cards of one act | passed, promise changed | passed | rules 1 and 3: both cards were taken while the devices were separated, so nothing is withdrawn; A's ledger holds one consent and one connect effect, both devices hold the same hand-over digest and agree after one round; two card documents reach B (each B device receives both), B connects once, no conflict mark |
-| X21 journal robustness | passed | n/a | repair after old and double restore with reordering, duplicates, concurrent requests and two crashes in 7 rounds; after 15 rounds of lost requests, answers, journal batches alone (reply head and receipts delivered) or receipts each in 1 round; after every phase no missing batch key and the reference projection on both devices; repair ends with no device waiting for catch-up and 17 silent rounds on the self address; no double effect, no conflict; 813 frames and 2.1 MB on the self address, of which 395 journal frames (1.65 MB for an 11-batch, 22 kB journal); 569 repeats, 566 on the self address and 3 to counterparts; the journal does not grow |
+| X21 journal robustness | passed | n/a | repair after old and double restore with reordering, duplicates, concurrent requests and two crashes in 7 rounds; after 15 rounds of lost requests, answers, journal batches alone (reply head and receipts delivered) or receipts each in 1 round; after every phase no missing batch key and the reference projection on both devices; repair ends with no device waiting for catch-up and 17 silent rounds on the self address; no double effect, no conflict; 813 frames and 2.2 MB on the self address, of which 395 journal frames (1.66 MB for an 11-batch, 23 kB journal; the writer tags in the operations add about 0.2 kB); 569 repeats, 566 on the self address and 3 to counterparts; the journal does not grow |
 
-Counts over X1 to X18, X7b and X21 with two devices: 15 kept (X3 and X18
-under a changed promise), 4 not kept, 1 not applicable (K0: 1 kept, 18
-not kept, 1 not applicable). Step 2 changed X14 and added X7b; step 3
-changed X3 and X18; every other outcome is the same as after step 1.
+Counts over X1 to X18, X7b and X21 with two devices: 17 kept (X3 and X18
+under a changed promise), 2 not kept (X7, X9), 1 not applicable (K0: 1
+kept, 18 not kept, 1 not applicable, unchanged). Step 2 changed X14 and
+added X7b; step 3 changed X3 and X18; step 4 changed X17; step 5 changed
+X16 by its oracle; every other outcome is the same as after step 1.
 
 Reservations (gate reviews 8 and 9): a successful restore with reachable
 history (X6) is not the same as repair after lost sync traffic (X21
@@ -457,6 +587,40 @@ and X7b do).
   card, or whether a second fresh card of the same act always sets K
   (8910.8).
 
+## Spec follow-ups from steps 4 and 5
+
+- **8500/6270 per writer.** 8500 (0.32) numbers revisions per
+  relationship; with two devices of one person producing independently
+  the inventory needs a writer component: numbering per writer, the
+  writer id in the revision, and 6270 compared per writer within the
+  scope of 6280. The writer id must be pseudonymous per relationship.
+- **6680/6280/6300 per writer.** The probe sequence per tuple direction
+  (6680: "starting at 1, strictly increasing, and persisted atomically
+  before send") and the mapping revision per pair scope (6280, 6300) have
+  the same problem as 8500 when two devices send on the same tuple; the
+  bench carries the tag in probe and mapping but models neither number.
+- **8535 across writers.** The empty revision on class off must withdraw
+  the keys of every writer, not only the sender's; a writer whose keyed
+  revision reaches M after it lists keys again, so every writer that
+  learns the class off sends its own empty revision. The inventory needs
+  both rules and M's union rule (latest revision per writer, union over
+  writers, clear marks).
+- **8445 per writer.** Shared key numbers are not harmless under one seed:
+  the same `(nonce, n)` derives the same anchor, but each device stamps
+  its own expiry (review 21 B1). The bench gives every device its own
+  class of numbers (blocks dealt in turn, orthogonal to the counterpart's
+  naming split); the inventory needs numbers per writer, and the receiver
+  rule for the same anchor with a different value (8445 next to 6270).
+- **What M learns about the device count.** With writer tags M learns per
+  relationship how many devices of the person have sent it a revision,
+  probe or mapping (measured: two tags on the relationship to A); it
+  cannot link them across relationships. Whether that is acceptable is a
+  decision on the privacy section (the fallback is 3b with a deadline).
+- **8640.6 and 8535 under 4a.** The withdrawal takes effect at M; a device
+  that still holds the key active accepts a ticket on it, the person keeps
+  the act, the key is consumed once. The inventory may state this
+  explicitly next to 8535.
+
 ## What re-evaluation adds (plan section 5: carrier, M, counterpart)
 
 On the receiving side, keeping entries means the receiver can run later
@@ -490,7 +654,25 @@ after its probe instead of right away; the delay tells it that the hit
 was found late, which in K1a happens only after a journal fold, so it
 can infer that the person uses more than one device.
 
-## Limits of steps 1 to 3
+## What writer tags show (plan section 5: carrier, M, counterpart)
+
+- **Carrier:** not the tag itself, which is inside the sealed document;
+  but every revision, probe and mapping grows by the field (the same
+  initial revision: 2389 bytes without tag, 2426 with), and a revision
+  owed after a restore goes out when the catch-up ends, at a time the
+  carrier observes. Neither size correlation nor send times are measured.
+- **M:** per relationship, one tag per device that sent it a revision
+  (X17: 2 tags on the relationship to A with two devices, 1 serial; per M
+  relationship 2/1/1 for A, B, C), so the number of the person's devices
+  that refilled; tags of one device in two relationships differ ("0
+  linkable" in X17 counts equal tags across relationships only, nothing
+  about sizes or timing; test "Kennung je Gerät und Beziehung"). A restore
+  does not add a tag.
+- **Counterpart of a probe or mapping:** the tag of the device that opened
+  the tuple or owed the mapping, per relationship; the same count as M
+  for the devices that sent it continuity documents.
+
+## Limits of steps 1 to 5
 
 - The device count is fixed; a third device is refused. Transferring or
   re-splitting rights is K1b.
@@ -518,10 +700,31 @@ can infer that the person uses more than one device.
 - The tie rules for concurrent unions (smallest operation for the union
   effect, smallest digest for a `united` duty) are bench rules of the
   fold, not inventory rules. Concurrent unions with own stock on the
-  united relationship would each produce a revision under the same
-  number; that is the open production question of X17.
-- Class changes and revision numbers are not rights and have no merge
-  rule beyond the fold: X16 and X17 fail.
+  united relationship each produce a revision; with writer tags each
+  under its own writer's next number.
+- Class changes are not rights; the `class` operation folds as the last
+  applied value, so a class toggle on a restored device during its
+  catch-up can be undone by the fold of older operations of its earlier
+  incarnation (not exercised by an X scenario).
+- Writer tags (step 4): probes and mappings carry the tag but the bench
+  numbers neither (6680, 6280/6300 not modelled). Key numbers `n` are
+  split by device class (review 21 B1); the class is fixed with the device
+  count, so a restore without a sibling can still reuse a number of its
+  own class (the fold then records `conflict:key-value`). The tag is derived from the
+  resolved relationship id; a union that keeps the other relationship's id
+  gives the device a new tag there (a new view scope at M anyway, 8557).
+- A device restored without a sibling (no catch-up) continues its
+  writer's counter from the backup and can reuse a number its lost
+  incarnation sent; M records 6270 (test "Gegenlauf: derselbe Schreiber").
+  With a sibling the catch-up recovers the counter.
+- M's union keeps keys from a writer's latest revision even if another
+  writer consumed them meanwhile; M does not name them because its
+  consumption marks are holder-wide (8570). Convergence to an empty view
+  after class off relies on every writer that listed keys sending its own
+  empty revision once it learns the class off.
+- X16 under 4a: the act accepted on a withdrawn key holds; serially the
+  only device refuses (8640.6), so the two-device and the serial run end
+  with a different act set; both pass the oracle.
 - Terminality of 8325 now holds for the person only after the devices
   have united: a device can show "consented" and later "declined" (its
   card never left), or "declined" and later "connected" (the sibling's

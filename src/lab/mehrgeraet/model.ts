@@ -96,11 +96,24 @@ export interface StockKey {
   state: StockState
 }
 
+export type ListedKey = { n: number; anchor: Anchor; keyAgreement: string; expiresAt: string }
+
 export interface StockView {
   scope: string
   revision: number
-  /** Die gelisteten Schlüssel mit ihrer Nummer (8445): M teilt sie unter seinen Geräten nach der Nummer auf (K1a). */
-  keys: Array<{ n: number; anchor: Anchor; keyAgreement: string; expiresAt: string }>
+  /** Die gelisteten Schlüssel mit ihrer Nummer (8445): M teilt sie unter seinen Geräten nach der Nummer auf (K1a). Mit Schreibern: die Vereinigung der geltenden Schreiber (`viewKeys`). */
+  keys: ListedKey[]
+  /**
+   * K1a Schritt 4 (Anton 18.10., 3a): je pseudonymer Schreiberkennung die jüngste Revision dieses Schreibers im Scope.
+   * Nummern sind je Schreiber monoton (6270 je Schreiber); ohne Feld (K0) gibt es einen Schreiber wie vorher.
+   */
+  writers?: Record<string, { revision: number; keys: ListedKey[] }>
+  /**
+   * Leere Revision bei Klasse aus (8535, 8475.S6) gilt über alle Schreiber: je Schreiber die höchste Revision, die eine
+   * angenommene leere Revision (irgendeines Schreibers) aufgehoben hat. Ein Schreiber zählt zur Vereinigung nur mit einer
+   * Revision darüber. Verband (Maximum je Schreiber): in jeder Faltungsreihenfolge dasselbe.
+   */
+  clears?: Record<string, number>
 }
 
 /** Beziehung je Holder (eine je Gegenüber, 6975.5: Zusammenhangskomponente der Herkunftskanten). */
@@ -116,6 +129,11 @@ export interface Relationship {
   nonce: string | null // Einführungs-Nonce (8430), base64
   nextN: number // 8445
   revision: number // 8500: höchste Revisionsnummer im Zustand
+  /**
+   * K1a Schritt 4: je eigener Schreiberkennung die höchste Revision im Zustand (8500 je Schreiber) und ob sie leer war
+   * (Klasse aus, 8535). Ohne Feld (K0) zählt `revision` allein.
+   */
+  writers?: Record<string, { revision: number; empty: boolean }>
   /** 8510: Annahmen (Akt-Id, Zeit); die Bestätigung benennt die bestätigten Akte (8515). */
   accepted: Array<{ act: string; at: string }>
   confirmed: string[]
@@ -231,10 +249,10 @@ export type Op = { id: OpId; at: string } & (
   | { kind: 'class'; rel: string; on: boolean }
   | { kind: 'depart'; rel: string }
   | { kind: 'allocate'; rel: string; nonce: string; keys: StockKey[] } // 8445, 8475.S1–S3 in einem Schritt (Registrierung im Prüfstand sofort)
-  | { kind: 'revision'; rel: string; revision: number; keys: Array<{ n: number; anchor: Anchor; keyAgreement: string; expiresAt: string }> } // 8500
+  | { kind: 'revision'; rel: string; revision: number; keys: ListedKey[]; writer?: string } // 8500, je Schreiber (Schritt 4)
   | { kind: 'withdraw'; rel: string; anchors: Anchor[] } // 8475.S6
   | { kind: 'age'; rel: string; anchors: Anchor[] } // 8475.S5
-  | { kind: 'view'; rel: string; scope: string; revision: number; keys: Array<{ n: number; anchor: Anchor; keyAgreement: string; expiresAt: string }> } // M: 8557/6270
+  | { kind: 'view'; rel: string; scope: string; revision: number; keys: ListedKey[]; writer?: string; clears?: Record<string, number> } // M: 8557/6270, je Schreiber (Schritt 4)
   | { kind: 'introduce'; act: MediatorAct } // M: 8605, 8570.2
   | { kind: 'ticket-accept'; act: Act } // 8640.14
   | { kind: 'ticket-refuse-budget'; rel: string; own: Anchor } // 8640.13
@@ -422,6 +440,70 @@ function aggregateO(a: Act): void {
   a.o = os.reduce((m, o) => (RANK[o] > RANK[m] ? o : m), 'none' as HandOver)
 }
 
+/**
+ * K1a Schritt 4 (Anton 18.10., Fragenkatalog Klasse 2, 3a): Ms Sicht liest mehrere Schreiber einer Seite.
+ *
+ *   8500 (0.32) „A sender MUST number each revision of a relationship one above the highest revision of that relationship
+ *               its persistent state holds.“ (hier: je Schreiberkennung)
+ *   6270        generischer Revisionsvertrag: höher ersetzt, gleich und gleich ignoriert, gleich und abweichend
+ *               Equivokation, niedriger abgewiesen (hier: je Schreiber im Scope 6280).
+ *   8535        „On a withdrawal by the class turning off (8475.S6), the sender MUST send a revision with an empty `keys`
+ *               list on the relationship, whether or not it lags.“
+ *
+ * Regel: je Schreiber die jüngste Revision (die höhere ersetzt die frühere dieses Schreibers ganz); die geltende Sicht ist
+ * die Vereinigung der Schlüssel aller Schreiber, deren jüngste Revision über ihrer Aufhebungsmarke liegt (`clears`). Eine
+ * leere Revision eines Schreibers hebt die Schlüssel aller Schreiber auf, die das empfangende Gerät bis dahin hielt (die
+ * Operation trägt diese Marken); die Marken falten als Maximum. Neuer Scope (8557): die Sicht beginnt neu.
+ */
+function applyWriterView(s: HolderState, r: Relationship, op: Op & { kind: 'view' }, keys: ListedKey[]): void {
+  const w = op.writer!
+  let v = r.view
+  if (!v || v.scope !== op.scope || !v.writers) v = { scope: op.scope, revision: 0, keys: [], writers: {}, clears: {} }
+  const writers = { ...v.writers }
+  const clears = { ...(v.clears ?? {}) }
+  for (const [x, n] of Object.entries(op.clears ?? {})) clears[x] = Math.max(clears[x] ?? 0, n)
+  const held = writers[w]
+  let take = !held || op.revision > held.revision
+  if (held && op.revision === held.revision && canonical(keys) !== canonical(held.keys)) {
+    s.findings.push(`view auf ${r.id}: Schreiber ${w.slice(0, 8)} Revision ${op.revision} zweimal mit anderen Schlüsseln: Equivokation (6270)`)
+    take = canonical(keys) < canonical(held.keys) // in jeder Reihenfolge dasselbe
+  }
+  if (take) writers[w] = { revision: op.revision, keys }
+  const v2 = viewKeys(writers, clears)
+  for (const anchor of v2.conflicts) keyValueConflict(s, anchor)
+  r.view = { scope: op.scope, revision: Math.max(0, ...Object.values(writers).map((x) => x.revision)), keys: v2.keys, writers, clears }
+}
+
+/**
+ * Die geltende Sicht über Schreiber: Vereinigung (nach Anker) der Schreiber mit einer Revision über ihrer Aufhebungsmarke.
+ * Review 21 B1: listen zwei Schreiber denselben Anker mit anderem Wert (Ablauf, Vereinbarung, Nummer), gilt der kanonisch
+ * kleinste Wert (in jeder Reihenfolge derselbe) und der Anker steht in `conflicts` (Befund, nie still). Mit der Aufteilung
+ * der Nummern je Restklasse (K1a) kommt das nicht vor.
+ */
+export function viewKeys(writers: Record<string, { revision: number; keys: ListedKey[] }>, clears: Record<string, number>): { keys: ListedKey[]; conflicts: string[] } {
+  const m = new Map<string, ListedKey>()
+  const conflicts = new Set<string>()
+  for (const w of Object.keys(writers).sort()) {
+    const x = writers[w]!
+    if (x.revision <= (clears[w] ?? 0)) continue
+    for (const k of x.keys) {
+      const held = m.get(k.anchor)
+      if (!held) m.set(k.anchor, k)
+      else if (canonical(held) !== canonical(k)) {
+        conflicts.add(k.anchor)
+        if (canonical(k) < canonical(held)) m.set(k.anchor, k)
+      }
+    }
+  }
+  return { keys: sortKeys([...m.values()]), conflicts: [...conflicts].sort() }
+}
+
+/** Review 21 B1: gleicher Anker, anderer Schlüsselwert; einmal je Anker als Befund festgehalten (reihenfolgeunabhängig). */
+function keyValueConflict(s: HolderState, anchor: string): void {
+  const prefix = `conflict:key-value:${anchor}`
+  if (!s.findings.some((f) => f.startsWith(prefix))) s.findings.push(`${prefix}: gleicher Anker mit anderem Schlüsselwert (8445); der kanonisch kleinste gilt`)
+}
+
 // ── Anwenden (deterministisch, idempotent je Operations-ID und je Effekt) ───
 
 export function apply(s: HolderState, original: Op): void {
@@ -472,7 +554,17 @@ function applyBody(s: HolderState, op: Op): void {
       if (!r.nonce) r.nonce = op.nonce // 8435: die erste Nonce der Beziehung
       else if (r.nonce !== op.nonce && !r.stock.some((x) => x.nonce === op.nonce)) s.findings.push(`allocate auf ${r.id}: zweiter Vorrat unter Nonce ${op.nonce.slice(0, 8)} neben ${r.nonce.slice(0, 8)} (8435): zwei Geräte haben getrennt zugeteilt`)
       for (const k of op.keys) {
-        if (r.stock.some((x) => (x.nonce === k.nonce && x.n === k.n) || x.anchor === k.anchor)) continue // Effekt-Identität: (Nonce, n)
+        const held = r.stock.find((x) => x.anchor === k.anchor) ?? r.stock.find((x) => x.nonce === k.nonce && x.n === k.n)
+        if (held) {
+          // Effekt-Identität: (Nonce, n) bzw. der Anker. Review 21 B1: gleicher Anker mit anderem Wert (zwei Geräte haben dieselbe
+          // Nummer getrennt zugeteilt) faltet auf den kanonisch kleinsten Wert und wird als Befund festgehalten, nie still.
+          const value = (x: StockKey) => canonical({ n: x.n, nonce: x.nonce ?? op.nonce, anchor: x.anchor, keyAgreement: x.keyAgreement, key: x.key, expiresAt: x.expiresAt })
+          if (value(held) !== value(k)) {
+            keyValueConflict(s, held.anchor)
+            if (value(k) < value(held)) Object.assign(held, { n: k.n, nonce: k.nonce ?? op.nonce, anchor: k.anchor, keyAgreement: k.keyAgreement, key: k.key, expiresAt: k.expiresAt })
+          }
+          continue
+        }
         r.stock.push({ ...k, nonce: k.nonce ?? op.nonce, state: 'active' }) // Vorbereitung sofort bestätigt (Prüfstand); 8475.S3 mit der Revision
         r.nextN = Math.max(r.nextN, k.n + 1)
       }
@@ -481,7 +573,12 @@ function applyBody(s: HolderState, op: Op): void {
     case 'revision': {
       const r = rel(s, op.rel)
       r.revision = Math.max(r.revision, op.revision) // 8500: Nummern bleiben verbraucht
-      effect(s, op, `revision:${r.id}:${op.revision}`)
+      if (op.writer) {
+        // Schritt 4: 8500 je Schreiber; die höchste Revision des Schreibers zählt, gleich in welcher Reihenfolge gefaltet.
+        const w = r.writers?.[op.writer]
+        if (!w || op.revision > w.revision) r.writers = { ...(r.writers ?? {}), [op.writer]: { revision: op.revision, empty: op.keys.length === 0 } }
+        effect(s, op, `revision:${r.id}:${op.writer}:${op.revision}`)
+      } else effect(s, op, `revision:${r.id}:${op.revision}`)
       return
     }
     case 'withdraw': {
@@ -500,6 +597,10 @@ function applyBody(s: HolderState, op: Op): void {
       const r = rel(s, op.rel)
       const v = r.view
       const keys = sortKeys(op.keys) // kanonisch gehalten: die Ankunftsreihenfolge ist nicht handlungswirksam (Review 4 B2)
+      if (op.writer) {
+        applyWriterView(s, r, op as Op & { kind: 'view' }, keys)
+        return
+      }
       if (v && v.scope === op.scope) {
         if (op.revision < v.revision) return
         if (op.revision === v.revision) {
@@ -670,6 +771,11 @@ function applyBody(s: HolderState, op: Op): void {
       keep.nonce = keep.nonce ?? other.nonce // 6987.3
       keep.nextN = Math.max(keep.nextN, other.nextN)
       keep.revision = Math.max(keep.revision, other.revision) // 6987.4
+      if (keep.writers || other.writers) {
+        const ws = { ...(keep.writers ?? {}) }
+        for (const [w, x] of Object.entries(other.writers ?? {})) if (!ws[w] || x.revision > ws[w]!.revision) ws[w] = x
+        keep.writers = ws // 6987.4 je Schreiber
+      }
       for (const e of other.accepted) if (!keep.accepted.some((x) => x.act === e.act)) keep.accepted.push(e) // 6987.6
       for (const id of other.confirmed) if (!keep.confirmed.includes(id)) keep.confirmed.push(id)
       keep.confirmedAt = [keep.confirmedAt, other.confirmedAt].filter(Boolean).sort().pop() ?? null
@@ -699,7 +805,7 @@ function applyBody(s: HolderState, op: Op): void {
 
 export interface Projection {
   /** Kontakte: je Beziehung alles, was eine spätere Entscheidung trägt (B5, Review 4 B3: ganze Schlüsselwerte mit Ablauf): Gegenanker, Kopf, Klasse, Abgang, Ms Sicht, Vorrat je Schlüssel, Nonce und Nummernstand, Revision, Annahmen mit Zeit, Bestätigungen, Budget. */
-  contacts: Array<{ peers: string[]; head: string; classOn: boolean; departed: boolean; view: StockView | null; stock: Record<string, { n: number; nonce: string; state: StockState; keyAgreement: string; expiresAt: string }>; nonce: string | null; nextN: number; revision: number; accepted: Array<{ act: string; at: string }>; confirmed: string[]; budget: number }>
+  contacts: Array<{ peers: string[]; head: string; classOn: boolean; departed: boolean; view: StockView | null; stock: Record<string, { n: number; nonce: string; state: StockState; keyAgreement: string; expiresAt: string }>; nonce: string | null; nextN: number; revision: number; writers?: Record<string, { revision: number; empty: boolean }>; accepted: Array<{ act: string; at: string }>; confirmed: string[]; budget: number }>
   /** Akte: Id → Hauptzustand, Nebenzustände P, V, K, O mit Kartenwerten, eigene Karte und Übergabedigest, Ablauf, geöffnete Beziehung. */
   acts: Record<string, { state: ActState; pending: Card | null; v: string | null; k: boolean; o: HandOver; ownCard: Card | null; ownCardDigest: string | null; expiresAt: string; opened: string | null }>
   /** Marken des Mediators. */
@@ -717,11 +823,12 @@ export function project(s: HolderState, now: string): Projection {
       head: head(r).id,
       classOn: r.classOn,
       departed: r.departed,
-      view: r.view ? { scope: r.view.scope, revision: r.view.revision, keys: sortKeys(r.view.keys) } : null,
+      view: r.view ? { scope: r.view.scope, revision: r.view.revision, keys: sortKeys(r.view.keys), ...(r.view.writers ? { writers: r.view.writers, clears: r.view.clears ?? {} } : {}) } : null,
       stock: Object.fromEntries(r.stock.map((k) => [k.anchor, { n: k.n, nonce: k.nonce, state: k.state, keyAgreement: k.keyAgreement, expiresAt: k.expiresAt }]).sort(([a], [b]) => (a as string).localeCompare(b as string))),
       nonce: r.nonce,
       nextN: r.nextN,
       revision: r.revision,
+      ...(r.writers ? { writers: r.writers } : {}),
       accepted: [...r.accepted].sort((x, y) => x.act.localeCompare(y.act)),
       confirmed: [...r.confirmed].sort(),
       budget: budgetUsed(r, now),
