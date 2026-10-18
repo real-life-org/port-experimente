@@ -14,10 +14,11 @@
 // of devices is fixed at the first enrollment (rights are never
 // redistributed in step 1); a restore gives a fresh random incarnation; the
 // candidate's volatile state is part of the device's checkpoint. Step 2:
-// since the devices learn each other's tuples, the holder completes the
-// candidate snapshot (2300) of own tuples opened concurrently on two devices
-// and probes again (`lateProbes`); the union itself still comes only from a
-// verified counterpart mapping (6975.1) and travels as a journal operation.
+// since the devices learn each other's tuples, a device keeps every probe
+// it received with the entries that hit nothing and evaluates it again
+// when a folded batch adds own tuples (`reevaluateProbes`); a hit owes the
+// own mapping, the union itself still comes only from a verified
+// counterpart mapping (6975.1) and travels as a journal operation.
 
 import { randomBytes } from 'node:crypto'
 import { EnrolmentRefused, seedScheme, type CandidateDevice, type HolderDevice, type Intent, type MultiDeviceCandidate, type Transaction } from '../../lab/mehrgeraet/holder'
@@ -62,8 +63,8 @@ export class K1aDevice implements CandidateDevice {
   private batches: Batch[] = []
   private out: Batch[] = []
   private n = 0
-  /** Step 2: devices learn their siblings' tuples through the journal, so the holder completes the candidate snapshot of concurrently opened own tuples and probes again. */
-  readonly lateProbes = true
+  /** Step 2: devices learn their siblings' tuples through the journal, so the holder keeps received probes and evaluates them again when the own tuple set grows. */
+  readonly reevaluateProbes = true
   constructor(
     readonly person: string,
     readonly name: string,

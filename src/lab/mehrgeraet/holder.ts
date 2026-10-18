@@ -35,11 +35,6 @@ import * as M from './model'
 
 const enc = new TextEncoder()
 const dec = new TextDecoder()
-/**
- * Ist `a` später geöffnet als `b`? Nach `openedAt` (Geräteuhr), bei Gleichstand nach dem Record-Anker (2290, nur als
- * deterministische Wahl, keine Zeitaussage). Dieselbe Richtung wie die späte Probe (`concurrentPairs`).
- */
-const laterOpened = (a: M.Tuple, b: M.Tuple) => (a.openedAt !== b.openedAt ? a.openedAt > b.openedAt : a.record > b.record)
 
 // ── Schlüssel ────────────────────────────────────────────────────────────────
 
@@ -145,12 +140,12 @@ export interface CandidateDevice {
   snapshot?(): unknown
   rollback?(snapshot: unknown): void
   /**
-   * Eigene Tupel über Geräte (K1a Schritt 2): die Geräte lernen die Tupel ihrer Schwestergeräte (Journal), also kann ein
-   * Gerät zwei eigene Tupel halten, die nebenläufig auf verschiedenen Geräten geöffnet wurden und deren eingefrorene
-   * Kandidatenlisten (2300) einander nicht enthalten. Mit `true` trägt das Gerät dann beim später geöffneten Tupel den
-   * späten Kandidaten nach und probt nach (`lateProbes` im Holder). Ohne Feld (K0) geschieht nichts.
+   * Neuauswertung empfangener Proben (K1a Schritt 2): die Geräte lernen die Tupel ihrer Schwestergeräte (Journal), also
+   * kann die eigene Tupelmenge nach dem Empfang einer Probe wachsen. Mit `true` behält das Gerät jede Probe der Gegenseite
+   * mit ihren noch nicht getroffenen Einträgen und wertet sie neu aus, sobald ein gefalteter Batch neue eigene Tupel bringt
+   * (`reevaluate` im Holder). Ohne Feld (K0, kein Journal) behält das Gerät nichts.
    */
-  readonly lateProbes?: boolean
+  readonly reevaluateProbes?: boolean
   /** Was der Kandidat dauerhaft hält (Journal); Teil des Store-Abbilds. */
   persist(): unknown
   /** Neuaufbau aus dem Store; ein Kandidat mit Inkarnationen wechselt hier die Inkarnation. */
@@ -200,13 +195,11 @@ interface Doc {
 /** Eine Operation ohne Kennung und Zeit (verteilt über die Union). */
 type OpBody = M.Op extends infer O ? (O extends M.Op ? Omit<O, 'id' | 'at'> : never) : never
 
-/** Eigene Dokumente, deren Ausgang fachlich wirkt (Karte, Mapping, späte Probe), mit den Bytes für eine Wiederholung. */
+/** Eigene Dokumente, deren Ausgang fachlich wirkt (Karte, Mapping), mit den Bytes für eine Wiederholung. */
 interface Sent {
-  kind: 'card' | 'mapping' | 'journal' | 'probe'
+  kind: 'card' | 'mapping' | 'journal'
   act?: string
   pair?: [string, string]
-  /** Späte Probe: das probende Tupel und das Tupel, dessen Gegenanker nachgetragen wurde (Tor-Review 13 B2). */
-  late?: { tuple: string; other: string }
   frame: Uint8Array
   address: string
 }
@@ -232,6 +225,8 @@ export interface DeviceState {
   buffer: Array<[string, Buffered]>
   /** Produktionsabsichten, eigene und aus dem Journal der eigenen Geräte (B4). */
   intents: Array<[string, Intent]>
+  /** Behaltene Proben der Gegenseite je eigenem Ankunftstupel: die noch nicht getroffenen Einträge (K1a Schritt 2). */
+  probes?: Array<[string, string[]]>
   /** Digest → erwarteter Signierer der Quittung, für jede quittierbare Submission (#55). */
   expected: Array<[string, string]>
 }
@@ -264,6 +259,15 @@ export class HolderDevice {
   private down = false
   private counter = 0
   private sent = new Map<string, Sent>()
+  /**
+   * Behaltene Proben (K1a Schritt 2): eigenes Ankunftstupel → Einträge der Probe(n) der Gegenseite, die noch keinen
+   * Treffer ergeben haben. Gerätelokal wie ein empfangener Rahmen (nicht im Journal); Teil von Checkpoint und Store-Abbild.
+   */
+  private probes = new Map<string, string[]>()
+  /** Lesbar für Messungen: die behaltenen Proben je Ankunftstupel. */
+  keptProbes(): ReadonlyMap<string, readonly string[]> {
+    return this.probes
+  }
   private buffer = new Map<string, Buffered>()
   /** Digest → erwarteter Quittungs-Signierer je eigener Submission (#55); lesbar für Messungen. */
   expected = new Map<string, string>()
@@ -363,10 +367,11 @@ export class HolderDevice {
   }
   /** Ein Schritt eines eigenen Geräts (Journal) anwenden: Operationen falten, Absichten merken; die Zuständigkeit bleibt beim erzeugenden Gerät. */
   async applyRemote(tx: Transaction): Promise<void> {
+    const known = this.tupleIds()
     for (const op of tx.ops) M.apply(this.state, op)
     for (const i of tx.intents) if (!this.intents.has(i.digest)) this.intents.set(i.digest, i)
     await this.relisten()
-    await this.lateProbes()
+    if ([...this.tupleIds()].some((id) => !known.has(id))) await this.reevaluate() // die eigene Tupelmenge ist gewachsen
     await this.refillAll()
   }
 
@@ -382,6 +387,7 @@ export class HolderDevice {
       buffer: new Map(this.buffer),
       expected: new Map(this.expected),
       intents: new Map(this.intents),
+      probes: new Map(this.probes),
       cand: this.cand.snapshot?.(),
       held: this.held.slice(),
       framesOut: this.measures.framesOut,
@@ -398,6 +404,7 @@ export class HolderDevice {
     this.buffer = c.buffer
     this.expected = c.expected
     this.intents = c.intents
+    this.probes = c.probes
     this.cand.rollback?.(c.cand)
     this.held = c.held
     this.measures.framesOut = c.framesOut
@@ -453,6 +460,7 @@ export class HolderDevice {
       buffer: [...this.buffer],
       expected: [...this.expected],
       intents: [...this.intents],
+      probes: [...this.probes],
     }
   }
   commit() {
@@ -471,6 +479,7 @@ export class HolderDevice {
     this.buffer = new Map(s?.buffer ?? [])
     this.expected = new Map(s?.expected ?? [])
     this.intents = new Map(s?.intents ?? [])
+    this.probes = new Map(s?.probes ?? [])
     // Was im Store steht, ist committet: vorgemerkte, nie freigegebene Submissions gehen nach dem nächsten Commit hinaus.
     this.held = this.zusteller.unreleased()
     this.cand.restore(s?.candidate ?? null)
@@ -578,6 +587,7 @@ export class HolderDevice {
     return this.action(async () => {
       const peers = new Set(M.rel(this.state, relId).tuples.map((t) => t.peerKeyAgreement))
       this.emit({ kind: 'depart', rel: relId })
+      for (const t of M.rel(this.state, relId).tuples) this.probes.delete(t.id) // Aufbewahrung endet mit dem Abgang
       // 8475.S6: Neues geht nicht mehr an diesen Kontakt; was nie freigegeben war, entfällt. Eine eingereichte Sendung
       // bleibt bei Delivery und wird weiter wiederholt (6845.7, Delivery 6.1; Tor-Review 4 B4).
       for (const d of this.held.filter((d) => peers.has(this.zusteller.submissions.get(d)?.address ?? ''))) this.zusteller.discard(d)
@@ -712,69 +722,65 @@ export class HolderDevice {
   private blind(t: M.Tuple, anchor: string): string {
     return createHmac('sha256', this.pairKeyOf(t)).update(anchor).digest('base64')
   }
-  /** Probe auf dem neuen Tupel: geblendete Kandidaten (die Gegenanker aller anderen gehaltenen Tupel, eingefroren bei der Öffnung); `only` = nur diese (späte Kandidaten). */
-  private async sendProbe(t: M.Tuple, only?: string[]): Promise<{ digest: string; bytes: Uint8Array } | null> {
-    const entries = (only ?? t.candidates).filter((c) => c !== t.peer).map((c) => this.blind(t, c))
-    if (!entries.length) return null
-    return this.sendDoc(TYPES.probe, t.ownKey, t.peer, t.peerKeyAgreement, (await this.keysFor(t.ownKey)).rkid, { entries })
+  /** Probe auf dem neuen Tupel: geblendete Kandidaten (die Gegenanker aller anderen gehaltenen Tupel, eingefroren bei der Öffnung). */
+  private async sendProbe(t: M.Tuple): Promise<void> {
+    const entries = t.candidates.filter((c) => c !== t.peer).map((c) => this.blind(t, c))
+    if (!entries.length) return
+    await this.sendDoc(TYPES.probe, t.ownKey, t.peer, t.peerKeyAgreement, (await this.keysFor(t.ownKey)).rkid, { entries })
   }
   /**
-   * Nebenläufige eigene Tupel (K1a Schritt 2): zwei Tupel verschiedener Beziehungen, von denen keines in der eingefrorenen
-   * Kandidatenliste des anderen steht (2300). Auf einem Gerät kommt das nicht vor: das später geöffnete Tupel hat jedes
-   * frühere einer nicht abgegangenen Beziehung im Schnappschuss (`candidates()`). Es entsteht nur, wenn zwei Geräte der
-   * Person je ein Tupel öffnen, bevor das Journal das andere bringt (X7, X14).
-   * Jedes Paar kommt als [später, früher] nach `openedAt` (Geräteuhr des öffnenden Geräts, Tor-Review 13 B1, Anton 18.10.
-   * Option (i')). Paare mit gleichem `openedAt` fehlen: keines der beiden ist später, keines trägt nach (Prüfstandsannahme,
-   * NOTES „Late candidates and opening time“).
+   * 6800/6806: eine Probe auf dem eigenen Tupel `t` auswerten. Jeder Eintrag, der `HMAC(k_p, a)` über den eigenen Paar-Anker
+   * `a` eines anderen gehaltenen Tupels gleicht, ist ein Treffer auf dem Paar (6806, jeder Treffer, nicht nur der erste);
+   * ein Treffer verpflichtet zum eigenen Mapping auf `t` (6845.1, 6840), es sei denn, die Pflicht über das Paar besteht
+   * schon (auch aus dem Journal eines Schwestergeräts). Vereinigt wird hier nichts (6804). Liefert die Einträge ohne Treffer.
    */
-  private concurrentPairs(): Array<[M.Tuple, M.Tuple]> {
-    const live = this.state.relationships.filter((r) => !r.departed).flatMap((r) => r.tuples.map((t) => ({ t, rel: r.id })))
-    const out: Array<[M.Tuple, M.Tuple]> = []
-    for (let i = 0; i < live.length; i++)
-      for (let j = i + 1; j < live.length; j++) {
-        const x = live[i]!
-        const y = live[j]!
-        if (x.rel === y.rel || x.t.candidates.includes(y.t.peer) || y.t.candidates.includes(x.t.peer)) continue
-        if (x.t.openedAt === y.t.openedAt) continue // Gleichstand: strikt nach 6750 kein Nachtrag
-        out.push(x.t.openedAt > y.t.openedAt ? [x.t, y.t] : [y.t, x.t])
+  private async evaluateProbe(t: M.Tuple, entries: string[]): Promise<string[]> {
+    const open = new Set(entries)
+    for (const r of this.state.relationships) {
+      if (r.departed) continue // Tupel abgegangener Beziehungen zählen nicht (6845.7)
+      for (const other of r.tuples) {
+        if (other.id === t.id) continue
+        const e = this.blind(t, other.own)
+        if (!open.has(e)) continue
+        open.delete(e)
+        const pair = M.pairKey(t.id, other.id)
+        const duty = this.state.duties.find((d) => d.pair[0] === pair[0] && d.pair[1] === pair[1])
+        if (!duty || duty.state === 'none') await this.sendMapping(t, other) // 6845.1
       }
-    return out
+    }
+    return [...open].sort()
+  }
+  private tupleIds(): Set<string> {
+    return new Set(this.state.relationships.flatMap((r) => r.tuples.map((t) => t.id)))
   }
   /**
-   * Späte Probe (K1a Schritt 2). Annahme über das Inventar hinaus: der Schnappschuss von 2300 („the active heads of its
-   * relationships then“) gilt für die Person; ein Tupel, das ein Schwestergerät nebenläufig geöffnet hat, wird nachgetragen,
-   * sobald das Gerät es kennt, und zwar nur beim **später geöffneten** Tupel (`openedAt`, Anton 18.10. Option (i')): das
-   * spätere hätte das frühere im Schnappschuss gehabt, wäre das Journal da gewesen; das frühere kann einen Anker, der bei
-   * seiner Öffnung noch nicht existierte, nie tragen (6750). Das spätere Tupel probt nur den neuen Eintrag; es ist damit
-   * das Ankunftstupel der Gegenseite (6960) und, ohne Absicht, das Tupel, auf dem `resumeDuties` ein Mapping neu produziert.
-   * Gleicher `openedAt`: kein Nachtrag. Die Ordnung liest die Geräteuhren der Person; Versatz zwischen A1 und A2 kann sie
-   * auf einem Paar umkehren (schlimmstenfalls trägt das frühere Tupel nach, wie vor dieser Regel), und das ist As eigene
-   * Offenlegungsregel (die Gegenseite kann `openedAt` nicht prüfen).
-   * Alles Weitere ist der unveränderte Kontinuitätsfluss: ein Treffer der Gegenseite verpflichtet sie zu einem Mapping
-   * (6845.1), vereinigt aber nichts (6804); vereinigt wird nur auf ein verifiziertes Mapping (6975.1: „The only trigger is
-   * the verification of a counterpart continuity mapping“), in einer Transaktion samt eigenem Mapping (6975.2), und die
-   * Gegenseite vereinigt auf dieses (6975.2) oder hält nur die Kante (6975.3). Der Nachtrag ist eine Operation im Schritt
-   * des Geräts, also ein Batch im Journal: das Schwestergerät faltet ihn und probt nicht noch einmal; probt es nebenläufig
-   * dasselbe, wertet die Gegenseite die zweite Probe ohne neues Mapping aus (Pflicht schon in `hit`).
+   * Neuauswertung (K1a Schritt 2, Anton 18.10. Option 1). Ein gefalteter Batch eines Schwestergeräts hat die eigene
+   * Tupelmenge vergrößert: jede behaltene Probe wird gegen die nun größere Menge eigener Paar-Anker neu ausgewertet,
+   * genau wie bei ihrer Ankunft (`evaluateProbe`: 6960/6806 über die Tupel aller Geräte der Person). Ein Treffer schuldet
+   * das eigene Mapping auf dem Ankunftstupel (6845.1); vereinigt wird erst auf das verifizierte Mapping der Gegenseite
+   * (6900, 6975.1/.2). Die Probe selbst ist die eingefrorene der Gegenseite (2300, 6750 auf ihrer Seite unberührt); kein
+   * neuer Rahmen außer dem geschuldeten Mapping, kein neuer Kandidat, keine Uhr.
+   * Läuft im Schritt, der den Batch faltet: Pflicht-Operation und Mapping-Absicht gehen mit dessen Commit ins Journal.
+   * Nur das Gerät, das die Probe empfangen hat, hält sie (empfangene Rahmen reisen nicht im Journal); das Schwestergerät
+   * erfährt die Pflicht aus dem Journal und mappt nicht noch einmal (`duty` besteht). Haben beide Geräte die Probe
+   * empfangen und werten getrennt voneinander aus, entstehen zwei Mappings über dasselbe Paar: die Gegenseite vereinigt
+   * einmal und hält für das zweite nur die Kante (6975.3); der Fold hält je Pflicht den kleinsten Digest und je Kante die
+   * kleinste Vereinigungsoperation (model.ts, `duty` und `union`).
+   * Aufbewahrung: je eigenem Ankunftstupel die Einträge ohne Treffer; ein getroffener Eintrag fällt weg (ein Paar-Anker
+   * trifft genau ein Tupel), die Probe fällt weg, wenn nichts offen ist oder die Beziehung des Ankunftstupels abgeht.
    */
-  private async lateProbes(): Promise<void> {
-    if (!this.cand.lateProbes) return
-    for (const [probed, other] of this.concurrentPairs()) {
-      const t = M.tuple(this.state, probed.id)
-      if (t.candidates.includes(other.peer)) continue // in dieser Runde schon nachgetragen (mehrere Paare an einem Tupel)
-      this.emit({ kind: 'candidates', tuple: t.id, add: [other.peer] })
-      const sent = await this.sendProbe(t, [other.peer])
-      // Tor-Review 13 B2: der Eintrag in `candidates` ist nicht der einzige Vermerk. Die späte Probe ist eine Pflicht des
-      // erzeugenden Geräts mit Wiederholung (`reportOne`), wie die Mapping-Pflicht (6845.4): offen bis zur Quittung der
-      // Gegenseite, einem Treffer (beide Tupel in einem Eintrag) oder dem Abgang.
-      if (sent) this.sent.set(sent.digest, { kind: 'probe', late: { tuple: t.id, other: other.id }, frame: sent.bytes, address: t.peerKeyAgreement })
+  private async reevaluate(): Promise<void> {
+    if (!this.cand.reevaluateProbes) return
+    for (const [id, entries] of [...this.probes]) {
+      const r = M.relOfTuple(this.state, id)
+      if (!r || r.departed) {
+        this.probes.delete(id)
+        continue
+      }
+      const open = await this.evaluateProbe(M.tuple(this.state, id), entries)
+      if (open.length) this.probes.set(id, open)
+      else this.probes.delete(id)
     }
-  }
-  /** Ist die Pflicht der späten Probe erledigt, ohne dass die Gegenseite quittiert hat? Treffer (vereinigt) oder Abgang. */
-  private lateProbeSettled(late: { tuple: string; other: string }): boolean {
-    const ra = M.relOfTuple(this.state, late.tuple)
-    const rb = M.relOfTuple(this.state, late.other)
-    return !ra || !rb || ra.departed || rb.departed || ra.id === rb.id
   }
   private async sendMapping(arrival: M.Tuple, other: M.Tuple): Promise<void> {
     const pair = M.pairKey(arrival.id, other.id)
@@ -786,9 +792,7 @@ export class HolderDevice {
    * 6845.10: offene Mapping-Pflichten (hit, sent) ohne lokale Übergabe werden wieder aufgenommen. Kennt das Gerät die
    * Absicht dazu (HSC-120, B4): dieselben Bytes, wenn es sie selbst erzeugt hat (Wiederanlauf, neue Inkarnation); eine
    * Absicht eines anderen eigenen Geräts bleibt bei dem (keine Neuproduktion, keine stille Übernahme). Ohne Absicht
-   * (K0, Zustandskopie) wird das Mapping neu produziert, auf dem später geöffneten Tupel des Paars (`laterOpened`, dieselbe
-   * Richtung wie die späte Probe); der Empfänger löst `entry` unter dem symmetrischen Paarschlüssel gegen jedes eigene
-   * Tupel auf, die Wahl ist also Konvention, keine Bedingung der Verifikation.
+   * (K0, Zustandskopie) wird das Mapping neu produziert.
    */
   private async resumeDuties(): Promise<void> {
     for (const d of this.state.duties) {
@@ -807,7 +811,7 @@ export class HolderDevice {
       const tb = this.state.relationships.flatMap((r) => r.tuples).find((t) => t.id === d.pair[1])
       if (!ta || !tb) continue
       if (M.relOfTuple(this.state, ta.id)?.departed) continue // 6845.7
-      const [arrival, other] = laterOpened(ta, tb) ? [ta, tb] : [tb, ta]
+      const [arrival, other] = ta.record > tb.record ? [ta, tb] : [tb, ta]
       await this.guarded(() => this.sendMapping(arrival, other))
     }
   }
@@ -895,12 +899,11 @@ export class HolderDevice {
       const aging = r.stock.filter((k) => k.state === 'active' && !M.usable(k.expiresAt, now)).map((k) => k.anchor)
       if (aging.length) await this.guarded(async () => void this.emit({ kind: 'age', rel: r.id, anchors: aging })) // 8475.S5
     }
-    // B6: fällige Arbeit folgt aus dem Zustand, nicht aus dem Ereignis; `refill` und `lateProbes` sind leer, wenn nichts fehlt.
-    if (this.cand.lateProbes && this.concurrentPairs().length) await this.guarded(() => this.lateProbes())
+    // B6: fällige Arbeit folgt aus dem Zustand, nicht aus dem Ereignis; `refill` ist leer, wenn nichts fehlt.
     await this.refillAll()
   }
 
-  /** Zustellerberichte in Fachwirkung: Karte taken/given-up (8326), Mapping sent, Wiederholung nach `failed` (6845.4), späte Probe (Tor-Review 13 B2). */
+  /** Zustellerberichte in Fachwirkung: Karte taken/given-up (8326), Mapping sent, Wiederholung nach `failed` (6845.4). */
   private async reports(): Promise<void> {
     for (const [d, x] of [...this.sent]) await this.guarded(() => this.reportOne(d, x))
   }
@@ -925,16 +928,6 @@ export class HolderDevice {
           this.zusteller.record(d, x.frame, x.address)
           this.held.push(d)
           this.emit({ kind: 'duty', pair: x.pair, state: 'hit', mappingDigest: d })
-        }
-      }
-      if (x.kind === 'probe' && x.late) {
-        // Quittiert: die Gegenseite hat die Probe ausgewertet (Treffer oder nicht, das entscheidet sie). Erledigt auch
-        // ohne Quittung bei Treffer oder Abgang. Sonst nach ausgeschöpften Zustellversuchen dieselben Bytes in einer neuen
-        // Übergabe, wie beim Mapping (6845.4); keine Neuproduktion.
-        if (r.state === 'delivered' || this.lateProbeSettled(x.late)) this.sent.delete(d)
-        else if (r.state === 'failed') {
-          this.zusteller.record(d, x.frame, x.address)
-          this.held.push(d)
         }
       }
     }
@@ -1186,19 +1179,9 @@ export class HolderDevice {
         const t = this.tupleOfAddress(address)
         if (!t || doc.issuer !== t.peer) return false
         const p = doc.payload as unknown as { entries: string[] }
-        for (const r of this.state.relationships) {
-          if (r.departed) continue
-          for (const other of r.tuples) {
-            if (other.id === t.id) continue
-            if (p.entries.includes(this.blind(t, other.own))) {
-              const pair = M.pairKey(t.id, other.id)
-              const duty = this.state.duties.find((d) => d.pair[0] === pair[0] && d.pair[1] === pair[1])
-              if (!duty || duty.state === 'none') await this.sendMapping(t, other) // 6845.1
-              return true
-            }
-          }
-        }
-        return true // kein Treffer: Wirkung „geprüft“, quittiert
+        const open = await this.evaluateProbe(t, p.entries)
+        if (this.cand.reevaluateProbes && open.length) this.probes.set(t.id, [...new Set([...(this.probes.get(t.id) ?? []), ...open])].sort())
+        return true // Wirkung „geprüft“, quittiert, mit oder ohne Treffer
       }
       case TYPES.mapping: {
         const t = this.tupleOfAddress(address)

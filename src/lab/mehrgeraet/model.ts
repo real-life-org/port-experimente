@@ -232,7 +232,6 @@ export type Op = { id: OpId; at: string } & (
   | { kind: 'duty'; pair: [string, string]; state: PairDuty['state']; mappingDigest: string | null } // 6845
   | { kind: 'union'; a: string; b: string; edge: [string, string] } // 6975.2
   | { kind: 'edge'; edge: [string, string] } // 6975.3
-  | { kind: 'candidates'; tuple: string; add: Anchor[] } // 2300 über Geräte (K1a Schritt 2, Annahme): späte Kandidaten eines nebenläufig geöffneten eigenen Tupels
 )
 
 // ── Hilfen ───────────────────────────────────────────────────────────────────
@@ -554,16 +553,6 @@ function applyBody(s: HolderState, op: Op): void {
       for (const r of s.relationships) r.vouchedBy = r.vouchedBy.map((v) => (v === other.id ? keep.id : v))
       s.relationships = s.relationships.filter((r) => r !== other)
       effect(s, op, `union:${op.edge.join('+')}`)
-      return
-    }
-    case 'candidates': {
-      // 2300: „A party's prior-candidate set of a fresh tuple MUST be the snapshot, taken when the fresh tuple was created,
-      // of the active heads of its relationships then“. Mit mehreren Geräten ist „its relationships then“ die Person, nicht
-      // das Gerät: ein Tupel, das ein Schwestergerät nebenläufig geöffnet hat, fehlt dem Schnappschuss des Geräts. Annahme
-      // (nicht im Inventar): es wird nachgetragen, sobald das Gerät es kennt, und nur beim später geöffneten Tupel (6750; die
-      // Richtung wählt der Holder nach `openedAt`); eine Menge, also reihenfolgefrei und idempotent.
-      const t = tuple(s, op.tuple)
-      t.candidates = [...new Set([...t.candidates, ...op.add])].sort()
       return
     }
     case 'edge': {

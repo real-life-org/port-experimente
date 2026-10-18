@@ -425,10 +425,8 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
     title: 'A1 trifft B1, A2 trifft B2 in derselben Runde, kein Gerät hat gemeinsame Kandidaten: Kontinuität über Geräte (I-6, 2300)',
     async run(c, serial) {
       const s = await setup(c, serial)
-      // Beide Begegnungen vor jeder Runde: kein Journal kann die erste vor der zweiten übertragen. Zwei Geräte, zwei
-      // Begegnungen: eine Sekunde dazwischen auf der Uhr (gleiche Millisekunde = Gleichstand, keine späte Probe, NOTES).
+      // Beide Begegnungen vor jeder Runde: kein Journal kann die erste vor der zweiten übertragen.
       await s.w.encounter(s.A, s.B)
-      s.w.clock.advance(1000)
       await s.w.encounter(s.A2, s.B2)
       const n = await untilStable(s.w, 'A')
       // Soll (B5, je Gerät): jedes Gerät hält genau einen Eintrag zu der anderen Person, und der trägt beide Tupel (nichts gelöscht).
@@ -436,7 +434,49 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const duplicates = Math.max(0, entriesAcross(s.w, 'A', 'B') - 1) + Math.max(0, entriesAcross(s.w, 'B', 'A') - 1)
       const missing = per.filter(({ r }) => r.entries === 0).length
       const ok = n > 0 && duplicates === 0 && per.every(({ r }) => r.entries === 1 && r.tuples === 2)
-      return { outcome: mark(ok), detail: `${per.map(({ d, r }) => `${d.name}: ${r.entries} Eintrag/Einträge mit ${r.tuples} Tupel(n)`).join('; ')}; stabil nach ${n} Runden`, measures: { duplicates, devicesWithoutContact: missing, roundsToConverge: n } }
+      // Grenze (Anton 18.10., Option 2): öffnen beide Personen nebenläufig auf je zwei Geräten, trägt keine eingefrorene Probe
+      // das andere Tupel (2300, 6750), auch die Neuauswertung findet nichts; das Doppel heilt erst bei der nächsten Begegnung.
+      const heal = duplicates > 0 ? '; das Doppel heilt bei der nächsten Begegnung (X7b)' : ''
+      return { outcome: mark(ok), detail: `${per.map(({ d, r }) => `${d.name}: ${r.entries} Eintrag/Einträge mit ${r.tuples} Tupel(n)`).join('; ')}; stabil nach ${n} Runden${heal}`, measures: { duplicates, devicesWithoutContact: missing, roundsToConverge: n } }
+    },
+  },
+  {
+    id: 'X7b',
+    title: 'Dritte Begegnung nach dem symmetrischen nebenläufigen Paar (X7): beide Geräte abgeglichen, A1 trifft B1 erneut; Einträge je Gerät vorher/nachher, Runden bis zu einem Eintrag mit drei Tupeln, keine Doppelwirkung (2300, 6806, 6975)',
+    async run(c, serial) {
+      const s = await setup(c, serial)
+      // Wie X7: beide Begegnungen vor jeder Runde, dann Abgleich der Geräte.
+      await s.w.encounter(s.A, s.B)
+      await s.w.encounter(s.A2, s.B2)
+      await untilStable(s.w, 'A')
+      await untilStable(s.w, 'B')
+      const count = (person: string, other: string) => s.w.of(person).map((d) => relationshipsTo(s.w, d, other))
+      const before = [...count('A', 'B'), ...count('B', 'A')]
+      const entriesBefore = Math.max(...before.map((r) => r.entries))
+      // Die dritte Begegnung: die frische Probe trägt beide alten Tupel als Kandidaten (2300), die Gegenseite trifft beide.
+      await s.w.encounter(s.A, s.B)
+      const one = () => [...count('A', 'B'), ...count('B', 'A')].every((r) => r.entries === 1 && r.tuples === 3)
+      let rounds = -1
+      for (let i = 1; i <= 30; i++) {
+        await s.w.rounds(1)
+        if (one()) {
+          rounds = i
+          break
+        }
+      }
+      const n = Math.max(await untilStable(s.w, 'A'), await untilStable(s.w, 'B'))
+      const after = [...count('A', 'B'), ...count('B', 'A')]
+      const duplicates = Math.max(0, entriesAcross(s.w, 'A', 'B') - 1) + Math.max(0, entriesAcross(s.w, 'B', 'A') - 1)
+      const feA = finalEffects(s.w, 'A')
+      const feB = finalEffects(s.w, 'B')
+      const doubles = feA.total + feB.total
+      const ok = rounds > 0 && n >= 0 && duplicates === 0 && doubles === 0 && one()
+      const names = [...s.w.of('A'), ...s.w.of('B')].map((d) => d.name)
+      return {
+        outcome: mark(ok),
+        detail: `vorher ${before.map((r, i) => `${names[i]}: ${r.entries}`).join(', ')} Einträge; nachher ${after.map((r, i) => `${names[i]}: ${r.entries} mit ${r.tuples} Tupeln`).join(', ')}; ein Eintrag mit drei Tupeln nach ${rounds} Runden; Doppel in der Liste ${duplicates}; doppelte Wirkungen ${doubles}`,
+        measures: { entriesBefore, entriesAfter: Math.max(...after.map((r) => r.entries)), tuplesAfter: Math.min(...after.map((r) => r.tuples)), roundsToOneEntry: rounds, duplicates, doubleFinalEffects: doubles, roundsToConverge: n },
+      }
     },
   },
   {
@@ -634,7 +674,7 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
         const conformance = [...s.w.of('B'), C].flatMap((d) => d.state.findings).filter((f) => f.includes('8640.12')).length
         return { outcome: 'nicht bestanden', detail: `offline ausgestellt ${offline} von 2; bei B und C angekommen: ${known} von 2; doppelt benannte Schlüssel bei A: ${fa.doubleConsumption}; Konformitätsfehler bei B/C: ${conformance}`, measures: { actsIssued: acts.length, issuedOffline: offline, actsArrived: known, doubleFinalEffects: fa.doubleConsumption, mediatorConformanceFailures: conformance } }
       }
-      // Zwei Geräte: B1 stimmt dem ersten Akt zu, B2 getrennt davon (Journal zurückgehalten) dem zweiten. Seriell: B nacheinander, der zweite nach der ersten Verbindung.
+      // Zwei Geräte: B1 stimmt dem ersten Akt zu, B2 zugleich dem zweiten. Seriell: B nacheinander, der zweite nach der ersten Verbindung.
       const connected = (a: string) => [...s.w.of('B'), C].every((d) => M.act(d.state, a).state === 'connected')
       if (serial) {
         for (const a of acts) {
@@ -647,15 +687,11 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
         // so entscheidet nicht der Zufall der Reihenfolge, ob ein Gerät eine Probe mit dem ganzen Wissen der Person prüft.
         const selfB = (await s.B.cand.keys.pair('self/B')).rkid
         for (const d of s.w.of('B')) s.w.carrier.faults.withhold(d.name, (f) => f.address === selfB)
-        // Die beiden Verbindungen entstehen nacheinander, eine Sekunde auseinander (B1 öffnet sein Tupel früher als B2):
-        // in derselben Millisekunde wäre keines später, und keines trüge nach (Gleichstand, NOTES).
         await s.B.consent(acts[0]!)
-        await C.consent(acts[0]!)
-        await s.w.until(() => M.act(s.B.state, acts[0]!).state === 'connected' && M.act(C.state, acts[0]!).state === 'connected', 15)
-        s.w.clock.advance(1000)
         await s.B2.consent(acts[1]!)
+        await C.consent(acts[0]!)
         await C.consent(acts[1]!)
-        await s.w.until(() => M.act(s.B2.state, acts[1]!).state === 'connected' && M.act(C.state, acts[1]!).state === 'connected', 15)
+        await s.w.until(() => M.act(s.B.state, acts[0]!).state === 'connected' && M.act(s.B2.state, acts[1]!).state === 'connected' && acts.every((a) => M.act(C.state, a).state === 'connected'), 15)
         await s.w.rounds(4)
         s.w.carrier.faults.reset()
       }

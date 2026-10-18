@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { Welt15 } from '../src/lab/mehrgeraet/welt'
-import { frameHash, HolderDevice } from '../src/lab/mehrgeraet/holder'
+import { HolderDevice } from '../src/lab/mehrgeraet/holder'
 import { runX15 } from '../src/lab/mehrgeraet/scenarios'
 import { k1a, K1aDevice } from '../src/candidates/mehrgeraet-k1a'
 import { k0 } from '../src/candidates/mehrgeraet-k0'
@@ -485,25 +485,28 @@ describe('K1a breite Matrix', () => {
   }, 600_000)
 })
 
-// K1a Schritt 2 (Anton 18.10.): Vereinigung eigener Tupel. Zwei Geräte derselben Person öffnen nebenläufig je ein Tupel
-// zur selben Gegenperson; das Journal teilt die Tupel, aber keine Probe hat das andere Tupel geprüft (2300 ist je Gerät
-// eingefroren). Das Gerät, das zwei nebenläufige eigene Tupel hält, ergänzt die Kandidatenliste des später geöffneten
-// Tupels (`openedAt`) um das frühere und probt nach; die Gegenseite trifft, mappt, und die Vereinigung entsteht wie
-// immer aus einem verifizierten Mapping (6975.1, 6975.2), als Operation im Journal.
-//   1. X7 besteht mit zwei Geräten.
-//   2. X14 besteht mit zwei Geräten.
-//   3. Alle übrigen Szenarien wie in NOTES (X15 besteht weiter).
-//   4. Beide Geräte vereinigen getrennt voneinander: nach der Heilung ein Eintrag, eine Vereinigungswirkung je Kante.
-//   5. Doppelte und umgeordnete Batches: genau eine Wirkung, gleiche Projektion.
-//   6. K0 verfehlt X7 mit zwei Geräten weiter (Eichung).
-//   Tor-Review 13:
-//   7. B2: eine einseitige späte Probe, die über die Aufgabegrenze verloren geht, wird mit denselben Bytes wiederholt;
-//      danach ein Eintrag je Gerät.
-//   8. B1 (Anton 18.10. Option (i')): nur das später geöffnete Tupel trägt nach und probt, das frühere nie (6750), auch wenn
-//      die Record-Anker umgekehrt liegen.
-//   8b. Gleichstand (gleiches `openedAt`): kein Nachtrag, keine späte Probe (Prüfstandsannahme, NOTES).
+// K1a Schritt 2 (Anton 18.10., Optionen 1+2): Vereinigung eigener Tupel durch Neuauswertung empfangener Proben. Ein
+// Gerät behält die Probe der Gegenseite je eigenem Ankunftstupel, solange Einträge darin nichts getroffen haben. Wächst
+// die eigene Tupelmenge durch das Journal (ein Schwestergerät hat ein Tupel geöffnet), wertet es die behaltenen Proben
+// gegen die nun größere Menge eigener Paar-Anker neu aus (6960/6806). Ein Treffer verpflichtet zum eigenen Mapping
+// (6845.1) wie bei der ersten Auswertung; vereinigt wird nur auf das verifizierte Mapping der Gegenseite (6975.1/.2).
+// Kein neuer Rahmen, kein neuer Kandidat, 6750 unberührt, keine Uhr. Grenze (Option 2): öffnen beide Personen auf je zwei
+// Geräten nebenläufig (X7 streng), enthält keine eingefrorene Probe das andere Tupel; das Doppel heilt bei der nächsten
+// Begegnung (X7b).
+//   1. X7 streng: nicht bestanden, das Doppel heilt bei der nächsten Begegnung; seriell bestanden.
+//   1b. X7b: dritte Begegnung nach dem symmetrischen Paar: ein Eintrag mit drei Tupeln je Gerät, keine Doppelwirkung.
+//   1c. Gegenlauf: K1a ohne Neuauswertung verfehlt X14 und den asymmetrischen Fall.
+//   2. X14 besteht mit zwei Geräten und seriell.
+//   3. Alle Szenarien mit zwei Geräten wie in NOTES.
+//   4. Asymmetrisch (Tor-Review 13): nur A hat zwei Geräte; Bs Probe auf dem zweiten Tupel trägt das erste; A2 behält sie
+//      und trifft nach dem Journal, ohne jede Probe von A.
+//   5. A1 und A2 vereinigen getrennt voneinander (A2 aus der Neuauswertung, A1 auf Bs Antwort): nach der Heilung ein
+//      Eintrag, eine Vereinigungswirkung, Ledger sauber.
+//   6. Doppelte und umgeordnete Batches: genau eine Vereinigungswirkung, gleiche Projektion.
+//   7. Aufbewahrung: getroffene Einträge fallen weg; beim Abgang der Beziehung fällt die Probe weg.
+//   8. Eichung: K0 verfehlt X7 und X14 mit zwei Geräten weiter (kein Journal, keine Neuauswertung).
 
-async function twoByTwo() {
+async function twoByOne() {
   const w = new Welt15(k1a())
   const A = await w.person('A', 'A1')
   const B = await w.person('B', 'B1')
@@ -512,9 +515,9 @@ async function twoByTwo() {
   await w.encounter(B, Mm)
   await w.rounds(2)
   const A2 = await w.enrol(A, 'A2')
-  const B2 = await w.enrol(B, 'B2')
   await w.rounds(3)
-  return { w, A, A2, B, B2 }
+  const selfA = (await A.cand.keys.pair('self/A')).rkid
+  return { w, A, A2, B, selfA }
 }
 const relsTo = (w: Welt15, d: HolderDevice, other: string) => d.state.relationships.filter((r) => !r.departed && r.tuples.some((t) => w.personOf(t.peer) === other))
 const tuplesTo = (w: Welt15, d: HolderDevice, other: string) => relsTo(w, d, other).flatMap((r) => r.tuples)
@@ -529,23 +532,45 @@ function ledgerOf(w: Welt15, person: string) {
 }
 const doubles = (w: Welt15, person: string) => [...ledgerOf(w, person).entries()].filter(([, ops]) => ops.size > 1).map(([id]) => id)
 const unions = (w: Welt15, person: string) => [...ledgerOf(w, person).keys()].filter((id) => id.startsWith('union:'))
+const isProbeOf = (w: Welt15, person: string) => (f: { bytes: Uint8Array }) => {
+  const o = w.frameOrigin(f.bytes)
+  return o?.kind === 'continuity-probe' && w.of(person).some((d) => d.name === o.device)
+}
+/** K1a ohne Neuauswertung (Gegenlauf). */
+function withoutReevaluation() {
+  const base = k1a()
+  const off = <T extends object>(d: T): T => Object.assign(d, { reevaluateProbes: false })
+  return { ...base, first: async (...a: Parameters<typeof base.first>) => off(await base.first(...a)), enrol: async (...a: Parameters<typeof base.enrol>) => { const r = await base.enrol(...a); off(r.cand); return r } }
+}
 
-describe('K1a Schritt 2: Vereinigung eigener Tupel', () => {
-  it('1. X7: A1 trifft B1, A2 trifft B2 in derselben Runde: jedes Gerät hält einen Eintrag mit beiden Tupeln (zwei Geräte und seriell)', async () => {
+describe('K1a Schritt 2: Vereinigung eigener Tupel durch Neuauswertung empfangener Proben', () => {
+  it('1. X7 streng: A1 trifft B1, A2 trifft B2 nebenläufig: nicht bestanden, das Doppel heilt bei der nächsten Begegnung; seriell bestanden', async () => {
     const two = byId(await runX15(k1a(), false, ['X7'])).X7!
     expect(two.crashed, two.detail).toBeFalsy()
-    expect(two.outcome, two.detail).toBe('bestanden')
-    expect(two.measures.duplicates).toBe(0)
+    expect(two.outcome, two.detail).toBe('nicht bestanden')
+    expect(two.measures.duplicates as number).toBeGreaterThan(0)
+    expect(two.detail).toMatch(/heilt bei der nächsten Begegnung \(X7b\)/)
     const one = byId(await runX15(k1a({ devices: 1 }), true, ['X7'])).X7!
     expect(one.crashed, one.detail).toBeFalsy()
     expect(one.outcome, one.detail).toBe('bestanden')
   }, 600_000)
 
-  it('1b. Gegenlauf: K1a ohne späte Probe (`lateProbes` aus) verfehlt X7 wie vor Schritt 2', async () => {
-    const base = k1a()
-    const off = <T extends object>(d: T): T => Object.assign(d, { lateProbes: false })
-    const without = { ...base, first: async (...a: Parameters<typeof base.first>) => off(await base.first(...a)), enrol: async (...a: Parameters<typeof base.enrol>) => { const r = await base.enrol(...a); off(r.cand); return r } }
-    const x = byId(await runX15(without, false, ['X7'])).X7!
+  it('1b. X7b: dritte Begegnung nach dem symmetrischen Paar: ein Eintrag mit drei Tupeln je Gerät, keine Doppelwirkung (zwei Geräte und seriell)', async () => {
+    const two = byId(await runX15(k1a(), false, ['X7b'])).X7b!
+    expect(two.crashed, two.detail).toBeFalsy()
+    expect(two.measures.entriesBefore, two.detail).toBe(2)
+    expect(two.measures.entriesAfter, two.detail).toBe(1)
+    expect(two.measures.tuplesAfter, two.detail).toBe(3)
+    expect(two.measures.doubleFinalEffects, two.detail).toBe(0)
+    expect(two.measures.roundsToOneEntry as number, two.detail).toBeGreaterThan(0)
+    expect(two.outcome, two.detail).toBe('bestanden')
+    const one = byId(await runX15(k1a({ devices: 1 }), true, ['X7b'])).X7b!
+    expect(one.crashed, one.detail).toBeFalsy()
+    expect(one.outcome, one.detail).toBe('bestanden')
+  }, 600_000)
+
+  it('1c. Gegenlauf: K1a ohne Neuauswertung (`reevaluateProbes` aus) verfehlt X14 wie vor Schritt 2', async () => {
+    const x = byId(await runX15(withoutReevaluation(), false, ['X14'])).X14!
     expect(x.crashed, x.detail).toBeFalsy()
     expect(x.outcome, x.detail).toBe('nicht bestanden')
     expect(x.measures.duplicates as number).toBeGreaterThan(0)
@@ -563,23 +588,59 @@ describe('K1a Schritt 2: Vereinigung eigener Tupel', () => {
     expect(one.outcome, one.detail).toBe('bestanden')
   }, 600_000)
 
-  it('3. alle Szenarien mit zwei Geräten: nur X7 und X14 wechseln auf bestanden, der Rest wie in NOTES', async () => {
+  it('3. alle Szenarien mit zwei Geräten: X14 und X7b bestanden, X7 streng nicht, der Rest wie in NOTES', async () => {
     const r = byId(await runX15(k1a(), false))
     for (const x of Object.values(r)) expect(x.crashed, `${x.scenario}: ${x.detail}`).toBeFalsy()
     const want: Record<string, string> = {
-      X1: 'bestanden', X2: 'bestanden', X3: 'nicht bestanden', X4: 'bestanden', X5: 'bestanden', X6: 'bestanden', X7: 'bestanden', X8: 'bestanden', X9: 'nicht bestanden', X10: 'nicht abbildbar', X11: 'bestanden', X12: 'bestanden',
+      X1: 'bestanden', X2: 'bestanden', X3: 'nicht bestanden', X4: 'bestanden', X5: 'bestanden', X6: 'bestanden', X7: 'nicht bestanden', X7b: 'bestanden', X8: 'bestanden', X9: 'nicht bestanden', X10: 'nicht abbildbar', X11: 'bestanden', X12: 'bestanden',
       X13: 'bestanden', X14: 'bestanden', X15: 'bestanden', X16: 'nicht bestanden', X17: 'nicht bestanden', X18: 'nicht bestanden', X21: 'bestanden',
     }
     for (const [id, outcome] of Object.entries(want)) expect(r[id]?.outcome, `${id}: ${r[id]?.detail}`).toBe(outcome)
   }, 1_800_000)
 
-  it('4. A1 und A2 vereinigen getrennt voneinander (Journal zurückgehalten): nach der Heilung ein Eintrag, eine Vereinigungswirkung je Kante, Ledger sauber', async () => {
-    const { w, A, A2, B, B2 } = await twoByTwo()
-    const selfA = (await A.cand.keys.pair('self/A')).rkid
+  it('4. Tor-Review 13, asymmetrisch: nur A hat zwei Geräte; A2 behält Bs Probe und trifft nach dem Journal, ohne jede Probe von A', async () => {
+    const { w, A, A2, B, selfA } = await twoByOne()
+    // Keine Probe von A erreicht B, über den ganzen Lauf; das Journal zwischen A1 und A2 bleibt aus, bis Bs Proben ausgewertet sind.
+    const from = w.carrier.carried.length
+    w.carrier.faults.drop(isProbeOf(w, 'A'))
+    for (const d of w.of('A')) w.carrier.faults.withhold(d.name, (f) => f.address === selfA)
+    const first = await w.encounter(A, B)
+    const second = await w.encounter(A2, B)
+    // B hat ein Gerät: sein zweites Tupel trägt das erste als Kandidaten (2300), die Probe darauf geht an A2.
+    expect(M.tuple(B.state, second.y.id).candidates).toContain(first.x.own)
+    await w.rounds(3)
+    expect(relsTo(w, B, 'A').length, 'Bs Probe hat bei A2 nichts getroffen').toBe(2)
+    // Bs Probe auf dem zweiten Tupel trägt zwei Einträge: Bs Beziehung zu M (trifft bei A nie) und das erste Tupel.
+    expect(A2.keptProbes().get(second.x.id)?.length, 'A2 behält Bs Probe auf dem zweiten Tupel').toBe(2)
+    w.carrier.faults.reset()
+    w.carrier.faults.drop(isProbeOf(w, 'A'))
+    await w.rounds(20)
+    for (const d of [A, A2]) expect(relsTo(w, d, 'B').map((r) => r.tuples.length), d.name).toEqual([2])
+    expect(relsTo(w, B, 'A').map((r) => r.tuples.length), 'B1').toEqual([2])
+    expect(w.agree('A')).toEqual({ agree: true, diff: '' })
+    expect(doubles(w, 'A')).toEqual([])
+    expect(doubles(w, 'B')).toEqual([])
+    expect(A2.keptProbes().get(second.x.id)?.length, 'der getroffene Eintrag fällt weg, der für Bs Beziehung zu M bleibt').toBe(1)
+    // Kein Rahmen von A außer den Mappings, die der Treffer und die Antwortpflicht schulden.
+    const fromA = w.carrier.carried.slice(from).map((f) => w.frameOrigin(f.bytes)).filter((o) => o && w.of('A').some((d) => d.name === o.device) && o.kind.startsWith('continuity'))
+    const aProbes = w.carrier.carried.slice(from).filter(isProbeOf(w, 'A'))
+    expect(aProbes.length, 'A hat geprobt (Proben auf den neuen Tupeln)').toBeGreaterThan(0)
+    expect(aProbes.every((f) => w.carrier.swallowed.includes(f)), 'keine Probe von A kam an').toBe(true)
+    const mappings = fromA.filter((o) => o!.kind === 'continuity-mapping')
+    expect(mappings.length, 'ein Mapping von A (A2, aus der Neuauswertung)').toBeGreaterThan(0)
+    expect(new Set(mappings.map((o) => o!.device))).toContain('A2')
+  }, 180_000)
+
+  it('5. A1 und A2 vereinigen getrennt voneinander (Journal zurückgehalten): nach der Heilung ein Eintrag, eine Vereinigungswirkung, Ledger sauber', async () => {
+    const { w, A, A2, B, selfA } = await twoByOne()
+    for (const d of w.of('A')) w.carrier.faults.withhold(d.name, (f) => f.address === selfA)
     await w.encounter(A, B)
-    w.clock.advance(1000) // zwei Begegnungen, nicht in derselben Millisekunde (Gleichstand: Test 8b)
-    await w.encounter(A2, B2)
-    // Sobald beide A-Geräte beide Tupel zu B kennen, sind sie voneinander getrennt: jedes vereinigt für sich.
+    await w.encounter(A2, B)
+    await w.rounds(3)
+    expect(A2.keptProbes().size).toBe(1)
+    w.carrier.faults.reset()
+    // Sobald beide A-Geräte beide Tupel zu B kennen, sind sie voneinander getrennt: A2 trifft aus der Neuauswertung, A1
+    // vereinigt auf Bs Antwort-Mapping, ohne von A2s Pflicht zu wissen.
     let separated = false
     const separate = () => {
       if (separated || tuplesTo(w, A, 'B').length !== 2 || tuplesTo(w, A2, 'B').length !== 2) return
@@ -591,7 +652,6 @@ describe('K1a Schritt 2: Vereinigung eigener Tupel', () => {
     expect(separated).toBe(true)
     expect(united(A), 'A1 hält einen Eintrag mit beiden Tupeln').toBe(true)
     expect(united(A2), 'A2 hält einen Eintrag mit beiden Tupeln').toBe(true)
-    // Jedes Gerät hat aus eigener Operation vereinigt.
     const own = (d: HolderDevice) => d.state.effects.filter((e) => e.id.startsWith('union:') && e.op.startsWith(`${d.name}@`)).length
     expect(own(A), 'A1 vereinigt selbst').toBeGreaterThan(0)
     expect(own(A2), 'A2 vereinigt selbst').toBeGreaterThan(0)
@@ -599,36 +659,36 @@ describe('K1a Schritt 2: Vereinigung eigener Tupel', () => {
     let stable = 0
     for (let i = 0; i < 30 && stable < 3; i++) {
       await w.rounds(1)
-      stable = w.agree('A').agree && w.agree('B').agree ? stable + 1 : 0
+      stable = w.agree('A').agree ? stable + 1 : 0
     }
     expect(w.agree('A')).toEqual({ agree: true, diff: '' })
-    expect(w.agree('B')).toEqual({ agree: true, diff: '' })
     for (const d of [A, A2]) expect(relsTo(w, d, 'B').map((r) => r.tuples.length)).toEqual([2])
-    for (const d of [B, B2]) expect(relsTo(w, d, 'A').map((r) => r.tuples.length)).toEqual([2])
+    expect(relsTo(w, B, 'A').map((r) => r.tuples.length)).toEqual([2])
     expect(unions(w, 'A').length).toBe(1)
     expect(doubles(w, 'A')).toEqual([])
     expect(doubles(w, 'B')).toEqual([])
-    for (const d of [...w.of('A'), ...w.of('B')]) expect(d.state.applied.filter((k, i, a) => a.indexOf(k) !== i), d.name).toEqual([])
+    for (const d of [...w.of('A'), B]) expect(d.state.applied.filter((k, i, a) => a.indexOf(k) !== i), d.name).toEqual([])
   }, 180_000)
 
-  it('5. doppelte und umgeordnete Batches: genau eine Vereinigungswirkung, gleiche Projektion', async () => {
-    const { w, A, A2, B, B2 } = await twoByTwo()
+  it('6. doppelte und umgeordnete Batches: genau eine Vereinigungswirkung, gleiche Projektion', async () => {
+    const { w, A, A2, B, selfA } = await twoByOne()
+    for (const d of w.of('A')) w.carrier.faults.withhold(d.name, (f) => f.address === selfA)
+    await w.encounter(A, B)
+    await w.encounter(A2, B)
+    await w.rounds(3)
+    w.carrier.faults.reset()
     w.carrier.faults.duplicate(true)
     w.carrier.faults.reverse(true)
-    await w.encounter(A, B)
-    w.clock.advance(1000)
-    await w.encounter(A2, B2)
     let stable = 0
     for (let i = 0; i < 40 && stable < 3; i++) {
       await w.rounds(1)
-      const united = [A, A2].every((d) => relsTo(w, d, 'B').length === 1) && [B, B2].every((d) => relsTo(w, d, 'A').length === 1)
-      stable = united && w.agree('A').agree && w.agree('B').agree ? stable + 1 : 0
+      const united = [A, A2].every((d) => relsTo(w, d, 'B').length === 1) && relsTo(w, B, 'A').length === 1
+      stable = united && w.agree('A').agree ? stable + 1 : 0
     }
     w.carrier.faults.reset()
     expect(stable).toBe(3)
     expect(M.canonical(A2.projection())).toBe(M.canonical(A.projection()))
-    expect(M.canonical(B2.projection())).toBe(M.canonical(B.projection()))
-    for (const d of [A, A2, B, B2]) {
+    for (const d of [A, A2, B]) {
       expect(d.state.applied.filter((k, i, a) => a.indexOf(k) !== i), d.name).toEqual([])
       const ids = d.state.effects.map((e) => e.id).filter((id) => id.startsWith('union:'))
       expect(new Set(ids).size, d.name).toBe(ids.length)
@@ -638,129 +698,33 @@ describe('K1a Schritt 2: Vereinigung eigener Tupel', () => {
     expect(doubles(w, 'A')).toEqual([])
     expect(doubles(w, 'B')).toEqual([])
     // Ein bekannter Vereinigungsbatch ein weiteres Mal geliefert: nichts Neues.
-    const batch = (A.cand as K1aDevice).journal().find((b) => b.ops.some((o) => o.kind === 'union'))!
-    expect((A2.cand as K1aDevice).receiveOwnFrame(new TextEncoder().encode(JSON.stringify(batch)))).toEqual({ ops: [], intents: [] })
+    const batch = [A, A2].flatMap((d) => (d.cand as K1aDevice).journal()).find((b) => b.ops.some((o) => o.kind === 'union'))!
+    for (const d of [A, A2]) expect((d.cand as K1aDevice).receiveOwnFrame(new TextEncoder().encode(JSON.stringify(batch)))).toEqual({ ops: [], intents: [] })
   }, 180_000)
 
-  it('7. Tor-Review 13 B2: einseitige späte Probe geht verloren (A-Probes 20 Runden verworfen): die Pflicht bleibt offen, nach der Störung ein Eintrag je Gerät', async () => {
-    // Astras Gegenlauf: A1 und A2 öffnen getrennt (Journal zurückgehalten) je ein Tupel zu B1; B1 öffnet seriell, seine
-    // ursprüngliche Probe trifft bei A2 nichts, weil A2 A1s Tupel noch nicht kennt. B1 hat kein nebenläufiges Paar und
-    // probt nie spät; die Vereinigung hängt allein an As später Probe. Die geht 20 Runden lang verloren (über die
-    // Aufgabegrenze der Zustellung hinaus), dann 40 störungsfreie Runden.
-    const w = new Welt15(k1a())
-    const A = await w.person('A', 'A1')
-    const B = await w.person('B', 'B1')
-    const Mm = await w.person('M', 'M1')
-    await w.encounter(A, Mm)
-    await w.encounter(B, Mm)
-    await w.rounds(2)
-    const A2 = await w.enrol(A, 'A2')
-    await w.rounds(3)
-    const selfA = (await A.cand.keys.pair('self/A')).rkid
+  it('7. Aufbewahrung: die Probe wird je Ankunftstupel gehalten, bis ihre Einträge getroffen haben oder die Beziehung abgeht', async () => {
+    const { w, A, A2, B, selfA } = await twoByOne()
     for (const d of w.of('A')) w.carrier.faults.withhold(d.name, (f) => f.address === selfA)
     await w.encounter(A, B)
-    w.clock.advance(1000)
-    await w.encounter(A2, B)
+    const second = await w.encounter(A2, B)
     await w.rounds(3)
-    expect(relsTo(w, B, 'A').length, 'B1s ursprüngliche Probe hat bei A2 nichts getroffen').toBe(2)
-    w.carrier.faults.reset()
-    const isAProbe = (f: { bytes: Uint8Array }) => {
-      const o = w.frameOrigin(f.bytes)
-      return o?.kind === 'continuity-probe' && (o.device === 'A1' || o.device === 'A2')
-    }
-    const from = w.carrier.carried.length
-    w.carrier.faults.drop(isAProbe)
-    await w.rounds(20)
-    expect(tuplesTo(w, A, 'B').length, 'A1 kennt beide Tupel').toBe(2)
-    expect(tuplesTo(w, A2, 'B').length, 'A2 kennt beide Tupel').toBe(2)
-    expect(relsTo(w, A, 'B').length, 'während der Störung noch zwei Einträge').toBe(2)
-    w.carrier.faults.reset()
-    await w.rounds(40)
-    expect(w.agree('A')).toEqual({ agree: true, diff: '' })
-    for (const d of [A, A2]) expect(relsTo(w, d, 'B').map((r) => r.tuples.length), d.name).toEqual([2])
-    expect(relsTo(w, B, 'A').map((r) => r.tuples.length), 'B1').toEqual([2])
-    expect(doubles(w, 'A')).toEqual([])
-    expect(doubles(w, 'B')).toEqual([])
-    // Die späte Probe ging erneut hinaus: dieselben Bytes nach der Aufgabe, keine neue Produktion. Lernen A1 und A2 das
-    // andere Tupel in derselben Runde, probt jedes Gerät einmal (nebenläufig dasselbe, siehe `lateProbes`).
-    const late = w.carrier.carried.slice(from).filter(isAProbe)
-    const byHash = new Map<string, { device: string; n: number }>()
-    for (const f of late) {
-      const h = frameHash(f.bytes)
-      const e = byHash.get(h) ?? { device: w.frameOrigin(f.bytes)!.device, n: 0 }
-      e.n++
-      byHash.set(h, e)
-    }
-    const producers = [...byHash.values()].map((e) => e.device)
-    expect(new Set(producers).size, 'höchstens eine späte Probe je Gerät').toBe(producers.length)
-    expect(Math.max(...[...byHash.values()].map((e) => e.n)), 'nach der Aufgabe erneut eingeliefert').toBeGreaterThan(1)
-  }, 180_000)
-
-  it('8. Tor-Review 13 B1 (Gegenlauf): nur das später geöffnete Tupel erhält den späten Kandidaten und probt; das frühere nie', async () => {
-    // Tor-Review 13 B1, Anton 18.10. Option (i'): A1 öffnet `z-first` zu B; eine Sekunde später öffnet A2 ohne
-    // Journalaustausch `a-second` zu C. Der Record-Anker ist umgekehrt zur Öffnungszeit (`z-first:…` > `a-second:…`), die
-    // Richtung folgt aber `openedAt`: das spätere Tupel `a-second` hätte `z-first` im Schnappschuss gehabt, wäre das
-    // Journal da gewesen (2300 über Geräte), und erhält Bs Anker; das frühere erhält Cs Anker nie (6750).
-    const w = new Welt15(k1a())
-    const A = await w.person('A', 'A1')
-    const B = await w.person('B', 'B1')
-    const C = await w.person('C', 'C1')
-    await w.rounds(2)
-    const A2 = await w.enrol(A, 'A2')
-    await w.rounds(3)
-    const selfA = (await A.cand.keys.pair('self/A')).rkid
-    for (const d of w.of('A')) w.carrier.faults.withhold(d.name, (f) => f.address === selfA)
-    const first = await w.encounter(A, B, 'z-first')
-    w.clock.advance(1000)
-    const second = await w.encounter(A2, C, 'a-second')
-    await w.rounds(3)
-    expect(first.x.openedAt < second.x.openedAt).toBe(true)
-    expect(first.x.record > second.x.record, 'Record-Anker umgekehrt zur Öffnungszeit').toBe(true)
-    expect(M.tuple(A.state, first.x.id).candidates).not.toContain(second.x.peer)
-    const from = w.carrier.carried.length
+    expect(A2.keptProbes().get(second.x.id), 'zwei offene Einträge: Bs Beziehung zu M und Bs erstes Tupel').toHaveLength(2)
+    // Die Probe übersteht einen Neuaufbau aus dem Store (Teil des Geräteabbilds).
+    const kept = A2.keptProbes().get(second.x.id)!.slice()
+    await A2.reload()
+    expect(A2.keptProbes().get(second.x.id)).toEqual(kept)
+    expect(await A2.depart(M.relOfTuple(A2.state, second.x.id)!.id)).toBe('ok')
+    expect(A2.keptProbes().has(second.x.id), 'Abgang: die Probe fällt weg').toBe(false)
     w.carrier.faults.reset()
     await w.rounds(10)
-    for (const d of [A, A2]) {
-      expect(M.tuple(d.state, first.x.id).candidates, `${d.name}: das frühere Tupel bleibt ohne Cs Anker`).not.toContain(second.x.peer)
-      expect(M.tuple(d.state, second.x.id).candidates, `${d.name}: das spätere Tupel trägt Bs Anker nach`).toContain(first.x.peer)
-    }
-    const probesTo = (address: string) => w.carrier.carried.slice(from).filter((f) => f.address === address && w.frameOrigin(f.bytes)?.kind === 'continuity-probe')
-    expect(probesTo(first.x.peerKeyAgreement).length, 'keine späte Probe an B auf `z-first`').toBe(0)
-    expect(probesTo(second.x.peerKeyAgreement).length, 'späte Probe an C auf `a-second`').toBeGreaterThan(0)
-    // Kein Treffer: B und C sind verschiedene Personen, nichts wird vereinigt; beide A-Geräte sind sich einig.
-    for (const d of [A, A2]) expect(relsTo(w, d, 'B').length + relsTo(w, d, 'C').length, d.name).toBe(2)
-    expect(w.agree('A')).toEqual({ agree: true, diff: '' })
+    expect(A2.state.effects.filter((e) => e.id.startsWith('union:'))).toEqual([])
   }, 120_000)
 
-  it('8b. Gleichstand: zwei nebenläufige Tupel mit gleichem `openedAt` erhalten keinen späten Kandidaten, keine späte Probe', async () => {
-    // Prüfstandsannahme (NOTES): bei gleicher Öffnungszeit ist keines der beiden Tupel später; strikt nach 6750 trägt keines
-    // nach. Die Vereinigung bleibt dann aus (wie ohne späte Probe), bis eine neue Begegnung sie trägt.
-    const { w, A, A2, B, B2 } = await twoByTwo()
-    const selfA = (await A.cand.keys.pair('self/A')).rkid
-    const selfB = (await B.cand.keys.pair('self/B')).rkid
-    for (const d of [...w.of('A'), ...w.of('B')]) w.carrier.faults.withhold(d.name, (f) => f.address === selfA || f.address === selfB)
-    const x = await w.encounter(A, B)
-    const y = await w.encounter(A2, B2)
-    expect(x.x.openedAt).toBe(y.x.openedAt)
-    await w.rounds(3)
-    w.carrier.faults.reset()
-    await w.rounds(10)
-    for (const d of [A, A2]) {
-      expect(M.tuple(d.state, x.x.id).candidates, d.name).not.toContain(y.x.peer)
-      expect(M.tuple(d.state, y.x.id).candidates, d.name).not.toContain(x.x.peer)
-    }
-    for (const d of [B, B2]) {
-      expect(M.tuple(d.state, x.y.id).candidates, d.name).not.toContain(y.y.peer)
-      expect(M.tuple(d.state, y.y.id).candidates, d.name).not.toContain(x.y.peer)
-    }
-    for (const d of [A, A2, B, B2]) expect(d.state.effects.filter((e) => e.id.startsWith('union:')), d.name).toEqual([])
-    for (const d of [A, A2]) expect(relsTo(w, d, 'B').length, d.name).toBe(2)
-  }, 120_000)
-
-  it('6. Eichung: K0 verfehlt X7 mit zwei Geräten weiter', async () => {
-    const x = byId(await runX15(k0(), false, ['X7'])).X7!
-    expect(x.crashed, x.detail).toBeFalsy()
-    expect(x.outcome, x.detail).toBe('nicht bestanden')
-    expect(x.measures.duplicates as number).toBeGreaterThan(0)
-  }, 300_000)
+  it('8. Eichung: K0 verfehlt X7 und X14 mit zwei Geräten weiter', async () => {
+    const r = byId(await runX15(k0(), false, ['X7', 'X14']))
+    for (const x of Object.values(r)) expect(x.crashed, x.detail).toBeFalsy()
+    expect(r.X7!.outcome, r.X7!.detail).toBe('nicht bestanden')
+    expect(r.X7!.measures.duplicates as number).toBeGreaterThan(0)
+    expect(r.X14!.outcome, r.X14!.detail).toBe('nicht bestanden')
+  }, 600_000)
 })

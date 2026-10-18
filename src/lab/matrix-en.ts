@@ -263,7 +263,7 @@ export const promiseEn: Record<string, { title: string; ref: string; gap: string
   },
   "MG7": {
     "title": "Continuity across devices: two encounters of the same persons on different devices become one relationship, no doubles",
-    "ref": "§6a 2300, 6975, 6987; I-6 (X7, X14, X15)",
+    "ref": "§6a 2300, 6806, 6975, 6987; I-6 (X7, X7b, X14, X15)",
     "gap": null
   },
   "MG8": {
@@ -335,6 +335,7 @@ export const scenarioEn: Record<string, string> = {
   "X5": "A1 ends the relationship with B, A2 replays an old mapping duty (departure ∥ replay, 6845.7, 6845.10)",
   "X6": "A2 is restored from an old backup: number reuse, stock state, incarnation (8500, 8315, finding 5)",
   "X7": "A1 meets B1, A2 meets B2 in the same round, no device has shared candidates: continuity across devices (I-6, 2300)",
+  "X7b": "Third encounter after the symmetric concurrent pair (X7): both devices synced, A1 meets B1 again; entries per device before/after, rounds to one entry with three tuples, no double effects (2300, 6806, 6975)",
   "X8": "A enrols A2: A2 sees everything and acts at once; enrollment traffic",
   "X9": "A loses A2 and revokes it: B and M must not reach A2 any more, A1 still",
   "X10": "A second app of A as a further device with a restricted right (read only)",
@@ -409,6 +410,6 @@ export const candidateEn: Record<string, { name: string; desc: string }> = {
   },
   "k1a-static": {
     "name": "K1a: journal, static rights",
-    "desc": "one seed; every committed step travels as a journal batch with its production intents; acceptance budget and nameable stock keys split statically across devices; own tuples opened concurrently on two devices are probed again and united through the counterpart's mapping"
+    "desc": "one seed; every committed step travels as a journal batch with its production intents; acceptance budget and nameable stock keys split statically across devices; a received probe is evaluated again when the journal adds own tuples; a hit owes the own mapping, the union comes from the counterpart's mapping"
   }
 }

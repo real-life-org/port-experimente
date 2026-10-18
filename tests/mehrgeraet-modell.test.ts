@@ -267,11 +267,4 @@ describe('K1a Schritt 2: nebenläufige Vereinigung über eigene Tupel', () => {
     for (const o of [late, d2, d1]) M.apply(s2, o)
     for (const s of [s1, s2]) expect(M.project(s, t0).duties['A:e1|A:e2']).toEqual({ state: 'united', mappingDigest: 'd-a' })
   })
-  it('späte Kandidaten: eine Menge, idempotent; ein unbekanntes Tupel ist Missing', () => {
-    const s = base()
-    M.apply(s, op({ kind: 'candidates', tuple: 'A:e2', add: ['b1'] }))
-    M.apply(s, op({ kind: 'candidates', tuple: 'A:e2', add: ['b1'] }))
-    expect(M.tuple(s, 'A:e2').candidates).toEqual(['b1'])
-    expect(() => M.apply(s, op({ kind: 'candidates', tuple: 'A:e9', add: ['b1'] }))).toThrow(M.Missing)
-  })
 })
