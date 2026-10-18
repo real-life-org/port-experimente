@@ -161,7 +161,7 @@ export interface MultiDeviceCandidate {
   /** Eine Instanz, die kein Gerät der Person ist (Dieb aus einem Abbild, X9): unabhängig, ohne Eintrag in der Geräteliste des Kandidaten. Ohne Methode nimmt der Prüfstand `first`. */
   instance?(person: string, device: string, seed: Uint8Array): Promise<CandidateDevice>
   /** Weiteres Gerät: Enrollment aus einem bestehenden Gerät (X8). Liefert den Kandidatenteil, den Zustand und die Absichten, mit denen das neue Gerät beginnt (ohne Absichten produziert es offene Pflichten neu, K0). */
-  enrol(from: HolderDevice, device: string): Promise<{ cand: CandidateDevice; state: M.HolderState; intents?: Intent[] }>
+  enrol(from: HolderDevice, device: string): Promise<{ cand: CandidateDevice; state: M.HolderState; intents?: Intent[]; probes?: Array<[string, string[]]> }>
   /** Widerruf eines Geräts (X9, K2): was die übrigen Geräte und die Gegenseiten davon erfahren. Ohne Methode geschieht nichts. */
   revoke?(from: HolderDevice, device: string): Promise<void>
   /** Ein Enrollment ist nach `enrol` am Gerät gescheitert (kein Holder entstanden): der Kandidat gibt den Platz wieder frei. */
@@ -268,6 +268,24 @@ export class HolderDevice {
   keptProbes(): ReadonlyMap<string, readonly string[]> {
     return this.probes
   }
+  /**
+   * Enrollment (Tor-Review 16 S2): das neue Gerät übernimmt die behaltenen Proben mit dem Abbild des Geräts, aus dem es
+   * eingeschrieben wird, wie Zustand und Absichten; so kann es sie neu auswerten, auch wenn jenes Gerät danach fehlt.
+   */
+  adoptProbes(probes: Iterable<readonly [string, readonly string[]]>): void {
+    for (const [id, entries] of probes) this.probes.set(id, [...entries])
+    this.dropDeparted()
+  }
+  /**
+   * Aufbewahrung endet mit dem Abgang (Tor-Review 16 B1): Proben auf Tupeln einer abgegangenen (oder unbekannten)
+   * Beziehung fallen weg. Teil jedes Anwendens: lokaler Abgang, gefalteter Abgang eines Schwestergeräts, Neuaufbau.
+   */
+  private dropDeparted(): void {
+    for (const id of [...this.probes.keys()]) {
+      const r = M.relOfTuple(this.state, id)
+      if (!r || r.departed) this.probes.delete(id)
+    }
+  }
   private buffer = new Map<string, Buffered>()
   /** Digest → erwarteter Quittungs-Signierer je eigener Submission (#55); lesbar für Messungen. */
   expected = new Map<string, string>()
@@ -369,6 +387,7 @@ export class HolderDevice {
   async applyRemote(tx: Transaction): Promise<void> {
     const known = this.tupleIds()
     for (const op of tx.ops) M.apply(this.state, op)
+    this.dropDeparted() // ein gefalteter Abgang beendet die Aufbewahrung wie ein lokaler (Tor-Review 16 B1)
     for (const i of tx.intents) if (!this.intents.has(i.digest)) this.intents.set(i.digest, i)
     await this.relisten()
     if ([...this.tupleIds()].some((id) => !known.has(id))) await this.reevaluate() // die eigene Tupelmenge ist gewachsen
@@ -480,6 +499,7 @@ export class HolderDevice {
     this.expected = new Map(s?.expected ?? [])
     this.intents = new Map(s?.intents ?? [])
     this.probes = new Map(s?.probes ?? [])
+    this.dropDeparted()
     // Was im Store steht, ist committet: vorgemerkte, nie freigegebene Submissions gehen nach dem nächsten Commit hinaus.
     this.held = this.zusteller.unreleased()
     this.cand.restore(s?.candidate ?? null)
@@ -587,7 +607,7 @@ export class HolderDevice {
     return this.action(async () => {
       const peers = new Set(M.rel(this.state, relId).tuples.map((t) => t.peerKeyAgreement))
       this.emit({ kind: 'depart', rel: relId })
-      for (const t of M.rel(this.state, relId).tuples) this.probes.delete(t.id) // Aufbewahrung endet mit dem Abgang
+      this.dropDeparted() // Aufbewahrung endet mit dem Abgang (derselbe Weg wie beim gefalteten Abgang)
       // 8475.S6: Neues geht nicht mehr an diesen Kontakt; was nie freigegeben war, entfällt. Eine eingereichte Sendung
       // bleibt bei Delivery und wird weiter wiederholt (6845.7, Delivery 6.1; Tor-Review 4 B4).
       for (const d of this.held.filter((d) => peers.has(this.zusteller.submissions.get(d)?.address ?? ''))) this.zusteller.discard(d)
@@ -767,16 +787,13 @@ export class HolderDevice {
    * einmal und hält für das zweite nur die Kante (6975.3); der Fold hält je Pflicht den kleinsten Digest und je Kante die
    * kleinste Vereinigungsoperation (model.ts, `duty` und `union`).
    * Aufbewahrung: je eigenem Ankunftstupel die Einträge ohne Treffer; ein getroffener Eintrag fällt weg (ein Paar-Anker
-   * trifft genau ein Tupel), die Probe fällt weg, wenn nichts offen ist oder die Beziehung des Ankunftstupels abgeht.
+   * trifft genau ein Tupel), die Probe fällt weg, wenn nichts offen ist oder die Beziehung des Ankunftstupels abgeht
+   * (`dropDeparted`, auch beim gefalteten Abgang); je Ankunftstupel gilt nur die jüngste Probe (Ankunft, `TYPES.probe`).
    */
   private async reevaluate(): Promise<void> {
     if (!this.cand.reevaluateProbes) return
+    this.dropDeparted()
     for (const [id, entries] of [...this.probes]) {
-      const r = M.relOfTuple(this.state, id)
-      if (!r || r.departed) {
-        this.probes.delete(id)
-        continue
-      }
       const open = await this.evaluateProbe(M.tuple(this.state, id), entries)
       if (open.length) this.probes.set(id, open)
       else this.probes.delete(id)
@@ -1180,7 +1197,13 @@ export class HolderDevice {
         if (!t || doc.issuer !== t.peer) return false
         const p = doc.payload as unknown as { entries: string[] }
         const open = await this.evaluateProbe(t, p.entries)
-        if (this.cand.reevaluateProbes && open.length) this.probes.set(t.id, [...new Set([...(this.probes.get(t.id) ?? []), ...open])].sort())
+        // Aufbewahrung (Tor-Review 16 B2): nur die jüngste Probe je Ankunftstupel, ihre offenen Einträge ersetzen die der
+        // früheren, nie vereinigt. Aus 6750: eine wiederholte Probe zeigt nichts, was die erste nicht zeigte; die Grenze ist
+        // damit die Größe einer Probe (die Kandidatenliste der Gegenseite), gleich wie viele Proben kommen.
+        if (this.cand.reevaluateProbes) {
+          if (open.length) this.probes.set(t.id, open)
+          else this.probes.delete(t.id)
+        }
         return true // Wirkung „geprüft“, quittiert, mit oder ohne Treffer
       }
       case TYPES.mapping: {

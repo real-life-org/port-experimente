@@ -201,8 +201,10 @@ export function k1a(opts: K1aOptions = {}): MultiDeviceCandidate {
       d.adopt((from.cand as K1aDevice).journal())
       list.push(d)
       devices.set(from.person, list)
-      // Zustand, Journal und Absichten wandern mit: das neue Gerät kennt jede offene Produktion und produziert nichts neu.
-      return { cand: d, state: structuredClone(from.state), intents: [...from.intents.values()] }
+      // Zustand, Journal, Absichten und behaltene Proben wandern mit (das Abbild des Geräts): das neue Gerät kennt jede
+      // offene Produktion, produziert nichts neu und kann die Proben neu auswerten, auch wenn `from` danach fehlt (Review 16 S2).
+      const probes = [...from.keptProbes()].map(([id, e]): [string, string[]] => [id, [...e]])
+      return { cand: d, state: structuredClone(from.state), intents: [...from.intents.values()], probes }
     },
     release(person, name) {
       const list = devices.get(person)
