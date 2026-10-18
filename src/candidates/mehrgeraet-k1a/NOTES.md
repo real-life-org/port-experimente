@@ -1,4 +1,4 @@
-# Port notes: K1a, one seed, operation journal, static rights (E15 steps 1 and 2)
+# Port notes: K1a, one seed, operation journal, static rights (E15 steps 1 to 3)
 
 As of 18 October 2026. K1a is the first positive candidate of the
 multi-device experiment: every device derives all keys from the same seed
@@ -60,8 +60,8 @@ limit are assigned to one device in advance.
   mediator may name (8570) are split by key number modulo the number of
   devices (8445: the revision lists the numbers), so the devices take
   turns; a mediator device without a nameable key refuses, the other
-  introduces. Decisions (consent, decline) are allowed on every device:
-  a conflict stays visible in the fold (8325 finding, X3).
+  introduces. Decisions (consent, decline) are allowed on every device;
+  since step 3 the fold decides between them (section below).
 - **Re-evaluation of received probes (step 2).** Two devices of a person
   can each open a tuple to the same counterpart before the journal brings
   the other's. A counterpart probe that arrives on one of them is checked
@@ -147,6 +147,72 @@ limit are assigned to one device in advance.
     wider search set are two decisions for the spec. 6750 is kept
     literally on the sender's side.
 
+## Step 3: decision and hand-over fold rules
+
+Anton's decision of 18 October 2026 (question catalogue class 2, answers
+1b and 2a), line "soft": what has reached the counterpart holds; what is
+still inside the person's own house the fold may re-decide. The rules are
+fold rules of the model (`src/lab/mehrgeraet/model.ts`, `resolveDecision`)
+and apply to every candidate; K0 devices never fold a sibling's
+operations, so K0 behaves as before.
+
+- **Rule 1: the same decision from two devices is one effect.** Two
+  consents (or two declines) of the same person on the same act fold into
+  one state and one ledger effect, carried by the canonically smallest
+  operation, as for concurrent unions. The act remembers every decision
+  with its operation id (`decisions`), so the result does not depend on
+  arrival order. The same holds for the act's connect and card effects:
+  two devices that each connect the act (both hold the counter card under
+  one seed) produce one connect effect.
+- **Rule 2: consent against decline.** If an own card of the act is
+  submitted (8325.0: O in `taken`, `delivered`, `given-up`) or the act is
+  connected, consent holds; the decline is recorded as a conflict
+  (`conflict:decline:<act>` and a finding), not as a contradiction.
+  Otherwise the decline holds (8325.A3): the consent is recorded as
+  `conflict:consent:<act>`, P stays in the state but is hidden in the
+  projection, and the device that produced the card withdraws it if it
+  never reached the carrier (8232.2; 8765: a side that declines sends
+  nothing). Withdrawal is an operation (`hand-over cancelled`) in the same
+  journal step. A card the carrier already has is not withdrawn (8326.9);
+  its `taken` report then decides rule 2 for consent, and the fold leaves
+  `declined` again.
+- **Rule 3: two hand-overs of one act.** O is kept per hand-over (digest of
+  the card document, `cards`), so a sibling's hand-over never overwrites
+  the own one; O of the act is the furthest of its cards. The winning
+  hand-over is the one with the smaller digest; the act's `ownCardDigest`
+  converges to it on every device. Two hand-overs are always concurrent (a
+  device that knows the sibling's consent does not consent and produces no
+  card), so "first in journal order" reduces to the tie rule. The losing
+  card is withdrawn like a declined one if it never reached the carrier.
+- **B's behaviour with two cards (bench rule, 8910).** Under one seed both
+  cards carry the same card key and the same payload, so their comparison
+  digest V is the same (8910.0 over the payload, 8913 independent of the
+  document bytes). B keeps the first verified card and treats the second
+  as a repetition of the act (8910.7): acknowledged, no second connect, no
+  conflict mark K. A card with different content (keys per device, K2)
+  would be refused with K := yes (8910.8).
+- **Local withdrawal (`Zusteller.demarcate`).** The bench's delivery
+  adapter discards a submission that never reached the carrier (recorded,
+  or `awaiting-transport` without a successful deposit), like a
+  `not-taken` answer that demarcates every hand-over (8326.4) followed by
+  8326.8.
+
+What the user sees: tapping consent on the phone shows "accepted" at once
+and it stays, unless the separated laptop declined earlier and the card
+had not yet left the phone; then the phone shows "declined" after the
+devices meet. A decline on the laptop, made while the phone's card was
+already out, turns into "connected" after the devices meet.
+
+Two oracles changed with the rules. X3 checks the rule (connected exactly
+when an own card was submitted, otherwise declined on every device), and
+heals A2 one round before A1, so A1 folds the decline before its card
+reaches the carrier (the decline branch); the submitted branch is the
+counter-run "consent with card taken, decline offline" in
+`tests/mehrgeraet-k1a.test.ts`. Both X3 and X18 mark a pass in which a
+device's own decision was overridden, or two devices each consented, as
+`promiseChanged` ("promise changed", ≈ in the matrix): terminality of
+8325 holds for the person only after the devices have united.
+
 ## Results (18 October, K1a against X1–X18, X7b and X21)
 
 See the matrix (`matrix.md`, multi-device port) for the cells; the table
@@ -159,7 +225,7 @@ scenario that has one.
 |---|---|---|---|
 | X1 double consumption | passed | passed | M1 and M2 name different keys (number classes); no 8640.12 at A |
 | X2 budget at 9 | passed | passed | ten acts for the person, seven acceptances blocked, the sibling takes what one device may not |
-| X3 consent ∥ decline | failed | passed | A1 connected, A2 declined; both effects in the ledger, contradiction at B; the devices never agree |
+| X3 consent ∥ decline | passed, promise changed | passed | rule 2, no own card submitted: A1 folds A2's decline before its card reaches the carrier, withdraws it (O `cancelled`), both devices declined after one round; no card at the carrier or at B, B stays consented without A's card; one decline effect, the consent as conflict, one finding |
 | X4 class off ∥ send | passed | passed | M's view empty on both devices, the running act connected on both, no equivocation |
 | X5 departure ∥ replay | passed | passed | A2 holds A1's mapping intent and produces nothing; only repeats of earlier bytes reach B |
 | X6 restore from backup | passed | n/a | new incarnation; the catch-up over the self address brings the missed batches, own earlier incarnation included |
@@ -175,13 +241,13 @@ scenario that has one.
 | X15 union ∥ running act | passed | passed | A2, separated from A1, unites the two relationships to M while A1's card is in transit; one entry with two tuples on both devices, the act connected, its mediator and acceptance on the united relationship, M's view on the united head |
 | X16 old stock after class revocation | failed | passed | A2, separated, accepts a ticket on a key A1 withdrew; after healing both devices hold the act and the key is consumed |
 | X17 parallel production | failed | passed | both devices refill and send revision 2 with different keys; one revision number from two operations, M records 6270 findings; probe sequence (6680) not modelled |
-| X18 two cards of one act | failed | passed | fails for two reasons: A's ledger holds consent and connect of the act each from two operations (two double final effects at A, none at B), and A's devices keep different hand-over digests and never agree; B receives two card documents with the same card key, connects once, no conflict mark |
+| X18 two cards of one act | passed, promise changed | passed | rules 1 and 3: both cards were taken while the devices were separated, so nothing is withdrawn; A's ledger holds one consent and one connect effect, both devices hold the same hand-over digest and agree after one round; two card documents reach B (each B device receives both), B connects once, no conflict mark |
 | X21 journal robustness | passed | n/a | repair after old and double restore with reordering, duplicates, concurrent requests and two crashes in 7 rounds; after 15 rounds of lost requests, answers, journal batches alone (reply head and receipts delivered) or receipts each in 1 round; after every phase no missing batch key and the reference projection on both devices; repair ends with no device waiting for catch-up and 17 silent rounds on the self address; no double effect, no conflict; 813 frames and 2.1 MB on the self address, of which 395 journal frames (1.65 MB for an 11-batch, 22 kB journal); 569 repeats, 566 on the self address and 3 to counterparts; the journal does not grow |
 
-Counts over X1 to X18, X7b and X21 with two devices: 13 kept, 6 not
-kept, 1 not applicable (K0: 1 kept, 18 not kept, 1 not applicable).
-Step 2 changed X14 and added X7b; every other outcome is the same as
-after step 1.
+Counts over X1 to X18, X7b and X21 with two devices: 15 kept (X3 and X18
+under a changed promise), 4 not kept, 1 not applicable (K0: 1 kept, 18
+not kept, 1 not applicable). Step 2 changed X14 and added X7b; step 3
+changed X3 and X18; every other outcome is the same as after step 1.
 
 Reservations (gate reviews 8 and 9): a successful restore with reachable
 history (X6) is not the same as repair after lost sync traffic (X21
@@ -201,14 +267,15 @@ and X7b do).
   person's budget holds at ten across both devices (five each, seven
   blocked acceptances in X2); the frame a device cannot accept stays
   unacknowledged and the sibling accepts it.
-- **Decisions are not a right in step 1, so X3 stays a visible conflict.**
-  A1 consents, A2 declines; the fold keeps the first terminal state on
-  each device (A1 connected, A2 declined), records the contradiction, and
-  the devices never agree. A connect from the other device must not
-  override a decline either; the refused attempt is recorded as a
-  conflict, not as an executed connect (model fix in this step). Making consent and
-  decline a device right is the open question for the multi-writer
-  contract, not something a journal solves.
+- **Consent against decline converges by rule 2 (X3, step 3).** Until
+  step 2 the fold kept the first terminal state on each device and the
+  devices never agreed. With rule 2 both end in the same state: declined
+  when no own card was submitted (X3), connected when one was (counter-run:
+  A1's card taken, A2 declines offline; after healing both connected, the
+  decline as conflict finding on both, A2 sends nothing but journal frames
+  and receipts, one card document at the carrier, B connects once). A
+  connect from the other device on an act declined without a submitted
+  card is still refused and recorded as `conflict:connect:<act>`.
 - **Catch-up after a backup works through the journal (X6).** A2 restored
   from an old backup gets a new incarnation and, after one sync round,
   every batch it missed, including those of its own earlier incarnation;
@@ -297,25 +364,41 @@ and X7b do).
   refilling apart send the same revision number with different keys, and
   M records the conflict (6270). Static rights cover consumption (budget,
   nameable keys), not changes of the class or of revision numbers.
-- **Two hand-overs of one act do not fold (X18).** Both devices consent and
-  send a card. A's ledger then holds the consent and the connect of the
-  act each from two operations: two double final effects at A, counted by
-  the same ledger oracle as in the other scenarios (gate review 11 B1; the
-  first cut counted only B's connect). With one seed the card key is the
-  same, so B sees a repetition and connects once, no double effect at B.
-  A's devices also each keep their own hand-over digest, since the fold
-  takes the last hand-over operation, and their projections never agree.
-  The two reasons are independent: with the digest hidden from the
-  projection A's devices agree and X18 still fails on A's double effects
-  (permanent counter-run). With keys per device (K2) B would also see two
-  different cards (8910.8). The multi-writer contract needs a rule for
-  concurrent consents and hand-overs that fixes convergence and a single
-  final effect.
+- **Two hand-overs of one act fold by rules 1 and 3 (X18, step 3).** Both
+  devices consent and send a card while separated. Before step 3 A's
+  ledger held consent and connect each from two operations and A's
+  devices kept different hand-over digests. Now A's ledger holds one
+  consent and one connect effect and both devices hold the smaller
+  digest. Counter-runs: without rule 1 the ledger oracle sees the two
+  double effects even with the digest hidden from the projection; without
+  rule 3 the digests differ and the projections never agree. Both cards
+  were already taken, so B receives two card documents; with one seed they
+  are a repetition (8910.7) and B connects once. When one card is still
+  at the adapter (device offline), the losing one is withdrawn and B
+  receives one card or two, depending on which digest wins (test "rule 3
+  at the device"). With keys per device (K2) B would see two different
+  cards (8910.8).
 - **Bench note: a repeated ticket after a budget refusal.** The ticket that
   A refuses for budget (8640.13) consumes the key; the mediator repeats the
   unacknowledged ticket and A then records 8640.12 (mediator conformance)
   for the repeat. X13 does not use that count; X1, which counts 8640.12,
   has no budget refusal.
+
+## Spec follow-ups from step 3
+
+- **8325 terminality per person after union.** 8325.0 calls `declined`
+  and `connected` terminal per side. With several devices and the soft
+  line the fold may leave `declined` (a sibling's card was submitted) and
+  may move `consented` to `declined` (no card submitted). The inventory
+  needs to say that terminality holds for the person once its devices
+  have united, and which state the user is shown before.
+- **8326/8910: two cards of one act.** Two devices of one person can each
+  hand over a card for the same act. 8326 has one O per act; the bench
+  keeps O per hand-over and lets the smaller digest win. 8910 decides what
+  the counterpart keeps: under one seed the second card is a repetition
+  (8910.7); with keys per device it would be refused with K (8910.8). The
+  inventory needs a rule for which card counts and what the counterpart
+  does with the second.
 
 ## What re-evaluation adds (plan section 5: carrier, M, counterpart)
 
@@ -350,7 +433,7 @@ after its probe instead of right away; the delay tells it that the hit
 was found late, which in K1a happens only after a journal fold, so it
 can infer that the person uses more than one device.
 
-## Limits of steps 1 and 2
+## Limits of steps 1 to 3
 
 - The device count is fixed; a third device is refused. Transferring or
   re-splitting rights is K1b.
@@ -380,8 +463,31 @@ can infer that the person uses more than one device.
   fold, not inventory rules. Concurrent unions with own stock on the
   united relationship would each produce a revision under the same
   number; that is the open production question of X17.
-- Class changes, revision numbers and hand-overs are not rights and have
-  no merge rule beyond the fold: X16, X17 and X18 fail.
+- Class changes and revision numbers are not rights and have no merge
+  rule beyond the fold: X16 and X17 fail.
+- Terminality of 8325 now holds for the person only after the devices
+  have united: a device can show "consented" and later "declined" (its
+  card never left), or "declined" and later "connected" (the sibling's
+  card was already out). X3 and X18 pass under this changed promise, not
+  under 8325 as written.
+- Rule 2 decides by whether a card reached the carrier. X3 heals A2 one
+  round before A1 to reach the decline branch; when both return in the
+  same round A1's card reaches the carrier first and consent holds. The
+  boundary is the bench's adapter (`demarcate`), not a query answer of
+  Delivery (8326.4 to 8326.6 are not modelled).
+- The fold assumes each writer's operations arrive in that writer's order
+  (the journal's heads guarantee it). A connect folded before the
+  sibling's `taken` on an act declined without a submitted card is
+  recorded as a conflict and not re-applied later; this order does not
+  occur with the journal.
+- If the device holding the winning card is lost before it hands the card
+  over, the act waits for that device; taking over a sibling's intent is
+  X20.
+- Rule 1 keeps one effect for two connects or two card hand-overs; how
+  often a card document, a probe or a connect was produced is measured
+  separately (X18: two card documents to B), not in the ledger.
+- The tie rule of rule 3 (smaller digest) and the per-hand-over O are
+  bench rules of the fold, not inventory rules.
 - The journal is a plain list of batches in the device's store; no
   cleanup, no tombstones, no bound on its size; every sibling that
   receives a request answers with all batches after the requester's heads,
