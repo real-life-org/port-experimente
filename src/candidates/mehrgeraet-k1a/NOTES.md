@@ -62,122 +62,63 @@ limit are assigned to one device in advance.
   turns; a mediator device without a nameable key refuses, the other
   introduces. Decisions (consent, decline) are allowed on every device:
   a conflict stays visible in the fold (8325 finding, X3).
-- **Union of own tuples (step 2).** Two devices of a person can each open
-  a tuple before the journal brings the other's (X7: A1 meets B1, A2 meets
-  B2; X14: B1 and B2 connect one act each). Each tuple's candidate
-  snapshot (2300) was taken on its device and lacks the other, so no probe
-  ever tests the pair. The holder, with the candidate flag `lateProbes`,
-  looks for such pairs whenever it applies a journal batch and in every
-  time step: two own tuples in different relationships, neither in the
-  other's frozen candidate list. On one device this cannot happen, because
-  a later tuple always has every earlier one of a held relationship in its
-  snapshot, so the condition identifies concurrent openings without knowing
-  which device opened what. For each pair the device adds the earlier
-  tuple's counterpart anchor to the candidate list of the tuple opened
-  later (`openedAt`, operation `candidates`) and sends a probe on that
-  tuple carrying only the new blinded entry; the earlier tuple receives
-  nothing (see "Late candidates and opening time" below). From there the unchanged
-  continuity flow runs: the counterpart, whose own devices share both of
-  its tuples through its journal, finds a hit and owes a mapping (6845.1);
-  the side verifies it and unites (6975.1, 6975.2) with its own mapping in
-  the same step; the counterpart verifies that mapping and unites as well,
-  or records the edge if it already has (6975.3). The step runs on both
-  persons alike; whichever side learns its pair last probes when the other
-  side already knows both of its tuples.
-  - **How own tuples are matched.** The holder has no identity of the
-    counterpart person: tuple peers are pair anchors, one per encounter
-    or act. The device does not decide that two tuples belong to the same
-    person; it only notices that two of its tuples were never tested
-    against each other. The counterpart decides through the probe hit, and
-    the union needs the verified mapping, as on one device.
-  - **What is journalised.** The `candidates` operation, the probe intent,
-    the union, the duty and the mapping intent are operations and intents
-    of the device's step, so they travel as one batch; a sibling folds the
-    added candidate and does not probe the same pair again. If both
-    devices detect the pair before either batch arrives, both probe; a
-    counterpart device that checks the second probe after the first finds
-    the duty already in `hit` and sends no second mapping, while two
-    counterpart devices checking at once may each send one (covered by the
-    rules below).
-  - **A late probe is a duty with retry (gate review 13 B2).** The
-    `candidates` entry is not the only record that the probe went out:
-    the producing device keeps the probe with its bytes, like a mapping
-    duty, until the counterpart acknowledges it, the two tuples end in one
-    entry, or one of the relationships departs. When the delivery attempts
-    run out (`failed` after the give-up horizon), the same bytes go into a
-    new hand-over (as 6845.4 for mappings); nothing is produced again. The
-    duty stays with the device that produced the probe; a sibling that
-    folded the `candidates` operation does not take it over (X20). An
-    acknowledgement ends the duty whether or not the counterpart hit:
-    the counterpart decides, and a miss is not repeated. Counter-run from
-    the review (permanent test): A1 and A2 each open a tuple to B1 while
-    A's journal is held, B1 opens serially and its probe misses at A2; then
-    A's journal heals and all of A's probes are dropped for 20 rounds. B1
-    never produces a late probe, so the union depends on A's alone. Before
-    the fix A1, A2 and B1 each kept two entries after 40 clean rounds; now
-    each holds one entry with both tuples, A's projections agree, no
-    double effect, and each late probe is one set of bytes per device,
-    deposited again after the give-up.
+- **Re-evaluation of received probes (step 2).** Two devices of a person
+  can each open a tuple to the same counterpart before the journal brings
+  the other's. A counterpart probe that arrives on one of them is checked
+  against the tuples the receiving device holds at that moment; the
+  sibling's tuple is not among them, so a hit that the person as a whole
+  would have is missed. With the candidate flag `reevaluateProbes` the
+  device keeps every received probe, per own arrival tuple, with the
+  entries that hit nothing. Whenever it folds a sibling's journal batch
+  that adds own tuples, it evaluates every kept probe again against its
+  now larger set of own pair anchors, exactly as at arrival (the
+  recomputation of 6960, the hit rule of 6806). A hit owes the own
+  mapping on the arrival tuple (6845.1, 6840), as a hit at first
+  evaluation does; the union happens only on the counterpart's verified
+  mapping (6900, 6975.1, 6975.2). The probe is the counterpart's own,
+  sent at its scan with its frozen candidate list (2300, 6750 on its
+  side); nothing is added to any candidate list, no new message type
+  exists, and no clock is read.
+  - **Every match is a hit.** A probe with several matching entries now
+    owes one mapping per matched pair (6806: "each probe match"), not
+    only for the first match. This is what makes a third encounter heal
+    two old tuples at once (X7b).
+  - **What is journalised.** The re-evaluation runs inside the step that
+    folds the batch; the duty operation and the mapping intent it
+    produces are part of that step's commit and travel as one batch. The
+    kept probes themselves are device state like a received frame: part
+    of the checkpoint (rolled back with a failed step) and of the store
+    image (they survive a rebuild), not of the journal.
+  - **Which device re-evaluates.** Received frames do not travel in the
+    journal, so only a device that received the probe holds it. Its
+    sibling learns the duty from the journal and maps nothing itself (the
+    pair duty already exists). If both devices received the probe and
+    re-evaluate while separated, or one maps from re-evaluation while the
+    other verifies the counterpart's answer, two mappings over the same
+    pair can arise; the counterpart unites once and records only the edge
+    for the second (6975.3).
   - **Concurrent unions.** With one seed both devices listen on every
-    tuple address, so a counterpart mapping reaches both and both may
-    unite over the same edge, each with its own mapping back. Two fold
-    rules make that converge: a union over an edge that is already
-    united keeps the effect of the canonically smallest operation (6230:
-    one union, not two, in every order); a pair duty that two devices
-    each bring to `united` keeps the smallest mapping digest (6845.9 stays
-    final). Without them the ledger shows the union from two operations
-    and the duty digests differ between the devices (checked by
-    counter-run).
-  - **Assumption beyond the inventory.** 2300 freezes the snapshot of
-    "the active heads of its relationships then". The candidate reads
-    "its relationships" as the person's, so a tuple a sibling device
-    opened concurrently is added once the device knows it. Whether a
-    concurrent opening on another device counts as "then" is not decided
-    by the inventory.
-  - **Late candidates and opening time (gate review 13 B1, decided 18
-    October, option (i')).** Only the tuple opened later receives a late
-    candidate, and only the counterpart anchor of the tuple opened
-    earlier: had the journal arrived in time, the later tuple's snapshot
-    (2300) would have held the earlier one, while the earlier tuple can
-    never have held an anchor that did not exist when it opened (6750:
-    the frozen set holds only anchors that existed at opening). The order
-    is `openedAt`, the clock of the device that opened the tuple; the
-    record anchor (2290) orders heads, not opening times, and is not used
-    for the direction. Counter-run (permanent test 8): A1 opens `z-first`
-    to B; one second later A2 opens `a-second` to C, with no journal
-    exchange between them, so the record anchors run opposite to the
-    opening times. After the sync both A devices hold B's anchor as a late
-    candidate of `a-second`, a late probe with it goes to C, `z-first`
-    holds no C anchor and sends no late probe; no hit, no union, A's
-    projections agree. Assumptions of the bench:
-    - **Tie.** Two concurrent tuples with the same `openedAt` get no late
-      candidate on either side and no late probe (strict 6750: neither is
-      later); the pair stays two entries until another flow connects it
-      (test 8b). The bench clock is shared and only moves when a scenario
-      moves it, so X7 and X14 would open both tuples in the same
-      millisecond. They now put one second between the two openings (X7
-      between the two encounters, X14 between B1's and B2's connection;
-      steps 4, 5 and 7 of the tests likewise), because two devices of one
-      person rarely open in the same millisecond. A real tie stays
-      unhealed by the late probe.
-    - **Clock skew.** The order reads the clocks of A's own devices. Skew
-      between A1 and A2 can invert it for a pair opened within the skew;
-      then the earlier tuple carries the later anchor on that pair, which
-      is the behaviour before this rule. The counterpart cannot check
-      `openedAt`; the ordering is A's own disclosure rule and its skew is
-      A's problem.
-    - **Arrival tuple and re-production.** The probing tuple is the later
-      one, so the counterpart's mapping arrives on the counterpart tuple
-      of that later tuple (6960 arrival tuple), and the side maps back on
-      the tuple the mapping arrived on, unchanged. Where a mapping is
-      produced again without an intent (`resumeDuties`, K0 state copy),
-      the device now picks the later-opened tuple of the pair (record
-      anchor only to break a tie), the same direction as the late probe;
-      before it picked the larger record anchor. The receiver resolves
-      the entry against every own tuple under the symmetric pair key, so
-      this is a convention, not a condition of verification.
+    tuple address, so the counterpart's answer mapping reaches both and
+    both may unite over the same edge. Two fold rules make that converge:
+    a union over an edge that is already united keeps the effect of the
+    canonically smallest operation (6230: one union, not two, in every
+    order); a pair duty that two devices each bring to `united` keeps the
+    smallest mapping digest (6845.9 stays final). Without them the ledger
+    shows the union from two operations and the duty digests differ
+    between the devices (checked by removing them: tests 5 and 6 fail).
+  - **Retention.** Per own arrival tuple one set of entries: the union of
+    the entries of the probes received on it that hit nothing. An entry
+    that hits is dropped (a pair anchor matches exactly one tuple); the
+    set is dropped when it is empty or when the relationship of the
+    arrival tuple departs. Its size is bounded by the counterpart's
+    candidate list when it opened the tuple. Entries for the
+    counterpart's other contacts never hit and stay until departure.
+  - **Assumption beyond the inventory.** The candidate reads the probe
+    evaluation (6960, 6806) over the tuples of all devices of the person
+    and repeats it when that set grows through the journal. The
+    inventory evaluates a probe once, at arrival. 6750 is kept literally.
 
-## Results (18 October, K1a against X1–X18 and X21)
+## Results (18 October, K1a against X1–X18, X7b and X21)
 
 See the matrix (`matrix.md`, multi-device port) for the cells; the table
 below is filled from the report run and the acceptance tests. "Serial"
@@ -193,24 +134,25 @@ scenario that has one.
 | X4 class off ∥ send | passed | passed | M's view empty on both devices, the running act connected on both, no equivocation |
 | X5 departure ∥ replay | passed | passed | A2 holds A1's mapping intent and produces nothing; only repeats of earlier bytes reach B |
 | X6 restore from backup | passed | n/a | new incarnation; the catch-up over the self address brings the missed batches, own earlier incarnation included |
-| X7 continuity across devices | passed | passed | A1, A2, B1 and B2 each hold one entry to the other person with both tuples, no duplicate across devices, stable after four rounds (late probe, step 2) |
+| X7 continuity across devices | failed | passed | both persons open concurrently on two devices each: every device holds two entries to the other person with one tuple each; neither frozen probe holds the other tuple, so re-evaluation finds nothing; the duplicate heals at the next encounter (X7b) |
+| X7b third encounter after X7 | passed | passed | after the symmetric concurrent pair and a sync every device holds two entries; A1 meets B1 again: the fresh probes carry both old tuples (2300), both sides hit both, and after two rounds A1, A2, B1 and B2 each hold one entry with three tuples; no duplicate, no double effect |
 | X8 enrollment | passed | n/a | state, journal and intents copied; A2 consents and connects at once |
 | X9 device revocation | failed | n/a | the thief with the image reads four documents and holds an act (one seed) |
 | X10 restricted app | n/a | n/a | step 1 has no rights profile per app |
 | X11 long separation | passed | n/a | both devices connected after reunion, stable after three rounds, no double effects, journal about 22 kB |
 | X12 delivery per device | passed | passed | B's effect once, A1 delivered after two rounds, A2 equal after one round |
 | X13 mediator devices against the shared budget | passed | passed | M1 and M2 each issue one introduction offline at budget 9, A1 sees one ticket, A2 the other: ten acts, no overrun, five blocked acceptances, no key named twice |
-| X14 double introduction | passed | passed | two acts, both connected on B1, B2 and C1; with B1 and B2 separated while consenting, B's late probe after healing reaches C, and B1, B2 and C1 each hold one entry with both tuples; no double effect |
-| X15 union ∥ running act | passed | passed | unchanged by step 2: A2, separated from A1, unites the two relationships to M while A1's card is in transit; one entry with two tuples on both devices, the act connected, its mediator and acceptance on the united relationship, M's view on the united head |
+| X14 double introduction | passed | passed | two acts, both connected; with B1 and B2 separated while consenting, C's probe on its second tuple (which holds the first) misses at the B device that lacks B's other tuple; after B's journal heals, that device re-evaluates the kept probe, hits and maps; B1, B2 and C1 each hold one entry with both tuples, no double effect |
+| X15 union ∥ running act | passed | passed | A2, separated from A1, unites the two relationships to M while A1's card is in transit; one entry with two tuples on both devices, the act connected, its mediator and acceptance on the united relationship, M's view on the united head |
 | X16 old stock after class revocation | failed | passed | A2, separated, accepts a ticket on a key A1 withdrew; after healing both devices hold the act and the key is consumed |
 | X17 parallel production | failed | passed | both devices refill and send revision 2 with different keys; one revision number from two operations, M records 6270 findings; probe sequence (6680) not modelled |
 | X18 two cards of one act | failed | passed | fails for two reasons: A's ledger holds consent and connect of the act each from two operations (two double final effects at A, none at B), and A's devices keep different hand-over digests and never agree; B receives two card documents with the same card key, connects once, no conflict mark |
 | X21 journal robustness | passed | n/a | repair after old and double restore with reordering, duplicates, concurrent requests and two crashes in 7 rounds; after 15 rounds of lost requests, answers, journal batches alone (reply head and receipts delivered) or receipts each in 1 round; after every phase no missing batch key and the reference projection on both devices; repair ends with no device waiting for catch-up and 17 silent rounds on the self address; no double effect, no conflict; 813 frames and 2.1 MB on the self address, of which 395 journal frames (1.65 MB for an 11-batch, 22 kB journal); 569 repeats, 566 on the self address and 3 to counterparts; the journal does not grow |
 
-Counts over X1 to X18 and X21 with two devices: 13 kept, 5 not kept, 1
-not applicable (K0: 1 kept, 17 not kept, 1 not applicable). Step 2
-changed X7 and X14; every other outcome is the same as after step 1. In
-the matrix MG7 (continuity across devices) is now kept.
+Counts over X1 to X18, X7b and X21 with two devices: 13 kept, 6 not
+kept, 1 not applicable (K0: 1 kept, 18 not kept, 1 not applicable).
+Step 2 changed X14 and added X7b; every other outcome is the same as
+after step 1.
 
 Reservations (gate reviews 8 and 9): a successful restore with reachable
 history (X6) is not the same as repair after lost sync traffic (X21
@@ -219,8 +161,8 @@ anchor and receives new history through the sync as well (X9, one seed);
 X1, X2 and X5 show
 fixed rights with the entitled device available and no re-production,
 not a transfer of rights or a takeover after a device is lost (K1b,
-X20); X8 and X11 do not show a union of the person's own tuples (X7 and
-X14 do).
+X20); X8 and X11 do not show a union of the person's own tuples (X14
+and X7b do).
 
 ## Findings
 
@@ -245,16 +187,17 @@ X14 do).
   the sync does not do: bound the journal, forget anything, or decide
   between two devices that answer the same request (both answer, the
   requester deduplicates).
-- **Shared tuples need a late probe (X7).** Both devices learn both
-  encounters with B from the journal, but the candidate snapshot of each
-  tuple was taken on its own device, so no probe tested the pair and each
-  device kept two entries to B. Sharing the facts is not merging them.
-  With the late probe (step 2) the device that holds both tuples probes
-  on the tuple opened later with the earlier tuple's counterpart anchor
-  (opening time, see "Late candidates and opening time" above); B, whose devices
-  share both of B's tuples, hits and maps, and both persons unite through
-  verified mappings. Without the late probe K1a still fails X7
-  (counter-run in the tests).
+- **Concurrent openings on both sides heal only at the next encounter
+  (X7, X7b).** Both devices learn both encounters with B from the
+  journal, but each tuple's probe was sent with the candidate list of
+  its own device, and B's likewise. When A and B both open concurrently
+  on two devices each, no probe holds the other tuple, on either side, so
+  re-evaluation has nothing to find and every device keeps two entries.
+  At the next encounter the fresh probe of each side carries both old
+  tuples (2300), the other side hits both, and the three tuples end in
+  one entry on every device (X7b). Re-evaluation helps whenever at least
+  one side opened its two tuples in order (one device, or a sync in
+  between): that side's second probe holds the first tuple.
 - **A seed is still a capability (X9).** The thief with A2's image reads
   the next ticket and holds the act; revocation at the carrier changes
   nothing under one seed, as with K0, and the catch-up answers the thief
@@ -297,25 +240,28 @@ X14 do).
   issuing offline against A's budget at nine do not overrun it: A's
   devices split the acceptance quota, the device without quota blocks, and
   the person ends at ten acts. K0 reaches eleven.
-- **Own tuples after a double introduction (X14).** Two acts from A1 and A2
-  for the same pair connect on B1 and B2 while B1 and B2 are separated.
-  Each of C's probes is checked by the B device that lacks the other tuple
-  and acknowledged. Once B's journal heals, a B device holds both tuples to
-  C, neither in the other's snapshot, and probes again; C (one device,
-  both tuples) hits, maps, and B and C unite. C itself never needs a late
-  probe: its second tuple has the first in its snapshot.
+- **Asymmetric concurrent openings unite through re-evaluation (X14,
+  test 4).** Only one side has two concurrent tuples, the other opened in
+  order: its second probe carries the first tuple and misses at the
+  device that lacks it; after the journal heals, that device re-evaluates
+  the kept probe and hits. In the acceptance test from gate review 13
+  (A on two devices, B on one) every probe of A is dropped for the whole
+  run, and A and B still end in one entry with both tuples on every
+  device: A2 maps from re-evaluation, B unites and answers. In X14 the
+  same happens with B on two devices and C on one.
+- **Concurrent unions on both devices converge (step 2).** A1 and A2,
+  separated from each other after both learned both tuples to B: A2 maps
+  from re-evaluation, A1 verifies B's answer mapping (it reaches both,
+  one seed) and unites with an operation of its own. After healing both
+  hold one entry with both tuples, the same projection, one union effect
+  for the edge and no double effect at A or B. Duplicated and reordered
+  frames during the whole flow give the same result.
 - **A union through the counterpart travels well (X15).** When M's mapping
   unites two relationships on one device, the union is an operation in the
   journal; the other device folds it, re-points the running act and its
-  acceptance to the united relationship, and the act connects. No late
-  probe is involved: A2's new tuple has the old one in its snapshot.
-- **Concurrent unions on both devices converge (step 2).** A1 and A2,
-  separated from each other after both learned both tuples to B, each
-  verify B's mapping (it reaches both, one seed) and each unite with an
-  operation of its own. After healing both hold one entry with both
-  tuples, the same projection, one union effect for the edge and no
-  double effect at A or B. Duplicated and reordered frames during the
-  whole flow give the same result.
+  acceptance to the united relationship, and the act connects. No
+  re-evaluation is involved: A2's new tuple has the old one in its
+  snapshot.
 - **Revocation and production are not rights (X16, X17).** A device that
   did not see the class revocation accepts a ticket on a withdrawn key,
   and the fold then marks the key consumed on every device. Two devices
@@ -342,47 +288,26 @@ X14 do).
   for the repeat. X13 does not use that count; X1, which counts 8640.12,
   has no budget refusal.
 
-## What a late probe adds (plan section 5: carrier, M, counterpart)
+## What re-evaluation adds (plan section 5: carrier, M, counterpart)
 
-A late probe is an extra continuity probe on an existing tuple, sent
-after the device folded a sibling's batch; it carries one blinded entry
-per late candidate. It goes out for every concurrent pair, also when the
-two tuples belong to different people. Blinding hides the anchor in the
-entry; it does not make the probe unlinkable. Per party, beyond what the
-initial probes already show:
+Nothing on the wire beyond the mapping a hit owes anyway. Re-evaluation
+reads probes the device has already received and acknowledged; it sends
+no probe, no request and no further document type. Measured on the
+bench against main (deposits at the carrier, continuity documents, 25
+rounds after the encounters):
 
-- **Carrier.** One more sealed frame to the counterpart's tuple address,
-  and the counterpart's acknowledgement back. The carrier sees address,
-  size and time, not the content. The probe leaves in the round in which
-  the device folded a journal batch from its sibling, so its time follows
-  the person's own journal traffic on the self address; an observer of
-  both addresses can relate the self address to that tuple address by
-  timing. The frame size grows with the number of entries, one per late
-  candidate. With the retry (B2) an unacknowledged late probe
-  is deposited again with identical bytes after each give-up, visible as
-  a repeated frame. With two devices that detect the pair in the same
-  round, two different late probes go to the same address.
-- **Mediator M.** As mediator, nothing: the late probe travels between
-  the two tuple ends and does not pass through M. When M is the
-  counterpart of the probed tuple (A1 meets M while A2 opens another
-  tuple), M receives it as a counterpart and learns what the counterpart
-  learns.
-- **Counterpart.** A second probe on a tuple that already had its probe.
-  That alone tells the counterpart that the person opened another tuple
-  around the same time, which this tuple's snapshot did not hold, and
-  that the person's devices exchanged their journal at that time; in K1a
-  that happens only with more than one device, so it shows that the
-  person uses at least two devices. The entry is an HMAC of the other
-  tuple's counterpart anchor under a key derived from the two anchors of
-  the probed tuple (bench rule), so the counterpart can test it for
-  equality against every anchor it knows, not only its own: a hit on
-  one of its own anchors starts the mapping (intended); a hit on a third
-  party's anchor it knows tells it that the person holds a tuple to that
-  anchor; no hit tells it that the person holds at least one further
-  tuple whose counterpart anchor is none of the anchors it tested. Each
-  late probe is one more such equality test that the initial probe did
-  not offer; the tested anchor is always one that existed when the
-  probed tuple opened (up to A's clock skew, see above).
+- Symmetric concurrent pair (X7 flow): four probes on both, nothing
+  else on either; identical traffic.
+- Asymmetric pair (A on two devices, B on one): four probes on both; on
+  this branch two mappings more (A2's mapping owed by its hit, 6845.1,
+  and B's answer mapping, 6845.1 second trigger), on main none because
+  the pair is never united.
+
+The carrier sees the mapping frames of an ordinary union. M, as
+mediator, sees nothing. The counterpart receives a mapping some rounds
+after its probe instead of right away; the delay tells it that the hit
+was found late, which in K1a happens only after a journal fold, so it
+can infer that the person uses more than one device.
 
 ## Limits of steps 1 and 2
 
@@ -390,28 +315,24 @@ initial probes already show:
   re-splitting rights is K1b.
 - No transfer of quota between devices (that is K1b); no takeover of a
   sibling's intent when the sibling is lost (X20, K2).
-- The late probe rests on an assumption the inventory does not make: the
-  2300 snapshot read per person, a concurrently opened sibling tuple
-  added once known. The device recognises no counterpart person; it only
-  finds own tuples never tested against each other, and the counterpart's
-  hit decides. Pairs are found by scanning all own tuples (quadratic).
-- A late probe is produced once per pair and device and repeated with
-  the same bytes until acknowledged, united or departed. If it is
-  acknowledged by a counterpart device that does not yet know both of
-  its tuples (a miss), the pair relies on the counterpart's own late
-  probe. A late probe whose producing device is lost is not taken over
-  (X20). Each concurrent pair costs a probe, also when the two tuples
-  belong to different people (no hit then); what that adds for the
-  carrier, M and the counterpart is listed below.
-- The tuple that probes is chosen by opening time on the device clocks;
-  a tie gives no late probe, and skew between A's devices can invert the
-  order on one pair (see above).
-- Concurrent unions with own stock on the united relationship would each
-  produce a revision (6987.5, 6987.14) under the same number; that is
-  the open production question of X17, not exercised by X7 or X14.
+- When both persons open concurrently on two devices each (X7 strict),
+  the duplicate stays until the next encounter between them (X7b); there
+  is no step that heals it earlier.
+- Kept probes are device state. A device that is lost takes its kept
+  probes with it, an enrolled device starts without any, and only a
+  journal fold triggers re-evaluation (no re-evaluation after a union or
+  a local opening).
+- Entries of a kept probe for the counterpart's other contacts never hit
+  and are kept until the arrival tuple's relationship departs.
+- The bench evaluates a probe against every own tuple, not only the
+  arrival tuple's candidate list and mutual candidates (6800, 6802); the
+  repetition over the person's tuples is an assumption beyond the
+  inventory.
 - The tie rules for concurrent unions (smallest operation for the union
   effect, smallest digest for a `united` duty) are bench rules of the
-  fold, not inventory rules.
+  fold, not inventory rules. Concurrent unions with own stock on the
+  united relationship would each produce a revision under the same
+  number; that is the open production question of X17.
 - Class changes, revision numbers and hand-overs are not rights and have
   no merge rule beyond the fold: X16, X17 and X18 fail.
 - The journal is a plain list of batches in the device's store; no
