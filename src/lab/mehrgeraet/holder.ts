@@ -1707,9 +1707,16 @@ export class HolderDevice {
     const signed = this.cand.signerWriters && (doc.type === TYPES.revision || doc.type === TYPES.probe || doc.type === TYPES.mapping)
     const via = signed ? this.tupleOfAddress(address) : undefined
     const viaRel = via ? M.relOfTuple(this.state, via.id) : undefined
-    this.log.push({ type: doc.type.split('/').slice(-2)[0] ?? doc.type, from: doc.issuer, at: this.clock.now(), ...(typeof writer === 'string' ? { writer } : signed ? { writer: signerId(doc.issuer) } : {}), ...(viaRel ? { rel: M.resolveId(this.state, viaRel.id) } : {}) })
+    this.log.push({ type: doc.type.split('/').slice(-2)[0] ?? doc.type, from: doc.issuer, at: this.clock.now(), ...(signed ? { writer: signerId(doc.issuer) } : typeof writer === 'string' ? { writer } : {}), ...(viaRel ? { rel: M.resolveId(this.state, viaRel.id) } : {}) })
     // Review 26 B2: ohne Objekt als Payload ist kein Dokument lesbar (Journalrahmen: Befund im Journalzweig).
     if (!payload && doc.type !== TYPES.journal) {
+      this.dispositions.push('failed(malformed-payload)')
+      return
+    }
+    // Review 31 B1: unter Geräteschlüsseln bestimmt nur der Signierer den Schreiber (8500/6270); ein Nutzlastfeld `writer`
+    // ist ein Formfehler, auch wenn es den Signierer nennt: Befund, keine Wirkung, keine Quittung.
+    if (signed && payload && Object.hasOwn(payload, 'writer')) {
+      this.emit({ kind: 'finding', text: `${doc.type.split('/').slice(-2)[0] ?? doc.type} von ${doc.issuer.slice(-8)}: writer-Feld unter Geräteschlüsseln (Schreiber = Signierer): Formfehler` })
       this.dispositions.push('failed(malformed-payload)')
       return
     }
@@ -1838,9 +1845,9 @@ export class HolderDevice {
         if (!t || !(await this.isPeer(doc.issuer, t.peer))) return false
         const r = M.relOfTuple(this.state, t.id)!
         const p = doc.payload as unknown as { revision: number; keys: Array<{ n: number; anchor: string; keyAgreement: string; expiresAt: string }>; writer?: string }
+        if (this.cand.signerWriters) return this.acceptWriterRevision(r, t, doc.issuer, { ...p, writer: signerId(doc.issuer) }) // K2: 6270 je Signierer; nur der Signierer (Review 31 B1)
         if (p.writer !== undefined && M.shapeProblem(p.writer, 'tag', 'writer')) return false // Review 28: Schreiberkennung nach ihrer Grammatik, sonst abgewiesen
         if (typeof p.writer === 'string') return this.acceptWriterRevision(r, t, doc.issuer, p as typeof p & { writer: string })
-        if (this.cand.signerWriters) return this.acceptWriterRevision(r, t, doc.issuer, { ...p, writer: signerId(doc.issuer) }) // K2: 6270 je Signierer
         if (r.view && r.view.scope === t.id && p.revision <= r.view.revision) {
           const same = p.revision === r.view.revision
           // Wiederholung nur bei gleichem ganzen Schlüsselwert (Anker, Vereinbarung, Ablauf); sonst Equivokation (6270; Review 5).

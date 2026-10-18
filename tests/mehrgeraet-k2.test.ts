@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Welt15 } from '../src/lab/mehrgeraet/welt'
-import { HolderDevice, UnknownWriter, type MultiDeviceCandidate } from '../src/lab/mehrgeraet/holder'
+import { HolderDevice, UnknownWriter, signerId, TYPES, type MultiDeviceCandidate } from '../src/lab/mehrgeraet/holder'
 import { runX15 } from '../src/lab/mehrgeraet/scenarios'
 import { k2, K2Device } from '../src/candidates/mehrgeraet-k2'
 import { k1a, type Batch } from '../src/candidates/mehrgeraet-k1a'
@@ -279,5 +279,46 @@ describe('K2 Schritt 1: Dieb, Restore, Fan-out', () => {
     const sub = A.zusteller.submissions.get(d!)!
     expect(sub.address).not.toBe(b1) // primary frame sealed to B2's key for the context
     expect(h.sent.get(d!)!.address).toBe(sub.address) // the retry re-records the primary frame at the address it was sealed to
+  }, 60_000)
+
+  it('8. Signierer = Schreiber (Review 31 B1): unter Geräteschlüsseln ist ein Nutzlastfeld `writer` in Revision, Probe und Mapping ein Formfehler (Befund, keine Quittung, Ms Zustand je Schreiber unberührt), auch wenn es den Signierer selbst nennt; A1s nächste echte Revision gilt', async () => {
+    const { w, A, A2, Mm, am } = await world()
+    type Raw = { sendDoc(type: string, ctx: string, peer: string, peerKa: string, rkid: string, payload: Record<string, unknown>): Promise<{ digest: string }>; sendRevision(rel: string): Promise<void>; completed: Set<string> }
+    const raw = (d: HolderDevice) => d as unknown as Raw
+    const h = M.head(M.rel(A2.state, am.x.id))
+    const rkid = (await A2.cand.keys.pair(h.ownKey)).rkid
+    const a1 = signerId((await A.cand.keys.pair(M.head(M.rel(A.state, am.x.id)).ownKey)).anchor)
+    const a2 = signerId((await A2.cand.keys.pair(h.ownKey)).anchor)
+    const mRel = () => M.relOfTuple(Mm.state, am.y.id)!
+    const writersBefore = JSON.stringify(mRel().view?.writers ?? {})
+    const held1 = M.own(mRel().view?.writers, a1)?.revision ?? 0
+    expect(held1).toBeGreaterThan(0)
+    const findingsBefore = Mm.state.findings.length
+    // Astra's probe: A2 signs a revision naming A1 as writer, and the same naming itself; a probe and a mapping with the field.
+    const forged = [
+      await raw(A2).sendDoc(TYPES.revision, h.ownKey, h.peer, h.peerKeyAgreement, rkid, { revision: 1000, keys: [], writer: a1 }),
+      await raw(A2).sendDoc(TYPES.revision, h.ownKey, h.peer, h.peerKeyAgreement, rkid, { revision: 1001, keys: [], writer: a2 }),
+      await raw(A2).sendDoc(TYPES.probe, h.ownKey, h.peer, h.peerKeyAgreement, rkid, { entries: [], writer: a1 }),
+      await raw(A2).sendDoc(TYPES.mapping, h.ownKey, h.peer, h.peerKeyAgreement, rkid, { entry: 'x', writer: a1 }),
+    ]
+    await w.rounds(3)
+    for (const f of forged) expect(raw(Mm).completed.has(f.digest)).toBe(false) // no receipt
+    expect(JSON.stringify(mRel().view?.writers ?? {})).toBe(writersBefore)
+    expect(Mm.state.findings.slice(findingsBefore).filter((f) => f.includes('writer-Feld'))).toHaveLength(4)
+    // A1's next real revision is accepted at M.
+    await raw(A).sendRevision(am.x.id)
+    await w.rounds(3)
+    expect(M.own(mRel().view?.writers, a1)?.revision).toBe(held1 + 1)
+  }, 60_000)
+
+  it('8b. K1a (Schreiberkennung im Feld) unverändert: das Feld `writer` bleibt der Schreiber', async () => {
+    const { w, A, Mm, am } = await world(k1a())
+    const tag = A.cand.writerTag!(am.x.id)
+    const mRel = () => M.relOfTuple(Mm.state, am.y.id)!
+    const held = M.own(mRel().view?.writers, tag)?.revision ?? 0
+    expect(held).toBeGreaterThan(0)
+    await (A as unknown as { sendRevision(rel: string): Promise<void> }).sendRevision(am.x.id)
+    await w.rounds(3)
+    expect(M.own(mRel().view?.writers, tag)?.revision).toBe(held + 1)
   }, 60_000)
 })

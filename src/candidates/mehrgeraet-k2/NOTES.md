@@ -114,6 +114,14 @@ devices, the set revision and its fan-out are steps 2 and 3.
   16-character hash of the signer's anchor; it is not on the wire, M
   computes it from the signature. A device's writer in a relationship is
   its own key for the head tuple's context.
+- Only the signer determines the writer (gate review 31 B1). Under
+  `signerWriters` a payload field `writer` in a revision, probe or
+  mapping is a form error, also when it names the signer itself: finding
+  at the receiver, no effect, no receipt, the per-writer state untouched
+  (`tests/mehrgeraet-k2.test.ts` 8). Before the fix the field won over
+  the signer: A2 could sign a revision 1000 under A1's writer and M then
+  rejected A1's next real revision. K1a (writer tags in the field) is
+  unchanged (test 8b).
 - Every device numbers its own stock under its own nonce
   (`stockNonce`, derived from the device secret per relationship; 8430,
   8445 per device). The person's stock is the union of the devices'
@@ -269,6 +277,19 @@ throwaway script, numbers from one run; the frame counts are asserted in
   rejection is recorded as input for step 3: a revocation mark per writer
   (Widerrufsmarke je Schreiber) that separates the batches signed before
   the mark from those after it. No change in step 1.
+- The history depends on the entry path (gate review 31 S2): a sibling
+  that relays an old batch of a revoked device gets `unknown-writer` (no
+  fold, no receipt), while enrolment takes over the same already applied
+  batch with the state unchecked, and restore takes over the image. Input
+  for step 3: enrolment and restore apply the revocation marks per writer
+  too, so a revoked device's batches are rejected on every entry path,
+  not only on relay.
+- An empty device set (gate review 31 S1): when the last recipient
+  device leaves the `DeviceDirectory`, `recipients()` returns `[]` and
+  `sendDoc()` still seals one frame to the recorded address (the key of
+  a revoked device). Input for step 3: an unknown key and a known empty
+  set are different cases; the known empty set is an explicit delivery
+  failure, never a frame to the recorded key.
 - Fixed device count and static rights as in K1a (assumption no. 5).
 - X1, X13, X14 pass only through the interim rule (K1a's static split
   at M) until step 5 builds the allocation per M device.
@@ -276,6 +297,15 @@ throwaway script, numbers from one run; the frame counts are asserted in
 - No variant with the journal at the service for K2.
 - The carrier sees one registration set per device; whether it can link
   a person's devices (registration sessions, timing) is not measured.
+- What the carrier learns under K2 (gate review 31 S3): more addresses
+  per person (one per device and context, one self address per device)
+  and sending patterns that can be correlated: with three devices one
+  journal send is two copies at the siblings' self addresses, one
+  document to A is three copies at the same moment. The address count
+  alone does not tie the addresses to a person; the timing of the copies
+  may. Measure for step 3: addresses per person at the carrier and the
+  share of copies that leave together. Whether this is acceptable is a
+  decision for Anton (with 6o.5 no. 2).
 - The production intents carry every copy's sealed bytes; that is the
   largest share of the journal growth.
 
