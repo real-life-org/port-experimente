@@ -71,8 +71,9 @@ limit are assigned to one device in advance.
   device keeps every received probe, per own arrival tuple, with the
   entries that hit nothing. Whenever it folds a sibling's journal batch
   that adds own tuples, it evaluates every kept probe again against its
-  now larger set of own pair anchors, exactly as at arrival (the
-  recomputation of 6960, the hit rule of 6806). A hit owes the own
+  now larger set of own pair anchors, with the same hit rule as at
+  arrival (6806). This is an extension beyond 6800, 6802, 6806 and 6960,
+  not a derivation from them (see the assumption below). A hit owes the own
   mapping on the arrival tuple (6845.1, 6840), as a hit at first
   evaluation does; the union happens only on the counterpart's verified
   mapping (6900, 6975.1, 6975.2). The probe is the counterpart's own,
@@ -106,17 +107,45 @@ limit are assigned to one device in advance.
     smallest mapping digest (6845.9 stays final). Without them the ledger
     shows the union from two operations and the duty digests differ
     between the devices (checked by removing them: tests 5 and 6 fail).
-  - **Retention.** Per own arrival tuple one set of entries: the union of
-    the entries of the probes received on it that hit nothing. An entry
-    that hits is dropped (a pair anchor matches exactly one tuple); the
-    set is dropped when it is empty or when the relationship of the
-    arrival tuple departs. Its size is bounded by the counterpart's
-    candidate list when it opened the tuple. Entries for the
-    counterpart's other contacts never hit and stay until departure.
-  - **Assumption beyond the inventory.** The candidate reads the probe
-    evaluation (6960, 6806) over the tuples of all devices of the person
-    and repeats it when that set grows through the journal. The
-    inventory evaluates a probe once, at arrival. 6750 is kept literally.
+    Reservation: rule (a) makes the ledger show one union where two
+    devices each produced one. The ledger therefore shows the set effect
+    (6230), not single production: whether one mapping, one union and one
+    follow-up revision were produced needs a production or traffic oracle
+    (frames per device and kind at the carrier), not the ledger. That
+    oracle is an open point (6845 production identity, gate review 16 S3).
+  - **Retention.** Per own arrival tuple only the latest probe received
+    on it: its entries that hit nothing replace the kept entries of any
+    earlier probe on that tuple, they are never united with them. The
+    rule follows from 6750: the counterpart's candidate list is frozen at
+    its scan, so a repeated probe shows nothing the first did not; a
+    probe that differs is the counterpart's latest statement and the only
+    one kept. The hard bound is therefore the size of one probe (the
+    counterpart's candidate list), whatever the number of probes; a
+    counterpart that sends many probes with different entries leaves only
+    those of its last (test 7c). An entry that hits is dropped (a pair
+    anchor matches exactly one tuple); the set is dropped when it is
+    empty or when the relationship of the arrival tuple departs, whether
+    the departure is local or folded from a sibling's journal batch (the
+    drop is part of every apply: local `depart`, journal fold, rebuild
+    from the store; test 7b). Entries for the counterpart's other
+    contacts never hit and stay until departure.
+  - **Enrolment.** Kept probes are part of the device image that
+    enrolment copies, as state, journal and intents are: an enrolled
+    device receives the kept probes of the device it is enrolled from and
+    re-evaluates them when its journal brings new own tuples, also while
+    that device is offline (test 7d: A3 enrolled from A2, A2 offline, A's
+    journal brings A1's tuple, A3 hits on A2's kept probe and maps; the
+    duplicate is resolved without A2).
+  - **Assumption beyond the inventory (spec follow-up).** Re-evaluation
+    is an extension beyond 6800, 6802, 6806 and 6960. 6800 and 6802 bound
+    the candidate relation, 6806 states the hit rule, 6960 governs the
+    verification of a mapping; none of them provides for evaluating a
+    probe again or for searching every tuple the person holds. The
+    candidate evaluates a probe against the own tuples of all devices of
+    the person and repeats this when that set grows through the journal;
+    the inventory evaluates a probe once, at arrival. Repetition and the
+    wider search set are two decisions for the spec. 6750 is kept
+    literally on the sender's side.
 
 ## Results (18 October, K1a against X1–X18, X7b and X21)
 
@@ -290,6 +319,18 @@ and X7b do).
 
 ## What re-evaluation adds (plan section 5: carrier, M, counterpart)
 
+On the receiving side, keeping entries means the receiver can run later
+equality tests with them. The bench runs them only against its own pair
+anchors: an
+entry is `HMAC(k_p, a)` under the pair key of the arrival tuple, and the
+receiver computes candidates only from anchors of tuples it holds itself.
+It can learn whether the counterpart's frozen list names one of its own
+anchors (that is, one of its own tuples), and nothing about third
+parties: an entry for the counterpart's contact with someone else never
+matches and tells the receiver nothing beyond the count of entries. Only
+the latest probe per arrival tuple is kept, so the number of such tests
+is bounded by one probe.
+
 Nothing on the wire beyond the mapping a hit owes anyway. Re-evaluation
 reads probes the device has already received and acknowledged; it sends
 no probe, no request and no further document type. Measured on the
@@ -319,11 +360,17 @@ can infer that the person uses more than one device.
   the duplicate stays until the next encounter between them (X7b); there
   is no step that heals it earlier.
 - Kept probes are device state. A device that is lost takes its kept
-  probes with it, an enrolled device starts without any, and only a
+  probes with it (an enrolled device gets those of the device it is
+  enrolled from at enrolment, nothing later), and only a
   journal fold triggers re-evaluation (no re-evaluation after a union or
   a local opening).
 - Entries of a kept probe for the counterpart's other contacts never hit
-  and are kept until the arrival tuple's relationship departs.
+  and are kept until the arrival tuple's relationship departs or a later
+  probe on the same tuple replaces them.
+- The ledger shows the set effect of concurrent unions (fold rule (a)),
+  not how often a mapping, union or revision was produced; single
+  production needs a production or traffic oracle, which the bench does
+  not have for step 2 yet.
 - The bench evaluates a probe against every own tuple, not only the
   arrival tuple's candidate list and mutual candidates (6800, 6802); the
   repetition over the person's tuples is an assumption beyond the
