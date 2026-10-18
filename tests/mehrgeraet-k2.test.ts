@@ -260,4 +260,24 @@ describe('K2 Schritt 1: Dieb, Restore, Fan-out', () => {
     expect(out.k2!.ticket).toBe(3)
     expect(out.k2!.journalBytes).toBeGreaterThan(out.k1a!.journalBytes)
   }, 120_000)
+
+  it('7. Ein Mapping an eine Gegenseite, deren aufgezeichnetes Gerät widerrufen ist, geht zuerst an ein Gerät der aktuellen Menge; die Wiederholung (6845.4) zielt auf dieselbe Adresse wie der erste Rahmen (CodeRabbit #73)', async () => {
+    const { w, A, B, am } = await world()
+    const B2 = await w.enrol(B, 'B2')
+    await w.rounds(2)
+    const ab = await w.encounter(A, B)
+    await w.rounds(3)
+    const arrival = M.head(M.rel(A.state, ab.x.id))
+    const b1 = arrival.peerKeyAgreement
+    expect(w.carrier.registeredAt(b1)).toEqual(['B1']) // recorded key = the creating device B1
+    await w.revoke(B2, B)
+    await w.rounds(1)
+    const h = A as unknown as { sendMapping(a: M.Tuple, o: M.Tuple): Promise<void>; sent: Map<string, { kind: string; address: string }> }
+    const before = new Set(h.sent.keys())
+    await h.sendMapping(arrival, M.head(M.rel(A.state, am.x.id)))
+    const [d] = [...h.sent.keys()].filter((k) => !before.has(k))
+    const sub = A.zusteller.submissions.get(d!)!
+    expect(sub.address).not.toBe(b1) // primary frame sealed to B2's key for the context
+    expect(h.sent.get(d!)!.address).toBe(sub.address) // the retry re-records the primary frame at the address it was sealed to
+  }, 60_000)
 })

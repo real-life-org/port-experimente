@@ -872,7 +872,7 @@ export class HolderDevice {
    * signierte Dokument je einmal versiegelt wird (eine Kopie je Gerät an dessen eigene Adresse, eine Submission). Der
    * aufgezeichnete Schlüssel geht zuerst, wenn er noch zur Menge gehört. Ohne Menge (K0, K1a): ein Rahmen an `toRkid`.
    */
-  private async sendDoc(type: string, issuerCtx: string, recipient: string, toRkid: string, replyTo: string, payload: Record<string, Json>, fan?: Array<{ anchor: string; rkid: string }>): Promise<{ digest: string; bytes: Uint8Array; frames: number; total: number }> {
+  private async sendDoc(type: string, issuerCtx: string, recipient: string, toRkid: string, replyTo: string, payload: Record<string, Json>, fan?: Array<{ anchor: string; rkid: string }>): Promise<{ digest: string; bytes: Uint8Array; address: string; frames: number; total: number }> {
     const k = await this.keysFor(issuerCtx)
     const unsigned: Doc = { id: crypto.randomUUID(), type, issuer: k.anchor, recipient, replyTo, issuedAt: this.clock.now(), payload }
     const doc = await diSign({ anchor: k.anchor, ed: { priv: k.ed.priv } }, unsigned as unknown as Record<string, Json>, this.clock.now())
@@ -896,7 +896,7 @@ export class HolderDevice {
     const total = frames.reduce((n, f) => n + f.frame.length, 0)
     this.measures.framesOut += frames.length
     this.measures.bytesOut += total
-    return { digest, bytes, frames: frames.length, total }
+    return { digest, bytes, address, frames: frames.length, total }
   }
 
   // ── Nutzeraktionen und Fachlogik ──
@@ -1079,8 +1079,8 @@ export class HolderDevice {
     const ownCtx = this.ctxOfAnchor.get(a.own) ?? (this.deviceKeys ? this.recordedCtx(a.own) : undefined)
     if (!ownCtx) return
     const own = await this.keysFor(ownCtx)
-    const { digest, bytes } = await this.sendDoc(TYPES.card, ownCtx, a.voucher.anchor, a.voucher.keyAgreement, own.rkid, { act: actId, expiresAt: a.expiresAt, from: a.own, fromKeyAgreement: own.rkid, to: a.voucher.anchor, card: { anchor: a.ownCard.anchor, keyAgreement: a.ownCard.keyAgreement } })
-    this.sent.set(digest, { kind: 'card', act: actId, frame: bytes, address: a.voucher.keyAgreement })
+    const { digest, bytes, address } = await this.sendDoc(TYPES.card, ownCtx, a.voucher.anchor, a.voucher.keyAgreement, own.rkid, { act: actId, expiresAt: a.expiresAt, from: a.own, fromKeyAgreement: own.rkid, to: a.voucher.anchor, card: { anchor: a.ownCard.anchor, keyAgreement: a.ownCard.keyAgreement } })
+    this.sent.set(digest, { kind: 'card', act: actId, frame: bytes, address }) // the address the primary frame is sealed to (K2: may differ from the recorded key)
     this.emit({ kind: 'hand-over', act: actId, o: 'handed', digest })
   }
 
@@ -1216,8 +1216,8 @@ export class HolderDevice {
   }
   private async sendMapping(arrival: M.Tuple, other: M.Tuple): Promise<void> {
     const pair = M.pairKey(arrival.id, other.id)
-    const { digest, bytes } = await this.sendDoc(TYPES.mapping, arrival.ownKey, arrival.peer, arrival.peerKeyAgreement, (await this.keysFor(arrival.ownKey)).rkid, { entry: this.blind(arrival, other.own), ...this.tagField(arrival.id) })
-    this.sent.set(digest, { kind: 'mapping', pair, frame: bytes, address: arrival.peerKeyAgreement })
+    const { digest, bytes, address } = await this.sendDoc(TYPES.mapping, arrival.ownKey, arrival.peer, arrival.peerKeyAgreement, (await this.keysFor(arrival.ownKey)).rkid, { entry: this.blind(arrival, other.own), ...this.tagField(arrival.id) })
+    this.sent.set(digest, { kind: 'mapping', pair, frame: bytes, address }) // 6845.4 retries the primary frame at the address it is sealed to
     this.emit({ kind: 'duty', pair, state: 'hit', mappingDigest: digest })
   }
   /**
