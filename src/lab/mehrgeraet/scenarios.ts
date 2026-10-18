@@ -814,7 +814,7 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
   },
   {
     id: 'X16',
-    title: 'A1 widerruft die Klasse, A2 hält getrennt den alten Vorrat; ein Mediatorgerät mit alter Sicht stellt noch vor, A2 nimmt das Ticket an (alter Vorrat nach Klassenwiderruf, 8535, 8475.S6, 8640.6)',
+    title: 'A1 widerruft die Klasse, A2 hält getrennt den alten Vorrat; ein Mediatorgerät mit alter Sicht stellt noch vor, A2 nimmt das Ticket an: nach Entscheidung 4a gilt das Ticket, der Widerruf wirkt ab Ankunft der leeren Revision; nach der Heilung einig, Schlüssel einmal verbraucht, Ms Sicht leer (8535, 8475.S6, 8640.6)',
     async run(c, serial) {
       const s = await setup(c, serial)
       // Die Mediatorgeräte sind weg, bevor die leere Revision ankommt: sie halten die alte Sicht. A2 ist von A1 getrennt (kein Journal).
@@ -835,15 +835,26 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const accepted = s.w.of('A').filter((d) => d.state.acts.some((a) => a.id === act)).map((d) => d.name)
       s.w.carrier.faults.reset()
       const n = await untilStable(s.w, 'A')
-      const after = s.w.of('A').filter((d) => d.state.acts.some((a) => a.id === act)).length
-      const keyState = s.w.of('A').map((d) => `${d.name}: ${M.rel(d.state, s.am).stock.find((k) => k.anchor === named)?.state ?? '–'}`)
+      // Orakel nach Entscheidung 4a (Anton 18.10.2026): ein Ticket auf einen inzwischen zurückgezogenen Schlüssel gilt; der
+      // Widerruf wirkt ab Ankunft der leeren Revision bei M (8535). Nach der Heilung: (a) die A-Geräte einig, (b) der Schlüssel
+      // über die Person höchstens einmal verbraucht (genau einmal, wenn ein Gerät das Ticket annahm), (c) der Akt gehört der
+      // Person (auf allen Geräten, wenn eines ihn annahm, sonst auf keinem), (d) Ms Sicht auf allen M-Geräten leer (Klasse
+      // aus), (e) keine doppelte endgültige Wirkung, (f) keine Equivokation bei M. Die Annahme selbst ist Information.
+      const holding = s.w.of('A').filter((d) => d.state.acts.some((a) => a.id === act)).length
+      const devices = s.w.of('A').length
+      const keyStates = s.w.of('A').map((d) => M.rel(d.state, s.am).stock.find((k) => k.anchor === named)?.state ?? '–')
+      const keyState = s.w.of('A').map((d, i) => `${d.name}: ${keyStates[i]}`)
+      const acceptOps = ledger(s.w, 'A').get(`accept:${act}`)?.size ?? 0
       const viewKeys = s.w.of('M').map((d) => M.rel(d.state, s.ma).view?.keys.length ?? 0)
       const equivocation = s.w.of('M').flatMap((d) => d.state.findings).filter((f) => f.includes('Equivokation')).length
       const classOn = s.w.of('A').filter((d) => M.rel(d.state, s.am).classOn).length
       const agree = s.w.agree('A')
-      const acceptedAfterRevocation = accepted.length || after ? 1 : 0
-      const ok = acceptedAfterRevocation === 0 && viewKeys.every((k) => k === 0) && equivocation === 0 && classOn === 0 && agree.agree && n > 0
-      return { outcome: mark(ok), detail: `aktive Schlüssel nach dem Widerruf je Gerät ${stale.join('/')}; Ticket auf alten Schlüssel angenommen von ${accepted.join(', ') || 'keinem Gerät'}, nach der Heilung auf ${after} Gerät(en); Schlüssel ${keyState.join(', ')}; Ms Sicht (Schlüssel) ${viewKeys.join('/')}; Klasse an auf ${classOn} Gerät(en); Equivokationen ${equivocation}; Projektion gleich nach ${n} Runden: ${agree.agree ? 'ja' : 'nein'}`, measures: { acceptedAfterRevocation, devicesWithAct: after, mediatorViewKeys: Math.max(...viewKeys), equivocations: equivocation, devicesWithClassOn: classOn, projectionAgrees: agree.agree ? 1 : 0, roundsToConverge: n } }
+      const fe = finalEffects(s.w, 'A')
+      const acceptedAfterRevocation = accepted.length || holding ? 1 : 0
+      const held = holding === devices && acceptOps === 1 && keyStates.every((k) => k === 'consumed')
+      const absent = holding === 0 && acceptOps === 0 && keyStates.every((k) => k === 'withdrawn')
+      const ok = agree.agree && n > 0 && (held || absent) && viewKeys.every((k) => k === 0) && classOn === 0 && fe.total === 0 && equivocation === 0
+      return { outcome: mark(ok), detail: `aktive Schlüssel nach dem Widerruf je Gerät ${stale.join('/')}; Ticket auf den zurückgezogenen Schlüssel angenommen von ${accepted.join(', ') || 'keinem Gerät'} (gilt nach 4a), nach der Heilung auf ${holding} von ${devices} Gerät(en), Annahme-Operationen ${acceptOps}; Schlüssel ${keyState.join(', ')}; Ms Sicht (Schlüssel) ${viewKeys.join('/')}; Klasse an auf ${classOn} Gerät(en); doppelte Wirkungen ${fe.total}; Equivokationen ${equivocation}; Projektion gleich nach ${n} Runden: ${agree.agree ? 'ja' : 'nein'}`, measures: { acceptedAfterRevocation, devicesWithAct: holding, acceptOperations: acceptOps, mediatorViewKeys: Math.max(...viewKeys), equivocations: equivocation, devicesWithClassOn: classOn, doubleFinalEffects: fe.total, projectionAgrees: agree.agree ? 1 : 0, roundsToConverge: n } }
     },
   },
   {

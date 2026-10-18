@@ -419,15 +419,15 @@ describe('K1a breite Matrix', () => {
     expect(one.outcome, one.detail).toBe('bestanden')
   }, 600_000)
 
-  it('X16: A1 widerruft die Klasse, A2 hält getrennt den alten Vorrat und nimmt noch ein Ticket an (der Widerruf ist in K1a kein Recht)', async () => {
+  it('X16 (Schritt 5, Entscheidung 4a): A1 widerruft die Klasse, A2 nimmt getrennt noch ein Ticket auf den alten Vorrat an; das Ticket gilt, nach der Heilung einig, Schlüssel einmal verbraucht, Ms Sicht leer', async () => {
     const two = byId(await runX15(k1a(), false, ['X16'])).X16!
     expect(two.crashed, two.detail).toBeFalsy()
-    expect(two.outcome, two.detail).toBe('nicht bestanden')
-    expect(two.measures.acceptedAfterRevocation).toBe(1)
+    expect(two.outcome, two.detail).toBe('bestanden')
+    expect(two.measures).toMatchObject({ acceptedAfterRevocation: 1, devicesWithAct: 2, acceptOperations: 1, mediatorViewKeys: 0, equivocations: 0, devicesWithClassOn: 0, doubleFinalEffects: 0, projectionAgrees: 1 })
     const one = byId(await runX15(k1a({ devices: 1 }), true, ['X16'])).X16!
     expect(one.crashed, one.detail).toBeFalsy()
     expect(one.outcome, one.detail).toBe('bestanden')
-    expect(one.measures.acceptedAfterRevocation).toBe(0)
+    expect(one.measures).toMatchObject({ acceptedAfterRevocation: 0, devicesWithAct: 0, acceptOperations: 0 })
   }, 600_000)
 
   it('X17 (Schritt 4): A1 und A2 füllen getrennt nach; mit Schreiberkennung je Beziehung nimmt M beide Revisionen an, keine Equivokation (8500, 6270 je Schreiber)', async () => {
@@ -865,12 +865,12 @@ describe('K1a Schritt 2: Vereinigung eigener Tupel durch Neuauswertung empfangen
     expect(one.outcome, one.detail).toBe('bestanden')
   }, 600_000)
 
-  it('3. alle Szenarien mit zwei Geräten: X14 und X7b bestanden, X7 streng nicht, X3 und X18 bestanden mit „Zusage geändert“ (Schritt 3), X17 bestanden (Schritt 4), der Rest wie in NOTES', async () => {
+  it('3. alle Szenarien mit zwei Geräten: X14 und X7b bestanden, X7 streng nicht, X3 und X18 bestanden mit „Zusage geändert“ (Schritt 3), X17 bestanden (Schritt 4), X16 bestanden (Schritt 5, Orakel nach 4a), der Rest wie in NOTES', async () => {
     const r = byId(await runX15(k1a(), false))
     for (const x of Object.values(r)) expect(x.crashed, `${x.scenario}: ${x.detail}`).toBeFalsy()
     const want: Record<string, string> = {
       X1: 'bestanden', X2: 'bestanden', X3: 'bestanden', X4: 'bestanden', X5: 'bestanden', X6: 'bestanden', X7: 'nicht bestanden', X7b: 'bestanden', X8: 'bestanden', X9: 'nicht bestanden', X10: 'nicht abbildbar', X11: 'bestanden', X12: 'bestanden',
-      X13: 'bestanden', X14: 'bestanden', X15: 'bestanden', X16: 'nicht bestanden', X17: 'bestanden', X18: 'bestanden', X21: 'bestanden',
+      X13: 'bestanden', X14: 'bestanden', X15: 'bestanden', X16: 'bestanden', X17: 'bestanden', X18: 'bestanden', X21: 'bestanden',
     }
     for (const [id, outcome] of Object.entries(want)) expect(r[id]?.outcome, `${id}: ${r[id]?.detail}`).toBe(outcome)
     // Zusage geändert (Schritt 3) genau bei X3 und X18; jede andere Zelle unverändert ohne Marke.

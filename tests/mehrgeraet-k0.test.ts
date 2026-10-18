@@ -47,7 +47,11 @@ describe('E15 K0 one-seed: Eichung', () => {
     for (const x of Object.values(r)) expect(x.crashed, x.detail).toBeFalsy()
     for (const id of ['X13', 'X14', 'X15', 'X16', 'X17', 'X18', 'X21']) expect(r[id]!.outcome, `${id}: ${r[id]!.detail}`).toBe('nicht bestanden')
     expect(r.X13!.measures.budgetOverrun).toBe(1)
+    // X16 nach Entscheidung 4a (Schritt 5): das Ticket auf den alten Schlüssel gilt und ist nur Information; K0 verfehlt
+    // X16 weiter, jetzt weil A1 den Akt nie erfährt und A2 die Klasse an behält (Geräte uneins), nicht wegen des Tickets.
     expect(r.X16!.measures.acceptedAfterRevocation).toBe(1)
+    expect(r.X16!.measures.projectionAgrees).toBe(0)
+    expect(r.X16!.measures.devicesWithClassOn).toBe(1)
     expect(r.X21!.measures.repairRoundsRestore).toBe(-1)
   }, 600_000)
 })
