@@ -212,7 +212,15 @@ operations, so K0 behaves as before.
   device (known from enrollment, or a foreign writer in its journal)
   releases nothing to a counterpart (card, mapping, revision, receipt)
   until its own catch-up has completed: the sibling answered the
-  `journal-sync` request and the own heads cover the sibling's. Only
+  `journal-sync` request and the own heads cover the sibling's. The
+  answer counts only if it is bound to the device's current request
+  (gate review 19 B1a): every request carries a fresh random request id,
+  the answerer echoes it, and an answer with an older or a foreign id is
+  dropped (`staleSyncAnswers`); an old, validly signed answer replayed
+  after the restore no longer ends the catch-up. The same answer a second
+  time changes nothing. Backoff re-requests and the answerer asking back
+  when the requester knows more are unchanged (X21 keeps its repair
+  rounds). Only
   traffic on the self address (journal, catch-up, receipts on it) goes
   out; held submissions neither deposit nor repeat, and their deadlines
   do not run. After the catch-up the fold decides which of them are still
@@ -221,7 +229,14 @@ operations, so K0 behaves as before.
   3 is withdrawn as usual, the rest goes out after the round's commit. A
   device whose sibling never answers stays held (no deadlock for others,
   but nothing leaves it); a device of a person with one device, or a K0
-  device without journal, holds nothing back.
+  device without journal, holds nothing back. Revoking the sibling lifts
+  the hold (gate review 19, question 3): a revoked device no longer counts
+  as a sibling (the revoking device records it in its store image); when
+  the device waits only on revoked siblings, nobody is left to catch up
+  with, and in the next round the fold decides what goes out (restore A1,
+  A2 lost, A1 revokes A2: held for every round before the revocation,
+  released in the round after it, B connects once). In the bench only the
+  revoking device learns the revocation.
 - **Local withdrawal (`Zusteller.demarcate`).** The bench's delivery
   adapter discards a submission that never reached the carrier (recorded,
   or `awaiting-transport` without a successful deposit), like a
@@ -535,9 +550,15 @@ can infer that the person uses more than one device.
   as a repetition (8910.7). A full card with its own `at`/`nonce` would
   differ and B would set K (8910.8); X18 passes for the simplified card.
 - After a restore a device holds back everything for its counterparts
-  until a sibling answers its catch-up request. If no sibling ever answers
-  (the sibling is lost), the device stays held; there is no timeout and no
-  measurement of that case yet (taking over is X20).
+  until a sibling answers its current catch-up request. A restored device
+  with a lost, unrevoked sibling sends nothing to counterparts until the
+  sibling is revoked; no time bound, decision Anton pending. Measured:
+  restore A1 from a backup with a valid consent, A2 lost: after 70 rounds
+  A1 is still held (`gatedRounds` 70, no card at the carrier, B stays
+  `consented`). Taking over is X20.
+- One seed: the revoked device still holds the self key, so an answer it
+  sends to a current request would still count; the request id binds an
+  answer to a request, not to a device (K2).
 - Sibling knowledge comes from enrollment (both devices record each other)
   or from a foreign writer in the journal. A backup taken before the
   enrollment knows no sibling and releases at once.

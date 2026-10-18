@@ -231,6 +231,8 @@ export interface DeviceState {
   probes?: Array<[string, string[]]>
   /** Digest → erwarteter Signierer der Quittung, für jede quittierbare Submission (#55). */
   expected: Array<[string, string]>
+  /** Geräte der Person, die dieses Gerät widerrufen hat (Review 19, Frage 3): sie antworten auf kein Nachholen mehr. */
+  revoked?: string[]
 }
 
 export interface Measures {
@@ -296,10 +298,18 @@ export class HolderDevice {
   /**
    * Nachholen (HSC-440, X21): `pending` bis ein Schwestergerät geantwortet hat und die eigenen Köpfe dessen Köpfe decken;
    * solange wird mit Backoff erneut angefragt (Anfrage, Antwort oder Quittung können verloren gehen, Review 9 B1).
+   * `id`: Kennung der laufenden Anfrage, frisch je gesendeter Anfrage; nur eine Antwort, die sie nennt, kann das Nachholen
+   * beenden (Tor-Review 19 B1a: eine alte, gültig signierte Antwort ist an keine laufende Anfrage gebunden).
    */
-  private sync: { pending: boolean; wait: number; backoff: number } = { pending: false, wait: 0, backoff: 1 }
+  private sync: { pending: boolean; wait: number; backoff: number; id: string | null } = { pending: false, wait: 0, backoff: 1, id: null }
   /** Anzahl gesendeter Nachhol-Anfragen (Messgröße des Reparaturverkehrs). */
   syncRequests = 0
+  /** Nachhol-Antworten ohne die Kennung der laufenden Anfrage (alt, wiederholt oder fremd): verworfen (Review 19 B1a). */
+  staleSyncAnswers = 0
+  /** Runden, in denen das Gerät nach einem Neuaufbau nichts an Gegenseiten freigab (Messung, Review 19 Frage 3). */
+  gatedRounds = 0
+  /** Widerrufene Geräte der Person (Teil des Abbilds): zählen nicht als Schwester, die nachholen hilft (Review 19 Frage 3). */
+  private revoked = new Set<string>()
   /** Steht noch Nachholarbeit aus (Messung, Review 11 B2)? Erst ohne sie ist eine Reparatur beendet, nicht schon, wenn das Gerät im Backoff schweigt. */
   get syncPending(): boolean {
     return this.sync.pending
@@ -495,6 +505,7 @@ export class HolderDevice {
       expected: [...this.expected],
       intents: [...this.intents],
       probes: [...this.probes],
+      ...(this.revoked.size ? { revoked: [...this.revoked] } : {}),
     }
   }
   commit() {
@@ -514,6 +525,7 @@ export class HolderDevice {
     this.expected = new Map(s?.expected ?? [])
     this.intents = new Map(s?.intents ?? [])
     this.probes = new Map(s?.probes ?? [])
+    this.revoked = new Set(s?.revoked ?? [])
     this.dropDeparted()
     // Was im Store steht, ist committet: vorgemerkte, nie freigegebene Submissions gehen nach dem nächsten Commit hinaus.
     this.held = this.zusteller.unreleased()
@@ -532,7 +544,18 @@ export class HolderDevice {
   private hasSibling(): boolean {
     const heads = this.cand.heads?.()
     if (!heads || !this.ownRkid) return false
-    return (this.cand.siblings?.() ?? []).length > 0 || Object.keys(heads).some((w) => w.split('@')[0] !== this.name)
+    const other = (d: string) => d !== this.name && !this.revoked.has(d)
+    return (this.cand.siblings?.() ?? []).some(other) || Object.keys(heads).some((w) => other(w.split('@')[0]!))
+  }
+  /**
+   * Ein Gerät der Person ist von diesem Gerät aus widerrufen (Review 19, Frage 3). Wartet das Gerät nach einem Neuaufbau
+   * nur auf widerrufene Schwestern, ist niemand mehr da, mit dem es nachholen könnte: die Sperre fällt, und in der nächsten
+   * Runde entscheidet die Faltung nach dem jetzigen Stand, was hinausgeht (`round`, `withdrawLosingCards`). Keine Zeitgrenze.
+   */
+  deviceRevoked(device: string): void {
+    this.revoked.add(device)
+    if (this.catchUp && !this.hasSibling()) this.sync = { pending: false, wait: 0, backoff: 1, id: null }
+    this.commit()
   }
   /** Freigeben (nach dem Commit): während des Nachholens nach einem Neuaufbau nur Verkehr an die eigene Adresse (B1a). */
   private release(ds: string[]): void {
@@ -544,7 +567,7 @@ export class HolderDevice {
   }
   /** Nachholen anstoßen: nach Neuaufbau, Enrollment oder wenn ein Rahmen zurückgestellt wurde (HSC-440). */
   requestSync() {
-    this.sync = { pending: true, wait: 0, backoff: 1 }
+    this.sync = { pending: true, wait: 0, backoff: 1, id: null } // keine Anfrage läuft: keine Antwort beendet das Nachholen
   }
   private crash(point: CrashPoint) {
     if (this.crashAt !== point) return
@@ -918,6 +941,7 @@ export class HolderDevice {
           this.catchUp = false
           for (const d of this.parked.splice(0)) if (this.zusteller.submissions.has(d) && !this.held.includes(d)) this.held.push(d)
         }
+        if (this.catchUp) this.gatedRounds++
         await this.journalOut()
         await this.syncOut()
         this.crash('before-commit')
@@ -965,7 +989,8 @@ export class HolderDevice {
     this.sync.wait = this.sync.backoff
     this.sync.backoff = Math.min(16, this.sync.backoff * 2)
     this.syncRequests++
-    await this.sendSelf(TYPES.journalSync, { heads: this.cand.heads(), reply: false })
+    this.sync.id = crypto.randomUUID() // frisch je Anfrage: nur die Antwort darauf zählt (Review 19 B1a)
+    await this.sendSelf(TYPES.journalSync, { heads: this.cand.heads(), reply: false, req: this.sync.id })
   }
   /** Ein Dokument an die eigene Adresse der Person (Journal, Nachholen), gezählt als eigener Verkehr. */
   private async sendSelf(type: string, payload: Record<string, Json>): Promise<void> {
@@ -1097,14 +1122,17 @@ export class HolderDevice {
         this.dispositions.push('failed(journal-from-unexpected-signer)')
         return
       }
-      const p = doc.payload as { heads?: Record<string, number>; reply?: boolean }
+      const p = doc.payload as { heads?: Record<string, number>; reply?: boolean; req?: string }
       const heads = p.heads ?? {}
       if (p.reply) {
-        // Antwort eines Schwestergeräts: decken die eigenen Köpfe seine, ist das Nachholen abgeschlossen; sonst weiter anfragen.
-        if (this.sync.pending && this.covers(heads)) this.sync = { pending: false, wait: 0, backoff: 1 }
+        // Antwort eines Schwestergeräts: nur auf die laufende Anfrage (Kennung, Review 19 B1a). Decken die eigenen Köpfe
+        // seine, ist das Nachholen abgeschlossen; sonst weiter anfragen. Eine alte, wiederholte oder fremde Antwort zählt
+        // nicht; dieselbe Antwort ein zweites Mal ändert nichts (das Nachholen ist schon beendet).
+        if (typeof p.req !== 'string' || p.req !== this.sync.id) this.staleSyncAnswers++
+        else if (this.sync.pending && this.covers(heads)) this.sync = { ...this.sync, pending: false, wait: 0, backoff: 1 }
       } else {
         for (const f of this.cand.batchesAfter?.(heads) ?? []) await this.sendSelf(TYPES.journal, { b: Buffer.from(f.body).toString('base64') })
-        if (this.cand.heads) await this.sendSelf(TYPES.journalSync, { heads: this.cand.heads(), reply: true })
+        if (this.cand.heads) await this.sendSelf(TYPES.journalSync, { heads: this.cand.heads(), reply: true, ...(typeof p.req === 'string' ? { req: p.req } : {}) })
         // Weiß der Anfragende mehr als wir, holen wir selbst nach.
         if (!this.covers(heads) && !this.sync.pending) this.requestSync()
       }

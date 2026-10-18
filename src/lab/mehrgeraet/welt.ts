@@ -71,6 +71,7 @@ export class Welt15 {
     const i = this.devices.indexOf(device)
     if (i >= 0) this.devices.splice(i, 1)
     await this.candidate.revoke?.(by, device.name)
+    by.deviceRevoked(device.name) // das widerrufende Gerät weiß es; wartet es aufs Nachholen nur noch auf dieses Gerät, fällt die Sperre (Review 19)
   }
 
   device(name: string): HolderDevice {

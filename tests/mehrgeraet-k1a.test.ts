@@ -671,6 +671,92 @@ describe('K1a Schritt 3: Entscheidung und Übergabe', () => {
     expect(doubles(w, 'A')).toEqual([])
     void A2
   }, 300_000)
+
+  it('6. Tor-Review 19 B1a: eine alte, gültig signierte Schwesterantwort, nach dem Restore erneut zugestellt, beendet das Nachholen nicht; erst eine Antwort auf die laufende Anfrage', async () => {
+    const { w, A, A2, B, act } = await withA2()
+    const self = (await A.cand.keys.pair('self/A')).rkid
+    A.online = A2.online = false
+    expect(await A.consent(act)).toBe('ok')
+    A.commit()
+    const backup = w.stores.get('A1')!.snapshot()
+    expect(await B.consent(act)).toBe('ok')
+    // Eine echte Antwort von A2 aufzeichnen (A1 holt nach, empfängt aber nichts an der eigenen Adresse; A2 sieht kein Journal).
+    const mark = w.carrier.carried.length
+    await A.reload()
+    A.online = A2.online = true
+    w.carrier.faults.withhold('A1', (f) => f.address === self)
+    w.carrier.faults.withhold('A2', (f) => w.frameOrigin(f.bytes)?.kind === 'journal')
+    await w.rounds(3)
+    const old = w.carrier.carried.slice(mark).find((f) => w.frameOrigin(f.bytes)?.device === 'A2' && w.frameOrigin(f.bytes)?.kind === 'journal-sync-reply')
+    expect(old).toBeTruthy()
+    // A2 lehnt ab, die Geräte heilen: beide abgelehnt, die Karte zurückgenommen.
+    expect(await A2.decline(act)).toBe('ok')
+    await A2.round()
+    w.carrier.faults.reset()
+    await w.rounds(30)
+    expect(states(w, act)).toEqual(['declined/cancelled', 'declined/cancelled'])
+    // Restore auf A1; nur die alte Antwort kommt an, das aktuelle Self-Journal bleibt zurückgehalten.
+    w.stores.get('A1')!.restore(backup)
+    await A.reload()
+    w.carrier.faults.withhold('A1', (f) => f.address === self && Buffer.compare(f.bytes, old!.bytes) !== 0)
+    w.carrier.deposit(self, old!.bytes)
+    await w.rounds(3)
+    expect(a1CardDeposits(A, act)).toBe(0)
+    expect(A.syncPending).toBe(true)
+    expect(M.act(B.state, act)).toMatchObject({ state: 'consented', pending: null })
+    expect(A.staleSyncAnswers).toBeGreaterThan(0)
+    // Eine frische Antwort auf die laufende Anfrage beendet das Nachholen; die Faltung entscheidet: abgelehnt, nichts an B.
+    w.carrier.faults.reset()
+    expect(await w.until(() => !A.syncPending, 30)).toBeGreaterThan(0)
+    await w.rounds(30)
+    expect(a1CardDeposits(A, act)).toBe(0)
+    expect(M.act(B.state, act)).toMatchObject({ state: 'consented', pending: null })
+    expect(states(w, act)).toEqual(['declined/cancelled', 'declined/cancelled'])
+    expect(w.agree('A').agree).toBe(true)
+  }, 300_000)
+
+  /** Restore A1 aus einem Backup mit gültiger Zustimmung (Karte nie beim Träger), A2 verloren (offline, antwortet nie). */
+  async function restoredWithLostSibling() {
+    const p = await withA2()
+    const { w, A, A2, B, act } = p
+    A.online = A2.online = false
+    expect(await A.consent(act)).toBe('ok')
+    A.commit()
+    const backup = w.stores.get('A1')!.snapshot()
+    expect(await B.consent(act)).toBe('ok')
+    w.stores.get('A1')!.restore(backup)
+    await A.reload()
+    A.online = true
+    return p
+  }
+
+  it('7. Frage 3 (Review 19): wird das einzige Schwestergerät widerrufen, hebt der Widerruf die Sperre; A1 gibt nach dem Stand der Faltung frei', async () => {
+    const { w, A, A2, B, act } = await restoredWithLostSibling()
+    await w.rounds(10)
+    expect(A.syncPending).toBe(true)
+    expect(a1CardDeposits(A, act)).toBe(0)
+    const gatedBefore = A.gatedRounds
+    expect(gatedBefore).toBe(10)
+    await w.revoke(A, A2)
+    const after = await w.until(() => a1CardDeposits(A, act) === 1 && M.act(B.state, act).state === 'connected', 20)
+    expect(after).toBeGreaterThan(0)
+    expect(A.gatedRounds - gatedBefore).toBeLessThanOrEqual(1) // die Sperre fällt in der Runde nach dem Widerruf
+    expect(M.act(A.state, act).state).toBe('connected')
+    expect(ledgerOf(w, 'B').get(`connect:${act}`)?.size).toBe(1)
+    // Ein späterer Neuaufbau sperrt nicht erneut: der Widerruf steht im Abbild.
+    await A.reload()
+    await w.rounds(1)
+    expect(A.gatedRounds - gatedBefore).toBeLessThanOrEqual(1)
+  }, 300_000)
+
+  it('8. Grenze (Review 19, Frage 3): ein wiederhergestelltes Gerät mit verlorenem, nicht widerrufenem Schwestergerät gibt nichts an Gegenseiten frei; keine Zeitgrenze', async () => {
+    const { w, A, B, act } = await restoredWithLostSibling()
+    await w.rounds(70)
+    expect(A.syncPending).toBe(true)
+    expect(A.gatedRounds).toBe(70)
+    expect(a1CardDeposits(A, act)).toBe(0)
+    expect(M.act(B.state, act).state).toBe('consented')
+  }, 300_000)
 })
 
 // K1a Schritt 2 (Anton 18.10., Optionen 1+2): Vereinigung eigener Tupel durch Neuauswertung empfangener Proben. Ein
