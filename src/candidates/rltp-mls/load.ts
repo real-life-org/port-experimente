@@ -1,4 +1,4 @@
-import init, { initSync, MlsPeer } from './pkg/mls_wasm.js'
+import init, { initSync, MlsPeer, forceTiebreak, tiebreakTrace } from './pkg/mls_wasm.js'
 
 let ready: Promise<void> | undefined
 
@@ -16,4 +16,4 @@ export function loadWasm(): Promise<void> {
   return ready
 }
 
-export { MlsPeer }
+export { MlsPeer, forceTiebreak, tiebreakTrace }

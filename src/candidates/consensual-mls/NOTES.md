@@ -29,21 +29,43 @@ a service, gap repair, fork detection as state.
 
 ## Results
 
-Three runs per mode (15 October). "hash-dependent": the result changes
-from run to run because the smallest hash decides. For comparison
-`rltp-mls` (log + MLS): all S/T passed except S10 blind, T6b blind,
-T8/T11.
+As of 18 October, every branch enumerated. Which of two concurrent commits
+has the smaller hash is a coin flip: the commit bytes carry fresh random
+secrets (path secrets, HPKE ciphertexts, signature keys), so their SHA-256
+is uniformly distributed. The bench no longer waits to see which side
+falls: it forces each side of every tie (`rust/mls-wasm` `force_tiebreak`:
+per tie, the commit created earlier or the one created later wins; the
+creation order is fixed by the scenario, the hash is not) and runs the
+scenario in every branch (`src/lab/zweige.ts`). A scenario passes only if
+it passes in every branch (Anton's rule, 18 October); otherwise the result
+says which branch breaks it. Before, the same cells flipped between report
+runs. For comparison `rltp-mls` (log + MLS), also in every branch: all S/T
+passed except S10 blind, T6b blind, T8/T11.
+
+**Limit of the enumeration.** The bench hook
+`force_tiebreak` (`rust/mls-wasm/src/peer.rs`) enumerates exactly one kind
+of chance: which of two sibling commits on the same epoch wins the
+tiebreak. Other orders that depend on random values are not enumerated,
+for example in `rltp-mls` the topological sort of the authority log,
+which breaks ties by operation ids that contain a fresh random nonce
+(`../rltp-beekem/authority.ts`, `make` and the sort in the fold). This
+candidate has no such log; any other random-dependent order inside OpenMLS
+or the candidate is not enumerated either. No
+changing outcome was observed from that (two report runs, all 132 scenario
+outcomes of the four MLS candidates identical), but that is an observation,
+not an enumeration: a cell that depended on it would not be caught by the
+bench.
 
 | | any-staged | owner | rltp-mls | Reason |
 |---|---|---|---|---|
 | S1–S3 | passed | passed | passed | |
 | S4a | passed | passed | passed | the removed reads nothing after the merge |
 | S4b | passed | passed | passed | two removals: the loser re-stages |
-| S4c | passed (one stays, the hash decides) | passed (the founder stays) | passed (both out) | A4a only demands agreement |
+| S4c | passed in both branches (one stays, the tie decides which) | passed (the founder stays) | passed (both out) | A4a only demands agreement |
 | S4c2 | failed | failed | passed | the winner reads Carol's concurrent entry (LEAK) |
 | S4d | passed | passed | passed | |
 | S4e, S4j | not applicable | not applicable | passed | no group policy |
-| S4f | **hash-dependent** | passed | passed | whether Mallory's chain (x, y) stays is decided by the hash; in owner mode her proposals do not count |
+| S4f | **failed: holds only if Alice's removal wins the tie** (1 of 3 branches) | passed | passed (all 3 branches) | if Mallory's invitation wins, x and y stay and read new content; in owner mode her proposals do not count |
 | S5 | failed | failed | passed | a second device reads neither old nor new (finding "without history no CRDT") |
 | S5b, S5c | passed | passed | passed | |
 | S6, S6b | failed | failed | passed | no history; even the next entry stays unreadable |
@@ -52,7 +74,7 @@ T8/T11.
 | S10a–c | not applicable | not applicable | with a view service | no service |
 | S11 | not applicable | not applicable | passed | |
 | T1 | failed | failed | passed | a swallowed commit stays a gap, no repair |
-| T2 | **hash-dependent** | passed | passed | if Alice's admission loses, her entry is lost for Bob |
+| T2 | **failed: holds only if Alice's admission wins the tie** (1 of 2 branches) | passed | passed (both branches) | if Bob's removal of Carol wins, Bob never reads Alice's entries (`eins`, `zwei`) |
 | T3, T4, T7, T12 | passed | passed | passed | |
 | T5 | failed | failed | passed | a damaged frame is discarded, not repaired |
 | T6, T6b | failed | failed | T6 passed, T6b with a view service | withholding goes unnoticed |
@@ -74,10 +96,16 @@ T8/T11.
   reads Alice's entry). `rltp-mls` re-seals them; this model has no place
   for that (lines are merged by line id, not re-sealed).
 - **The hash decides over power.** S4c (mutual removal): one stays, which
-  one is decided by the hash. S4f (a removed member invites concurrently):
-  whether the removed member's chain stays is decided by the hash; the
-  result changes from run to run. With us the matrix decides, the same in
-  every run.
+  one is decided by the hash; agreement holds in both branches. S4f (a
+  removed member invites concurrently): the promise (A8, KV2) holds only in
+  the branch where Alice's removal wins the tie. In the other branches
+  Mallory's invitation stands, x stays, invites y, and both read new
+  content. A promise that holds only when a coin falls the right way is
+  not kept. With us the matrix decides, the same in every branch.
+- **Lost content is a coin flip too (T2, I2).** The promise holds only in
+  the branch where Alice's admission of Dave wins the tie against Bob's
+  concurrent removal of Carol; when Bob's commit wins, Alice's entries stay
+  unreadable for Bob for good (see "Lapsed epoch, lost content").
 - **Confidentiality after removal (S4c2).** Whoever wins the mutual removal
   reads the third party's concurrent entry; with us neither of the two
   reads it.

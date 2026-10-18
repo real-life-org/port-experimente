@@ -15,6 +15,20 @@ pub fn start() {
     console_error_panic_hook::set_once();
 }
 
+/// Prüfstands-Haken: je Gleichstand erzwingen, ob der früher (0) oder der später (1) erzeugte Commit gewinnt;
+/// `null` stellt den Vertrag (kleinster Hash) wieder her. S. `peer::force_tiebreak`.
+#[wasm_bindgen(js_name = forceTiebreak)]
+pub fn force_tiebreak(decisions: Option<Vec<u8>>) {
+    crate::peer::force_tiebreak(decisions);
+}
+
+/// Seit `forceTiebreak`: `[Gleichstände, vollständig (0/1)]`.
+#[wasm_bindgen(js_name = tiebreakTrace)]
+pub fn tiebreak_trace() -> Vec<u32> {
+    let (n, complete) = crate::peer::tiebreak_trace();
+    vec![n as u32, complete as u32]
+}
+
 #[wasm_bindgen]
 pub struct MlsPeer {
     inner: RefCell<Peer>,

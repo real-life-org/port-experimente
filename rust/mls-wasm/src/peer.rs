@@ -9,7 +9,9 @@
 //!
 //! 1. Commits bilden einen Baum über Epochen; je Epoche gilt der Commit mit
 //!    dem kleinsten Hash (deterministisch für alle Repliken, unabhängig von
-//!    der Reihenfolge; nur über Schlüssel, nie über Mitgliedschaft).
+//!    der Reihenfolge; nur über Schlüssel, nie über Mitgliedschaft). Welcher
+//!    das ist, bleibt ein Münzwurf; der Prüfstand erzwingt jede Seite
+//!    (`force_tiebreak`).
 //! 2. Jede Replik hält Momentaufnahmen der letzten `SNAPSHOT_DEPTH` Epochen.
 //!    Ein Commit auf eine schon verlassene Epoche wird gegen deren
 //!    Momentaufnahme geprüft: hat er den kleineren Hash als der dort
@@ -149,6 +151,78 @@ pub struct Peer {
 
 fn digest(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
+}
+
+// Prüfstands-Haken (Anton 18.10.: eine Zelle gilt nur, wenn sie in jedem Zweig hält). Welcher von zwei
+// Geschwister-Commits den kleineren Hash hat, ist ein Münzwurf: die Commit-Bytes tragen frische Zufallsgeheimnisse
+// (Pfadgeheimnisse, HPKE-Chiffrate, Signaturschlüssel), ihr SHA-256 ist gleichverteilt. Der Prüfstand erzwingt
+// jede Seite des Wurfs, statt zu warten, welche fällt: er legt je Gleichstand fest, ob der früher oder der später
+// erzeugte Commit gewinnt (die Erzeugungsreihenfolge ist im Szenario fest, der Hash nicht). Gleichstände werden in
+// der Reihenfolge ihrer ersten Entscheidung nummeriert. Threadweit (alle Repliken eines Laufs teilen das Modul),
+// damit alle Repliken dieselbe Entscheidung treffen; ohne `force_tiebreak` gilt der Vertrag unverändert.
+#[derive(Default)]
+struct Forced {
+    /// Je Gleichstand: 0 = der früher erzeugte Commit gewinnt, 1 = der später erzeugte; fehlende Einträge 0.
+    decisions: Vec<u8>,
+    /// Erzeugungsreihenfolge jedes Commits seit `force_tiebreak`.
+    seq: HashMap<[u8; 32], u64>,
+    /// Entschiedene Gleichstände als (früher, später), in der Reihenfolge ihrer ersten Entscheidung.
+    ties: Vec<([u8; 32], [u8; 32])>,
+    /// Falsch, sobald die Aufzählung je Gleichstand nicht alle Zweige trifft: ein Commit in zwei Gleichständen (drei
+    /// Geschwister, deren paarweise Entscheidungen keine Rangfolge sein müssen) oder einer ohne bekannte Herkunft.
+    incomplete: bool,
+}
+
+thread_local! {
+    static FORCED: std::cell::RefCell<Option<Forced>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Zweig erzwingen (`Some`: Entscheidungen je Gleichstand) oder zum Vertrag zurück (`None`, kleinster Hash).
+pub fn force_tiebreak(decisions: Option<Vec<u8>>) {
+    FORCED.with(|f| *f.borrow_mut() = decisions.map(|decisions| Forced { decisions, ..Default::default() }));
+}
+
+/// Seit `force_tiebreak`: wie viele Gleichstände entschieden wurden und ob die Aufzählung sie vollständig trifft.
+pub fn tiebreak_trace() -> (usize, bool) {
+    FORCED.with(|f| f.borrow().as_ref().map(|x| (x.ties.len(), !x.incomplete)).unwrap_or((0, true)))
+}
+
+fn note_created(h: [u8; 32]) {
+    FORCED.with(|f| {
+        if let Some(x) = f.borrow_mut().as_mut() {
+            let n = x.seq.len() as u64;
+            x.seq.entry(h).or_insert(n);
+        }
+    });
+}
+
+/// Gewinnt `incoming` gegen den auf derselben Epoche angewandten Commit? Vertrag: der kleinere Hash. Ein leerer
+/// Eintrag (keiner angewandt) wird nie geschlagen.
+fn wins_tiebreak(incoming: [u8; 32], applied: [u8; 32]) -> bool {
+    if applied == [0; 32] {
+        return false;
+    }
+    FORCED.with(|f| {
+        let mut f = f.borrow_mut();
+        let Some(x) = f.as_mut() else { return incoming < applied };
+        let (Some(&si), Some(&sa)) = (x.seq.get(&incoming), x.seq.get(&applied)) else {
+            x.incomplete = true;
+            return incoming < applied;
+        };
+        let pair = if si < sa { (incoming, applied) } else { (applied, incoming) };
+        let idx = match x.ties.iter().position(|p| *p == pair) {
+            Some(i) => i,
+            None => {
+                if x.ties.iter().any(|p| [p.0, p.1].iter().any(|h| *h == pair.0 || *h == pair.1)) {
+                    x.incomplete = true;
+                }
+                x.ties.push(pair);
+                x.ties.len() - 1
+            }
+        };
+        let later_wins = x.decisions.get(idx).copied().unwrap_or(0) == 1;
+        later_wins == (si > sa)
+    })
 }
 
 /// Hash eines Commit-Rahmens, wie ihn der Tiebreak vergleicht (für Tests).
@@ -316,6 +390,7 @@ impl Peer {
         self.group.as_mut().ok_or(Error::NoGroup)?.merge_pending_commit(provider).map_err(mls)?;
         self.remember_exporter()?;
         let h = digest(commit);
+        note_created(h);
         self.own.insert(h);
         self.mark_applied(h);
         Ok(())
@@ -489,7 +564,7 @@ impl Peer {
                         self.restore_checkpoint(checkpoint)?;
                         return Err(Error::Epoch(format!("Epoche {incoming_epoch}, anderer Zweig, Vorgänger offen: {e}")));
                     }
-                    if h >= applied {
+                    if !wins_tiebreak(h, applied) {
                         self.restore_checkpoint(checkpoint)?;
                         return Err(Error::Stale(format!("Geschwister verliert den Tiebreak auf Epoche {incoming_epoch}")));
                     }

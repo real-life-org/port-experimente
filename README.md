@@ -24,6 +24,24 @@ workshop repository (`rltp/design/port-experimente-2026-10.md`).
   passes. "Not applicable" means the candidate has no capability for the
   scenario, or the carrier fault never touched a frame of that kind. That
   is a gap in coverage, never a pass.
+- **Every branch.** A cell is kept only if it holds in every branch.
+  Where a candidate decides by chance (two concurrent MLS commits: the
+  smaller hash wins), the bench forces each side of every such decision and
+  runs the scenario in all branches (`src/lab/zweige.ts`). The enumeration
+  covers only that sibling-commit tiebreak (`force_tiebreak` in
+  `rust/mls-wasm`); other random-dependent orders, such as the topological
+  sort over nonce-dependent operation ids in
+  `src/candidates/rltp-beekem/authority.ts`, are not enumerated (no
+  changing outcome observed in 2 × 132 cells). Where a result depends on
+  delivery time and the stack gives no delivery bound (the Subduction
+  server in `keyhive-ark`, S6 and S6b), the cell is not kept, always: it
+  reads "abhängig von: Zustellzeit …". The bench still runs the scenario
+  several times, checks every run strictly (no exception, the expected
+  membership) and reports the distribution within an observation window in
+  the details (`src/lab/zeit.ts`); the window is the bench's waiting time,
+  not a bound. A cell that holds only sometimes is not kept, and its result
+  says what it depends on ("abhängig von …"). There is no
+  "nondeterministic" marker and no oracle is widened to make a run pass.
 - The bench itself speaks German: scenario titles, status lines and the
   recorded results are German strings in the code. The notes and this
   README are English.

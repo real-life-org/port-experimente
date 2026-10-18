@@ -33,7 +33,7 @@ it.runIf(process.env.REPORT)('Bericht', async () => {
   // Die Seite aus demselben Lauf (alle Ports, auch Zustellung und Mehrgerät); die englischen Texte in src/lab/matrix-en.ts.
   const page = pageData(matrix, runs, new Date().toISOString())
   writeFileSync(process.env.PAGE_OUT ?? 'public/matrix.html', renderPage(page))
-  // Die Zusammenfassung der Befunde-Seite aus demselben Lauf (hash-abhängige Zellen wechseln von Lauf zu Lauf).
+  // Die Zusammenfassung der Befunde-Seite aus demselben Lauf (Zellen mit Münzwurf laufen in jedem Zweig, s. src/lab/zweige.ts).
   const findings = process.env.FINDINGS_OUT ?? 'public/findings.html'
   writeFileSync(findings, updateFindingsSummary(readFileSync(findings, 'utf8'), page))
   process.stdout.write('\n' + md)

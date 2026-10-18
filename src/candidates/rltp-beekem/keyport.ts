@@ -11,7 +11,8 @@
 // wurden, versiegelt ihr Autor neu (`lost`, `reset`).
 
 import { BeekemPeer, loadWasm as loadBeekem } from './load'
-import { MlsPeer, loadWasm as loadMls } from '../rltp-mls/load'
+import { MlsPeer, forceTiebreak, loadWasm as loadMls, tiebreakTrace } from '../rltp-mls/load'
+import type { CoinBranches } from '../../lab/types'
 
 export interface KeyPeer {
   readonly id: Uint8Array
@@ -179,4 +180,24 @@ export const mlsPort: KeyPort = {
   load: loadMls,
   peer: () => new MlsAdapter(new MlsPeer()),
   fromState: (bytes) => new MlsAdapter(MlsPeer.fromState(bytes)),
+}
+
+/**
+ * Der Münzwurf des MLS-Ports (Anton 18.10.: jede Zelle in jedem Zweig). Gleichzeitige Commits auf dieselbe Epoche
+ * entscheidet der kleinste Hash; die Commit-Bytes tragen frische Zufallsgeheimnisse, welcher kleiner ist, fällt
+ * zufällig. Der Prüfstand erzwingt je Gleichstand, ob der früher oder der später erzeugte Commit gewinnt
+ * (rust/mls-wasm `force_tiebreak`); prozessweit, also für alle MLS-Kandidaten eines Laufs.
+ */
+export const mlsTiebreak: CoinBranches = {
+  coin: 'Hash-Gleichstand',
+  sides: ['früherer gewinnt', 'späterer gewinnt'],
+  async force(decisions) {
+    await loadMls()
+    forceTiebreak(Uint8Array.from(decisions))
+  },
+  trace() {
+    const [decisions = 0, complete = 1] = tiebreakTrace()
+    return { decisions, complete: complete === 1 }
+  },
+  release: () => forceTiebreak(null),
 }

@@ -113,7 +113,7 @@ export function summaryCounts(d: PageData): Map<string, { kept: number; partial:
 /**
  * The summary table of the findings page from the same run (its rows carry `data-cand`): the numbers are rewritten;
  * a row that lists several candidates whose counts differ is split into one row per candidate, so the table never
- * says something the matrix does not (hash-dependent cells such as S4f of the any-staged room can differ per run).
+ * says something the matrix does not (two candidates that shared a row can come apart when a cell changes).
  */
 export function updateFindingsSummary(html: string, d: PageData): string {
   const counts = summaryCounts(d)

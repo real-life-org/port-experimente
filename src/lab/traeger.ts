@@ -1,6 +1,7 @@
 import { World } from './world'
 import type { CandidateFactory, Msg, Outcome, ScenarioResult } from './types'
 import type { Scenario } from './scenarios'
+import { enumerateBranches, foldBranches } from './zweige'
 
 // Träger-Prüfstand (E10/E11): derselbe Kandidat, der Träger spielt den
 // Gegner. Jedes Szenario nennt die Tür des Vertrags, die es prüft. Plan:
@@ -325,6 +326,22 @@ export async function runCarrier(make: CandidateFactory): Promise<Array<Scenario
   for (const s of carrierScenarios) {
     const candidate = await make()
     const t0 = performance.now()
+    // Entscheidet der Kandidat nach Zufall, läuft das Szenario in jedem Zweig (Anton 18.10.; src/lab/zweige.ts).
+    if (candidate.branches) {
+      const once = async (c: typeof candidate): Promise<ScenarioOutcome> => {
+        try {
+          const w = new World(c)
+          if (!w.carrier()) return { outcome: 'nicht abbildbar', authority: 'Träger ohne Fehlerinjektion', keys: '—' }
+          return await s.run(w)
+        } catch (e) {
+          return { outcome: 'nicht bestanden', authority: `Fehler: ${(e as Error).message}`, keys: '—' }
+        }
+      }
+      const { runs, exhausted } = await enumerateBranches(candidate, make, once)
+      const r = foldBranches(candidate.branches, runs, exhausted)
+      out.push({ scenario: s.id, title: s.title, door: s.door, ms: r.outcome === 'nicht abbildbar' ? 0 : performance.now() - t0, ...r })
+      continue
+    }
     try {
       const w = new World(candidate)
       if (!w.carrier()) {

@@ -1,6 +1,8 @@
 import * as Y from 'yjs'
 import { World } from './world'
 import type { CandidateFactory, Capability, Outcome, ScenarioResult } from './types'
+import { enumerateBranches, foldBranches } from './zweige'
+import { foldTiming, measureRuns } from './zeit'
 
 export interface Scenario {
   readonly id: string
@@ -670,6 +672,24 @@ export async function runScenario(make: CandidateFactory, s: Scenario): Promise<
     return { scenario: s.id, title: s.title, outcome: 'nicht abbildbar', authority: `fehlt: ${missing.join(', ')}`, keys: '—', ms: 0 }
   }
   const t0 = performance.now()
+  // Entscheidet der Kandidat nach Zufall, läuft das Szenario in jedem Zweig (Anton 18.10.; src/lab/zweige.ts).
+  if (candidate.branches) {
+    const once = async (c: typeof candidate) => {
+      try {
+        return await s.run(new World(c))
+      } catch (e) {
+        return { outcome: 'nicht bestanden' as const, authority: `Fehler: ${(e as Error).message}`, keys: '—' }
+      }
+    }
+    const { runs, exhausted } = await enumerateBranches(candidate, make, once)
+    return { scenario: s.id, title: s.title, ms: performance.now() - t0, ...foldBranches(candidate.branches, runs, exhausted) }
+  }
+  // Hängt das Szenario von Zustellzeiten ab, misst der Prüfstand eine Verteilung über mehrere Läufe (src/lab/zeit.ts).
+  if (candidate.timing?.scenarios.includes(s.id)) {
+    // Ausnahmen fängt measureRuns je Lauf und hält sie fest (`runs[i].error`), damit die Prüfung je Lauf sie sieht.
+    const runs = await measureRuns(candidate, make, (c) => s.run(new World(c)))
+    return { scenario: s.id, title: s.title, ms: performance.now() - t0, ...foldTiming(candidate.timing, runs) }
+  }
   try {
     const r = await s.run(new World(candidate))
     return { scenario: s.id, title: s.title, ms: performance.now() - t0, ...r }

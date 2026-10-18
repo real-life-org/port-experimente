@@ -131,6 +131,24 @@ const hexToBytes = (hex: string) => Uint8Array.from(hex.match(/../g)!.map((h) =>
 const hexToBase64 = (hex: string) => btoa(String.fromCharCode(...hex.match(/../g)!.map((h) => parseInt(h, 16))))
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+// Zustellzeit als Verteilung (Anton 18.10.: Zeitabhängigkeit wird gemessen, nie als Einzelergebnis). S6 und S6b
+// hängen davon ab, wann der Server einem neuen Mitglied das Dokument samt Historie gibt. Eine Zustellschranke gibt der
+// Stack nicht zu (Review 23 B2): die Sync-Runde eines Clients hat 60 s Frist (automerge-repo
+// src/subduction/source.ts DEFAULT_SYNC_TIMEOUT_MS), auch für Heilungen; die Heilung verdoppelt ihren Abstand bis 60 s
+// und gibt nach zehn Versuchen auf (SyncScheduler.ts DEFAULT_HEAL_MAX_DELAY_MS, DEFAULT_HEAL_MAX_ATTEMPTS); eine Runde,
+// die „gelingt“, aber Blobs ohne Schlüssel zurücklässt, wird gar nicht wiederholt. In der CI blieb die Zustellung
+// mehrfach aus (Läufe 39106289737, 39084511143, 38800864482). Deshalb stehen S6 und S6b fest „nicht bestanden,
+// abhängig von …“ (src/lab/zeit.ts); jeder Lauf wird trotzdem gemessen und streng geprüft
+// (tests/keyhive-ark.test.ts), die Verteilung steht in den Details.
+export const ARK_TIMING_RUNS = 5
+/**
+ * Beobachtungsfenster, keine Schranke: so lange wartet settle() auf die Zustellung an ein frisch aufgenommenes Gerät;
+ * eine längere Zustellung zählt als „nicht innerhalb des Fensters“. Am Ausgang der Zelle ändert es nichts.
+ */
+export const ARK_OBSERVATION_WINDOW_MS = 20_000
+export const ARK_NO_BOUND =
+  'keine Zustellschranke im Stack (Sync-Frist 60 s, Heilung gibt nach 10 Versuchen auf; CI-Hänger beobachtet)'
+
 export function keyhiveArk(): Candidate {
   const devices = new Map<Device, DeviceState>()
   const cards = new Map<Person, ContactCard>()
@@ -146,6 +164,10 @@ export function keyhiveArk(): Candidate {
   let idle = 0
   /** Nach jedem Schreiben: Wer soll den Eintrag bekommen? (Mitglieder laut Sicht des Schreibers, online.) */
   const expectations: Array<{ writer: Device; text: string }> = []
+  /** Messung (S6, S6b): aufgenommene Geräte und der Zeitpunkt ihrer Aufnahme, bis sie lesen, was die anderen lesen. */
+  const pendingDelivery = new Map<Device, number>()
+  /** Gemessene Zustellzeiten in ms je Gerät. */
+  const deliveries = new Map<Device, number>()
 
   const dev = (d: Device) => {
     const s = devices.get(d)
@@ -271,7 +293,20 @@ export function keyhiveArk(): Candidate {
         const union = new Set(others.flatMap(([o]) => view.get(o)?.items ?? []))
         return [...union].some((x) => !v.items.includes(x))
       })
-      const expectationsDone = (unmet.length === 0 && freshUnmet.length === 0) || Date.now() > start + 12_000
+      // Messung: ein aufgenommenes Gerät ist zugestellt, sobald es das Dokument hält und alles liest, was die anderen
+      // Online-Mitglieder seiner Sicht lesen.
+      for (const [d, at] of pendingDelivery) {
+        const s = dev(d)
+        const v = view.get(d)
+        if (!s.online || !s.handle || !v) continue
+        const others = [...devices].filter(([o, t]) => o !== d && t.online && t.handle && v.members.includes(t.person))
+        if ([...new Set(others.flatMap(([o]) => view.get(o)?.items ?? []))].every((x) => v.items.includes(x))) {
+          deliveries.set(d, Date.now() - at)
+          pendingDelivery.delete(d)
+        }
+      }
+      // Frische Geräte: gewartet wird bis zum Beobachtungsfenster (oben, keine Schranke), geschriebene Einträge bis 12 s.
+      const expectationsDone = (unmet.length === 0 || Date.now() > start + 12_000) && (freshUnmet.length === 0 || Date.now() > start + ARK_OBSERVATION_WINDOW_MS)
       const fp = JSON.stringify(views)
       stable = fp === last ? stable + 1 : 0
       last = fp
@@ -289,6 +324,15 @@ export function keyhiveArk(): Candidate {
     id: 'keyhive-ark',
     // Kein 'steal': Ein Angreifer müsste Sedimentree-Blobs vom Server lesen; nicht verdrahtet.
     capabilities: new Set<Capability>(['roles', 'rotate']),
+    timing: {
+      scenarios: ['S6', 'S6b'],
+      runs: ARK_TIMING_RUNS,
+      cause: 'Zustellzeit des Subduction-Servers',
+      noBound: ARK_NO_BOUND,
+      windowMs: ARK_OBSERVATION_WINDOW_MS,
+      // Die längste Zustellung des Laufs; blieb eine aus (Gerät aufgenommen, liest nie alles), gibt es keine Zeit.
+      measure: () => (pendingDelivery.size ? undefined : Math.max(0, ...deliveries.values())),
+    },
 
     transport: {
       async setOnline(d, online) {
@@ -343,6 +387,7 @@ export function keyhiveArk(): Candidate {
     async addMember(by, p, role) {
       if (!docUrl) throw new Error('kein Dokument')
       const s = dev(by)
+      for (const [d, t] of devices) if (t.person === p && !pendingDelivery.has(d) && !deliveries.has(d)) pendingDelivery.set(d, Date.now())
       const card = cards.get(p)
       if (!card) throw new Error(`unbekannte Person ${p}`)
       if (role === 'admin') {

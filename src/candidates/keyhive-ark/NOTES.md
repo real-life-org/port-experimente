@@ -24,8 +24,8 @@ the group, members directly onto the document (see finding 2).
 | S4e | not applicable | no group policy |
 | S4f | failed | ARK revokes with `retain_all_other_members = true`: whoever Mallory invited stays (x). Offline, x cannot invite anyone because x never received the document. Plus finding 3 |
 | S5 | not applicable | a person as a group of their devices, not wired in the bench |
-| S6 | passed | ARK's "nudge": after every admission an edit under the new key, so the new member can read the history. No app chain needed (Automerge provides the content DAG) |
-| S6b | passed | |
+| S6 | failed, always: depends on the server's delivery time, and the stack gives no delivery bound (finding 5). Measured: locally 5/5 delivered within the 20 s observation window (delivery 2.3–3.6 s, 18 Oct) | ARK's "nudge": after every admission an edit under the new key, so the new member can read the history. No app chain needed (Automerge provides the content DAG) |
+| S6b | failed, always (finding 5). Measured: locally 5/5 within the window (delivery 2.3–3.3 s, 18 Oct); in CI single runs never delivered | |
 | S7 | not applicable | an attacker would have to read Sedimentree blobs from the server; not wired |
 | S8 | passed | an admin removes without the founder |
 
@@ -66,6 +66,27 @@ not by compute.
 4. **ARK keeps the invitations of a removed member**
    (`retain_all_other_members = true`, S4f). That is a product decision of
    ARK, not a limit of Keyhive.
+5. **Liveness: delivery to a new member has no bound** (18 October). S6
+   and S6b depend on when the server hands the new member the document
+   and its history, and the stack bounds that nowhere: a client sync
+   round may take up to 60 s (`DEFAULT_SYNC_TIMEOUT_MS`,
+   `@automerge/automerge-repo/src/subduction/source.ts`), also for heal
+   rounds; heal retries double up to 60 s and stop after ten attempts
+   (`SyncScheduler.ts`); a sync round that "succeeds" but leaves blobs
+   without a key is not retried until a later share-config change. The
+   stack can therefore hang. In CI (runs 39106289737, 39084511143,
+   38800864482) single runs never delivered: Dave read only `{alt-bob}`
+   or `{}` after about 43 s, and not even the next entry. By the bench
+   rule (a cell is kept only if it holds in every branch) S6 and S6b are
+   therefore **not kept, always**, whatever a run measures: "abhängig von:
+   Zustellzeit des Subduction-Servers; keine Zustellschranke im Stack …".
+   The bench still measures the distribution (`ARK_TIMING_RUNS` = 5 runs
+   per scenario, `src/lab/zeit.ts`) and reports it in the details: k/N
+   delivered within the observation window
+   (`ARK_OBSERVATION_WINDOW_MS` = 20 s, the bench's waiting time, not a
+   bound), min/median/max delivery time. Locally on 18 October: S6 5/5
+   (2.3 / 2.3 / 3.6 s), S6b 5/5 (2.3 / 2.4 / 3.3 s). Every run is checked
+   strictly (`tests/keyhive-ark.test.ts`): no exception, Dave a member.
 
 ## Comparison of the two Keyhive runs
 

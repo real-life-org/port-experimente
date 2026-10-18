@@ -18,6 +18,22 @@ the gap repair are unchanged.
 All S and T scenarios as for `rltp-beekem` (four runs in a row, no
 flicker); expectations in `tests/rltp-mls.test.ts`.
 
+Since 18 October every scenario runs in every branch of the MLS tiebreak
+(see `../consensual-mls/NOTES.md`, "Results"); the results below hold in
+each branch.
+
+**Limit of the enumeration.** The bench hook
+`force_tiebreak` (`rust/mls-wasm/src/peer.rs`) enumerates exactly one kind
+of chance: which of two sibling commits on the same epoch wins the
+tiebreak. Other orders that depend on random values are not enumerated,
+in particular the topological sort of the authority log, which breaks ties
+by operation ids that contain a fresh random nonce
+(`../rltp-beekem/authority.ts`, `make` and the sort in the fold). No
+changing outcome was observed from that (two report runs, all 132 scenario
+outcomes of the four MLS candidates identical), but that is an observation,
+not an enumeration: a cell that depended on it would not be caught by the
+bench.
+
 | | Result | Reason |
 |---|---|---|
 | S1–S8, S4a–S4j, S5–S5c, S6, S6b | passed | as BeeKEM |
