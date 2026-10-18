@@ -136,6 +136,8 @@ export interface CandidateDevice {
   /** Nachholen (HSC-440, X21): die bekannten Köpfe je Schreiber, und die Rahmen, die ein Gerät mit diesen Köpfen noch nicht hat. Ohne Methoden gibt es kein Nachholen. */
   heads?(): Record<string, number>
   batchesAfter?(heads: Record<string, number>): OwnFrame[]
+  /** Die anderen eingeschriebenen Geräte der Person, die dieses Gerät aus dem Enrollment kennt (Teil von `persist`). Ohne Methode: nur aus dem Journal erkennbar. */
+  siblings?(): string[]
   /** Flüchtiger Stand des Kandidaten für die Rücknahme eines Schritts (Tor-Review 7 B1): ohne Inkarnationswechsel, anders als `restore`. Ohne Methoden hält der Kandidat nichts Rücknehmbares. */
   snapshot?(): unknown
   rollback?(snapshot: unknown): void
@@ -229,6 +231,8 @@ export interface DeviceState {
   probes?: Array<[string, string[]]>
   /** Digest → erwarteter Signierer der Quittung, für jede quittierbare Submission (#55). */
   expected: Array<[string, string]>
+  /** Geräte der Person, die dieses Gerät widerrufen hat (Review 19, Frage 3): sie antworten auf kein Nachholen mehr. */
+  revoked?: string[]
 }
 
 export interface Measures {
@@ -294,10 +298,18 @@ export class HolderDevice {
   /**
    * Nachholen (HSC-440, X21): `pending` bis ein Schwestergerät geantwortet hat und die eigenen Köpfe dessen Köpfe decken;
    * solange wird mit Backoff erneut angefragt (Anfrage, Antwort oder Quittung können verloren gehen, Review 9 B1).
+   * `id`: Kennung der laufenden Anfrage, frisch je gesendeter Anfrage; nur eine Antwort, die sie nennt, kann das Nachholen
+   * beenden (Tor-Review 19 B1a: eine alte, gültig signierte Antwort ist an keine laufende Anfrage gebunden).
    */
-  private sync: { pending: boolean; wait: number; backoff: number } = { pending: false, wait: 0, backoff: 1 }
+  private sync: { pending: boolean; wait: number; backoff: number; id: string | null } = { pending: false, wait: 0, backoff: 1, id: null }
   /** Anzahl gesendeter Nachhol-Anfragen (Messgröße des Reparaturverkehrs). */
   syncRequests = 0
+  /** Nachhol-Antworten ohne die Kennung der laufenden Anfrage (alt, wiederholt oder fremd): verworfen (Review 19 B1a). */
+  staleSyncAnswers = 0
+  /** Runden, in denen das Gerät nach einem Neuaufbau nichts an Gegenseiten freigab (Messung, Review 19 Frage 3). */
+  gatedRounds = 0
+  /** Widerrufene Geräte der Person (Teil des Abbilds): zählen nicht als Schwester, die nachholen hilft (Review 19 Frage 3). */
+  private revoked = new Set<string>()
   /** Steht noch Nachholarbeit aus (Messung, Review 11 B2)? Erst ohne sie ist eine Reparatur beendet, nicht schon, wenn das Gerät im Backoff schweigt. */
   get syncPending(): boolean {
     return this.sync.pending
@@ -312,6 +324,17 @@ export class HolderDevice {
   intents = new Map<string, Intent>()
   /** Aufgezeichnet, noch nicht eingeliefert: geht nach dem nächsten Commit hinaus. */
   private held: string[] = []
+  /**
+   * Tor-Review 18 B1a (Linie Anton 18.10.: was den Träger erreicht hat, gilt; was in den eigenen Geräten liegt, darf die
+   * Faltung neu entscheiden): nach einem Neuaufbau aus dem Store gibt das Gerät keine Submission an Gegenseiten frei
+   * (Karte, Mapping, Revision, Quittung, alles), bevor sein eigenes Nachholen abgeschlossen ist (die Antwort eines
+   * Schwestergeräts auf `journal-sync` und eigene Köpfe, die dessen Köpfe decken; `requestSync`, HSC-440). Nur der
+   * Verkehr an die eigene Adresse (Journal, Nachholen, Quittungen darauf) geht hinaus. Danach entscheidet die Faltung,
+   * was noch gilt (`endCatchUp`). Gilt nur, wenn die Person ein anderes Gerät hat, das antworten kann.
+   */
+  private catchUp = false
+  /** Während des Nachholens freigegeben, aber zurückgehalten (B1a); nach dem Nachholen geprüft und eingeliefert. */
+  private parked: string[] = []
   private readonly ctxOfRkid = new Map<string, string>()
   private readonly ctxOfAnchor = new Map<string, string>()
   private privOf = new Map<string, CryptoKey>()
@@ -329,6 +352,7 @@ export class HolderDevice {
     this.state = state
     this.carrierRef = carrier
     this.zusteller = new Zusteller(name, () => this.carrierRef, () => this.online && !this.down)
+    this.zusteller.gate = (x) => this.catchUp && x.address !== this.ownRkid // B1a: Wiederholungen warten aufs Nachholen
   }
   get carrier() {
     return this.carrierRef
@@ -389,6 +413,7 @@ export class HolderDevice {
     for (const op of tx.ops) M.apply(this.state, op)
     this.dropDeparted() // ein gefalteter Abgang beendet die Aufbewahrung wie ein lokaler (Tor-Review 16 B1)
     for (const i of tx.intents) if (!this.intents.has(i.digest)) this.intents.set(i.digest, i)
+    await this.withdrawLosingCards()
     await this.relisten()
     if ([...this.tupleIds()].some((id) => !known.has(id))) await this.reevaluate() // die eigene Tupelmenge ist gewachsen
     await this.refillAll()
@@ -480,6 +505,7 @@ export class HolderDevice {
       expected: [...this.expected],
       intents: [...this.intents],
       probes: [...this.probes],
+      ...(this.revoked.size ? { revoked: [...this.revoked] } : {}),
     }
   }
   commit() {
@@ -499,17 +525,49 @@ export class HolderDevice {
     this.expected = new Map(s?.expected ?? [])
     this.intents = new Map(s?.intents ?? [])
     this.probes = new Map(s?.probes ?? [])
+    this.revoked = new Set(s?.revoked ?? [])
     this.dropDeparted()
     // Was im Store steht, ist committet: vorgemerkte, nie freigegebene Submissions gehen nach dem nächsten Commit hinaus.
     this.held = this.zusteller.unreleased()
     this.cand.restore(s?.candidate ?? null)
     this.down = false
+    this.parked = []
     await this.relisten()
+    this.catchUp = this.hasSibling() // B1a: vor dem Nachholen nichts an Gegenseiten freigeben
     this.requestSync()
+  }
+  /**
+   * Hat die Person ein anderes Gerät, das auf `journal-sync` antworten kann? Ein Gerät aus dem Enrollment (`siblings`)
+   * oder ein Schreiber im eigenen Journal, der nicht eine Inkarnation dieses Geräts ist (Schreiber `<Gerät>@<Inkarnation>`). Ohne Journal (K0) oder ohne Schwester
+   * antwortet niemand: dann hält das Gerät nichts zurück (sonst bliebe es für immer stumm).
+   */
+  private hasSibling(): boolean {
+    const heads = this.cand.heads?.()
+    if (!heads || !this.ownRkid) return false
+    const other = (d: string) => d !== this.name && !this.revoked.has(d)
+    return (this.cand.siblings?.() ?? []).some(other) || Object.keys(heads).some((w) => other(w.split('@')[0]!))
+  }
+  /**
+   * Ein Gerät der Person ist von diesem Gerät aus widerrufen (Review 19, Frage 3). Wartet das Gerät nach einem Neuaufbau
+   * nur auf widerrufene Schwestern, ist niemand mehr da, mit dem es nachholen könnte: die Sperre fällt, und in der nächsten
+   * Runde entscheidet die Faltung nach dem jetzigen Stand, was hinausgeht (`round`, `withdrawLosingCards`). Keine Zeitgrenze.
+   */
+  deviceRevoked(device: string): void {
+    this.revoked.add(device)
+    if (this.catchUp && !this.hasSibling()) this.sync = { pending: false, wait: 0, backoff: 1, id: null }
+    this.commit()
+  }
+  /** Freigeben (nach dem Commit): während des Nachholens nach einem Neuaufbau nur Verkehr an die eigene Adresse (B1a). */
+  private release(ds: string[]): void {
+    for (const d of ds) {
+      if (this.catchUp && this.zusteller.submissions.get(d)?.address !== this.ownRkid) {
+        if (!this.parked.includes(d)) this.parked.push(d)
+      } else this.zusteller.deposit(d)
+    }
   }
   /** Nachholen anstoßen: nach Neuaufbau, Enrollment oder wenn ein Rahmen zurückgestellt wurde (HSC-440). */
   requestSync() {
-    this.sync = { pending: true, wait: 0, backoff: 1 }
+    this.sync = { pending: true, wait: 0, backoff: 1, id: null } // keine Anfrage läuft: keine Antwort beendet das Nachholen
   }
   private crash(point: CrashPoint) {
     if (this.crashAt !== point) return
@@ -528,7 +586,7 @@ export class HolderDevice {
     this.crash('before-commit')
     this.commit()
     this.crash('before-send')
-    for (const d of this.held.splice(0)) this.zusteller.deposit(d)
+    this.release(this.held.splice(0))
   }
   /** Eine Nutzeraktion: blockiert (ganz zurückgenommen) oder abgestürzt heißt nicht fehlerhaft. */
   private async action(f: () => Promise<void>): Promise<ActionResult> {
@@ -719,7 +777,44 @@ export class HolderDevice {
   }
 
   private submitted(a: M.Act) {
-    return a.o === 'taken' || a.o === 'delivered' || a.o === 'given-up'
+    return M.SUBMITTED.has(a.o)
+  }
+  /**
+   * K1a Schritt 3, Regeln 2 und 3 (Anton 18.10.2026), auf dem Gerät, das die Karte erzeugt hat: nach dem Falten eines
+   * Batches eines Schwestergeräts nimmt es seine eigene Karte zurück, wenn die Faltung gegen sie entschieden hat (der Akt
+   * ist abgelehnt, Regel 2, oder eine andere Übergabe desselben Akts gewinnt, Regel 3) und die Karte nicht eingereicht
+   * ist (8232.2: „Unless submitted or currently undecided (8232.0), the registration and the document are cancelled“;
+   * 8765: wer ablehnt, sendet nichts). Zurückgenommen wird nur, was den Träger nie erreicht hat (`Zusteller.demarcate`,
+   * wie 8326.4/8326.8); hat der Träger die Karte schon, bleibt sie (8326.9), wird `taken` und entscheidet Regel 2 dann für
+   * die Zustimmung: was die Gegenseite erreicht hat, gilt. Die Rücknahme ist eine Operation im selben Schritt (Journal).
+   */
+  private async withdrawLosingCards(): Promise<void> {
+    const drop = (d: string) => {
+      this.sent.delete(d)
+      this.held = this.held.filter((h) => h !== d)
+      this.parked = this.parked.filter((h) => h !== d)
+      this.expected.delete(d)
+    }
+    for (const [d, x] of [...this.sent]) {
+      if (x.kind !== 'card' || !x.act) continue
+      const a = this.state.acts.find((y) => y.id === x.act)
+      if (!a) continue
+      const o = a.cards?.[d] ?? a.o
+      // B1a: die Faltung kennt die Rücknahme schon (aus dem Journal, etwa einer früheren Inkarnation vor einem Restore),
+      // der Adapter hält die Karte aber noch: abgrenzen, ohne neue Operation. Hat sie den Träger erreicht, bleibt sie und
+      // schlägt die Rücknahme (B1b, Rang je Übergabe).
+      if (o === 'cancelled') {
+        if (this.zusteller.demarcate(d)) drop(d)
+        continue
+      }
+      if (o !== 'handed') continue
+      const declined = a.state === 'declined'
+      const loses = a.ownCardDigest !== null && a.ownCardDigest !== d
+      if (!declined && !loses) continue
+      if (!this.zusteller.demarcate(d)) continue
+      drop(d)
+      this.emit({ kind: 'hand-over', act: a.id, o: 'cancelled', digest: d })
+    }
   }
   /** 8325.A5c: eine wartende Gegenkarte nach der Einreichung der eigenen Karte neu prüfen. */
   private async evaluatePending(actId: string): Promise<void> {
@@ -840,13 +935,20 @@ export class HolderDevice {
       if (this.online) {
         const frames = this.carrier.collect(this.name)
         for (const f of frames) await this.guarded(() => this.handle(f.bytes, f.address), true)
+        // B1a: das Nachholen ist abgeschlossen; die Faltung entscheidet, was von dem Zurückgehaltenen noch gilt (eine
+        // zurückgenommene Karte bleibt zurückgenommen), der Rest geht nach dem Commit dieser Runde hinaus.
+        if (this.catchUp && !this.sync.pending && (await this.guarded(() => this.withdrawLosingCards()))) {
+          this.catchUp = false
+          for (const d of this.parked.splice(0)) if (this.zusteller.submissions.has(d) && !this.held.includes(d)) this.held.push(d)
+        }
+        if (this.catchUp) this.gatedRounds++
         await this.journalOut()
         await this.syncOut()
         this.crash('before-commit')
         this.commit()
         this.crash('after-commit')
         // Quittungen und Folgedokumente verlassen das Gerät erst nach dem Commit der Wirkung (#54, #56).
-        for (const d of this.held.splice(0)) this.zusteller.deposit(d)
+        this.release(this.held.splice(0))
         if (frames.length) this.carrier.conclude(this.name, frames.map((f) => f.id))
       }
       await this.tick()
@@ -887,7 +989,8 @@ export class HolderDevice {
     this.sync.wait = this.sync.backoff
     this.sync.backoff = Math.min(16, this.sync.backoff * 2)
     this.syncRequests++
-    await this.sendSelf(TYPES.journalSync, { heads: this.cand.heads(), reply: false })
+    this.sync.id = crypto.randomUUID() // frisch je Anfrage: nur die Antwort darauf zählt (Review 19 B1a)
+    await this.sendSelf(TYPES.journalSync, { heads: this.cand.heads(), reply: false, req: this.sync.id })
   }
   /** Ein Dokument an die eigene Adresse der Person (Journal, Nachholen), gezählt als eigener Verkehr. */
   private async sendSelf(type: string, payload: Record<string, Json>): Promise<void> {
@@ -931,10 +1034,12 @@ export class HolderDevice {
       if (x.kind === 'card' && x.act) {
         const a = this.state.acts.find((y) => y.id === x.act)
         if (!a) return
-        if (a.o === 'handed' && r.state === 'accepted') {
+        // O je Übergabe (Regel 3): die Karte des Schwestergeräts ändert nichts am Bericht dieser Karte.
+        const o = a.cards?.[d] ?? a.o
+        if (o === 'handed' && r.state === 'accepted') {
           this.emit({ kind: 'hand-over', act: x.act, o: 'taken', digest: d })
           await this.evaluatePending(x.act)
-        } else if (a.o === 'taken' && r.state === 'failed') this.emit({ kind: 'hand-over', act: x.act, o: 'given-up' })
+        } else if (o === 'taken' && r.state === 'failed') this.emit({ kind: 'hand-over', act: x.act, o: 'given-up', digest: d })
       }
       if (x.kind === 'mapping' && x.pair) {
         const duty = this.state.duties.find((y) => y.pair[0] === x.pair![0] && y.pair[1] === x.pair![1])
@@ -1017,14 +1122,17 @@ export class HolderDevice {
         this.dispositions.push('failed(journal-from-unexpected-signer)')
         return
       }
-      const p = doc.payload as { heads?: Record<string, number>; reply?: boolean }
+      const p = doc.payload as { heads?: Record<string, number>; reply?: boolean; req?: string }
       const heads = p.heads ?? {}
       if (p.reply) {
-        // Antwort eines Schwestergeräts: decken die eigenen Köpfe seine, ist das Nachholen abgeschlossen; sonst weiter anfragen.
-        if (this.sync.pending && this.covers(heads)) this.sync = { pending: false, wait: 0, backoff: 1 }
+        // Antwort eines Schwestergeräts: nur auf die laufende Anfrage (Kennung, Review 19 B1a). Decken die eigenen Köpfe
+        // seine, ist das Nachholen abgeschlossen; sonst weiter anfragen. Eine alte, wiederholte oder fremde Antwort zählt
+        // nicht; dieselbe Antwort ein zweites Mal ändert nichts (das Nachholen ist schon beendet).
+        if (typeof p.req !== 'string' || p.req !== this.sync.id) this.staleSyncAnswers++
+        else if (this.sync.pending && this.covers(heads)) this.sync = { ...this.sync, pending: false, wait: 0, backoff: 1 }
       } else {
         for (const f of this.cand.batchesAfter?.(heads) ?? []) await this.sendSelf(TYPES.journal, { b: Buffer.from(f.body).toString('base64') })
-        if (this.cand.heads) await this.sendSelf(TYPES.journalSync, { heads: this.cand.heads(), reply: true })
+        if (this.cand.heads) await this.sendSelf(TYPES.journalSync, { heads: this.cand.heads(), reply: true, ...(typeof p.req === 'string' ? { req: p.req } : {}) })
         // Weiß der Anfragende mehr als wir, holen wir selbst nach.
         if (!this.covers(heads) && !this.sync.pending) this.requestSync()
       }
@@ -1067,7 +1175,8 @@ export class HolderDevice {
     if (!x) return
     if (x.kind === 'card' && x.act) {
       const a = M.act(this.state, x.act)
-      if (a.o === 'taken' || a.o === 'given-up' || a.o === 'handed') {
+      const o = a.cards?.[ref] ?? a.o
+      if (o === 'taken' || o === 'given-up' || o === 'handed') {
         this.emit({ kind: 'hand-over', act: x.act, o: 'delivered', digest: ref })
         await this.evaluatePending(x.act)
       }
@@ -1179,7 +1288,12 @@ export class HolderDevice {
           this.emit({ kind: 'card-refused', act: a.id, v, k: true }) // 8910.8
           return false
         }
-        if (a.v === v) return true // 8910.7: Wiederholung
+        // 8910.7: Wiederholung. Prüfstandregel für zwei Übergaben eines Akts (K1a Schritt 3, Regel 3; Spec-Folgepunkt
+        // 8326/8910): mit einem Seed tragen beide Karten denselben Kartenschlüssel und dieselbe Nutzlast, also denselben
+        // Vergleichsdigest V (8910.0 über die Nutzlast, 8913 unabhängig von den Dokumentbytes). B behält die erste geprüfte
+        // Karte; die zweite ist eine Wiederholung des Akts: Quittung, keine zweite Verbindung, keine Konfliktmarke K.
+        // Unterscheidet sich der Karteninhalt (Schlüssel je Gerät, K2), greift 8910.8: abgewiesen, K := yes.
+        if (a.v === v) return true
         if (a.state === 'declined' || a.state === 'expired') {
           this.emit({ kind: 'card-refused', act: a.id, v, k: false }) // 8910.6
           return true

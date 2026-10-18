@@ -13,7 +13,7 @@ import * as M from '../src/lab/mehrgeraet/model'
 //   2. Versand und Absturzstelle before-send liegen hinter dem Commit (#56).
 //   3. Ein echter Neustart (neue Instanz aus dem Store) behält die Zuordnung der Quittungen (#57).
 //   4. Orakel: korrektes Blockieren besteht X1; „nach neun alles verweigern“ fällt bei X2;
-//      eine überschriebene Ablehnung wird bei X3 erkannt.
+//      eine Zustimmung, die eine Ablehnung ohne eingereichte Karte überschreibt, wird bei X3 erkannt.
 //   5. Die Commit-Grenze gilt auch für Zeitübergänge: der Träger sieht ein Dokument
 //      erst, wenn der Zustand dazu im Store steht (#56, Loop-Review 3).
 //   6. Eine Quittung gilt nur vom erwarteten Empfänger der konkreten Submission, für
@@ -249,16 +249,17 @@ describe('E15 Gegenläufe: Orakel', () => {
     expect(r.X2!.measures.budgetOverrun).toBe(0)
   }, 300_000)
 
-  it('X3: ein Journal, in dem die Zustimmung eine Ablehnung überschreibt, wird erkannt (terminaler Zustand verlassen)', async () => {
-    // Hack: sobald das Gerät ein Consent eines anderen Geräts für einen abgelehnten Akt kennt, öffnet es ihn wieder.
+  it('X3: ein Journal, in dem die Zustimmung eine Ablehnung ohne eingereichte Karte überschreibt, wird erkannt (Regel 2 verletzt, terminaler Zustand verlassen)', async () => {
+    // Hack: sobald das Gerät ein Consent eines anderen Geräts für einen abgelehnten Akt kennt, vergisst es die Ablehnung und
+    // öffnet ihn wieder als zugestimmt, gleich ob eine Karte eingereicht ist (gegen Regel 2, K1a Schritt 3).
     const seen = new Map<string, M.Op>()
     const c = journal((op, state) => {
       for (const o of seen.values()) {
         if (o.kind !== 'consent') continue
         const a = state.acts.find((x) => x.id === o.act)
         if (a && a.state === 'declined') {
-          a.state = 'offered'
-          M.apply(state, { ...o, id: { writer: `${o.id.writer}-again`, n: o.id.n } })
+          a.decisions = (a.decisions ?? []).filter((d) => d.kind !== 'decline')
+          a.state = 'consented'
         }
       }
       if (op.kind === 'consent') seen.set(op.act, op)
@@ -266,7 +267,8 @@ describe('E15 Gegenläufe: Orakel', () => {
     const r = byId(await runX15(c, false, ['X3']))
     expect(r.X3!.outcome, r.X3!.detail).toBe('nicht bestanden')
     expect(r.X3!.crashed, r.X3!.detail).toBeFalsy()
-    expect(r.X3!.measures.leftTerminal).toBe(1)
+    expect(r.X3!.measures.ruleKept, r.X3!.detail).toBe(0)
+    expect(r.X3!.measures.leftTerminal, r.X3!.detail).toBe(1)
   }, 300_000)
 })
 

@@ -22,8 +22,15 @@
 // gleiche Revision mit anderen Schlüsseln = Equivokation 6270), die
 // Budgetbestätigung benennt die bestätigten Akte (8515), ein Vorrats-
 // Schlüssel heißt (Nonce, n) und ein zweiter Vorrat bleibt sichtbar
-// (8435), Zustimmung gegen Ablehnung bleibt beim ersten terminalen
-// Zustand und steht als Widerspruch im Ledger (8325.A3/A4).
+// (8435). Entscheidung und Übergabe (K1a Schritt 3, Anton 18.10., Linie
+// „weich“: was die Gegenseite schon erreicht hat, gilt; was noch im eigenen
+// Haus ist, darf die Faltung umentscheiden): (1) dieselbe Entscheidung von
+// zwei Geräten ist eine Wirkung; (2) Zustimmung gegen Ablehnung: ist eine
+// eigene Karte eingereicht (8325.0), gilt die Zustimmung und die Ablehnung
+// ist ein Konfliktbefund, sonst gilt die Ablehnung und die nicht
+// eingereichte Karte wird zurückgenommen (8232.2, 8765); (3) zwei
+// Übergaben eines Akts: die kleinere Kennung gewinnt, die andere wird
+// zurückgenommen, wenn sie nicht eingereicht ist (`resolveDecision`).
 
 // ── Parameter (Profil, vereinfacht) ──────────────────────────────────────────
 
@@ -119,8 +126,10 @@ export interface Relationship {
 }
 
 export type ActState = 'offered' | 'declined' | 'consented' | 'connected' | 'expired'
-/** 8326, vereinfacht: ohne Abfrage/Abgrenzung des Adapters. */
-export type HandOver = 'none' | 'intent' | 'handed' | 'taken' | 'delivered' | 'given-up'
+/** 8326, vereinfacht: ohne Abfrage des Adapters; `cancelled` nach 8326.8/8232.2 (K1a Schritt 3: eine nie beim Träger angekommene Übergabe, lokal abgegrenzt). */
+export type HandOver = 'none' | 'intent' | 'handed' | 'taken' | 'delivered' | 'given-up' | 'cancelled'
+/** 8325.0: „the own card counts as submitted exactly at O ∈ {`taken`, `delivered`, `given-up`}“. */
+export const SUBMITTED: ReadonlySet<HandOver> = new Set(['taken', 'delivered', 'given-up'])
 
 export interface Card {
   anchor: Anchor
@@ -146,10 +155,19 @@ export interface Act {
   ownCard: Card | null
   ownCardKey: string | null
   o: HandOver
-  /** Digest des eigenen Kartendokuments (die Kennung der Übergabe), gesetzt bei der Übergabe. */
+  /** Digest des eigenen Kartendokuments (die Kennung der Übergabe); bei zwei Übergaben eines Akts die gewinnende (Regel 3). */
   ownCardDigest: string | null
   /** Beziehung, die 8905 geöffnet hat. */
   opened: string | null
+  /**
+   * K1a Schritt 3: Faltungsgedächtnis des Akts (nicht in der Projektion). `decisions`: jede Zustimmung und Ablehnung mit
+   * Operations-Id, auch von anderen Geräten der Person; daraus folgt der Hauptzustand (`resolveDecision`). `cards`: O je
+   * Übergabe (Digest des Kartendokuments), damit zwei Übergaben eines Akts einander nicht überschreiben; `o` ist daraus
+   * abgeleitet. Ohne Felder (K0, ein Gerät) verhält sich der Akt wie vorher.
+   */
+  decisions?: Array<{ kind: 'consent' | 'decline'; op: string; at: string }>
+  cards?: Record<string, HandOver>
+  consentOp?: string
 }
 
 /** Ms Akt: nur Produktionsabsicht und Marken (8630). */
@@ -303,6 +321,107 @@ const effect = (s: HolderState, op: Op, id: string) => {
   if (!s.effects.some((e) => e.id === id && e.op === opKey(op.id))) s.effects.push({ id, op: opKey(op.id), at: op.at })
 }
 
+/**
+ * Eine Wirkung, die zwei Geräte einer Person mit je eigener Operation erreichen können (Regel 1, wie 6230 für die
+ * Vereinigung): die Wirkung ist eine, sie trägt in jeder Reihenfolge die kanonisch kleinste Operation.
+ */
+const effectMin = (s: HolderState, op: Op, id: string) => {
+  const e = s.effects.find((x) => x.id === id)
+  if (!e) s.effects.push({ id, op: opKey(op.id), at: op.at })
+  else if (FOLD.sameDecision && opKey(op.id) < e.op) Object.assign(e, { op: opKey(op.id), at: op.at })
+  else if (!FOLD.sameDecision && e.op !== opKey(op.id) && !s.effects.some((x) => x.id === id && x.op === opKey(op.id))) s.effects.push({ id, op: opKey(op.id), at: op.at })
+}
+
+/**
+ * Schalter für Gegenläufe (Tests): jede Regel von K1a Schritt 3 lässt sich einzeln abschalten, damit ein Test zeigt,
+ * dass das Orakel ohne sie fällt. Im Prüfstand immer an.
+ */
+export const FOLD = { sameDecision: true, consentVsDecline: true, handOver: true }
+
+/** Rangfolge für O über mehrere Übergaben eines Akts: das weiteste Fortkommen einer eigenen Karte zählt. */
+const RANK: Record<HandOver, number> = { none: 0, cancelled: 1, intent: 2, handed: 3, taken: 4, 'given-up': 5, delivered: 6 }
+
+/**
+ * K1a Schritt 3 (Anton 18.10.2026, Fragenkatalog Klasse 2, Entscheidung 1b und 2a): der Hauptzustand eines Akts folgt aus
+ * der Menge seiner Entscheidungen und dem Übergabezustand seiner eigenen Karten, nicht aus der Ankunftsreihenfolge.
+ *
+ *   8325.0  „Main states `offered`, `declined`, `consented`, `connected`, `expired`, of which exactly `declined`,
+ *           `connected` and `expired` are terminal. […] the own card counts as submitted exactly at O ∈ {`taken`,
+ *           `delivered`, `given-up`}.“
+ *   8325.A3 `offered` → the user refuses → `declined`: „P discarded; V kept (8913); nothing sent (8765)“.
+ *   8325.A4 `offered` → the user consents → `consented`: „in one transaction: consent, fresh pair context (8725), fresh
+ *           card (8727), card artifact and document as production intent (ENG-INTENT-1); O = `intent`“.
+ *   8232.2  card: „Unless submitted or currently undecided (8232.0), the registration and the document are cancelled
+ *           and the fresh pair context is discarded (8326.8, 8326.9).“
+ *   8765    „A side that declines MUST send nothing about the act to the other side, the mediator or anyone.“
+ *
+ * Regel 1: zwei Zustimmungen (oder zwei Ablehnungen) derselben Person sind eine Entscheidung und eine Wirkung; die
+ * Wirkung trägt die kleinste Operation. Regel 2: Zustimmung gegen Ablehnung. Ist eine eigene Karte eingereicht (8325.0)
+ * oder der Akt schon verbunden, gilt die Zustimmung, die Ablehnung steht als Konflikt `conflict:decline:<akt>` im Ledger
+ * und als Befund (kein Widerspruch); sonst gilt die Ablehnung, die Zustimmung steht als `conflict:consent:<akt>`, und das
+ * Gerät, das die Karte erzeugt hat, nimmt sie zurück, solange sie den Träger nicht erreicht hat (Holder,
+ * `withdrawLosingCards`; 8232.2, 8765). Damit gilt die Terminalität von 8325 für die Person erst, wenn ihre Geräte
+ * vereinigt sind: das ist eine geänderte Zusage („Zusage geändert“ in der Matrix).
+ * P bleibt im Zustand eines abgelehnten Akts erhalten und ist nur verdeckt (Projektion): entscheidet die Faltung später
+ * für die Zustimmung, wird die wartende Gegenkarte wieder ausgewertet (8325.A5c).
+ */
+function resolveDecision(s: HolderState, a: Act): void {
+  const ds = a.decisions ?? []
+  const consents = ds.filter((d) => d.kind === 'consent').sort((x, y) => (x.op < y.op ? -1 : 1))
+  const declines = ds.filter((d) => d.kind === 'decline').sort((x, y) => (x.op < y.op ? -1 : 1))
+  if (!consents.length && !declines.length) return
+  const submitted = SUBMITTED.has(a.o) || a.opened !== null
+  // Ohne Regel 2 (Gegenlauf): der erste terminale Zustand des Geräts bleibt, wie vor Schritt 3.
+  const consentHolds = FOLD.consentVsDecline ? consents.length > 0 && (submitted || declines.length === 0) : a.state !== 'declined' && consents.length > 0
+  if (a.state !== 'expired') {
+    if (consentHolds) {
+      if (a.state === 'offered' || a.state === 'declined') a.state = a.opened ? 'connected' : 'consented'
+    } else if (a.state !== 'connected') a.state = 'declined'
+  }
+  const ids = [`consent:${a.id}`, `decline:${a.id}`, `conflict:consent:${a.id}`, `conflict:decline:${a.id}`]
+  const keep = s.effects.filter((e) => !ids.includes(e.id))
+  const push = (id: string, list: typeof ds) => {
+    if (!list.length) return
+    if (FOLD.sameDecision) keep.push({ id, op: list[0]!.op, at: list[0]!.at })
+    else for (const d of list) keep.push({ id, op: d.op, at: d.at })
+  }
+  if (consentHolds) {
+    push(`consent:${a.id}`, consents)
+    push(`conflict:decline:${a.id}`, declines)
+  } else {
+    push(`decline:${a.id}`, declines)
+    push(`conflict:consent:${a.id}`, consents)
+  }
+  s.effects = keep
+  if (consents.length && declines.length) {
+    const text = consentHolds
+      ? `decline auf ${a.id} gegen eine eingereichte eigene Karte: Konflikt, die Zustimmung gilt (Regel 2; 8325.0, 8326.3)`
+      : `consent auf ${a.id} gegen eine Ablehnung ohne eingereichte eigene Karte: Konflikt, die Ablehnung gilt, die Karte wird zurückgenommen (Regel 2; 8232.2, 8765)`
+    s.findings = s.findings.filter((f) => !f.startsWith(`decline auf ${a.id} gegen`) && !f.startsWith(`consent auf ${a.id} gegen`))
+    s.findings.push(text)
+  }
+}
+
+/** O des Akts aus den Übergaben seiner Karten (Regel 3): je Übergabe ein eigener Zustand, der Akt trägt das weiteste Fortkommen. */
+/**
+ * Tor-Review 18 B1b: Rang je Übergabe (ein Digest). Der Zustand einer Übergabe faltet als Verband, nicht nach
+ * Ankunftsreihenfolge: von zwei Werten für denselben Digest gilt der mit dem höheren Rang, auf jedem Gerät gleich.
+ *
+ *   8326.8  eine nie genommene Übergabe wird lokal abgegrenzt (`cancelled`, wie `not-taken`); das schlägt die Zustände vor
+ *           dem Träger (`none`, `intent`, `handed`): eine Rücknahme, die gegolten hat, kehrt nicht zu `handed` zurück.
+ *   8326.9  eine Übergabe, die der Träger genommen hat, wird nicht aufgehoben: `taken`, `given-up` und `delivered` schlagen
+ *           `cancelled` (was den Träger erreicht hat, gilt; Linie Anton 18.10., wie Regel 2).
+ *   8326.10 `delivered` ist der letzte Zustand, auch nach `given-up` (späte Quittung).
+ */
+const HAND_OVER_RANK: Record<HandOver, number> = { none: 0, intent: 1, handed: 2, cancelled: 3, taken: 4, 'given-up': 5, delivered: 6 }
+const higher = (x: HandOver | undefined, y: HandOver): HandOver => (x !== undefined && HAND_OVER_RANK[x] >= HAND_OVER_RANK[y] ? x : y)
+
+function aggregateO(a: Act): void {
+  const os = Object.values(a.cards ?? {})
+  if (!os.length) return
+  a.o = os.reduce((m, o) => (RANK[o] > RANK[m] ? o : m), 'none' as HandOver)
+}
+
 // ── Anwenden (deterministisch, idempotent je Operations-ID und je Effekt) ───
 
 export function apply(s: HolderState, original: Op): void {
@@ -422,39 +541,43 @@ function applyBody(s: HolderState, op: Op): void {
       s.findings.push(op.text)
       return
     case 'consent': {
+      // 8325.A4; Regel 1 und 2 (K1a Schritt 3): jede Zustimmung wird gemerkt, der Zustand folgt aus allen Entscheidungen.
       const a = act(s, op.act)
-      if (a.state === 'declined') {
-        // 8325.A3/A4: der erste terminale Zustand bleibt; der Widerspruch ist sichtbar, nie still verworfen.
-        s.findings.push(`consent auf ${a.id} nach decline: Widerspruch (8325.A3)`)
-        effect(s, op, `consent:${a.id}`)
-        return
+      if (a.state === 'expired') return // 8280: nach einem terminalen Ablauf keine Produktion
+      const key = opKey(op.id)
+      a.decisions = [...(a.decisions ?? []).filter((d) => d.op !== key), { kind: 'consent', op: key, at: op.at }]
+      // Ein Seed: beide Geräte leiten denselben Kartenschlüssel ab; die Karte der kleinsten Zustimmung gilt (deterministisch).
+      if (!a.consentOp || (FOLD.sameDecision ? key < a.consentOp : false)) {
+        a.consentOp = key
+        a.ownCard = op.card
+        a.ownCardKey = op.cardKey
       }
-      if (a.state !== 'offered') return // 8325.A4 nur aus offered; eine Journal-Wiederholung ändert nichts
-      a.state = 'consented'
-      a.ownCard = op.card
-      a.ownCardKey = op.cardKey
-      a.o = 'intent'
-      effect(s, op, `consent:${a.id}`)
+      if (a.o === 'none') a.o = 'intent'
+      resolveDecision(s, a)
       return
     }
     case 'decline': {
+      // 8325.A3; Regel 1 und 2: gemerkt, der Zustand folgt aus allen Entscheidungen; P wird verdeckt, nicht gelöscht.
       const a = act(s, op.act)
-      if (a.state === 'consented' || a.state === 'connected') {
-        s.findings.push(`decline auf ${a.id} nach consent: Widerspruch (8325.A4)`)
-        effect(s, op, `decline:${a.id}`)
-        return
-      }
-      if (a.state !== 'offered') return // 8325.A3 nur aus offered
-      a.state = 'declined'
-      a.pending = null
-      effect(s, op, `decline:${a.id}`)
+      if (a.state === 'expired') return
+      const key = opKey(op.id)
+      a.decisions = [...(a.decisions ?? []).filter((d) => d.op !== key), { kind: 'decline', op: key, at: op.at }]
+      resolveDecision(s, a)
       return
     }
     case 'hand-over': {
+      // 8326; Regel 3: O je Übergabe (Digest), die gewinnende Übergabe ist die mit der kleineren Kennung. Zwei Übergaben
+      // eines Akts sind immer nebenläufig (ein Gerät, das die Zustimmung des anderen kennt, stimmt nicht zu und produziert
+      // keine Karte); „erste in Journalordnung“ ist damit für sie nicht definiert, es gilt der Gleichstand: kleinerer Digest.
       const a = act(s, op.act)
-      a.o = op.o
-      if (op.digest) a.ownCardDigest = op.digest
-      if (op.o === 'taken' && a.ownCard) effect(s, op, `card:${a.id}:${a.ownCard.anchor}`)
+      if (op.digest) {
+        a.cards = { ...(a.cards ?? {}), [op.digest]: FOLD.handOver ? higher(a.cards?.[op.digest], op.o) : op.o } // B1b: Rang je Übergabe
+        if (!a.ownCardDigest || (FOLD.handOver ? op.digest < a.ownCardDigest : true)) a.ownCardDigest = op.digest
+        if (FOLD.handOver) aggregateO(a)
+        else a.o = op.o
+      } else a.o = op.o
+      if (op.o === 'taken' && a.ownCard) effectMin(s, op, `card:${a.id}:${a.ownCard.anchor}`)
+      resolveDecision(s, a) // eine eingereichte Karte entscheidet Regel 2 für die Zustimmung
       return
     }
     case 'card-pending': {
@@ -472,7 +595,12 @@ function applyBody(s: HolderState, op: Op): void {
     case 'connect': {
       // 8905: Tupel öffnen als neue Beziehung, Akt connected.
       const a = act(s, op.act)
-      if (a.opened || s.relationships.some((r) => r.tuples.some((t) => t.id === op.tuple.id))) return // Effekt-Identität: der Akt
+      if (a.opened || s.relationships.some((r) => r.tuples.some((t) => t.id === op.tuple.id))) {
+        // Effekt-Identität: der Akt. Regel 1: verbinden zwei Geräte derselben Person je für sich (beide halten die
+        // Gegenkarte, ein Seed), ist das eine Verbindung; die Wirkung trägt die kleinste Operation.
+        if (a.opened && s.effects.some((e) => e.id === `connect:${a.id}`)) effectMin(s, op, `connect:${a.id}`)
+        return
+      }
       if (a.state === 'declined') {
         // 8325.A3: eine Ablehnung ist terminal, auch gegen eine Verbindung vom anderen Gerät; der abgewiesene Versuch ist ein Konflikt, keine ausgeführte Verbindung (Review 7 S3).
         s.findings.push(`connect auf ${a.id} nach decline: Widerspruch (8325.A3)`)
@@ -483,7 +611,7 @@ function applyBody(s: HolderState, op: Op): void {
       a.state = 'connected'
       a.opened = op.rel
       a.pending = null
-      effect(s, op, `connect:${a.id}`)
+      effectMin(s, op, `connect:${a.id}`)
       return
     }
     case 'expire': {
@@ -600,7 +728,8 @@ export function project(s: HolderState, now: string): Projection {
     }))
     .sort((a, b) => a.peers.join().localeCompare(b.peers.join()))
   const acts: Projection['acts'] = {}
-  for (const a of [...s.acts].sort((x, y) => x.id.localeCompare(y.id))) acts[a.id] = { state: a.state, pending: a.pending, v: a.v, k: a.k, o: a.o, ownCard: a.ownCard, ownCardDigest: a.ownCardDigest, expiresAt: a.expiresAt, opened: a.opened }
+  // P eines abgelehnten Akts ist verdeckt (8325.A3 „P discarded“), bleibt aber im Zustand, falls Regel 2 später für die Zustimmung entscheidet.
+  for (const a of [...s.acts].sort((x, y) => x.id.localeCompare(y.id))) acts[a.id] = { state: a.state, pending: a.state === 'declined' ? null : a.pending, v: a.v, k: a.k, o: a.o, ownCard: a.ownCard, ownCardDigest: a.ownCardDigest, expiresAt: a.expiresAt, opened: a.opened }
   const duties: Projection['duties'] = {}
   for (const d of [...s.duties].sort((x, y) => x.pair.join().localeCompare(y.pair.join()))) duties[d.pair.join('|')] = { state: d.state, mappingDigest: d.mappingDigest }
   return { contacts, acts, consumed: [...s.consumed].sort(), duties }

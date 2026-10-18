@@ -112,6 +112,21 @@ function finalEffects(w: Welt15, person: string) {
   return { doubles: doubles.length, doubleIds: doubles, doubleConsumption, contradictions, total: doubles.length + doubleConsumption + contradictions }
 }
 
+/**
+ * Karten-Dokumente eines Akts, die den Träger erreicht haben (K1a Schritt 3): je Gerät der Person die eigenen
+ * Kartenabsichten an die Adresse des Gegenübers, deren Einlieferung mindestens einmal gelungen ist. Eine zurückgenommene
+ * Karte (lokal abgegrenzt, `Zusteller.demarcate`) zählt nicht; Wiederholungen derselben Bytes zählen einmal.
+ */
+function cardFramesOut(w: Welt15, person: string, actId: string): number {
+  const out = new Set<string>()
+  for (const d of w.of(person)) {
+    const a = d.state.acts.find((x) => x.id === actId)
+    if (!a) continue
+    for (const [digest, i] of d.intents) if (i.device === d.name && i.kind.includes('introduction-card') && i.address === a.voucher.keyAgreement && (d.zusteller.submissions.get(digest)?.deposits ?? 0) > 0) out.add(digest)
+  }
+  return out.size
+}
+
 /** Angenommene Akte einer Person über alle Geräte (verschiedene Akt-Ids). */
 function acceptedActs(w: Welt15, person: string): Set<string> {
   const ids = new Set<string>()
@@ -295,24 +310,42 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       await s.A.consent(r.act)
       if (!serial) await s.A2.decline(r.act)
       await s.B.consent(r.act)
-      s.A.online = true
+      // Heilung: A2 kommt eine Runde vor A1 zurück, so faltet A1 die Ablehnung, bevor seine Karte den Träger erreicht (der
+      // Zweig „keine Karte eingereicht“ von Regel 2; der andere Zweig ist der Gegenlauf in tests/mehrgeraet-k1a.test.ts).
       s.A2.online = true
+      await s.w.rounds(1)
+      s.A.online = true
       const n = await untilStable(s.w, 'A')
       const l = ledger(s.w, 'A')
-      const decisions = ['consent', 'decline'].filter((k) => l.has(`${k}:${r.act}`))
+      const decisions = ['consent', 'decline'].filter((k) => l.has(`${k}:${r.act}`) || l.has(`conflict:${k}:${r.act}`))
       const states = s.w.of('A').map((d) => M.act(d.state, r.act).state)
       const bState = M.act(s.B.state, r.act).state
       const agree = s.w.agree('A')
-      // Terminalität (8325.A3): das Gerät, das selbst abgelehnt hat, verlässt `declined` nie; wird es dennoch connected, ist die Zusage geändert.
-      // (Mit Journal trägt jedes Gerät beide Effekte im Ledger; es zählt die eigene Entscheidung, erkennbar am Schreiber der Operation.)
-      const leftTerminal = s.w.of('A').some((d) => d.state.effects.some((e) => e.id === `decline:${r.act}` && e.op.startsWith(`${d.name}@`)) && M.act(d.state, r.act).state !== 'declined')
-      // Widerspruch: B hält eine Karte oder ist verbunden, während A als Ganzes abgelehnt hat.
+      // Regel 2 (Anton 18.10.2026, Linie „weich“): ist eine eigene Karte eingereicht (8325.0: O ∈ {taken, delivered,
+      // given-up}), gilt die Zustimmung und der Akt endet connected; sonst gilt die Ablehnung (8325.A3, 8232.2, 8765).
+      const pa = M.act(s.A.state, r.act)
+      const submitted = M.SUBMITTED.has(pa.o)
+      const expected = submitted ? 'connected' : 'declined'
+      const ruleKept = states.every((x) => x === expected)
+      // Geänderte Zusage (8325): ein Gerät, das selbst entschieden hat, endet im anderen Zustand. A2 hat abgelehnt, A1 zugestimmt.
+      const leftTerminal = !serial && M.act(s.A2.state, r.act).state !== 'declined'
+      const consentUndone = !serial && M.act(s.A.state, r.act).state === 'declined'
+      // Widerspruch: B hält eine Karte oder ist verbunden, während A als Ganzes abgelehnt hat (8765).
       const contradiction = states.some((x) => x === 'declined') && (bState === 'connected' || M.act(s.B.state, r.act).v !== null)
       const progress = states.every((x) => x !== 'offered')
       const mArtifacts = s.w.of('M').flatMap((d) => d.log).filter((e) => e.type === 'introduction-card').length // 8765/8920
-      const ok = agree.agree && !contradiction && progress && mArtifacts === 0 && !leftTerminal
-      const promiseChanged = agree.agree && !contradiction && progress && leftTerminal
-      return { outcome: mark(ok), promiseChanged, detail: `Entscheidungen: ${decisions.join('+') || 'keine'}; A: ${s.w.of('A').map((d, i) => `${d.name}: ${states[i]}`).join(', ')}; B: ${bState}; Projektion gleich nach ${n} Runden: ${agree.agree ? 'ja' : 'nein (' + agree.diff + ')'}; terminaler Zustand verlassen: ${leftTerminal ? 'ja' : 'nein'}; Widerspruch bei B: ${contradiction ? 'ja' : 'nein'}`, measures: { doubleFinalEffects: finalEffects(s.w, 'A').contradictions, projectionAgrees: agree.agree ? 1 : 0, roundsToConverge: n, leftTerminal: leftTerminal ? 1 : 0, contradictionAtB: contradiction ? 1 : 0, promiseChanged: promiseChanged ? 1 : 0 } }
+      const cardsOut = cardFramesOut(s.w, 'A', r.act)
+      const conflicts = s.w.of('A')[0]!.state.findings.filter((f) => f.includes(r.act) && f.includes('Regel 2')).length
+      const ok = agree.agree && ruleKept && !contradiction && progress && mArtifacts === 0
+      const promiseChanged = ok && (leftTerminal || consentUndone)
+      const rule = serial
+        ? 'eine Entscheidung'
+        : !agree.agree
+          ? 'keine gemeinsame Entscheidung: die Geräte von A bleiben uneins'
+          : submitted
+          ? `Regel 2: eine eigene Karte eingereicht (O = ${pa.o}), die Zustimmung gilt, die Ablehnung ist ein Konfliktbefund`
+          : `Regel 2: keine eigene Karte eingereicht (O = ${pa.o}), die Ablehnung gilt, die Karte ist zurückgenommen (8232.2), nichts an B (8765)`
+      return { outcome: mark(ok), promiseChanged, detail: `${rule}; Entscheidungen: ${decisions.join('+') || 'keine'}; A: ${s.w.of('A').map((d, i) => `${d.name}: ${states[i]}`).join(', ')}; B: ${bState}; Karten-Dokumente von A beim Träger: ${cardsOut}; Projektion gleich nach ${n} Runden: ${agree.agree ? 'ja' : 'nein (' + agree.diff + ')'}; Regel eingehalten: ${ruleKept ? 'ja' : 'nein'}; terminaler Zustand verlassen: ${leftTerminal ? 'ja' : 'nein'}, Zustimmung zurückgenommen: ${consentUndone ? 'ja' : 'nein'}; Widerspruch bei B: ${contradiction ? 'ja' : 'nein'}`, measures: { doubleFinalEffects: finalEffects(s.w, 'A').contradictions, projectionAgrees: agree.agree ? 1 : 0, roundsToConverge: n, leftTerminal: leftTerminal ? 1 : 0, consentUndone: consentUndone ? 1 : 0, ruleKept: ruleKept ? 1 : 0, cardSubmitted: submitted ? 1 : 0, cardFramesToCarrier: cardsOut, conflictFindings: conflicts, contradictionAtB: contradiction ? 1 : 0, promiseChanged: promiseChanged ? 1 : 0 } }
     },
   },
   {
@@ -855,6 +888,7 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const cards = new Set(s.w.of('A').flatMap((d) => [...d.intents.values()]).filter((i) => i.kind.includes('introduction-card') && s.w.of('A').some((d) => d.state.acts.some((a) => a.id === r.act && a.voucher.keyAgreement === i.address))).map((i) => i.digest)).size
       const cardKeys = new Set(s.w.of('A').map((d) => M.act(d.state, r.act).ownCard?.anchor).filter(Boolean)).size
       const consents = ledger(s.w, 'A').get(`consent:${r.act}`)?.size ?? 0
+      const connectsA = ledger(s.w, 'A').get(`connect:${r.act}`)?.size ?? 0
       const connectsAtB = ledger(s.w, 'B').get(`connect:${r.act}`)?.size ?? 0
       const conflicts = s.w.of('B').filter((d) => M.act(d.state, r.act).k).length
       const cardsAtB = s.w.of('B').map((d) => d.log.filter((e) => e.type === 'introduction-card').length)
@@ -869,8 +903,13 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const kindsA = [...new Set(feA.doubleIds.map((id) => id.split(':')[0]!))].sort().join(', ')
       const doubles = feA.total + feB.total
       const ok = nA > 0 && nB > 0 && doubles === 0 && connectsAtB === 1 && conflicts === 0 && tuplesAtB.every((x) => x === 1) && agree.agree && states.every((x) => x.endsWith('connected'))
+      // K1a Schritt 3: zwei Geräte haben je zugestimmt (Zustimmungen von zwei Schreibern im Akt). Dass das eine Wirkung ist
+      // (Regel 1) und die kleinere Übergabe gewinnt (Regel 3), ist eine Ersatzregel für 8325.A4: „Zusage geändert“.
+      const writers = new Set((M.act(s.A.state, r.act).decisions ?? []).filter((d) => d.kind === 'consent').map((d) => d.op.split('#')[0])).size
+      const promiseChanged = ok && writers > 1
+      const cardsOut = cardFramesOut(s.w, 'A', r.act)
       const reasons = [doubles > 0 ? `doppelte Endwirkungen (A ${feA.total}${kindsA ? `: ${kindsA}` : ''}, B ${feB.total})` : '', !agree.agree ? 'die Projektionen von A bleiben verschieden' : ''].filter(Boolean)
-      return { outcome: mark(ok), detail: `${states.join(', ')}; A: ${cards} Karten-Dokument(e), ${cardKeys} Kartenschlüssel, Zustimmung aus ${consents} Operation(en); doppelte Endwirkungen bei A: ${feA.total}${kindsA ? ` (${kindsA} je aus zwei Operationen)` : ''}, bei B: ${feB.total}; B: Karten empfangen ${cardsAtB.join('/')}, verbunden ${connectsAtB}×, Konfliktmarke K auf ${conflicts} Gerät(en), Tupel des Akts je Gerät ${tuplesAtB.join('/')}; Übergabe-Digests des Akts auf den A-Geräten: ${handOvers}; A stabil gleich nach ${nA} Runden: ${agree.agree ? 'ja' : 'nein'}, B nach ${nB}${reasons.length ? `; nicht bestanden wegen: ${reasons.join('; ')}` : ''}`, measures: { cardsProducedByA: cards, cardKeys, consentOperations: consents, connectsAtB, cardConflictsAtB: conflicts, doubleFinalEffects: doubles, doubleFinalEffectsA: feA.total, doubleFinalEffectsB: feB.total, doubleEffectKindsA: kindsA || '–', handOverDigestsOnA: handOvers, projectionAgrees: agree.agree ? 1 : 0, roundsToConverge: nA } }
+      return { outcome: mark(ok), promiseChanged, detail: `${writers > 1 ? 'Regeln 1 und 3: zwei Zustimmungen, eine Wirkung, die kleinere Übergabe gewinnt; ' : ''}${states.join(', ')}; A: ${cards} Karten-Dokument(e), davon ${cardsOut} beim Träger, ${cardKeys} Kartenschlüssel, Zustimmung aus ${consents} Operation(en) von ${writers} Gerät(en), Verbindung aus ${connectsA} Operation(en); doppelte Endwirkungen bei A: ${feA.total}${kindsA ? ` (${kindsA} je aus zwei Operationen)` : ''}, bei B: ${feB.total}; B: Karten empfangen ${cardsAtB.join('/')}, verbunden ${connectsAtB}×, Konfliktmarke K auf ${conflicts} Gerät(en), Tupel des Akts je Gerät ${tuplesAtB.join('/')}; Übergabe-Digests des Akts auf den A-Geräten: ${handOvers}; A stabil gleich nach ${nA} Runden: ${agree.agree ? 'ja' : 'nein'}, B nach ${nB}${reasons.length ? `; nicht bestanden wegen: ${reasons.join('; ')}` : ''}`, measures: { cardsProducedByA: cards, cardFramesToB: cardsOut, consentWriters: writers, promiseChanged: promiseChanged ? 1 : 0, cardKeys, consentOperations: consents, connectOperationsA: connectsA, connectsAtB, cardConflictsAtB: conflicts, doubleFinalEffects: doubles, doubleFinalEffectsA: feA.total, doubleFinalEffectsB: feB.total, doubleEffectKindsA: kindsA || '–', handOverDigestsOnA: handOvers, projectionAgrees: agree.agree ? 1 : 0, roundsToConverge: nA } }
     },
   },
   {

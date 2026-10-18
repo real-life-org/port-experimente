@@ -62,6 +62,15 @@ describe('Konformitätsmatrix', () => {
     expect(kv1('mixedFail').status).toBe('nicht bestanden') // ein echter Verstoß bleibt einer
   })
 
+  it('MG3 (E15 K1a Schritt 3): X3 und X18 bestehen unter einer Ersatzregel; die Zelle zeigt „Zusage geändert“ (≈) für beide, im Markdown und auf der Seite', () => {
+    const x = (scenario: string, promiseChanged?: boolean): ScenarioResult => ({ ...r(scenario, 'bestanden'), promiseChanged })
+    const m = buildMatrix([{ id: 'k1a-static', scenarios: [], carrier: [x('X3', true), x('X18', true)] }, { id: 'serial', scenarios: [], carrier: [x('X3'), x('X18')] }])
+    const mg3 = m.ports.find((p) => p.port === 'mehrgerät')!.rows.find((y) => y.promise.id === 'MG3')!
+    expect(mg3.promise.scenarios).toEqual(['X3', 'X18'])
+    expect(mg3.cells['k1a-static']!.evidence.map((e) => [e.scenario, e.promiseChanged])).toEqual([['X18', true], ['X3', true]])
+    expect(toMarkdown(m)).toContain('≈ X18 ≈ X3 | ✓ X18 ✓ X3')
+  })
+
   it('A10 (Konvergenz) fällt, wenn die Mitgliedschaft uneinig ist, auch wenn alle Inhalte lesen (Review zu #35)', async () => {
     const bobAlone = () => {
       const c = klartext()

@@ -441,31 +441,33 @@ describe('K1a breite Matrix', () => {
     expect(one.measures.revisionNumbersReused).toBe(0)
   }, 600_000)
 
-  it('X18: A1 und A2 stimmen getrennt demselben Akt zu und produzieren je eine Karte: B sieht eine Verbindung, A bleibt uneins über die Übergabe', async () => {
+  it('X18 (Schritt 3, Regeln 1 und 3): A1 und A2 stimmen getrennt zu und produzieren je eine Karte: eine Zustimmung, eine Verbindung, ein Übergabedigest; B verbindet einmal; Zusage geändert', async () => {
     const two = byId(await runX15(k1a(), false, ['X18'])).X18!
     expect(two.crashed, two.detail).toBeFalsy()
-    expect(two.measures.cardsProducedByA).toBe(2) // zwei Karten-Dokumente eines Akts
+    expect(two.outcome, two.detail).toBe('bestanden')
+    expect(two.promiseChanged, two.detail).toBe(true)
+    expect(two.measures.consentWriters).toBe(2) // zwei Geräte haben zugestimmt
+    expect(two.measures.cardsProducedByA).toBe(2) // zwei Karten-Dokumente eines Akts, beide eingereicht (getrennt, nichts zurückzunehmen)
+    expect(two.measures.cardFramesToB).toBe(2) // gemessen: B erhält zwei Karten-Dokumente
+    // Ein Seed: beide Karten tragen denselben Kartenschlüssel und dieselbe Nutzlast; B sieht eine Wiederholung (8910.7), keinen Konflikt (8910.8).
     expect(two.measures.connectsAtB).toBe(1)
-    // Ein Seed: beide Karten tragen denselben Kartenschlüssel, B sieht eine Wiederholung (8910.7), keinen Konflikt (8910.8).
     expect(two.measures.cardConflictsAtB).toBe(0)
-    // Die Faltung hat keine Regel für zwei Übergaben eines Akts: jedes Gerät behält eine andere (Digest, O), die Projektionen bleiben verschieden.
-    expect(two.measures.handOverDigestsOnA).toBe(2)
-    expect(two.measures.projectionAgrees).toBe(0)
-    // Review 11 B1: das Ledger-Orakel zählt die Endwirkungen beider Personen; A hat Zustimmung und Verbindung je aus zwei Operationen.
-    expect(two.measures.doubleFinalEffectsA).toBe(2)
-    expect(two.measures.doubleFinalEffectsB).toBe(0)
-    expect(two.measures.doubleFinalEffects).toBe(2)
-    expect(two.measures.doubleEffectKindsA).toBe('connect, consent')
-    expect(two.detail).toMatch(/doppelte Endwirkungen bei A: 2/)
-    expect(two.outcome, two.detail).toBe('nicht bestanden')
+    // Regel 1: As Ledger trägt eine Zustimmung und eine Verbindung; Regel 3: beide Geräte halten dieselbe Übergabe.
+    expect(two.measures.consentOperations).toBe(1)
+    expect(two.measures.connectOperationsA).toBe(1)
+    expect(two.measures.doubleFinalEffects).toBe(0)
+    expect(two.measures.handOverDigestsOnA).toBe(1)
+    expect(two.measures.projectionAgrees).toBe(1)
+    expect(two.detail).toMatch(/Regeln 1 und 3/)
     const one = byId(await runX15(k1a({ devices: 1 }), true, ['X18'])).X18!
     expect(one.crashed, one.detail).toBeFalsy()
     expect(one.outcome, one.detail).toBe('bestanden')
+    expect(one.promiseChanged).toBeFalsy()
     expect(one.measures.cardsProducedByA).toBe(1)
     expect(one.measures.doubleFinalEffects).toBe(0)
   }, 600_000)
 
-  it('X18 Gegenlauf (Review 11 B1): ohne den Übergabe-Digest in der Projektion sind As Geräte gleich; das Orakel fängt As doppelte Endwirkungen trotzdem', async () => {
+  it('X18 Gegenlauf (Review 11 B1, Schritt 3): ohne Regel 1 fängt das Orakel As doppelte Endwirkungen, auch wenn die Projektion den Übergabedigest ausblendet; ohne Regel 3 bleiben die Digests verschieden', async () => {
     const proto = HolderDevice.prototype as unknown as { projection: () => M.Projection }
     const projection = proto.projection
     const spy = vi.spyOn(proto, 'projection').mockImplementation(function (this: HolderDevice) {
@@ -474,15 +476,287 @@ describe('K1a breite Matrix', () => {
       return p
     })
     try {
+      M.FOLD.sameDecision = false
       const x = byId(await runX15(k1a(), false, ['X18'])).X18!
       expect(x.crashed, x.detail).toBeFalsy()
-      expect(x.measures.projectionAgrees, x.detail).toBe(1) // die Digest-Divergenz ist ausgeblendet
+      expect(x.measures.projectionAgrees, x.detail).toBe(1)
       expect(x.measures.doubleFinalEffectsA, x.detail).toBe(2)
+      expect(x.measures.doubleEffectKindsA, x.detail).toBe('connect, consent')
       expect(x.outcome, x.detail).toBe('nicht bestanden')
     } finally {
       spy.mockRestore()
+      M.FOLD.sameDecision = true
+    }
+    try {
+      M.FOLD.handOver = false
+      const y = byId(await runX15(k1a(), false, ['X18'])).X18!
+      expect(y.crashed, y.detail).toBeFalsy()
+      expect(y.measures.handOverDigestsOnA, y.detail).toBe(2)
+      expect(y.measures.projectionAgrees, y.detail).toBe(0)
+      expect(y.outcome, y.detail).toBe('nicht bestanden')
+    } finally {
+      M.FOLD.handOver = true
     }
   }, 600_000)
+})
+
+// K1a Schritt 3 (Anton 18.10.2026, Fragenkatalog Klasse 2, Linie „weich“: was die Gegenseite schon erreicht hat, gilt;
+// was noch im eigenen Haus ist, darf die Faltung umentscheiden). Faltungsregeln des Modells (model.ts, `resolveDecision`):
+//   Regel 1: dieselbe Entscheidung von zwei Geräten ist eine Wirkung.
+//   Regel 2: Zustimmung gegen Ablehnung: eingereichte eigene Karte → Zustimmung gilt, Ablehnung ist Konfliktbefund; sonst
+//            gilt die Ablehnung, das erzeugende Gerät nimmt seine nicht eingereichte Karte zurück (8232.2, 8765).
+//   Regel 3: zwei Übergaben eines Akts: die kleinere Kennung gewinnt, die andere wird zurückgenommen, wenn sie den Träger
+//            nicht erreicht hat.
+//   1. X3: A1 stimmt zu, A2 lehnt ab (beide offline, A2 kommt zuerst zurück): die Ablehnung gilt, A1s Karte geht nie hinaus,
+//      B bleibt ohne Karte; bestanden mit „Zusage geändert“; seriell unverändert.
+//   2. Gegenlauf zu X3: A1s Karte ist schon `taken`, als A2 offline ablehnt: nach der Heilung connected, Konfliktbefund,
+//      kein Rahmen an B, der etwas zurücknimmt.
+//   3. Regel 3 am Gerät: A2 stimmt zu, während A1s Karte offline beim Adapter liegt; die größere Übergabe wird
+//      zurückgenommen, B erhält ein Karten-Dokument.
+describe('K1a Schritt 3: Entscheidung und Übergabe', () => {
+  async function withA2() {
+    const p = await pair()
+    const A2 = await p.w.enrol(p.A, 'A2')
+    await p.w.rounds(3)
+    const r = await p.Mm.introduce(p.am.y.id, p.bm.y.id)
+    if (!('act' in r)) throw new Error(r.refused)
+    await p.w.until(() => [p.A, A2, p.B].every((d) => d.state.acts.some((a) => a.id === r.act)))
+    return { ...p, A2, act: r.act }
+  }
+  const cardDocs = (w: Welt15, act: string) => {
+    const out = new Set<string>()
+    for (const d of w.of('A')) {
+      const a = M.act(d.state, act)
+      for (const [digest, i] of d.intents) if (i.device === d.name && i.kind.includes('introduction-card') && i.address === a.voucher.keyAgreement && (d.zusteller.submissions.get(digest)?.deposits ?? 0) > 0) out.add(digest)
+    }
+    return out.size
+  }
+
+  it('1. X3: die Ablehnung gilt, wenn A1s Karte den Träger nicht erreicht hat; bestanden mit „Zusage geändert“, seriell unverändert', async () => {
+    const two = byId(await runX15(k1a(), false, ['X3'])).X3!
+    expect(two.crashed, two.detail).toBeFalsy()
+    expect(two.outcome, two.detail).toBe('bestanden')
+    expect(two.promiseChanged, two.detail).toBe(true)
+    expect(two.detail).toMatch(/Regel 2: keine eigene Karte eingereicht \(O = cancelled\), die Ablehnung gilt/)
+    expect(two.measures.consentUndone).toBe(1) // A1 hat zugestimmt und endet abgelehnt
+    expect(two.measures.leftTerminal).toBe(0)
+    expect(two.measures.cardFramesToCarrier).toBe(0) // 8765: nichts an B
+    expect(two.measures.contradictionAtB).toBe(0)
+    expect(two.measures.conflictFindings).toBe(1)
+    expect(two.measures.doubleFinalEffects).toBe(0) // kein Widerspruch im Ledger, nur ein Konflikt
+    const one = byId(await runX15(k1a({ devices: 1 }), true, ['X3'])).X3!
+    expect(one.crashed, one.detail).toBeFalsy()
+    expect(one.outcome, one.detail).toBe('bestanden')
+    expect(one.promiseChanged).toBeFalsy()
+  }, 600_000)
+
+  it('2. Gegenlauf: A1s Karte ist schon taken, A2 lehnt offline ab; nach der Heilung connected, Konfliktbefund, kein Rahmen an B, der etwas zurücknimmt', async () => {
+    const { w, A, A2, B, act } = await withA2()
+    A2.online = false
+    expect(await A.consent(act)).toBe('ok')
+    expect(await w.until(() => M.SUBMITTED.has(M.act(A.state, act).o), 5)).toBeGreaterThan(0)
+    expect(await A2.decline(act)).toBe('ok')
+    expect(M.act(A2.state, act).state).toBe('declined')
+    const before = new Set(A2.produced.keys())
+    expect(await B.consent(act)).toBe('ok')
+    A2.online = true
+    expect(await w.until(() => w.of('A').every((d) => M.act(d.state, act).state === 'connected') && w.agree('A').agree, 20)).toBeGreaterThan(0)
+    await w.rounds(3)
+    expect(w.agree('A').agree).toBe(true)
+    expect(M.act(B.state, act).state).toBe('connected')
+    const l = ledgerOf(w, 'A')
+    expect(l.get(`consent:${act}`)?.size).toBe(1)
+    expect(l.get(`conflict:decline:${act}`)?.size).toBe(1)
+    expect(l.has(`decline:${act}`)).toBe(false)
+    expect(doubles(w, 'A')).toEqual([])
+    for (const d of w.of('A')) expect(d.state.findings.some((f) => f.includes(act) && f.includes('Regel 2') && f.includes('Zustimmung gilt'))).toBe(true)
+    // Kein Rahmen von A2 an B außer Quittungen und Journal; A hat genau ein Karten-Dokument eingereicht.
+    const kinds = [...A2.produced.entries()].filter(([h]) => !before.has(h)).map(([, k]) => k)
+    expect(kinds.filter((k) => !['journal', 'journal-sync', 'journal-sync-reply', 'delivery-ack'].includes(k))).toEqual([])
+    expect(cardDocs(w, act)).toBe(1)
+    expect(ledgerOf(w, 'B').get(`connect:${act}`)?.size).toBe(1)
+  }, 300_000)
+
+  it('3. Regel 3 am Gerät: A1s Karte liegt offline beim Adapter, A2 stimmt verbunden zu; nach der Heilung eine Übergabe, die andere zurückgenommen, B verbindet einmal', async () => {
+    const { w, A, A2, B, act } = await withA2()
+    const selfA = (await A.cand.keys.pair('self/A')).rkid
+    // A1 offline (Karte bleibt beim Adapter), A2 sieht A1s Zustimmung nicht (Journal zurückgehalten) und stimmt selbst zu.
+    A.online = false
+    expect(await A.consent(act)).toBe('ok')
+    w.carrier.faults.withhold('A2', (f) => f.address === selfA)
+    expect(await A2.consent(act)).toBe('ok')
+    await w.rounds(2)
+    expect(M.SUBMITTED.has(M.act(A2.state, act).o)).toBe(true)
+    w.carrier.faults.reset()
+    expect(await B.consent(act)).toBe('ok')
+    A.online = true
+    expect(await w.until(() => [...w.of('A'), B].every((d) => M.act(d.state, act).state === 'connected') && w.agree('A').agree, 25)).toBeGreaterThan(0)
+    const digests = new Set(w.of('A').map((d) => M.act(d.state, act).ownCardDigest))
+    expect(digests.size).toBe(1)
+    const cards = M.act(A.state, act).cards!
+    expect(Object.keys(cards).length).toBe(2)
+    expect(doubles(w, 'A')).toEqual([])
+    expect(ledgerOf(w, 'B').get(`connect:${act}`)?.size).toBe(1)
+    // Welche Karte zurückgenommen wurde, hängt am Digest (Regel 3): ist A1s die größere, ist sie `cancelled` und nie beim Träger.
+    const a1 = Object.entries(cards).find(([d]) => A.intents.get(d)?.device === 'A1')!
+    const winner = [...digests][0]!
+    if (a1[0] !== winner) {
+      expect(a1[1]).toBe('cancelled')
+      expect(cardDocs(w, act)).toBe(1)
+    } else expect(cardDocs(w, act)).toBe(2) // A1s Karte gewinnt, A2s war schon eingereicht: beide hinaus, B sieht eine Wiederholung
+  }, 300_000)
+
+  /** Kartendokumente von A1 an B, die den Träger erreicht haben (Einlieferungen im Zusteller, auch nach Restore). */
+  const a1CardDeposits = (A: HolderDevice, act: string) => {
+    const a = M.act(A.state, act)
+    return [...A.zusteller.submissions.values()].filter((x) => x.address === a.voucher.keyAgreement && A.intents.get(x.digest)?.kind.includes('introduction-card') && x.deposits > 0).length
+  }
+  const states = (w: Welt15, act: string) => w.of('A').map((d) => `${M.act(d.state, act).state}/${M.act(d.state, act).o}`)
+
+  it('4. Tor-Review 18 B1a: Restore aus einem Backup vor der Rücknahme gibt nichts frei, bevor das eigene Journal nachgeholt ist; die zurückgenommene Karte erreicht B nie, A bleibt abgelehnt und einig', async () => {
+    const { w, A, A2, B, act } = await withA2()
+    // Astras Gegenlauf (Review 18): A1 stimmt offline zu (Karte beim Adapter, nie beim Träger), Backup.
+    A.online = A2.online = false
+    expect(await A.consent(act)).toBe('ok')
+    A.commit()
+    const backup = w.stores.get('A1')!.snapshot()
+    expect(await A2.decline(act)).toBe('ok')
+    expect(await B.consent(act)).toBe('ok')
+    A2.online = true
+    await w.rounds(1)
+    A.online = true
+    await w.rounds(20)
+    // X3-Heilung: beide A abgelehnt, die Karte zurückgenommen.
+    expect(states(w, act)).toEqual(['declined/cancelled', 'declined/cancelled'])
+    expect(a1CardDeposits(A, act)).toBe(0)
+    // Restore auf A1, das Self-Journal drei Runden zurückgehalten: keine Freigabe vor dem Nachholen.
+    w.stores.get('A1')!.restore(backup)
+    await A.reload()
+    expect(M.act(A.state, act).o).toBe('handed') // der Stand des Backups
+    const self = (await A.cand.keys.pair('self/A')).rkid
+    w.carrier.faults.withhold('A1', (f) => f.address === self)
+    await w.rounds(3)
+    expect(A.syncPending).toBe(true)
+    expect(a1CardDeposits(A, act)).toBe(0)
+    expect(M.act(B.state, act).state).toBe('consented')
+    w.carrier.faults.reset()
+    expect(await w.until(() => !A.syncPending, 30)).toBeGreaterThan(0)
+    await w.rounds(30)
+    expect(a1CardDeposits(A, act)).toBe(0)
+    expect(M.act(B.state, act)).toMatchObject({ state: 'consented', pending: null })
+    expect(states(w, act)).toEqual(['declined/cancelled', 'declined/cancelled'])
+    expect(w.agree('A').agree).toBe(true)
+    expect(doubles(w, 'A')).toEqual([])
+  }, 300_000)
+
+  it('5. Spiegel zu 4: Restore, nach dem die Karte rechtmäßig gilt (keine Ablehnung); sie wartet auf das Nachholen und geht danach hinaus; A und B verbunden', async () => {
+    const { w, A, A2, B, act } = await withA2()
+    A.online = false
+    expect(await A.consent(act)).toBe('ok')
+    A.commit()
+    const backup = w.stores.get('A1')!.snapshot()
+    expect(await B.consent(act)).toBe('ok')
+    w.stores.get('A1')!.restore(backup)
+    await A.reload()
+    const self = (await A.cand.keys.pair('self/A')).rkid
+    w.carrier.faults.withhold('A1', (f) => f.address === self)
+    A.online = true
+    await w.rounds(3)
+    expect(A.syncPending).toBe(true)
+    expect(a1CardDeposits(A, act)).toBe(0)
+    w.carrier.faults.reset()
+    expect(await w.until(() => [...w.of('A'), B].every((d) => M.act(d.state, act).state === 'connected') && w.agree('A').agree, 30)).toBeGreaterThan(0)
+    expect(a1CardDeposits(A, act)).toBe(1)
+    expect(ledgerOf(w, 'B').get(`connect:${act}`)?.size).toBe(1)
+    expect(doubles(w, 'A')).toEqual([])
+    void A2
+  }, 300_000)
+
+  it('6. Tor-Review 19 B1a: eine alte, gültig signierte Schwesterantwort, nach dem Restore erneut zugestellt, beendet das Nachholen nicht; erst eine Antwort auf die laufende Anfrage', async () => {
+    const { w, A, A2, B, act } = await withA2()
+    const self = (await A.cand.keys.pair('self/A')).rkid
+    A.online = A2.online = false
+    expect(await A.consent(act)).toBe('ok')
+    A.commit()
+    const backup = w.stores.get('A1')!.snapshot()
+    expect(await B.consent(act)).toBe('ok')
+    // Eine echte Antwort von A2 aufzeichnen (A1 holt nach, empfängt aber nichts an der eigenen Adresse; A2 sieht kein Journal).
+    const mark = w.carrier.carried.length
+    await A.reload()
+    A.online = A2.online = true
+    w.carrier.faults.withhold('A1', (f) => f.address === self)
+    w.carrier.faults.withhold('A2', (f) => w.frameOrigin(f.bytes)?.kind === 'journal')
+    await w.rounds(3)
+    const old = w.carrier.carried.slice(mark).find((f) => w.frameOrigin(f.bytes)?.device === 'A2' && w.frameOrigin(f.bytes)?.kind === 'journal-sync-reply')
+    expect(old).toBeTruthy()
+    // A2 lehnt ab, die Geräte heilen: beide abgelehnt, die Karte zurückgenommen.
+    expect(await A2.decline(act)).toBe('ok')
+    await A2.round()
+    w.carrier.faults.reset()
+    await w.rounds(30)
+    expect(states(w, act)).toEqual(['declined/cancelled', 'declined/cancelled'])
+    // Restore auf A1; nur die alte Antwort kommt an, das aktuelle Self-Journal bleibt zurückgehalten.
+    w.stores.get('A1')!.restore(backup)
+    await A.reload()
+    w.carrier.faults.withhold('A1', (f) => f.address === self && Buffer.compare(f.bytes, old!.bytes) !== 0)
+    w.carrier.deposit(self, old!.bytes)
+    await w.rounds(3)
+    expect(a1CardDeposits(A, act)).toBe(0)
+    expect(A.syncPending).toBe(true)
+    expect(M.act(B.state, act)).toMatchObject({ state: 'consented', pending: null })
+    expect(A.staleSyncAnswers).toBeGreaterThan(0)
+    // Eine frische Antwort auf die laufende Anfrage beendet das Nachholen; die Faltung entscheidet: abgelehnt, nichts an B.
+    w.carrier.faults.reset()
+    expect(await w.until(() => !A.syncPending, 30)).toBeGreaterThan(0)
+    await w.rounds(30)
+    expect(a1CardDeposits(A, act)).toBe(0)
+    expect(M.act(B.state, act)).toMatchObject({ state: 'consented', pending: null })
+    expect(states(w, act)).toEqual(['declined/cancelled', 'declined/cancelled'])
+    expect(w.agree('A').agree).toBe(true)
+  }, 300_000)
+
+  /** Restore A1 aus einem Backup mit gültiger Zustimmung (Karte nie beim Träger), A2 verloren (offline, antwortet nie). */
+  async function restoredWithLostSibling() {
+    const p = await withA2()
+    const { w, A, A2, B, act } = p
+    A.online = A2.online = false
+    expect(await A.consent(act)).toBe('ok')
+    A.commit()
+    const backup = w.stores.get('A1')!.snapshot()
+    expect(await B.consent(act)).toBe('ok')
+    w.stores.get('A1')!.restore(backup)
+    await A.reload()
+    A.online = true
+    return p
+  }
+
+  it('7. Frage 3 (Review 19): wird das einzige Schwestergerät widerrufen, hebt der Widerruf die Sperre; A1 gibt nach dem Stand der Faltung frei', async () => {
+    const { w, A, A2, B, act } = await restoredWithLostSibling()
+    await w.rounds(10)
+    expect(A.syncPending).toBe(true)
+    expect(a1CardDeposits(A, act)).toBe(0)
+    const gatedBefore = A.gatedRounds
+    expect(gatedBefore).toBe(10)
+    await w.revoke(A, A2)
+    const after = await w.until(() => a1CardDeposits(A, act) === 1 && M.act(B.state, act).state === 'connected', 20)
+    expect(after).toBeGreaterThan(0)
+    expect(A.gatedRounds - gatedBefore).toBeLessThanOrEqual(1) // die Sperre fällt in der Runde nach dem Widerruf
+    expect(M.act(A.state, act).state).toBe('connected')
+    expect(ledgerOf(w, 'B').get(`connect:${act}`)?.size).toBe(1)
+    // Ein späterer Neuaufbau sperrt nicht erneut: der Widerruf steht im Abbild.
+    await A.reload()
+    await w.rounds(1)
+    expect(A.gatedRounds - gatedBefore).toBeLessThanOrEqual(1)
+  }, 300_000)
+
+  it('8. Grenze (Review 19, Frage 3): ein wiederhergestelltes Gerät mit verlorenem, nicht widerrufenem Schwestergerät gibt nichts an Gegenseiten frei; keine Zeitgrenze', async () => {
+    const { w, A, B, act } = await restoredWithLostSibling()
+    await w.rounds(70)
+    expect(A.syncPending).toBe(true)
+    expect(A.gatedRounds).toBe(70)
+    expect(a1CardDeposits(A, act)).toBe(0)
+    expect(M.act(B.state, act).state).toBe('consented')
+  }, 300_000)
 })
 
 // K1a Schritt 2 (Anton 18.10., Optionen 1+2): Vereinigung eigener Tupel durch Neuauswertung empfangener Proben. Ein
@@ -591,14 +865,16 @@ describe('K1a Schritt 2: Vereinigung eigener Tupel durch Neuauswertung empfangen
     expect(one.outcome, one.detail).toBe('bestanden')
   }, 600_000)
 
-  it('3. alle Szenarien mit zwei Geräten: X14 und X7b bestanden, X7 streng nicht, der Rest wie in NOTES', async () => {
+  it('3. alle Szenarien mit zwei Geräten: X14 und X7b bestanden, X7 streng nicht, X3 und X18 bestanden mit „Zusage geändert“ (Schritt 3), der Rest wie in NOTES', async () => {
     const r = byId(await runX15(k1a(), false))
     for (const x of Object.values(r)) expect(x.crashed, `${x.scenario}: ${x.detail}`).toBeFalsy()
     const want: Record<string, string> = {
-      X1: 'bestanden', X2: 'bestanden', X3: 'nicht bestanden', X4: 'bestanden', X5: 'bestanden', X6: 'bestanden', X7: 'nicht bestanden', X7b: 'bestanden', X8: 'bestanden', X9: 'nicht bestanden', X10: 'nicht abbildbar', X11: 'bestanden', X12: 'bestanden',
-      X13: 'bestanden', X14: 'bestanden', X15: 'bestanden', X16: 'nicht bestanden', X17: 'nicht bestanden', X18: 'nicht bestanden', X21: 'bestanden',
+      X1: 'bestanden', X2: 'bestanden', X3: 'bestanden', X4: 'bestanden', X5: 'bestanden', X6: 'bestanden', X7: 'nicht bestanden', X7b: 'bestanden', X8: 'bestanden', X9: 'nicht bestanden', X10: 'nicht abbildbar', X11: 'bestanden', X12: 'bestanden',
+      X13: 'bestanden', X14: 'bestanden', X15: 'bestanden', X16: 'nicht bestanden', X17: 'nicht bestanden', X18: 'bestanden', X21: 'bestanden',
     }
     for (const [id, outcome] of Object.entries(want)) expect(r[id]?.outcome, `${id}: ${r[id]?.detail}`).toBe(outcome)
+    // Zusage geändert (Schritt 3) genau bei X3 und X18; jede andere Zelle unverändert ohne Marke.
+    expect(Object.values(r).filter((x) => x.promiseChanged).map((x) => x.scenario).sort()).toEqual(['X18', 'X3'])
   }, 1_800_000)
 
   it('4. Tor-Review 13, asymmetrisch: nur A hat zwei Geräte; A2 behält Bs Probe und trifft nach dem Journal, ohne jede Probe von A', async () => {

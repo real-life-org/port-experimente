@@ -277,6 +277,12 @@ export interface Submission {
 export class Zusteller {
   readonly submissions = new Map<string, Submission>()
   readonly notes: string[] = []
+  /**
+   * Zurückgehalten (E15, Tor-Review 18 B1a): eine freigegebene Submission, für die das Gerät `true` liefert, wird in
+   * dieser Runde weder eingeliefert noch wiederholt, und ihre Fristen laufen nicht (das Gerät holt nach einem
+   * Neuaufbau erst sein eigenes Journal nach). `null`: nichts zurückgehalten.
+   */
+  gate: ((s: Submission) => boolean) | null = null
   constructor(
     readonly device: string,
     private readonly carrier: () => Carrier,
@@ -343,6 +349,7 @@ export class Zusteller {
   advance() {
     for (const s of this.submissions.values()) {
       if (s.report === null) continue // vorgemerkt, nicht freigegeben: liegt vor der Commit-Grenze des Geräts (#56)
+      if (this.gate?.(s)) continue // zurückgehalten bis zum Nachholen (B1a): keine Einlieferung, keine Frist
       s.rounds++
       s.sinceDeposit++
       if (s.sinceAccepted !== null) s.sinceAccepted++
@@ -367,6 +374,19 @@ export class Zusteller {
   discard(digest: string): void {
     const s = this.submissions.get(digest)
     if (s && s.report === null) this.submissions.delete(digest)
+  }
+  /**
+   * Lokale Abgrenzung (E15 K1a Schritt 3, wie 8326.4 `not-taken` und 8326.8): eine Einlieferung, die den Träger nie
+   * erreicht hat (vorgemerkt, oder `awaiting-transport` ohne eine gelungene Einlieferung), kann nicht mehr genommen
+   * werden; der Adapter verwirft sie. Liefert true, wenn verworfen. Hat der Träger sie schon (`accepted` oder später),
+   * bleibt sie (8326.9: eine offene Übergabe wird nicht aufgehoben).
+   */
+  demarcate(digest: string): boolean {
+    const s = this.submissions.get(digest)
+    if (!s || s.deposits > 0) return false
+    if (s.report !== null && s.report.state !== 'awaiting-transport') return false
+    this.submissions.delete(digest)
+    return true
   }
   transport(digest: string) {
     return this.submissions.get(digest)?.transport
