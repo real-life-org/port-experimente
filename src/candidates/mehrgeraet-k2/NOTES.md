@@ -179,28 +179,35 @@ act, the counterpart at once, the user confirms the acceptance budget
 daily (8515; the per-device share is lifted, budget 1000). Stock key
 lifetime = naming window beyond the act (8470 needs the whole act lifetime
 of remaining validity: expiresAt = allocation + act-lifetime + act-skew +
-window). One run per cell; counts per 30 introductions.
+window). Five runs per cell under seeded randomness (seeds 1–5; which A
+device opens which relationship, and so whose keys M names, varies with
+the seed); sums over 5 × 30 = 150 introductions, range per run in
+brackets.
 
-| variant | window | issued (refused by M) | on A2's keys | of them while A2 sleeps | expired unseen (8155) | card after end of acceptance (8110.5) | connected |
-|---|---|---|---|---|---|---|---|
-| K1a | 2 d | 27 (3) | – | – | 0 | 0 | 27 |
-| K1a | 7 d | 29 (1) | – | – | 0 | 0 | 29 |
-| K1a | 30 d | 30 (0) | – | – | 0 | 0 | 30 |
-| K2-strict | 2 d | 27 (3) | 5 | 0 | 0 | 0 | 27 |
-| K2-strict | 7 d | 30 (0) | 12 | 3 | **3** | 0 | 27 |
-| K2-strict | 30 d | 30 (0) | 8 | 2 | **2** | 0 | 28 |
-| K2-shared | 2 d | 27 (3) | 8 | 0 | 0 | 0 | 27 |
-| K2-shared | 7 d | 30 (0) | 12 | 1 | 0 | **1** | 29 |
-| K2-shared | 30 d | 30 (0) | 11 | 3 | 0 | **2** | 28 |
+| variant | window | issued | refused by M | on A2's keys | of them while A2 sleeps | expired unseen (8155) | card after end of acceptance (8110.5) | connected |
+|---|---|---|---|---|---|---|---|---|
+| K1a | 2 d | 135 | 15 (3) | – | – | 0 | 0 | 135 |
+| K1a | 7 d | 145 | 5 (1) | – | – | 0 | 0 | 145 |
+| K1a | 30 d | 150 | 0 | – | – | 0 | 0 | 150 |
+| K2-strict | 2 d | 135 | 15 (3) | 40 (6–10) | 3 (0–1) | **3** (0–1) | 0 | 132 |
+| K2-strict | 7 d | 150 | 0 | 52 (9–14) | 9 (1–2) | **9** (1–2) | 0 | 141 |
+| K2-strict | 30 d | 150 | 0 | 34 (6–7) | 13 (2–3) | **13** (2–3) | 0 | 137 |
+| K2-shared | 2 d | 135 | 15 (3) | 40 (6–10) | 3 (0–1) | 0 | **3** (0–1) | 132 |
+| K2-shared | 7 d | 150 | 0 | 52 (9–14) | 9 (1–2) | 0 | **9** (1–2) | 141 |
+| K2-shared | 30 d | 150 | 0 | 59 (9–13) | 13 (2–3) | 0 | **13** (2–3) | 137 |
 
 Reading: every loss is a ticket on a key of the sleeping device issued
-while it sleeps. K2-strict loses it before consent (only the holder opens
-the ticket, the consent cutoff passes unseen); K2-shared loses it after
-consent (any device sees and consents, the allocating device produces the
-card after the end of acceptance). The loss is bounded by the sleeping
+while it sleeps, and in every run the loss equals that count. Both
+variants lose the same introductions: K2-strict before consent (only the
+holder opens the ticket, the consent cutoff passes unseen), K2-shared after
+consent (any device sees and consents, but the allocating device produces
+the card only after the end of acceptance). Shared stock keys move the
+loss from 8155 to 8110.5; they do not remove it, because production stays
+with the allocator (E2 (iv)). The loss is bounded by the sleeping
 device's listed share (≤ 3 keys, MV-9 under device keys), not by the
-length of the sleep; a short window (2 days) lets those keys age out of
-M's view before they are named, at the price of three refusals by M for
+length of the sleep; it grows with the window (2 % at 2 days, 6 % at 7, 9 %
+at 30), and a short window (2 days) lets those keys age out of M's view
+before they are named, at the price of three refusals by M per run for
 want of a nameable key (K1a the same). K1a (one seed, every device opens
 and produces) loses nothing.
 
@@ -208,13 +215,14 @@ and produces) loses nothing.
 
 Thief window (`thiefWindow`: theft of A2's image, two rounds of activity by
 M and B before the revocation, two after; counted: documents the thief
-reads, receipts excluded):
+reads, receipts excluded; five seeds, equal in every seed unless a range is
+given):
 
 | | K1a | K2-strict | K2-shared | K2-strict, carrier only |
 |---|---|---|---|---|
 | reads before revocation | 7 | 7 | 9 | 7 |
-| of which tickets | 2 | 2 | 2 | 2 |
-| reads after revocation | 11 | **0** | **0** | 4 |
+| of which tickets | 2 | 1 | 2 | 1 |
+| reads after revocation | 11 | **0** | **0** | 3–5 |
 | rounds until B / M know the revocation | – | 1 / 1 | 1 / 1 | – |
 
 Before the revocation K2-shared exposes more (the thief also holds the
@@ -225,6 +233,8 @@ reading, as K1a does.
 Rotation traffic on revocation (`revocationTraffic`: A with M, B and C, A1
 revokes A2; frames from A's devices to counterparts until quiet, receipts
 and journal excluded):
+
+Five seeds, frames equal in every seed, bytes within ±5 B:
 
 | | K1a | K2-strict | K2-shared |
 |---|---|---|---|
@@ -271,6 +281,20 @@ byte-identical to main 69c70a1. Shared changes take effect only under
 kinds, the X2/X12/X13/X21 scenario adjustments (allocator consents,
 authorized path, structural X13, wait for the peer's ticket), and the
 X18 oracle (K0/K1a pass or fail it as before).
+
+### X21 phase end under device sets
+
+Under device sets a journal batch can be missing on a device while its
+content is already in that device's state through a sibling's cumulative
+revision (a `device-set` op): the projection is stable, the device is
+still catching up. X21 ended each phase with `untilStable` and counted the
+batch as missing one round before it arrived; K2-shared failed X21 in 5 of
+60 seeds. The phase end is now `untilSettled`: as long as a batch is
+missing and a device still catches up, the bench waits; a batch missing
+with no device catching up still counts as missing. Without missing
+batches it equals `untilStable`, so K0 and K1a are unchanged (identity
+above). After the change 60 of 60 seeds pass for K2-shared and 30 of 30 for
+K2-strict.
 
 ### Limits of step 2
 
@@ -668,5 +692,5 @@ throwaway script, numbers from one run; the frame counts are asserted in
 ```sh
 export PATH=/home/fritz/.n/n/versions/node/24.21.0/bin:$PATH
 pnpm vitest run tests/mehrgeraet-k2.test.ts
-REPORT=1 pnpm vitest run report   # column k2-device-keys in the multi-device port
+REPORT=1 pnpm vitest run report   # columns k2-device-keys and k2-shared-stock in the multi-device port
 ```
