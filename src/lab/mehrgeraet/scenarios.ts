@@ -604,8 +604,11 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
         }
         return k
       }
-      let addrRounds = 0
-      if (sets) for (addrRounds = 1; addrRounds <= 10 && (await addressable()) < roots.length; addrRounds++) await s.w.rounds(1)
+      let addrRounds = 0 // rounds actually run until addressable (CodeRabbit #74: counted before, one too many)
+      if (sets) while (addrRounds < 10 && (await addressable()) < roots.length) {
+        await s.w.rounds(1)
+        addrRounds++
+      }
       const addr = sets ? await addressable() : 0
       await A2.consent(r.act)
       await s.B.consent(r.act)
@@ -1040,7 +1043,7 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       // zwischen Karten gibt es nicht. Die Terminalität nach Faltung (8325) bleibt eine geänderte Zusage.
       const promiseChanged = ok && writers > 1
       const cardsOut = cardFramesOut(s.w, 'A', r.act)
-      const reasons = [doubles > 0 ? `doppelte Endwirkungen (A ${feA.total}${kindsA ? `: ${kindsA}` : ''}, B ${feB.total})` : '', !agree.agree ? 'die Projektionen von A bleiben verschieden' : '', sets && !pair.pairsAgree ? 'die Ankerpaare beider Seiten stimmen nicht überein' : '', sets && !pair.decrypt ? 'ein Mitglied öffnet nicht, was die Gegenseite versiegelt' : '', sets && !pair.cardIdentity ? 'V der Gegenseite ist nicht der Nutzlastdigest der Karte' : ''].filter(Boolean)
+      const reasons = [doubles > 0 ? `doppelte Endwirkungen (A ${feA.total}${kindsA ? `: ${kindsA}` : ''}, B ${feB.total})` : '', !agree.agree ? 'die Projektionen von A bleiben verschieden' : '', !pair.pairsAgree ? 'die Ankerpaare beider Seiten stimmen nicht überein' : '', !pair.decrypt ? 'ein Mitglied öffnet nicht, was die Gegenseite versiegelt' : '', !pair.cardIdentity ? 'V der Gegenseite ist nicht der Nutzlastdigest der Karte' : ''].filter(Boolean)
       const rule = sets ? (writers > 1 ? 'E2 (iv): zwei Zustimmungen (Regel 1), eine Karte vom zuteilenden Gerät, keine Auswahl; ' : '') : writers > 1 ? 'Regeln 1 und 3: zwei Zustimmungen, eine Wirkung, die kleinere Übergabe gewinnt; ' : ''
       const pairDetail = sets ? `; Ankerpaar beidseitig gleich: ${pair.pairsAgree ? 'ja' : 'nein'}, jedes Mitglied öffnet: ${pair.decrypt ? 'ja' : 'nein'}, V = Kartenidentität: ${pair.cardIdentity ? 'ja' : 'nein'}` : ''
       return { outcome: mark(ok), promiseChanged, detail: `${rule}${states.join(', ')}; A: ${cards} Karten-Dokument(e), davon ${cardsOut} beim Träger, ${cardKeys} Kartenschlüssel, Zustimmung aus ${consents} Operation(en) von ${writers} Gerät(en), Verbindung aus ${connectsA} Operation(en); doppelte Endwirkungen bei A: ${feA.total}${kindsA ? ` (${kindsA} je aus zwei Operationen)` : ''}, bei B: ${feB.total}; B: Karten empfangen ${cardsAtB.join('/')}, verbunden ${connectsAtB}×, Konfliktmarke K auf ${conflicts} Gerät(en), Tupel des Akts je Gerät ${tuplesAtB.join('/')}; Übergabe-Digests des Akts auf den A-Geräten: ${handOvers}; A stabil gleich nach ${nA} Runden: ${agree.agree ? 'ja' : 'nein'}, B nach ${nB}${pairDetail}${reasons.length ? `; nicht bestanden wegen: ${reasons.join('; ')}` : ''}`, measures: { ...(sets ? { anchorPairsAgree: pair.pairsAgree ? 1 : 0, membersDecrypt: pair.decrypt ? 1 : 0, cardIdentityAgrees: pair.cardIdentity ? 1 : 0 } : {}), cardsProducedByA: cards, cardFramesToB: cardsOut, consentWriters: writers, promiseChanged: promiseChanged ? 1 : 0, cardKeys, consentOperations: consents, connectOperationsA: connectsA, connectsAtB, cardConflictsAtB: conflicts, doubleFinalEffects: doubles, doubleFinalEffectsA: feA.total, doubleFinalEffectsB: feB.total, doubleEffectKindsA: kindsA || '–', handOverDigestsOnA: handOvers, projectionAgrees: agree.agree ? 1 : 0, roundsToConverge: nA } }

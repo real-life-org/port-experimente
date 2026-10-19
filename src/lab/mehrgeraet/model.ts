@@ -1001,7 +1001,23 @@ function applyBody(s: HolderState, op: Op): void {
       const sets = tableOf(s.sets)
       const prev = own(sets, op.root)
       const set: DeviceSet = prev ? { ...prev, certs: tableOf(prev.certs), revs: tableOf(prev.revs), seen: [...prev.seen], ...(prev.local ? { local: tableOf(prev.local) } : {}) } : { root: op.root, rootKeyAgreement: op.rootKeyAgreement, certs: table(), revs: table(), seen: [] }
-      for (const c of op.certs) if (c.root === op.root && !own(set.certs, certKey(c))) put(set.certs, certKey(c), c)
+      // Widersprüchliche Werte (CodeRabbit #74): in jeder Reihenfolge bleibt der kanonisch kleinere, je Konflikt ein Befund.
+      const conflict = (text: string) => {
+        if (!s.findings.includes(text)) s.findings.push(text)
+      }
+      if (prev && op.rootKeyAgreement !== set.rootKeyAgreement) {
+        conflict(`device-set auf ${op.root.slice(-8)}: zwei Vereinbarungsschlüssel der Wurzel`)
+        if (op.rootKeyAgreement < set.rootKeyAgreement) set.rootKeyAgreement = op.rootKeyAgreement
+      }
+      for (const c of op.certs) {
+        if (c.root !== op.root) continue
+        const held = own(set.certs, certKey(c))
+        if (!held) put(set.certs, certKey(c), c)
+        else if (canonical(held) !== canonical(c)) {
+          conflict(`device-set auf ${op.root.slice(-8)}: Nachweis ${c.kind} ${c.anchor.slice(-8)} von ${c.by.slice(-8)} zweimal mit anderem Inhalt`)
+          if (canonical(c) < canonical(held)) put(set.certs, certKey(c), c)
+        }
+      }
       if (op.local) {
         const local = tableOf(set.local)
         for (const [anchor, device] of Object.entries(op.local)) if (!own(local, anchor)) put(local, anchor, device)

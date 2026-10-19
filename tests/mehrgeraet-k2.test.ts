@@ -7,6 +7,7 @@ import { runX15 } from '../src/lab/mehrgeraet/scenarios'
 import { anchorPairOracle, enrolFanout, revocationTraffic, thiefWindow, timeModel } from '../src/lab/mehrgeraet/geraetemengen'
 import { k2, K2Device } from '../src/candidates/mehrgeraet-k2'
 import { k1a, type Batch } from '../src/candidates/mehrgeraet-k1a'
+import { k0 } from '../src/candidates/mehrgeraet-k0'
 import * as M from '../src/lab/mehrgeraet/model'
 
 // E15 K2 step 1: device keys (plan 6o.4 step 1, assumptions 6o.5 no. 1–5).
@@ -393,6 +394,27 @@ describe('K2 Schritt 2: Gerätemengen aus Nachweisen', () => {
     expect(revs(d1, d2).findings).toBe(1)
   })
 
+  it('S1b. Modell (CodeRabbit #74): widersprüchliche Nachweise mit demselben Schlüssel (Art, Anker, Aussteller) und ein widersprüchlicher Wurzel-Vereinbarungsschlüssel falten in jeder Reihenfolge gleich: das kanonisch kleinere bleibt, je Konflikt ein Befund', () => {
+    const proof = (v: string) => ({ type: 'DataIntegrityProof', cryptosuite: 'eddsa-jcs-2022', created: '2026-10-19T00:00:00Z', verificationMethod: 'x', proofPurpose: 'assertionMethod', proofValue: v })
+    const c1: M.SetCert = { root: 'r', kind: 'admit', anchor: 'a2', keyAgreement: 'ka-1', by: 'r', proof: proof('z1') }
+    const c2: M.SetCert = { root: 'r', kind: 'admit', anchor: 'a2', keyAgreement: 'ka-2', by: 'r', proof: proof('z2') }
+    const fold = (ops: Array<{ rka: string; cert: M.SetCert }>) => {
+      const s = M.emptyState('B')
+      ops.forEach((o, i) => M.apply(s, { id: { writer: 'B1@x', n: i + 1 }, at: '2026-10-19T00:00:00Z', kind: 'device-set', root: 'r', rootKeyAgreement: o.rka, certs: [o.cert] }))
+      const set = M.own(s.sets, 'r')!
+      return { set: M.canonical({ rka: set.rootKeyAgreement, certs: set.certs }), findings: s.findings.length }
+    }
+    const x = fold([{ rka: 'ka-r', cert: c1 }, { rka: 'ka-q', cert: c2 }])
+    const y = fold([{ rka: 'ka-q', cert: c2 }, { rka: 'ka-r', cert: c1 }])
+    expect(x.set).toBe(y.set)
+    expect(x.set).toContain('ka-1') // the smaller certificate
+    expect(x.set).toContain('ka-q') // the smaller root key agreement
+    expect(x.findings).toBe(2)
+    expect(y.findings).toBe(2)
+    // The same conflict again adds no finding (deduplicated); an identical certificate is no conflict.
+    expect(fold([{ rka: 'ka-r', cert: c1 }, { rka: 'ka-q', cert: c2 }, { rka: 'ka-r', cert: c2 }, { rka: 'ka-r', cert: c1 }]).findings).toBe(2)
+  })
+
   it('S2. Begegnung: B kennt As Menge nur aus dem Nachweis (keine Liste für Gegenseiten); ohne Nachweis versiegelt B an die Wurzel allein, danach an jedes Mitglied', async () => {
     const c = k2()
     expect('recipients' in c.directory).toBe(false)
@@ -768,6 +790,12 @@ describe('K2 Schritt 2: Messungen (X23, Diebesfenster, Rotation, Fan-out, Ankerp
     expect(env).toBeTruthy()
     void receive
   }, 60_000)
+
+  it('M1b. X18 (CodeRabbit #74): das Ankerpaar-Orakel gilt für jeden Kandidaten, und fällt es, nennt das Detail den Grund auch ohne Gerätemengen (K0)', async () => {
+    const [r] = await runX15(k0(), false, ['X18'])
+    expect(r!.outcome).toBe('nicht bestanden')
+    expect(r!.detail).toContain('die Ankerpaare beider Seiten stimmen nicht überein')
+  }, 120_000)
 
   it('M2. X23 Zeitmodell: ruhendes Gerät (14 von 30 Tagen), Lebensdauer der Vorrats-Schlüssel 2 und 30 Tage (7 Tage in den NOTES), je Variante: ungesehen verfallene Vorstellungen (8155) und Karten nach dem Annahmeende (8110.5)', async () => {
     const table: Record<string, unknown> = {}
