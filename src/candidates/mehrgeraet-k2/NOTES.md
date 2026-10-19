@@ -217,7 +217,7 @@ with its outcome, `expire` op in C's journal):
 |---|---|---|---|---|---|---|---|---|
 | K2-strict | 8155 (3/8/9) | inside A2's sleep (8–14) | +6 / +7 d | never (holder online 0 steps before the cutoff) | never | never | – | 0.25 d after expiry (next step at C) |
 | K2-shared | 8110.5 (3/8/9) | inside A2's sleep (8–14) | +6 / +7 d | 0.25 d after issue, on A1 | never (no `produce` op on any A device; allocator online 0 steps before expiry) | never | – | 0.25 d after expiry |
-| K2-shared, review 34 counter-run (seeds 2, 3, 5, 2 days, A2 asleep days 0–8, window 30 d; test in `mehrgeraet-seeds.test.ts`) | card late (1 per seed) | day 1 | day 7 / day 8 | day 1.25 on A1 | day 8 (A2 back, `produce` op at the acceptance end) | after day 8 | `after-acceptance-end-8110.5` | – |
+| K2-shared, review 34 counter-run (seeds 2, 3, 5, 2 days, A2 asleep days 0–8, window 30 d; test in `mehrgeraet-seeds.test.ts`) | card late (1 per seed) | day 1 | day 7 / day 8 | day 1.25 on A1 | day 8 (A2 back, `produce` op at the acceptance end) | after day 8 | `after-acceptance-end-8110.5` | day 8.25 (`expire` op in C's journal; review 35 S5) |
 
 The table numbers did not change with the correction: under the default
 sleep (days 8–22) no card is produced at the edge, so every shared loss is
@@ -407,54 +407,67 @@ M keeps a tombstone per anchor:
 
 - **Sender** (`holder.ts` `sendRevision`): an empty revision carries
   `tombstones`, the sorted anchors of the stock it withdraws, consumed
-  keys left out (8570.2 marks them at M already). Strict: the device's own
-  anchors (`by` = this device). Shared: every anchor of the shared stock
-  (from the journal; every device holds the seed). `clears` under device
+  keys left out (8570.2 marks them at M already). On class off, in both
+  variants: every anchor of the person the issuer knows (its own and its
+  siblings' from the journal; review 35 B6). Shared also on the rotation
+  after a revocation. Strict with the class still on (an empty share):
+  only the device's own anchors. `clears` under device
   keys is a form error at M (finding, no receipt).
-- **Fold** (`model.ts` `applyWriterView`, op `view` with `standing`): every
-  folded revision of a signer, lower ones included, adds its listed
-  anchors to `listed[signer]` and its tombstones to `tombstones[anchor]`
-  (set of signers). Both only grow; the view is a function of the folded
+- **Fold** (`model.ts` `applyWriterView`, op `view` with `standing: 'person'`): every
+  folded revision of a signer, lower ones included, adds its tombstones
+  to `tombstones[anchor]` (set of signers). Both only grow; the view is a function of the folded
   set (`viewKeys`, `buried`): order-free, idempotent under duplicates. A
   buried anchor is absent from the view whichever writer lists it, so the
   tombstone dominates any listing of that anchor, before or after it.
-- **Standing** (`M.hasStanding`): strict (`own`): a tombstone counts only
-  for an anchor its signer listed itself; a tombstone for a sibling's
-  key or for an anchor nobody listed has no effect. Shared (`set`): a
-  tombstone counts for any anchor a writer of the same person listed at M
-  (the shared stock). A tombstone without standing when it arrives is a
-  finding (`Grabstein ohne Stand`) and has no effect; it takes effect
-  only if a listing of that anchor later gives its signer standing (the
-  same rule in every arrival order; the finding itself is written when the
-  tombstone arrives first).
+- **Who may bury** (review 35 B6; decision under Anton's rule 1b,
+  "a decision of the person may be spoken by any device"; Anton may
+  veto): class off is a decision of the person. Any member device's
+  tombstone counts for any anchor of the person at M, in both variants;
+  there is no standing by listing any more. A tombstone for an anchor
+  nobody lists yet is kept and takes effect when a listing of that anchor
+  arrives (same result in every order). Price, named: a stolen device can
+  bury all of the person's keys at M until its revocation; the refill
+  after the revocation restores (fresh anchors), and the rule below
+  restores every old anchor a remaining device still lists.
 - **Revoked signers** (`holder.ts` `unrevokedKeys`, `M.buried` with the
   revoked set M holds for the counterpart): a tombstone of a signer M
   knows as revoked counts only for an anchor that no unrevoked writer
   lists in its latest revision. So a revoked device never takes away a key
   a remaining device still vouches for. What a revoked device could reach
-  before its revocation: strict, only its own listed keys (withdrawn by
-  the rotation anyway; listing a sibling's anchor itself to gain standing
-  does not help, the sibling still lists it); shared, only anchors that
-  existed and were listed before its revocation, all of which the
-  rotation withdraws. Anchors created after the revocation (the refill)
+  before its revocation: every anchor of the person; after M knows the
+  revocation, only those no remaining device lists (its own, withdrawn by
+  the rotation anyway). Anchors created after the revocation (the refill)
   are fresh keys it cannot know (the journal is sealed to members only).
-- **Consequence for strict class-off**: a device's empty revision buries
-  only its own keys at M. Each sibling buries its own when it folds the
-  class-off (`withdrawAfterClassOff`), so an offline sibling's keys stay
-  nameable at M until it is back (a ticket on them is refused by the
-  sibling, whose stock is withdrawn by then). Shared buries every anchor
-  of the person with one revision, as before.
-- Restore and enrolment: tombstones and `listed` are part of the view op
+- **Strict class-off** (review 35 B6, Astra's counter-run): A1 turns
+  the class off while A2 is offline; A1's empty revision names A2's
+  anchors too, so M names none of the person's keys once it has folded
+  it and refuses to introduce; A2 returns with its journal delayed and
+  there is nothing to accept. Before the fix M still named two of A2's
+  keys and an introduction led to a connection.
+- **Naming split after a revocation** (found with the fix): the interim
+  split rule (`mayName`, n mod devices) read the key's number from the
+  stored view, which leaves out every anchor buried at fold time. A
+  revoked device's tombstone folded before M knew the revocation thus
+  kept a restored key unnameable. The split now reads the number from
+  the writers' listings; whether a key is in force stays with the
+  selection (`unrevokedKeys`). T1 checks that M introduces again after
+  the revocation.
+- Restore and enrolment: tombstones are part of the view op
   (journal) and of the state image (`fromJson`, projection), so a
   restored or newly enrolled M device holds them (test T2).
 
-Tests: model (shared and strict, all 120 orders of listing, withdrawal,
-refill and a re-listing of buried anchors, with duplicates; revoked rule;
-image), T1 (Astra's probe in both variants: the `clears` revision is
-refused, tombstones for A1's anchors and an invented anchor; after the
-revocation every active A1 key stays nameable), T2 (restore of M1 from
-an image before the revocation, M3 enrolled after), R4 (B4 stays closed:
-every order and duplicates).
+Tests: model (all 120 orders of listing, withdrawal, refill and a
+re-listing of buried anchors, with duplicates; a member buries a sibling's
+anchor and one listed only later, every order; revoked rule; image), T1
+(Astra's probe in both variants: the `clears` revision is refused; A2's
+tombstones for A1's anchors bury them before the revocation, the named
+price; after the revocation every active A1 key is nameable again), T2
+(restore of M1 from an image before the revocation, M3 enrolled after),
+U1 (review 35 B6, both variants, forward, reverse, duplicates: A2
+offline, A1 class off, M names nothing and refuses to introduce, A2
+returns with a delayed journal, no connection; restore of M1 and an M3
+enrolled after: still nothing; class on again: the refill is nameable),
+R4 (B4 stays closed: every order and duplicates).
 
 ### Counter card through the sibling (8325.A5c)
 
@@ -579,10 +592,15 @@ under load). The default run (CI) takes seed 1 of each variant (97 s);
 7. **6270 receive contract**: receive never filters; conflicting proofs
    fold to the canonical smallest with both kept for the finding; empty
    revisions (8535) name the anchors they withdraw (tombstones per anchor,
-   bound by standing: strict own listing, shared the person's listing; a
-   revoked signer's tombstone never buries a key an unrevoked writer still
-   lists), so withdrawal is order-free and bounded (8535 under per-signer
-   writers; review 34).
+   any member may bury any anchor of the person; a revoked signer's
+   tombstone never buries a key an unrevoked writer still lists), so
+   withdrawal is order-free and bounded (8535 under per-signer writers;
+   reviews 34, 35).
+8. **Multi-writer contract, question 4.10 (class across writers)**:
+   answered (Fable under rule 1b, 19.10.; Anton may veto): off wins, and
+   any member device may tombstone all anchors of the person. Price: a
+   stolen device can bury all of the person's keys at M until its
+   revocation; the refill restores.
 
 ## Step 1 (18 October 2026)
 

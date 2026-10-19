@@ -469,7 +469,7 @@ describe('K1a Schritt 4: Ms Sicht über pseudonyme Schreiber (8500 und 6270 je S
 
 describe('K2, Review 34 B5: Grabstein je Anker statt Nummern', () => {
   const lk = (a: string, n = 1) => ({ n, anchor: a, keyAgreement: `r${a}`, expiresAt: t0 })
-  const view = (standing: 'own' | 'set', writer: string, revision: number, anchors: string[], tombstones?: string[]) => op({ kind: 'view', rel: 'A:e1', scope: 'A:e1', revision, keys: anchors.map((a) => lk(a)), writer, standing, ...(tombstones ? { tombstones } : {}) })
+  const view = (writer: string, revision: number, anchors: string[], tombstones?: string[]) => op({ kind: 'view', rel: 'A:e1', scope: 'A:e1', revision, keys: anchors.map((a) => lk(a)), writer, standing: 'person', ...(tombstones ? { tombstones } : {}) })
   const fold = (ops: M.Op[]) => {
     const s = withRel()
     for (const o of ops) M.apply(s, o)
@@ -479,11 +479,11 @@ describe('K2, Review 34 B5: Grabstein je Anker statt Nummern', () => {
   const anchors = (s: M.HolderState) => M.rel(s, 'A:e1').view!.keys.map((k) => k.anchor)
 
   it('shared: die leere Revision nennt die Anker, die sie zurückzieht (auch die einer Schwester); in jeder Reihenfolge, mit Duplikaten, dominiert der Grabstein auch eine Nachfüllung, die einen der Anker wieder listet; die Nachfüllung mit neuen Ankern gilt', () => {
-    const L1 = view('set', 'w1', 1, ['a', 'b'])
-    const L2 = view('set', 'w2', 1, ['c'])
-    const E = view('set', 'w1', 2, [], ['a', 'b', 'c'])
-    const R = view('set', 'w1', 3, ['d'])
-    const X = view('set', 'w2', 2, ['a', 'c']) // lists tombstoned anchors again
+    const L1 = view('w1', 1, ['a', 'b'])
+    const L2 = view('w2', 1, ['c'])
+    const E = view('w1', 2, [], ['a', 'b', 'c'])
+    const R = view('w1', 3, ['d'])
+    const X = view('w2', 2, ['a', 'c']) // lists tombstoned anchors again
     const E2 = { ...E, id: { writer: 'w', n: 9999 } } as M.Op // the same revision a second time (network duplicate, new op)
     const want = M.canonical(M.rel(fold([L1, L2, E, R, X]), 'A:e1').view)
     for (const p of perms([L1, L2, E, R, X])) {
@@ -495,29 +495,29 @@ describe('K2, Review 34 B5: Grabstein je Anker statt Nummern', () => {
     }
   })
 
-  it('strict: ein Grabstein zählt nur für Anker, die der Aussteller selbst gelistet hat; Anker einer Schwester und nie gelistete bleiben unberührt (in jeder Reihenfolge)', () => {
-    const L1 = view('own', 'w1', 1, ['a', 'b'])
-    const L2 = view('own', 'w2', 1, ['c'])
-    const E2 = view('own', 'w2', 2, [], ['a', 'b', 'c', 'z']) // w2 names w1's anchors and an anchor nobody listed
-    for (const p of perms([L1, L2, E2])) expect(anchors(fold(p))).toEqual(['a', 'b'])
-    // Shared standing for the same ops: every listed anchor of the person counts.
-    const S = [view('set', 'w1', 1, ['a', 'b']), view('set', 'w2', 1, ['c']), view('set', 'w2', 2, [], ['a', 'b', 'c', 'z'])]
-    for (const p of perms(S)) expect(anchors(fold(p))).toEqual([])
+  it('Review 35 B6 (Entscheidung 1b): Klasse aus ist Sache der Person; der Grabstein jedes Mitglieds zählt für jeden Anker der Person, auch für die einer Schwester und für noch nie gelistete (in jeder Reihenfolge, mit Duplikaten)', () => {
+    const L1 = view('w1', 1, ['a', 'b'])
+    const L2 = view('w2', 1, ['c'])
+    const E1 = view('w1', 2, [], ['a', 'b', 'c', 'z']) // w1 names its sibling's anchor c and an anchor nobody listed yet
+    const Z = view('w2', 2, ['c', 'z']) // w2 (offline at the time) lists c again and z for the first time
+    for (const p of perms([L1, L2, E1, Z])) {
+      expect(anchors(fold(p))).toEqual([])
+      expect(anchors(fold([...p, { ...E1, id: { writer: 'w', n: 9998 } } as M.Op, L2]))).toEqual([])
+    }
   })
 
-  it('Widerruf: Grabsteine eines widerrufenen Signierers zählen nicht für Anker, die ein nicht widerrufener Schreiber listet (auch wenn er sie sich vorher selbst gelistet hat)', () => {
-    // strict: w2 lists w1's anchor a itself (to gain standing), then tombstones it.
-    const ops = [view('own', 'w1', 1, ['a', 'b']), view('own', 'w2', 1, ['a']), view('own', 'w2', 2, [], ['a'])]
+  it('Widerruf: Grabsteine eines widerrufenen Signierers zählen nur für Anker, die kein nicht widerrufener Schreiber listet; vor dem Widerruf begräbt er alle (benannter Preis: Diebesfenster)', () => {
+    const ops = [view('w1', 1, ['a', 'b']), view('w2', 1, ['c']), view('w2', 2, [], ['a', 'c'])]
     for (const p of perms(ops)) {
       const v = M.rel(fold(p), 'A:e1').view!
-      expect(M.viewKeys(v.writers!, M.tableOf(v.clears), v).keys.map((k) => k.anchor)).toEqual(['b']) // w2 not known as revoked: it had standing
+      expect(M.viewKeys(v.writers!, M.tableOf(v.clears), v).keys.map((k) => k.anchor)).toEqual(['b']) // w2 not known as revoked: it buries a and c
       const unrevoked = M.table(Object.entries(v.writers!).filter(([w]) => w !== 'w2'))
       expect(M.viewKeys(unrevoked, M.tableOf(v.clears), v, new Set(['w2'])).keys.map((k) => k.anchor)).toEqual(['a', 'b'])
     }
   })
 
   it('Restore: Grabsteine und gelistete Anker überstehen das Abbild (JSON) und die Projektion trägt sie', () => {
-    const s = fold([view('set', 'w1', 1, ['a']), view('set', 'w1', 2, [], ['a'])])
+    const s = fold([view('w1', 1, ['a']), view('w1', 2, [], ['a'])])
     const back = M.fromJson(JSON.parse(JSON.stringify(s)) as M.HolderState)
     expect(M.canonical(M.rel(back, 'A:e1').view)).toBe(M.canonical(M.rel(s, 'A:e1').view))
     expect(M.rel(back, 'A:e1').view!.tombstones).toEqual({ a: ['w1'] })

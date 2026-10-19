@@ -988,8 +988,8 @@ const unrevoked = (m: HolderDevice, relId: string) => (m as unknown as { unrevok
 
 describe('K2 Schritt 2: Review 34, Grabstein je Anker statt Nummern (B5)', () => {
   for (const stock of ['strict', 'shared'] as const) {
-    it(`T1. ${stock}: Astras Probe: A2 signiert vor dem Widerruf Revision 0 mit \`clears: {A1: 1000000}\` (alte Form: abgewiesen, Befund) und mit Grabsteinen für A1s Anker und einen nie gelisteten Anker (Befund ohne Stand); nach Widerruf und Nachfüllung bleiben A1s Schlüssel für M benennbar`, async () => {
-      const { w, A, A2, Mm, am } = await world(k2({ stock }))
+    it(`T1. ${stock}: Astras Probe: A2 signiert vor dem Widerruf Revision 0 mit \`clears: {A1: 1000000}\` (alte Form: abgewiesen, Befund) und mit Grabsteinen für A1s Anker und einen nie gelisteten Anker; vor dem Widerruf begräbt A2 als Mitglied A1s Schlüssel (Entscheidung 1b, benannter Preis), nach Widerruf und Nachfüllung sind A1s Schlüssel für M wieder benennbar`, async () => {
+      const { w, A, A2, Mm, am, bm } = await world(k2({ stock }))
       const mRel = () => M.relOfTuple(Mm.state, am.y.id)!.id
       const h = M.head(M.rel(A2.state, am.x.id))
       const rkid = (await A2.cand.keys.pair(h.ownKey)).rkid
@@ -1005,15 +1005,16 @@ describe('K2 Schritt 2: Review 34, Grabstein je Anker statt Nummern (B5)', () =>
       expect(raw(Mm).completed.has(old!.digest)).toBe(false)
       const found = Mm.state.findings.slice(before)
       expect(found.filter((f) => f.includes('clears')), found.join('\n')).toHaveLength(1)
-      expect(found.some((f) => f.includes('ohne Stand') && f.includes(fake.slice(-8))), found.join('\n')).toBe(true)
-      // strict: A2 never listed A1's keys, so they stay nameable before the revocation; shared: A2 knew them (standing).
-      if (stock === 'strict') expect(a1Anchors.every((a) => unrevoked(Mm, mRel()).includes(a))).toBe(true)
+      // Review 35 B6 (1b): any member may bury any anchor of the person; before the revocation A1's keys are gone (thief window).
+      expect(a1Anchors.filter((a) => unrevoked(Mm, mRel()).includes(a)), stock).toEqual([])
       await w.revoke(A, A2)
       await w.rounds(6)
       const now = M.rel(A.state, am.x.id).stock.filter((k) => k.by === 'A1' && k.state === 'active').map((k) => k.anchor)
       expect(now.length).toBeGreaterThan(0)
       expect(now.filter((a) => !unrevoked(Mm, mRel()).includes(a)), stock).toEqual([])
       expect(Mm.stockAt(mRel()).nameable, stock).toBeGreaterThan(0)
+      // ... and M introduces on them again (the split reads the restored listing, not the view folded before the revocation).
+      expect('act' in (await Mm.introduce(am.y.id, bm.y.id)), stock).toBe(true)
     }, 120_000)
   }
 
@@ -1043,6 +1044,57 @@ describe('K2 Schritt 2: Review 34, Grabstein je Anker statt Nummern (B5)', () =>
     await s.w.rounds(4)
     check(M3, 'M3 aufgenommen')
   }, 180_000)
+})
+
+describe('K2 Schritt 2: Review 35, Klasse aus ist Sache der Person (B6)', () => {
+  for (const stock of ['strict', 'shared'] as const) {
+    it(`U1. ${stock}: Astras Gegenlauf: A2 offline, A1 schaltet die Klasse aus; in jeder Ankunftsreihenfolge und mit Duplikaten benennt M danach keinen Schlüssel der Person mehr (auch keinen von A2) und stellt nicht vor; A2 kommt mit verzögertem Journal zurück, keine Verbindung; Restore und Enrollment bei M ändern das nicht`, async () => {
+      for (const order of ORDERS) {
+        const s = await world(k2({ stock, devices: 3 }))
+        const M2 = await s.w.enrol(s.Mm, 'M2')
+        await s.w.rounds(4)
+        const mRel = () => M.relOfTuple(s.Mm.state, s.am.y.id)!.id
+        const a2Anchors = M.rel(s.A2.state, s.am.x.id).stock.filter((k) => k.by === 'A2' && k.state === 'active').map((k) => k.anchor)
+        expect(a2Anchors.length, order).toBeGreaterThan(0)
+        expect(a2Anchors.some((a) => unrevoked(s.Mm, mRel()).includes(a)), order).toBe(true)
+        const backup = s.w.stores.get('M1')!.snapshot()
+        s.A2.online = false
+        if (order === 'reverse') s.w.carrier.faults.reverse(true)
+        if (order === 'duplicate') s.w.carrier.faults.duplicate(true)
+        await s.A.setClass(s.am.x.id, false)
+        await s.w.rounds(4)
+        s.w.carrier.faults.reset()
+        await s.w.rounds(2)
+        const what = `${stock} ${order}`
+        for (const m of [s.Mm, M2]) {
+          expect(`${what} ${m.name}: ${unrevoked(m, s.am.y.id).length}`).toBe(`${what} ${m.name}: 0`)
+          expect(m.stockAt(M.relOfTuple(m.state, s.am.y.id)!.id).nameable, `${what} ${m.name}`).toBe(0)
+        }
+        const r = await s.Mm.introduce(s.am.y.id, s.bm.y.id)
+        expect('refused' in r, `${what}: ${JSON.stringify(r)}`).toBe(true)
+        // A2 returns while only its journal stays delayed: nothing to accept, no connection.
+        const selfA = s.w.selfAddresses('A')
+        s.w.carrier.faults.withhold('A1', (f) => selfA.has(f.address))
+        s.A2.online = true
+        await s.w.rounds(3)
+        expect(s.A2.state.acts.length + s.B.state.acts.filter((a) => a.state === 'connected').length, what).toBe(0)
+        s.w.carrier.faults.reset()
+        await s.w.rounds(3)
+        // Restore at M (image from before the class turned off) and a fresh enrolment at M: still nothing nameable.
+        s.w.stores.get('M1')!.restore(backup)
+        await s.Mm.reload()
+        await s.w.until(() => !s.Mm.syncPending, 20)
+        await s.w.rounds(2)
+        const M3 = await s.w.enrol(M2, 'M3')
+        await s.w.rounds(4)
+        for (const m of [s.Mm, M2, M3]) expect(`${what} ${m.name} danach: ${unrevoked(m, s.am.y.id).length}`).toBe(`${what} ${m.name} danach: 0`)
+        // Refill: the class on again brings new anchors, nameable at M.
+        await s.A.setClass(s.am.x.id, true)
+        await s.w.rounds(4)
+        expect(s.Mm.stockAt(mRel()).nameable, `${what}: Nachfüllung`).toBeGreaterThan(0)
+      }
+    }, 400_000)
+  }
 })
 
 describe('K2 Schritt 2: Messungen (X23, Diebesfenster, Rotation, Fan-out, Ankerpaar)', () => {

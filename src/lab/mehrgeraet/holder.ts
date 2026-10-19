@@ -1344,10 +1344,13 @@ export class HolderDevice {
     // K2 Schritt 2: jeder Schreiber listet seinen eigenen Anteil (der Signierer bürgt für die Schlüssel, die er hält); M vereinigt.
     const share = !!this.cand.stockShare
     const keys = r.stock.filter((k) => k.state === 'active' && (!share || k.by === this.me)).map((k) => ({ n: k.n, anchor: k.anchor, keyAgreement: k.keyAgreement, expiresAt: k.expiresAt }))
-    // K2, Review 34 B5: eine leere Revision nennt die konkreten Anker, die sie zurückzieht (Grabstein je Anker, keine
-    // Nummernmarken): strict die eigenen (nur für sie hat der Signierer Stand), shared jeden Anker des gemeinsamen Vorrats
-    // (aus dem Journal; jedes Gerät hält den Seed). Verbrauchte nicht (8570.2 markiert sie bei M schon).
-    const tombstones = this.cand.signerWriters && tag && !keys.length ? r.stock.filter((k) => k.state !== 'consumed' && (this.cand.stockMode === 'shared' || k.by === this.me)).map((k) => k.anchor).sort() : undefined
+    // K2, Review 34 B5 / Review 35 B6: eine leere Revision nennt die konkreten Anker, die sie zurückzieht (Grabstein je Anker,
+    // keine Nummernmarken). Klasse aus ist Sache der Person (Entscheidung 1b, Vertrag 4.10): dann nennt sie in beiden
+    // Varianten jeden Anker der Person, den der Aussteller kennt (eigene und die der Schwestern aus dem Journal); shared
+    // ebenso bei der Rotation nach Widerruf. Eine leere Revision bei eingeschalteter Klasse unter strict nennt nur die
+    // eigenen. Verbrauchte nicht (8570.2 markiert sie bei M schon).
+    const personWide = !r.classOn || this.cand.stockMode === 'shared'
+    const tombstones = this.cand.signerWriters && tag && !keys.length ? r.stock.filter((k) => k.state !== 'consumed' && (personWide || k.by === this.me)).map((k) => k.anchor).sort() : undefined
     this.emit({ kind: 'revision', rel: r.id, revision, keys, ...(tag ? { writer: tag } : {}) })
     await this.sendDoc(TYPES.revision, h.ownKey, h.peer, h.peerKeyAgreement, (await this.keysFor(h.ownKey)).rkid, { revision, keys, ...(tag && this.cand.writerTag ? { writer: tag } : {}), ...(tombstones ? { tombstones } : {}) }) // K2: der Schreiber ist der Signierer, kein Feld
   }
@@ -2469,10 +2472,9 @@ export class HolderDevice {
    * nicht, die Faltung entscheidet). Je Schreiber zählt die höchste Revision, gleiche Nummer mit anderen Schlüsseln ist eine
    * Equivokation (kanonisch kleinere, Befund), eine niedrigere ändert die Schlüssel nicht. Eine Rückzugsrevision (8535)
    * nennt die Anker, die sie zurückzieht; die Faltung hält je Anker einen Grabstein (wächst nur, reihenfolgefrei), der
-   * jede Listung des Ankers dominiert, wenn der Signierer Stand hat (`M.hasStanding`: strict selbst gelistet, shared von
-   * einem Schreiber der Person gelistet). Einen Anker ohne Stand hält M als Befund fest; der Grabstein wirkt nicht (und erst,
-   * wenn eine Listung ihm Stand gibt, gleich in welcher Reihenfolge beides ankommt). Nur ein älterer Kopf wird abgewiesen
-   * (8557: neuer Scope).
+   * jede Listung des Ankers dominiert. Klasse aus ist Sache der Person (Review 35 B6, Entscheidung 1b, Vertrag 4.10): der
+   * Grabstein jedes Mitglieds zählt für jeden Anker der Person, in beiden Varianten; ein widerrufener Signierer nur für Anker,
+   * für die kein verbliebenes Gerät bürgt (`M.buried`). Nur ein älterer Kopf wird abgewiesen (8557: neuer Scope).
    */
   private foldSignerRevision(r: M.Relationship, t: M.Tuple, p: { revision: number; keys: M.ListedKey[]; writer: string; tombstones?: string[] }): boolean {
     if (r.view && r.view.scope !== t.id && t.record < M.tuple(this.state, r.view.scope).record) return false // älterer Kopf
@@ -2482,15 +2484,7 @@ export class HolderDevice {
     const tombs = [...new Set(p.tombstones ?? [])].sort()
     const newTombs = tombs.some((a) => !(M.own(same?.tombstones, a) ?? []).includes(p.writer))
     if (held && p.revision === held.revision && whole(p.keys) === whole(held.keys) && !newTombs) return true // Wiederholung
-    const standing = this.cand.stockMode === 'shared' ? 'set' : 'own'
-    const listed = M.tableOf(same?.listed)
-    M.put(listed, p.writer, [...(M.own(listed, p.writer) ?? []), ...p.keys.map((k) => k.anchor)])
-    const without = tombs.filter((a) => !M.hasStanding({ listed, standing }, p.writer, a))
-    if (without.length) {
-      const text = `revision ${p.revision} von ${p.writer.slice(-8)}: Grabstein ohne Stand für ${without.map((a) => a.slice(-8)).join(', ')} (${standing === 'own' ? 'nie vom Signierer selbst' : 'von keinem Schreiber der Person'} gelistet): ohne Wirkung`
-      if (!this.state.findings.includes(text)) this.emit({ kind: 'finding', text })
-    }
-    this.emit({ kind: 'view', rel: r.id, scope: t.id, revision: p.revision, keys: p.keys, writer: p.writer, standing, tombstones: tombs })
+    this.emit({ kind: 'view', rel: r.id, scope: t.id, revision: p.revision, keys: p.keys, writer: p.writer, standing: 'person', tombstones: tombs })
     return true
   }
 
