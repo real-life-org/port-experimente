@@ -1089,7 +1089,9 @@ export class HolderDevice {
       const n = (held?.n ?? 0) + 1
       const payload = { root: set.root, rootKeyAgreement: set.rootKeyAgreement, revision: n, deps: [...set.seen].sort(), entries } as unknown as Record<string, Json>
       const sent = await this.sendDoc(TYPES.deviceSet, rc.ctx, rc.to.anchor, rc.to.rkid, (await this.keysFor(rc.ctx)).rkid, payload)
-      this.emit({ kind: 'device-set', root: set.root, rootKeyAgreement: set.rootKeyAgreement, certs: [], rev: { signer: signerId(me), n, digest: sent?.digest ?? null, covered: entries.map(M.certKey) }, ...(sent ? { seen: sent.digest } : {}) })
+      // Bekannt leer (kein Rahmen, ausdrücklicher Zustellfehler): nichts ging hinaus, also nichts veröffentlicht (CodeRabbit #74).
+      if (!sent) continue
+      this.emit({ kind: 'device-set', root: set.root, rootKeyAgreement: set.rootKeyAgreement, certs: [], rev: { signer: signerId(me), n, digest: sent.digest, covered: entries.map(M.certKey) }, seen: sent.digest })
     }
   }
   /**

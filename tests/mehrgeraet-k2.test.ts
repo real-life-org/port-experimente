@@ -474,6 +474,25 @@ describe('K2 Schritt 2: Gerätemengen aus Nachweisen', () => {
     expect(w.carrier.carried.slice(mark).filter((f) => w.frameOrigin(f.bytes)?.kind === 'introduction-prekeys' && toA.has(f.address))).toHaveLength(0)
   }, 60_000)
 
+  it('S3b. Eine Mengenrevision an eine bekannt leere Menge geht nicht hinaus und gilt nicht als veröffentlicht (CodeRabbit #74): kein `covered`, keine Nummer verbraucht', async () => {
+    const { w, A, A2, B, ab } = await abWorld()
+    const a2key = (await A2.cand.keys.pair(ab.x.ownKey)).anchor
+    const revoke = [await raw(A).cert(ab.x.ownKey, { root: ab.x.own, kind: 'revoke', anchor: a2key, keyAgreement: null }), await raw(A).cert(ab.x.ownKey, { root: ab.x.own, kind: 'revoke', anchor: ab.x.own, keyAgreement: null })]
+    const set = A.setOf(ab.x.own)!
+    await raw(A).sendDoc(TYPES.deviceSet, ab.x.ownKey, ab.x.peer, ab.x.peerKeyAgreement, (await A.cand.keys.pair(ab.x.ownKey)).rkid, { root: ab.x.own, rootKeyAgreement: set.rootKeyAgreement, revision: 50, deps: [], entries: [...Object.values(set.certs), ...revoke] as unknown as Json[] })
+    await w.rounds(2)
+    expect(members(B, ab.y.peer)).toEqual([])
+    const signer = signerId(ab.y.own)
+    const before = M.own(B.setOf(ab.y.own)!.revs, signer)
+    const failures = B.emptySetFailures
+    await w.enrol(B, 'B2') // B admits B2 in its set of this relationship and publishes the revision to A: known empty
+    await w.rounds(2)
+    expect(B.emptySetFailures).toBeGreaterThan(failures)
+    const after = M.own(B.setOf(ab.y.own)!.revs, signer)
+    expect(after?.n ?? 0).toBe(before?.n ?? 0)
+    expect(after?.covered ?? null).toEqual(before?.covered ?? null)
+  }, 60_000)
+
   it('S4. Ein bekannter Widerruf schlägt: nach dem Widerruf von A2 weist B eine Mengenrevision ab, die A2s Schlüssel signiert (Dieb mit dem Abbild); die Menge bleibt', async () => {
     const { w, A, A2, B, ab } = await abWorld()
     const thief = rogue(await w.steal(A2, 'A2-dieb'))

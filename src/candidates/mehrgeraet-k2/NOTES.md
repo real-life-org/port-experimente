@@ -345,6 +345,13 @@ K2-strict.
   connected) holds only for acts with a producer card (`ownCardV`); K1a's
   fold keeps the old order-dependent rule to stay identical (it converges
   in every K1a scenario; spec follow-up).
+- A known-empty counterpart set is an explicit delivery failure: nothing
+  goes out, and a set revision that could not go out is not recorded as
+  published (test S3b). If such a set fills again (a late, older admission
+  of a key that was never revoked), nothing resends the stock revision or
+  the own set revision until the next regular trigger (refill, enrolment,
+  card); a resend on "set no longer empty" belongs to step 3 together with
+  all entry paths (review 31 S2).
 - X21's restore repair takes 11 rounds instead of 7 (more batches: set
   proofs, pools, revisions per writer).
 
