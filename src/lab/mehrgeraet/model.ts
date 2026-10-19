@@ -34,6 +34,8 @@
 
 // ── Parameter (Profil, vereinfacht) ──────────────────────────────────────────
 
+import { createHash } from 'node:crypto'
+
 export const PARAM = {
   /** 8510: zehn Annahmen je Mediatorbeziehung im Fenster. */
   budget: 10,
@@ -128,7 +130,10 @@ export type ListedKey = { n: number; anchor: Anchor; keyAgreement: string; expir
 export interface StockView {
   scope: string
   revision: number
-  /** Die gelisteten Schlüssel mit ihrer Nummer (8445): M teilt sie unter seinen Geräten nach der Nummer auf (K1a). Mit Schreibern: die Vereinigung der geltenden Schreiber (`viewKeys`). */
+  /**
+   * Die gelisteten Schlüssel mit ihrer Nummer (8445), wie die Faltung sie festhält (mit Schreibern: `viewKeys` ohne Wissen
+   * über Widerrufe). Entscheidungen lesen nie dieses Feld, sondern `usableView` (Review 36 B7: eine Rechnung für Ms Sicht).
+   */
   keys: ListedKey[]
   /**
    * K1a Schritt 4 (Anton 18.10., 3a): je pseudonymer Schreiberkennung die jüngste Revision dieses Schreibers im Scope.
@@ -856,6 +861,49 @@ export function viewKeys(writers: Record<string, { revision: number; keys: Liste
     }
   }
   return { keys: sortKeys([...m.values()]), conflicts: [...conflicts].sort() }
+}
+
+/**
+ * K2: der Schreiber einer Revision ist der signierende Geräteschlüssel der Beziehung (8500/6270 je Signierer). Als
+ * Tabellenschlüssel (Form `tag`, 16 Zeichen base64url) dient ein Hash des Ankers; er reist nicht im Dokument, die Gegenseite
+ * bildet ihn aus dem Signierer.
+ */
+export const signerId = (anchor: string) => createHash('sha256').update(`signer|${anchor}`).digest().subarray(0, 12).toString('base64url')
+
+/** Ms nutzbare Sicht auf den Vorrat einer Seite in einem Moment (`usableView`): jede Stufe eine Teilmenge der vorigen. */
+export interface UsableView {
+  /** Geltende Schlüssel: je Anker der kanonische Wert über die nicht widerrufenen Schreiber, ohne begrabene Anker. */
+  listed: ListedKey[]
+  /** Davon noch lang genug gültig (8470). */
+  usable: ListedKey[]
+  /** Davon nicht verbraucht (8570.2). */
+  unconsumed: ListedKey[]
+}
+
+/**
+ * Review 36 B7 (Vertrag statt Patch-Kaskade): die eine Rechnung für Ms Sicht auf den Vorrat einer Seite. Jeder Verbraucher
+ * liest aus ihr: die Wahl des Schlüssels in einer Vorstellung, die Teilung unter Ms Geräten (`mayName` bekommt den Wert von
+ * hier, nie aus einer Listung), die Rechteprüfung der Vorstellung (`authorize`), die Zählung des Vorrats (`stockAt`, X23)
+ * und die Messungen der Szenarien. Rein, eine Funktion des gefalteten Zustands (Listungen je Schreiber, Grabsteine,
+ * Mengennachweise, Verbrauchsmarken) und der Zeit; damit in jeder Empfangsreihenfolge dieselbe.
+ *
+ * Schritte: Schreiber, deren Signierer die Seite in einer ihrer Mengen widerrufen hat, fallen weg (K2); Grabsteine wirken nach
+ * `buried` (ein widerrufener Signierer nur, wofür kein verbliebener Schreiber bürgt); je Anker gilt der kanonisch kleinste
+ * Wert (Review 21 B1, `viewKeys`); dann Ablauf (8470) und Verbrauch (8570.2). Ohne Schreiber (K0) die gefaltete Liste.
+ */
+export function usableView(s: HolderState, relId: string, now: string): UsableView {
+  const r = findRel(s, relId)
+  const v = r?.view
+  if (!r || !v) return { listed: [], usable: [], unconsumed: [] }
+  let listed = v.keys
+  if (v.writers) {
+    const revoked = new Set<string>()
+    for (const t of r.tuples) for (const a of setView(own(s.sets, t.peer)).revoked) revoked.add(signerId(a))
+    const writers = table(Object.entries(v.writers).filter(([w]) => !revoked.has(w)))
+    listed = viewKeys(writers, tableOf(v.clears), v, revoked).keys
+  }
+  const fresh = listed.filter((k) => usable(k.expiresAt, now))
+  return { listed, usable: fresh, unconsumed: fresh.filter((k) => !s.consumed.includes(k.anchor)) }
 }
 
 /** Review 21 B1: gleicher Anker, anderer Schlüsselwert; einmal je Anker als Befund festgehalten (reihenfolgeunabhängig). */

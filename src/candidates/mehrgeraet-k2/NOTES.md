@@ -429,7 +429,7 @@ M keeps a tombstone per anchor:
   bury all of the person's keys at M until its revocation; the refill
   after the revocation restores (fresh anchors), and the rule below
   restores every old anchor a remaining device still lists.
-- **Revoked signers** (`holder.ts` `unrevokedKeys`, `M.buried` with the
+- **Revoked signers** (`M.usableView`, `M.buried` with the
   revoked set M holds for the counterpart): a tombstone of a signer M
   knows as revoked counts only for an anchor that no unrevoked writer
   lists in its latest revision. So a revoked device never takes away a key
@@ -444,14 +444,14 @@ M keeps a tombstone per anchor:
   it and refuses to introduce; A2 returns with its journal delayed and
   there is nothing to accept. Before the fix M still named two of A2's
   keys and an introduction led to a connection.
-- **Naming split after a revocation** (found with the fix): the interim
-  split rule (`mayName`, n mod devices) read the key's number from the
-  stored view, which leaves out every anchor buried at fold time. A
-  revoked device's tombstone folded before M knew the revocation thus
-  kept a restored key unnameable. The split now reads the number from
-  the writers' listings; whether a key is in force stays with the
-  selection (`unrevokedKeys`). T1 checks that M introduces again after
-  the revocation.
+- **Naming split after a revocation** (found with the review-35 fix):
+  the interim split rule (`mayName`, n mod devices) read the key's
+  number from the stored view, which leaves out every anchor buried at
+  fold time, so a restored key stayed unnameable after the revocation.
+  The review-35 fix read the number from the writers' listings instead,
+  which review 36 found order-dependent (B7); since review 36 the split
+  gets the canonical value from `M.usableView` (next section). T1 checks
+  that M introduces again after the revocation.
 - Restore and enrolment: tombstones are part of the view op
   (journal) and of the state image (`fromJson`, projection), so a
   restored or newly enrolled M device holds them (test T2).
@@ -468,6 +468,65 @@ offline, A1 class off, M names nothing and refuses to introduce, A2
 returns with a delayed journal, no connection; restore of M1 and an M3
 enrolled after: still nothing; class on again: the refill is nameable),
 R4 (B4 stays closed: every order and duplicates).
+
+### One computation of M's view (review 36 B7)
+
+Reviews 33 to 36 each found a new blocker in the previous fix, all in how
+M's usable view of a side's stock was computed: receive filtering (33),
+number marks (34), standing by listing (35), and the split reading the
+first listing instead of the canonical value (36: A1 lists an anchor with
+n=2, A2 the same anchor with n=3; M1 learnt A1 first, M2 A2 first; both
+held the canonical n=2, yet each device's split found "its" listing and
+both named the key: two acts on one stock key). The cause was that each
+consumer computed the view itself. Now there is one pure function,
+`M.usableView(state, rel, now)` in `model.ts`:
+
+1. writers whose signer the side revoked in one of its sets drop out
+   (from `state.sets`, `M.signerId`);
+2. tombstones act per `M.buried` (a revoked signer only where no
+   remaining writer vouches);
+3. per anchor the canonically smallest value (`viewKeys`, review 21 B1);
+4. then expiry (8470) and consumption (8570.2).
+
+It returns `listed`, `usable`, `unconsumed`; it is a function of the
+folded state and the time, hence the same in every receive order.
+Consumers, all reading from it:
+
+- the key selection in `introduce` (`holder.ts`, via `nameable`);
+- the naming split: `mayName` now takes the canonical key
+  (`mayName(key)`, K1a `n mod devices`; K2 only adds the counter-run
+  switch), never an anchor to look up;
+- the rights check of an introduction (`authorize`, K1a, inherited by K2):
+  the canonical key of each named anchor from `usableView`;
+- the stock count `stockAt` (X23 refusals and their stock record);
+- the scenario measures of M's view (X4 and X16 "M's view has no keys",
+  the X17 writer detail).
+
+Deleted: `holder.ts` `unrevokedKeys`, the selection's and `stockAt`'s own
+filter chains, K2's `mayName` that scanned the writers' listings, K1a's
+`mayName` that read the stored view, and the measures reading
+`view.keys` (4 computations and 4 measure reads). The stored
+`view.keys` stays the fold's record (K0's single-writer view, the
+equivocation check on receive, the projection) and is documented as never
+read for a decision. Tests: V1 (Astra's flow, both variants, both
+arrival orders of the conflicting listings after M1 and M2 learnt the
+writers in opposite orders: both hold n=2 with the conflict finding, one
+act), V2 (property: 200 seeded random orders with duplicates of
+conflicting listings, tombstones and a revocation; the view is the same,
+exactly one M device may name each key, `authorize`, `stockAt` and the
+split agree with `usableView`).
+
+Review 36 S6: U1 now withholds A's journal at the returning device A2
+(it was held at A1, so A2's class was already off); B6 stays closed.
+
+R1 flakiness (review 35 verification, "red once under parallel load"):
+not load. The test's oracle sorted the two conflicting proofs with
+`localeCompare`, the fold keeps the code-unit smaller (`<`). Where the
+first differing character of the two key-agreement keys orders
+differently in the two (e.g. `Y` < `r` by code unit, `r` first in a
+locale), the test expected the other proof. Measured: 38 of 3000 random
+key pairs disagree (1.3 %), 3.7 % per R1 run (three orders); before the
+fix 1 failure in 30 runs alone without load, after it 0 in 40.
 
 ### Counter card through the sibling (8325.A5c)
 
@@ -561,6 +620,12 @@ under load). The default run (CI) takes seed 1 of each variant (97 s);
   step 3: on "set no longer empty", resend every document that failed as
   `empty-device-set`, together with all entry paths (review 31 S2;
   CodeRabbit #74, three findings of this class).
+- One computation of M's view (review 36): before both M devices hold
+  both of two conflicting listings of the same anchor (only a
+  misbehaving A device produces them: honest devices list disjoint
+  anchors), each device judges by what it holds, so in that window two
+  devices can name the same key. Once both have folded both listings
+  they agree (V1); the conflict is a finding at M.
 - X21's restore repair takes 11 rounds instead of 7 (more batches: set
   proofs, pools, revisions per writer).
 
@@ -601,6 +666,11 @@ under load). The default run (CI) takes seed 1 of each variant (97 s);
    any member device may tombstone all anchors of the person. Price: a
    stolen device can bury all of the person's keys at M until its
    revocation; the refill restores.
+9. **Canonical key value for naming rights** (review 36): the split of
+   naming rights among the mediator's devices reads the same effective,
+   canonical key value as the selection (one computation of the usable
+   view over unrevoked writers, tombstones, canonical value per anchor,
+   expiry, consumption).
 
 ## Step 1 (18 October 2026)
 

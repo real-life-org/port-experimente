@@ -145,12 +145,8 @@ export class CorruptFrame extends Error {
  * ist oder dessen Signatur nicht vom Geräteschlüssel des Schreibers stammt. Befund `journal:unknown-writer`, nie Zustand.
  */
 export class UnknownWriter extends Error {}
-/**
- * K2 Schritt 1: der Schreiber einer Revision ist der signierende Geräteschlüssel der Beziehung (8500/6270 je Signierer). Als
- * Tabellenschlüssel (Form `tag`, 16 Zeichen base64url) dient ein Hash des Ankers; er reist nicht im Dokument, die Gegenseite
- * bildet ihn aus dem Signierer. Keine Kennung unter einem Seed, keine eigene Drahtangabe.
- */
-export const signerId = (anchor: string) => createHash('sha256').update(`signer|${anchor}`).digest().subarray(0, 12).toString('base64url')
+/** K2: der Schreiber einer Revision ist der signierende Geräteschlüssel (`M.signerId`). */
+export const signerId = M.signerId
 const isRecord = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x)
 /**
  * Form einer Absicht ohne ihre Bytes (Review 27 B2a), für beide Journalpfade: der Batch trägt die Bytes als strenges base64
@@ -191,8 +187,11 @@ export interface CandidateDevice {
   readonly writer: string
   /** Rechteprüfung VOR der Anwendung (B3): false = blockiert. Rein: ohne Nebenwirkung. Ohne Methode ist alles erlaubt. */
   authorize?(op: M.Op, state: M.HolderState): boolean
-  /** Darf dieses Gerät diesen fremden Vorrats-Schlüssel in einer Vorstellung benennen (K1a: vorab verteilte Schlüssel)? Rein. Ohne Methode: alle. */
-  mayName?(anchor: string, rel: string, state: M.HolderState): boolean
+  /**
+   * Darf dieses Gerät diesen fremden Vorrats-Schlüssel in einer Vorstellung benennen (K1a: vorab verteilte Schlüssel)? Rein.
+   * Der Schlüssel kommt mit seinem kanonischen Wert aus `M.usableView` (Review 36 B7), nie aus einer Listung. Ohne Methode: alle.
+   */
+  mayName?(key: M.ListedKey): boolean
   /**
    * Darf dieses Gerät die Vorrats-Nummer n (8445) zuteilen (K1a, Tor-Review 21 B1)? Rein. Teilen sich Geräte eines Seeds
    * die Nummern, ergeben getrennte Zuteilungen derselben Nummer denselben Anker mit anderem Wert (Ablauf); mit Methode
@@ -1361,38 +1360,29 @@ export class HolderDevice {
     return tag ? { writer: tag } : {}
   }
 
-  /** K2 Schritt 2: Ms Sicht ohne die Schreiber, deren Signierer die Seite in einer ihrer Mengen widerrufen hat (Vereinigung wie `viewKeys`). */
-  private unrevokedKeys(r: M.Relationship): M.ListedKey[] {
-    const revoked = new Set<string>()
-    for (const t of r.tuples) for (const a of M.setView(this.setOf(t.peer)).revoked) revoked.add(signerId(a))
-    const writers = M.table(Object.entries(r.view!.writers ?? {}).filter(([w]) => !revoked.has(w)))
-    return M.viewKeys(writers, M.tableOf(r.view!.clears), r.view!, revoked).keys
+  /**
+   * Ms benennbare Schlüssel für eine Seite: aus der einen Rechnung (`M.usableView`, Review 36 B7), davon diesem Gerät
+   * zugeteilt (`mayName` auf dem kanonischen Wert, K1a/K2-Zwischenregel).
+   */
+  private nameable(relId: string): { view: M.UsableView; nameable: M.ListedKey[] } {
+    M.rel(this.state, relId) // unbekannte Beziehung: Missing wie bisher, nie eine stille leere Sicht
+    const view = M.usableView(this.state, relId, this.clock.now())
+    return { view, nameable: view.unconsumed.filter((k) => this.cand.mayName?.(k) ?? true) }
   }
   /**
-   * Messung (X23, Review 33 S2): Ms Vorrat für eine Seite in diesem Moment, gezählt mit denselben Prüfungen wie die Wahl
-   * in `introduce`: gelistet (geltende Sicht, ohne widerrufene Signierer), davon noch lang genug gültig (8470), davon nicht
-   * verbraucht (8570.2), davon diesem Gerät zugeteilt (`mayName`, K1a/K2-Zwischenregel) = benennbar. Nur lesend.
+   * Messung (X23, Review 33 S2): Ms Vorrat für eine Seite in diesem Moment, aus derselben Rechnung wie die Wahl in
+   * `introduce`: gelistet, davon noch lang genug gültig (8470), davon nicht verbraucht (8570.2), davon diesem Gerät
+   * zugeteilt = benennbar. Nur lesend.
    */
   stockAt(relId: string): { listed: number; usable: number; unconsumed: number; nameable: number } {
-    const now = this.clock.now()
-    const r = M.rel(this.state, relId)
-    const keys = !r.view ? [] : this.sets && r.view.writers ? this.unrevokedKeys(r) : r.view.keys
-    const usable = keys.filter((k) => M.usable(k.expiresAt, now))
-    const unconsumed = usable.filter((k) => !this.state.consumed.includes(k.anchor))
-    const nameable = unconsumed.filter((k) => this.cand.mayName?.(k.anchor, r.id, this.state) ?? true)
-    return { listed: keys.length, usable: usable.length, unconsumed: unconsumed.length, nameable: nameable.length }
+    const { view, nameable } = this.nameable(relId)
+    return { listed: view.listed.length, usable: view.usable.length, unconsumed: view.unconsumed.length, nameable: nameable.length }
   }
   /** M: zwei Seiten vorstellen (8605, 8570). Liefert die Akt-Id oder den Grund, warum nichts ging. */
   async introduce(relA: string, relB: string, nameA = 'A', nameB = 'B'): Promise<{ act: string } | { refused: string }> {
     const now = this.clock.now()
-    const pick = (relId: string) => {
-      const r = M.rel(this.state, relId)
-      if (!r.view) return null
-      // K2 Schritt 2: Schlüssel eines Schreibers, dessen Signierer in der Gerätemenge der Seite widerrufen ist, nennt M nicht mehr.
-      const keys = this.sets && r.view.writers ? this.unrevokedKeys(r) : r.view.keys
-      // 8570.4; kanonische Wahl (kleinster Anker), damit die Ankunftsreihenfolge nicht entscheidet (Review 4 B2); nur Schlüssel, die der Kandidat diesem Gerät zuteilt (K1a).
-      return [...keys].sort((a, b) => a.anchor.localeCompare(b.anchor)).find((k) => M.usable(k.expiresAt, now) && !this.state.consumed.includes(k.anchor) && (this.cand.mayName?.(k.anchor, r.id, this.state) ?? true)) ?? null
-    }
+    // 8570.4; kanonische Wahl (kleinster Anker), damit die Ankunftsreihenfolge nicht entscheidet (Review 4 B2).
+    const pick = (relId: string) => [...this.nameable(relId).nameable].sort((a, b) => a.anchor.localeCompare(b.anchor))[0] ?? null
     const ka = pick(relA)
     const kb = pick(relB)
     if (!ka || !kb) return { refused: `kein benennbarer Schlüssel (${ka ? '' : relA} ${kb ? '' : relB})`.trim() }

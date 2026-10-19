@@ -437,11 +437,11 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       if (offline === 'blocked') await s.w.rounds(1), await s.A.consent(lastAct)
       const n = await untilStable(s.w, 'A')
       const equivocation = s.w.of('M').flatMap((d) => d.state.findings).filter((f) => f.includes('Equivokation')).length
-      const viewKeys = s.w.of('M').map((d) => `${d.name}: ${M.rel(d.state, s.ma).view?.keys.length ?? 0}`)
+      const viewKeys = s.w.of('M').map((d) => `${d.name}: ${M.usableView(d.state, s.ma, s.w.clock.now()).listed.length}`)
       const act4 = 'act' in r4 ? s.w.of('A').map((d) => `${d.name}: ${d.state.acts.find((a) => a.id === r4.act)?.state ?? 'abgewiesen'}`) : ['keine vierte Vorstellung']
       const cont = s.w.of('A').map((d) => M.act(d.state, lastAct).state)
       const agree = s.w.agree('A')
-      const ok = equivocation === 0 && agree.agree && s.w.of('M').every((d) => (M.rel(d.state, s.ma).view?.keys.length ?? 0) === 0) && cont.every((x) => x === 'connected') // 8232.2, 8925: der laufende Akt läuft weiter
+      const ok = equivocation === 0 && agree.agree && s.w.of('M').every((d) => M.usableView(d.state, s.ma, s.w.clock.now()).listed.length === 0) && cont.every((x) => x === 'connected') // 8232.2, 8925: der laufende Akt läuft weiter
       return { outcome: mark(ok), detail: `Equivokationen bei M: ${equivocation}; Ms Sicht auf A (Schlüssel): ${viewKeys.join(', ')}; vierte Vorstellung: ${act4.join(', ')}; Akt mit Karte: ${cont.join('/')}; Zustimmung offline ${offline}; Projektion gleich nach ${n} Runden: ${agree.agree ? 'ja' : 'nein'}`, measures: { equivocations: equivocation, projectionAgrees: agree.agree ? 1 : 0, roundsToConverge: n, offlineBlocked: offline === 'blocked' ? 1 : 0 } }
     },
   },
@@ -929,7 +929,7 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const ownActs = new Set(s.w.of('A').flatMap((d) => d.state.acts.filter((a) => a.own === named).map((a) => a.id)))
       const acceptLedger = ledger(s.w, 'A')
       const acceptOps = [...ownActs].reduce((sum, id) => sum + (acceptLedger.get(`accept:${id}`)?.size ?? 0), 0)
-      const viewKeys = s.w.of('M').map((d) => M.rel(d.state, s.ma).view?.keys.length ?? 0)
+      const viewKeys = s.w.of('M').map((d) => M.usableView(d.state, s.ma, s.w.clock.now()).listed.length)
       const equivocation = s.w.of('M').flatMap((d) => d.state.findings).filter((f) => f.includes('Equivokation')).length
       const classOn = s.w.of('A').filter((d) => M.rel(d.state, s.am).classOn).length
       const agree = s.w.agree('A')
@@ -990,7 +990,7 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const tagsAtM = seen.perRelationship.get(M.resolveId(s.Mm.state, s.ma))?.size ?? 0
       const tagged = aWriters.size > 0
       const ok = reused === 0 && equivocation === 0 && keyValueConflicts === 0 && progress === 1 && conformance === 0 && agree.agree && mAgree.agree && n > 0 && (!tagged || (accepted === aWriters.size && seen.linked === 0))
-      const tagDetail = tagged ? `; Schreiber bei A ${aWriters.size}, davon mit ihrer letzten Revision in Ms Sicht (alle M-Geräte) ${accepted}; Ms Sicht ${mViews.map((v) => `${Object.keys(v?.writers ?? {}).length} Schreiber/${v?.keys.length ?? 0} Schlüssel`).join(', ')}; was M lernt: ${tagsAtM} Schreiberkennung(en) auf der Beziehung zu A, ${[...seen.perRelationship.values()].map((x) => x.size).join('/')} je Beziehung von M, über Beziehungen verknüpfbar ${seen.linked}` : ''
+      const tagDetail = tagged ? `; Schreiber bei A ${aWriters.size}, davon mit ihrer letzten Revision in Ms Sicht (alle M-Geräte) ${accepted}; Ms Sicht ${s.w.of('M').map((d, i) => `${Object.keys(mViews[i]?.writers ?? {}).length} Schreiber/${M.usableView(d.state, s.ma, s.w.clock.now()).listed.length} Schlüssel`).join(', ')}; was M lernt: ${tagsAtM} Schreiberkennung(en) auf der Beziehung zu A, ${[...seen.perRelationship.values()].map((x) => x.size).join('/')} je Beziehung von M, über Beziehungen verknüpfbar ${seen.linked}` : ''
       return { outcome: mark(ok), detail: `Revision vorher ${rev0}, getrennt je Gerät ${revs.join('/')}; Revisionsnummern mit mehr als einer Operation: ${reused}; Befunde 6270 bei M: ${equivocation}; zweiter Vorrat (8435) bei A: ${secondStock}; gleicher Anker mit anderem Wert: ${keyValueConflicts}; nächste Vorstellung ${'act' in r ? (progress ? 'angenommen' : 'nicht angenommen') : 'verweigert'}, Konformitätsfehler bei A: ${conformance}; Projektion gleich nach ${n} Runden: ${agree.agree ? 'ja' : 'nein'}, M-Geräte gleich: ${mAgree.agree ? 'ja' : 'nein'}${tagDetail}; Probe-Sequenz (6680) und Mapping-Revision sind im Prüfstand nicht modelliert`, measures: { revisionNumbersReused: reused, equivocations: equivocation, secondStockFindings: secondStock, keyValueConflicts, progressAfterHeal: progress, mediatorConformanceFailures: conformance, projectionAgrees: agree.agree ? 1 : 0, mediatorDevicesAgree: mAgree.agree ? 1 : 0, roundsToConverge: n, ...(tagged ? { writersAtA: aWriters.size, writersAcceptedByM: accepted, writerTagsSeenByM: tagsAtM, writerTagsLinkedAcrossRelationships: seen.linked } : {}) } }
     },
   },

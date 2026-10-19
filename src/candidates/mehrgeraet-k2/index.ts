@@ -196,16 +196,11 @@ export class K2Device extends K1aDevice {
     if (this.stockMode === 'shared') for (const x of b.seeds ?? []) if (!this.seeds.has(x.ctx)) this.seeds.set(x.ctx, { ed: x.ed, x: x.x })
   }
   /**
-   * Interim rule: K1a's `n mod devices` split until step 5; off (counter-run) M names any key of the person's stock.
-   * Review 35 B6: the split reads the key's number from the writers' listings, not from the stored view. Whether the key
-   * is in force is the selection's business (`unrevokedKeys`): a revoked signer's tombstone, folded before M knew the
-   * revocation, is left out of the stored view but no longer counts for a key a remaining writer lists.
+   * Interim rule: K1a's `n mod devices` split until step 5 on the canonical value from `M.usableView` (review 36 B7: one
+   * computation of M's view, the split never reads a listing); off (counter-run) M names any key of the person's stock.
    */
-  override mayName(anchor: string, rel: string, state: M.HolderState): boolean {
-    if (!this.nameSplit) return true
-    const v = M.findRel(state, rel)?.view
-    const k = Object.values(v?.writers ?? {}).flatMap((x) => x.keys).find((x) => x.anchor === anchor) ?? v?.keys.find((x) => x.anchor === anchor)
-    return !!k && k.n % this.slots === this.index
+  override mayName(key: M.ListedKey): boolean {
+    return !this.nameSplit || super.mayName(key)
   }
   async selfPeers() {
     return (await this.dir.selfKeys(this.person)).filter((k) => k.device !== this.name).map(({ anchor, rkid }) => ({ anchor, rkid }))

@@ -171,12 +171,12 @@ export class K1aDevice implements CandidateDevice {
     const since = Date.parse(now) - M.PARAM.budgetWindowMs
     return r.accepted.filter((e) => own.has(e.act) && !r.confirmed.includes(e.act) && Date.parse(e.at) > since).length
   }
-  /** Ein fremder Vorrats-Schlüssel gehört dem Gerät, dessen Platz seine Nummer trifft (8445: n mod Geräte); so wechseln sich die Geräte ab. */
-  mayName(anchor: string, rel: string, state: M.HolderState): boolean {
-    const r = M.findRel(state, rel)
-    const k = r?.view?.keys.find((x) => x.anchor === anchor)
-    if (!k) return false
-    return k.n % this.slots === this.index
+  /**
+   * Ein fremder Vorrats-Schlüssel gehört dem Gerät, dessen Platz seine Nummer trifft (8445: n mod Geräte); so wechseln sich
+   * die Geräte ab. Die Nummer ist der kanonische Wert aus `M.usableView` (Review 36 B7: eine Rechnung für Ms Sicht).
+   */
+  mayName(key: M.ListedKey): boolean {
+    return key.n % this.slots === this.index
   }
   /**
    * Review 21 B1: eigene Vorrats-Nummern nur aus der eigenen Klasse, disjunkt über die Schreiber. Die Klasse ist die
@@ -189,7 +189,7 @@ export class K1aDevice implements CandidateDevice {
   }
   authorize(op: M.Op, state: M.HolderState): boolean {
     if (op.kind === 'ticket-accept') return this.ownAccepted(op.act.mediator, state, op.at) < this.share
-    if (op.kind === 'introduce') return this.mayName(op.act.a.key, op.act.a.rel, state) && this.mayName(op.act.b.key, op.act.b.rel, state)
+    if (op.kind === 'introduce') return [op.act.a, op.act.b].every((x) => { const k = M.usableView(state, x.rel, op.at).listed.find((y) => y.anchor === x.key); return !!k && this.mayName(k) })
     return true
   }
   /** The last batch seen from every writer. */

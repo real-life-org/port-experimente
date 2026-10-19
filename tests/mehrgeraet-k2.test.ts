@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest'
 import { seal, receive } from '@real-life/trust-protocol'
 import type { Json } from '@real-life/trust-protocol'
 import { Welt15 } from '../src/lab/mehrgeraet/welt'
+import { Carrier, VirtualClock } from '../src/lab/zustellung'
 import { HolderDevice, UnknownWriter, signerId, TYPES, type MultiDeviceCandidate } from '../src/lab/mehrgeraet/holder'
 import { runX15 } from '../src/lab/mehrgeraet/scenarios'
 import { anchorPairOracle, enrolFanout, revocationTraffic, thiefWindow, timeModel } from '../src/lab/mehrgeraet/geraetemengen'
-import { k2, K2Device } from '../src/candidates/mehrgeraet-k2'
+import { k2, K2Device, DeviceDirectory } from '../src/candidates/mehrgeraet-k2'
 import { k1a, type Batch } from '../src/candidates/mehrgeraet-k1a'
 import { k0 } from '../src/candidates/mehrgeraet-k0'
 import * as M from '../src/lab/mehrgeraet/model'
@@ -845,7 +846,9 @@ describe('K2 Schritt 2: Review 33, Empfang filtert nicht, die Faltung entscheide
       const alt = await A2.cand.keys.pair('pool/998')
       const set = A.setOf(ab.x.own)!
       const cs = await Promise.all([key.rkid, alt.rkid].map((keyAgreement) => raw(A).cert(ab.x.ownKey, { root: ab.x.own, kind: 'admit', anchor: key.anchor, keyAgreement })))
-      const smaller = [...cs].sort((x, y) => M.canonical(x).localeCompare(M.canonical(y)))[0]!
+      // "Canonically smaller" is code-unit order (`<`, as the fold), not `localeCompare` (review 36: R1 failed whenever the two
+      // orders disagreed on the first differing character of the key-agreement keys, e.g. 'Y' < 'r' but 'r' sorts first in a locale).
+      const smaller = [...cs].sort((x, y) => (M.canonical(x) < M.canonical(y) ? -1 : 1))[0]!
       if (order === 'duplicate') w.carrier.faults.duplicate(true)
       for (const c of order === 'reverse' ? [...cs].reverse() : cs) {
         for (let i = 0; i < (order === 'duplicate' ? 2 : 1); i++) await raw(A).sendDoc(TYPES.deviceSet, ab.x.ownKey, ab.x.peer, ab.x.peerKeyAgreement, set.rootKeyAgreement, { root: ab.x.own, rootKeyAgreement: set.rootKeyAgreement, revision: 99, deps: [], entries: [...Object.values(set.certs), c] as unknown as Json[] })
@@ -975,16 +978,17 @@ describe('K2 Schritt 2: Review 33, Empfang filtert nicht, die Faltung entscheide
       await s.w.rounds(3)
       for (const m of s.w.of('M')) {
         const r = M.rel(m.state, s.am.y.id)
-        const listed = (m as unknown as { unrevokedKeys(r: M.Relationship): M.ListedKey[] }).unrevokedKeys(r)
+        const listed = M.usableView(m.state, r.id, s.w.clock.now()).listed
         expect(`${order} ${m.name}: ${listed.filter((k) => known.some((o) => o.anchor === k.anchor)).length}`).toBe(`${order} ${m.name}: 0`)
       }
       // The refill after the withdrawal stays nameable (the mark clears only what the empty revision covered).
-      expect(s.w.of('M').some((m) => (m as unknown as { unrevokedKeys(r: M.Relationship): M.ListedKey[] }).unrevokedKeys(M.rel(m.state, s.am.y.id)).length > 0), order).toBe(true)
+      expect(s.w.of('M').some((m) => M.usableView(m.state, s.am.y.id, s.w.clock.now()).listed.length > 0), order).toBe(true)
     }
   }, 300_000)
 })
 
-const unrevoked = (m: HolderDevice, relId: string) => (m as unknown as { unrevokedKeys(r: M.Relationship): M.ListedKey[] }).unrevokedKeys(M.rel(m.state, relId)).map((k) => k.anchor)
+/** Ms geltende Schlüssel für eine Seite aus der einen Rechnung (`M.usableView`, Review 36 B7). */
+const unrevoked = (m: HolderDevice, relId: string) => M.usableView(m.state, relId, m.clock.now()).listed.map((k) => k.anchor)
 
 describe('K2 Schritt 2: Review 34, Grabstein je Anker statt Nummern (B5)', () => {
   for (const stock of ['strict', 'shared'] as const) {
@@ -1074,7 +1078,7 @@ describe('K2 Schritt 2: Review 35, Klasse aus ist Sache der Person (B6)', () => 
         expect('refused' in r, `${what}: ${JSON.stringify(r)}`).toBe(true)
         // A2 returns while only its journal stays delayed: nothing to accept, no connection.
         const selfA = s.w.selfAddresses('A')
-        s.w.carrier.faults.withhold('A1', (f) => selfA.has(f.address))
+        s.w.carrier.faults.withhold('A2', (f) => selfA.has(f.address)) // review 36 S6: held at the returning device
         s.A2.online = true
         await s.w.rounds(3)
         expect(s.A2.state.acts.length + s.B.state.acts.filter((a) => a.state === 'connected').length, what).toBe(0)
@@ -1095,6 +1099,142 @@ describe('K2 Schritt 2: Review 35, Klasse aus ist Sache der Person (B6)', () => 
       }
     }, 400_000)
   }
+})
+
+/**
+ * Review 36 B7: a world in which M1 and M2 learn the two A writers in opposite orders (M1 first A1's listing, M2 first
+ * A2's), both A devices listing, both M devices holding both listings afterwards.
+ */
+async function crossedWriters(stock: 'strict' | 'shared') {
+  const w = new Welt15(k2({ stock }))
+  const A = await w.person('A', 'A1')
+  const B = await w.person('B', 'B1')
+  const Mm = await w.person('M', 'M1')
+  const am = await w.encounter(A, Mm)
+  const bm = await w.encounter(B, Mm)
+  await w.rounds(2)
+  await B.setClass(bm.x.id, true)
+  const A2 = await w.enrol(A, 'A2')
+  const M2 = await w.enrol(Mm, 'M2')
+  await w.rounds(4)
+  const fromA1 = new Set<number>()
+  const fromA2 = new Set<number>()
+  w.carrier.faults.withhold('M2', (f) => fromA1.has(f.id))
+  w.carrier.faults.withhold('M1', (f) => fromA2.has(f.id))
+  // ... and neither M device learns the other's fold through its journal meanwhile.
+  const selfM = w.selfAddresses('M')
+  for (const m of ['M1', 'M2']) w.carrier.faults.withhold(m, (f) => selfM.has(f.address))
+  const sent = async (into: Set<number>, step: () => Promise<unknown>) => {
+    const from = w.carrier.carried.length
+    await step()
+    for (const f of w.carrier.carried.slice(from)) into.add(f.id)
+  }
+  A2.online = false
+  await sent(fromA1, async () => {
+    await A.setClass(am.x.id, true)
+    await A.round()
+  })
+  A2.online = true
+  await sent(fromA2, async () => {
+    for (let i = 0; i < 4; i++) await A2.round()
+  })
+  for (let i = 0; i < 2; i++) for (const m of [Mm, M2]) await m.round()
+  w.carrier.faults.reset()
+  await w.rounds(4)
+  return { w, A, A2, B, Mm, M2, am, bm }
+}
+
+describe('K2 Schritt 2: Review 36, eine Rechnung für Ms Sicht (B7)', () => {
+  for (const stock of ['strict', 'shared'] as const) {
+    it(`V1. ${stock}: Astras Gegenlauf B7: M1 kennt A1 zuerst, M2 A2 zuerst; A1 listet einen echten Anker mit n=2, A2 denselben mit n=3: beide M-Geräte halten denselben kanonischen Wert (n=2, Befund), genau eines darf ihn benennen, ein Akt`, async () => {
+      for (const order of ['A1 zuerst', 'A2 zuerst'] as const) {
+        const s = await crossedWriters(stock)
+        const ms = [s.Mm, s.M2]
+        const writersOf = (m: HolderDevice) => Object.keys(M.rel(m.state, s.am.y.id).view?.writers ?? {})
+        const sid = async (d: HolderDevice) => signerId((await d.cand.keys.pair(M.head(M.rel(d.state, s.am.x.id)).ownKey)).anchor)
+        const [a1, a2] = [await sid(s.A), await sid(s.A2)]
+        // The precondition of Astra's flow: the two M devices hold the writers in opposite orders.
+        expect(writersOf(s.Mm).filter((x) => x === a1 || x === a2), stock).toEqual([a1, a2])
+        expect(writersOf(s.M2).filter((x) => x === a1 || x === a2), stock).toEqual([a2, a1])
+        const x = M.rel(s.A.state, s.am.x.id).stock.find((k) => k.by === 'A1' && k.state === 'active')!
+        const lists = async (d: HolderDevice, signer: string, n: number) => {
+          const h = M.head(M.rel(d.state, s.am.x.id))
+          const revision = Math.max(...ms.map((m) => M.own(M.rel(m.state, s.am.y.id).view?.writers, signer)?.revision ?? 0)) + 1
+          await raw(d).sendDoc(TYPES.revision, h.ownKey, h.peer, h.peerKeyAgreement, (await d.cand.keys.pair(h.ownKey)).rkid, { revision, keys: [{ n, anchor: x.anchor, keyAgreement: x.keyAgreement, expiresAt: x.expiresAt }] })
+        }
+        if (order === 'A1 zuerst') {
+          await lists(s.A, a1, 2)
+          await lists(s.A2, a2, 3)
+        } else {
+          await lists(s.A2, a2, 3)
+          await lists(s.A, a1, 2)
+        }
+        await s.w.rounds(3)
+        const what = `${stock}, ${order}`
+        for (const m of ms) {
+          expect(m.state.findings.some((f) => f.startsWith(`conflict:key-value:${x.anchor}`)), `${what} ${m.name}`).toBe(true)
+          expect(M.usableView(m.state, s.am.y.id, s.w.clock.now()).listed.find((k) => k.anchor === x.anchor)?.n, `${what} ${m.name}`).toBe(2)
+        }
+        const results = [await s.Mm.introduce(s.am.y.id, s.bm.y.id), await s.M2.introduce(s.am.y.id, s.bm.y.id)]
+        const acts = ms.flatMap((m) => m.state.mediatorActs.filter((a) => a.a.key === x.anchor))
+        expect(`${what}: ${acts.length}`, JSON.stringify(results)).toBe(`${what}: 1`)
+      }
+    }, 240_000)
+  }
+
+  it('V2. Eigenschaft: in zufälligen Empfangsreihenfolgen (fester Seed, mit Duplikaten) von widersprüchlichen Listungen, Grabsteinen und Widerruf ist Ms Sicht dieselbe, und jeder Verbraucher liest aus ihr: Teilung (genau ein M-Gerät je Schlüssel, auf dem kanonischen Wert), Rechteprüfung der Vorstellung, Vorratszählung (`stockAt`), Wahl', () => {
+    const t0 = '2026-10-17T08:00:00.000Z'
+    const exp = '2027-04-15T08:00:00.000Z'
+    const [root, d2, d3, broot] = ['m-root', 'm-d2', 'm-d3', 'b-root']
+    let seq = 0
+    const op = (body: Record<string, unknown>) => ({ id: { writer: 'w', n: ++seq }, at: t0, ...body }) as unknown as M.Op
+    const lk = (anchor: string, n: number) => ({ n, anchor, keyAgreement: `r${anchor}`, expiresAt: exp })
+    const view = (rel: string, signer: string, revision: number, keys: M.ListedKey[], tombstones?: string[]) => op({ kind: 'view', rel, scope: rel, revision, keys, writer: signerId(signer), standing: 'person', ...(tombstones ? { tombstones } : {}) })
+    const proof = { type: 't', cryptosuite: 'c', created: t0, verificationMethod: 'v', proofPurpose: 'p', proofValue: 'x' }
+    const cert = (kind: 'admit' | 'revoke', anchor: string): M.SetCert => ({ root, kind, anchor, keyAgreement: kind === 'admit' ? `r${anchor}` : null, by: root, proof })
+    const set = (certs: M.SetCert[]) => op({ kind: 'device-set', root, rootKeyAgreement: `r${root}`, certs })
+    const tuple = (id: string, peer: string): M.Tuple => ({ id, own: `own-${id}`, ownKey: `k/${id}`, peer, peerKeyAgreement: `r${peer}`, record: `${id}:own`, openedAt: t0, candidates: [], deactivated: false })
+    const ops = [
+      view('M:e1', root, 1, [lk('x', 2), lk('y', 4)]),
+      view('M:e1', d2, 1, [lk('x', 3), lk('z', 1)]), // same anchor x, another value (B7)
+      view('M:e1', d3, 1, [lk('w', 6), lk('x', 7)]),
+      view('M:e1', d2, 2, [], ['y', 'w']), // d2 buries y and w before its revocation
+      set([cert('admit', d2), cert('admit', d3)]),
+      set([cert('revoke', d2)]),
+    ]
+    const base = () => {
+      const s = M.emptyState('M')
+      M.apply(s, op({ kind: 'open-tuple', rel: null, tuple: tuple('M:e1', root), provenance: 'encounter', vouchedBy: null, act: null }))
+      M.apply(s, op({ kind: 'open-tuple', rel: null, tuple: tuple('M:e2', broot), provenance: 'encounter', vouchedBy: null, act: null }))
+      M.apply(s, view('M:e2', broot, 1, [lk('b0', 0), lk('b1', 1)]))
+      return s
+    }
+    const dir = new DeviceDirectory()
+    const cands = [0, 1].map((i) => new K2Device('M', `M${i + 1}`, new Uint8Array(32).fill(i + 1), i, 2, M.PARAM.budget, dir))
+    let rnd = 36
+    const next = () => ((rnd = (rnd * 1103515245 + 12345) % 2 ** 31) / 2 ** 31)
+    const want = ['w:6', 'x:2', 'y:4']
+    for (let run = 0; run < 200; run++) {
+      const order = ops.map((o) => ({ o, k: next() })).sort((a, b) => a.k - b.k).map((x) => x.o)
+      const dups = order.filter(() => next() < 0.3).map((o) => ({ ...o, id: { writer: 'w', n: ++seq } }) as M.Op)
+      const s = base()
+      for (const o of [...order, ...dups]) M.apply(s, o)
+      const uv = M.usableView(s, 'M:e1', t0)
+      const what = `run ${run}`
+      expect(uv.listed.map((k) => `${k.anchor}:${k.n}`), what).toEqual(want)
+      for (const k of uv.listed) expect(cands.filter((c) => c.mayName(k)).length, `${what} ${k.anchor}`).toBe(1)
+      for (const c of cands) {
+        const bKey = M.usableView(s, 'M:e2', t0).listed.find((k) => c.mayName(k))!
+        for (const k of uv.listed) {
+          const intro = op({ kind: 'introduce', act: { id: `act-${k.anchor}`, a: { rel: 'M:e1', key: k.anchor, keyAgreement: k.keyAgreement }, b: { rel: 'M:e2', key: bKey.anchor, keyAgreement: bKey.keyAgreement }, issuedAt: t0, expiresAt: exp } })
+          expect(c.authorize(intro, s), `${what} ${c.name} ${k.anchor}`).toBe(c.mayName(k))
+        }
+        const h = new HolderDevice(c.name, 'M', c, new Carrier(), new VirtualClock(t0), undefined, s)
+        const mine = uv.unconsumed.filter((k) => c.mayName(k))
+        expect(h.stockAt('M:e1'), `${what} ${c.name}`).toEqual({ listed: uv.listed.length, usable: uv.usable.length, unconsumed: uv.unconsumed.length, nameable: mine.length })
+      }
+    }
+  })
 })
 
 describe('K2 Schritt 2: Messungen (X23, Diebesfenster, Rotation, Fan-out, Ankerpaar)', () => {
