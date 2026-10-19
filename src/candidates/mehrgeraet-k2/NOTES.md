@@ -130,8 +130,8 @@ accept. So every key M can name can be accepted (strict: only its holder
 opens the ticket, a key of a device without quota would be dead), and
 two devices of K2-shared that accept the same ticket concurrently count it
 once (rule 1 for `accept:<act>`). An empty own list never goes out while
-the class is on (an empty revision is 8535's class-off signal, it clears
-every writer at M, MV-12).
+the class is on (an empty revision is 8535's class-off signal and names
+the anchors it withdraws, below).
 
 **Revocation** (`holder.ts` `revokeInSets`, after the carrier
 deregistration): the revoking device writes a revocation proof in every
@@ -140,12 +140,11 @@ and sends one revision per relationship. Rotation: K2-strict withdraws the
 revoked device's own stock keys in the state (M stops naming them because
 their signer is revoked in the set it holds for A); K2-shared withdraws
 every live stock key (the revoked device knew them all), sends the empty
-revision (8535) and refills. The empty revision carries its clearing
-marks signed (`clears`: per writer of the person the highest revision the
-sender holds, siblings' writers from the journal, its own writer at the
-empty revision's number); M folds them as a maximum whenever the empty
-revision arrives, so the withdrawal dominates the refill in any order. Counter-run `counterpartRevocation: false`:
-none of this (carrier only).
+revision (8535) and refills. The empty revision names the anchors it
+withdraws (tombstones per anchor, review 34, below); the refill has new
+anchors, so the withdrawal dominates the refill in any order without
+touching it. Counter-run `counterpartRevocation: false`: none of this
+(carrier only).
 
 **Bench-side in step 2** (named, step 3): the person's own devices still
 learn the set from the bench list (`DeviceDirectory`: journal writer check,
@@ -197,17 +196,37 @@ device opens which relationship, and so whose keys M names, varies with
 the seed); sums over 5 × 30 = 150 introductions, range per run in
 brackets.
 
-| variant | window | issued | on A2's keys | of them while A2 sleeps | expired unseen (8155) | card never produced (8110.5) | connected |
-|---|---|---|---|---|---|---|---|
-| K1a | 2 d | 135 | – | – | 0 | 0 | 135 |
-| K1a | 7 d | 145 | – | – | 0 | 0 | 145 |
-| K1a | 30 d | 150 | – | – | 0 | 0 | 150 |
-| K2-strict | 2 d | 135 | 39 (6–10) | 3 (0–1) | **3** (0–1) | 0 | 132 |
-| K2-strict | 7 d | 150 | 53 (9–12) | 8 (1–2) | **8** (1–2) | 0 | 142 |
-| K2-strict | 30 d | 150 | 36 (6–9) | 9 (1–3) | **9** (1–3) | 0 | 141 |
-| K2-shared | 2 d | 135 | 39 (6–10) | 3 (0–1) | 0 | **3** (0–1) | 132 |
-| K2-shared | 7 d | 150 | 53 (9–12) | 8 (1–2) | 0 | **8** (1–2) | 142 |
-| K2-shared | 30 d | 150 | 52 (7–14) | 9 (1–3) | 0 | **9** (1–3) | 141 |
+| variant | window | issued | on A2's keys | of them while A2 sleeps | expired unseen (8155) | no card by the acceptance end (8110.5) | card late at C (8110.5 at C) | connected |
+|---|---|---|---|---|---|---|---|---|
+| K1a | 2 d | 135 | – | – | 0 | 0 | 0 | 135 |
+| K1a | 7 d | 145 | – | – | 0 | 0 | 0 | 145 |
+| K1a | 30 d | 150 | – | – | 0 | 0 | 0 | 150 |
+| K2-strict | 2 d | 135 | 39 (6–10) | 3 (0–1) | **3** (0–1) | 0 | 0 | 132 |
+| K2-strict | 7 d | 150 | 53 (9–12) | 8 (1–2) | **8** (1–2) | 0 | 0 | 142 |
+| K2-strict | 30 d | 150 | 36 (6–9) | 9 (1–3) | **9** (1–3) | 0 | 0 | 141 |
+| K2-shared | 2 d | 135 | 39 (6–10) | 3 (0–1) | 0 | **3** (0–1) | 0 | 132 |
+| K2-shared | 7 d | 150 | 53 (9–12) | 8 (1–2) | 0 | **8** (1–2) | 0 | 142 |
+| K2-shared | 30 d | 150 | 52 (7–14) | 9 (1–3) | 0 | **9** (1–3) | 0 | 141 |
+
+Evidence per loss (review 34 S4: every time is the time of the event,
+taken from the journal op that caused it, not from the next observation;
+C's side measured on its own: `cardLog` at C records every card arrival
+with its outcome, `expire` op in C's journal):
+
+| variant | loss class | issued (day) | consent cutoff / act expiry | seen / consented on A | card produced (journal) | card at C | refused at C | act expired at C |
+|---|---|---|---|---|---|---|---|---|
+| K2-strict | 8155 (3/8/9) | inside A2's sleep (8–14) | +6 / +7 d | never (holder online 0 steps before the cutoff) | never | never | – | 0.25 d after expiry (next step at C) |
+| K2-shared | 8110.5 (3/8/9) | inside A2's sleep (8–14) | +6 / +7 d | 0.25 d after issue, on A1 | never (no `produce` op on any A device; allocator online 0 steps before expiry) | never | – | 0.25 d after expiry |
+| K2-shared, review 34 counter-run (seeds 2, 3, 5, 2 days, A2 asleep days 0–8, window 30 d; test in `mehrgeraet-seeds.test.ts`) | card late (1 per seed) | day 1 | day 7 / day 8 | day 1.25 on A1 | day 8 (A2 back, `produce` op at the acceptance end) | after day 8 | `after-acceptance-end-8110.5` | – |
+
+The table numbers did not change with the correction: under the default
+sleep (days 8–22) no card is produced at the edge, so every shared loss is
+a card that was never produced, confirmed now by the journals (no
+`produce` op) and by C (no card arrived). The earlier classification was
+wrong only where the producer returns right at the acceptance end;
+Astra's counter-run shows that case, and it is now counted as a card
+produced in time that reaches C too late (C refuses it with 8110.5), not
+as a card never produced.
 
 Refusals by M (a row of their own, review 33 S2; reason and M's stock at
 that moment, `stockAt` on both M devices, counted with the same checks as
@@ -224,15 +243,17 @@ the choice in `introduce`):
 introduction, the measured cause, never the outcome read backwards; test
 M2b checks the structure): the named key's device (holder; K2: the
 allocator), issue time, consent cutoff (8155), act expiry (8110.5), when a
-device of A first held the act, when the user consented, when the
-allocator produced the card, the steps in which the holder was online and
+device of A first held the act, when the user consented, when the card
+was produced (the `produce` op in the journal, K1a: the consent op with
+the card; review 34 S4), at C when a card arrived, with which reason C
+refused it and when C's act expired, the steps in which the holder was online and
 a ticket received in that round could still have been shown before the
 cutoff, the steps in which the allocator was online between consent and
 expiry, and the holder's measured offline windows. Result over all 5 ×
 150 introductions: every 8155 loss (strict 3/8/9) is a ticket on A2's key,
 issued inside A2's offline window, with the cutoff inside it, and A2 online
 in 0 usable steps before the cutoff; every 8110.5 loss (shared 3/8/9) is
-consented, has no card on the allocator A2, and A2 was online in 0 steps
+consented, has no `produce` op in any A journal and no card arrival at C, and A2 was online in 0 steps
 between consent and act expiry (the producer does not produce after
 expiry, `produce`); no loss of another kind. The refusals are not losses
 of issued introductions: they come from the counterpart's stock (C, one
@@ -254,9 +275,13 @@ the length of the sleep; it grows with the window (2 % at 2 days, 5 % at
 nothing. These numbers replace the earlier 3/9/13 (a throwaway script
 whose seeding is not on record; review 33 confirmed only one seed). Now
 the seeds 1–5 of the seed-sweep generator, on the head with the review-33
-fix. Grid dependence: steps of 6 hours; a ticket counts as shown only
-from the step after its arrival, so a coarser grid can only move losses at
-the window edges (not measured separately).
+fix; rerun on the head with the review-34 fix (journal times, C's
+evidence), same numbers. Grid dependence: steps of 6 hours; a ticket counts
+as shown only from the step after its arrival, and in each step the bench
+attempts the day's introduction before the world round, so a ticket issued
+in a step is delivered in that step's round at the earliest. How the
+results depend on this time grid (step length, order of introduction and
+round) is not measured.
 
 ### X9 thief window, rotation, enrolment fan-out
 
@@ -360,16 +385,76 @@ on the withdrawal marks of K1a step 4 (a fold as maximum, order-free):
   after twelve rounds, never silently (test R2b).
 - **Buffered card**: the buffer keeps `fromKeyAgreement`; on assignment
   to the ticket 8850.6 (d) sets K, no connect (test R3, B3).
-- **Shared rotation**: the empty revision's clearing marks are signed in
-  the revision and fold as a maximum; M also folds a revision of a writer
-  lower than the one it holds (keys unchanged, marks folded) instead of
-  refusing it. Three devices, A3 offline, A1 revokes A2: in forward and
+- **Shared rotation**: the empty revision names what it withdraws (since
+  review 34 as tombstones per anchor, below; review 33 had signed number
+  marks); M also folds a revision of a writer lower than the one it holds
+  (keys unchanged, tombstones folded) instead of refusing it. Three devices, A3 offline, A1 revokes A2: in forward and
   reverse arrival order and with every frame duplicated, no key of A3
   that A2 knew stays nameable at either M device, and the refill stays
   nameable (test R4, B4). K1a keeps its receiver-side marks (identical to
   main).
 
 The one receive-side filter left is S1 (limits below).
+
+### Tombstones per anchor (review 34 B5)
+
+Gate review 34 found that signed number marks (`clears: {writer: n}`)
+had no bound: A2 signed revision 0 with `clears: {A1: 1000000}` before
+its revocation, M took the mark as a maximum, and after the revocation
+and A1's refill M had no nameable key. A number names keys that do not
+exist yet. Now a withdrawal names the concrete anchors it withdraws, and
+M keeps a tombstone per anchor:
+
+- **Sender** (`holder.ts` `sendRevision`): an empty revision carries
+  `tombstones`, the sorted anchors of the stock it withdraws, consumed
+  keys left out (8570.2 marks them at M already). Strict: the device's own
+  anchors (`by` = this device). Shared: every anchor of the shared stock
+  (from the journal; every device holds the seed). `clears` under device
+  keys is a form error at M (finding, no receipt).
+- **Fold** (`model.ts` `applyWriterView`, op `view` with `standing`): every
+  folded revision of a signer, lower ones included, adds its listed
+  anchors to `listed[signer]` and its tombstones to `tombstones[anchor]`
+  (set of signers). Both only grow; the view is a function of the folded
+  set (`viewKeys`, `buried`): order-free, idempotent under duplicates. A
+  buried anchor is absent from the view whichever writer lists it, so the
+  tombstone dominates any listing of that anchor, before or after it.
+- **Standing** (`M.hasStanding`): strict (`own`): a tombstone counts only
+  for an anchor its signer listed itself; a tombstone for a sibling's
+  key or for an anchor nobody listed has no effect. Shared (`set`): a
+  tombstone counts for any anchor a writer of the same person listed at M
+  (the shared stock). A tombstone without standing when it arrives is a
+  finding (`Grabstein ohne Stand`) and has no effect; it takes effect
+  only if a listing of that anchor later gives its signer standing (the
+  same rule in every arrival order; the finding itself is written when the
+  tombstone arrives first).
+- **Revoked signers** (`holder.ts` `unrevokedKeys`, `M.buried` with the
+  revoked set M holds for the counterpart): a tombstone of a signer M
+  knows as revoked counts only for an anchor that no unrevoked writer
+  lists in its latest revision. So a revoked device never takes away a key
+  a remaining device still vouches for. What a revoked device could reach
+  before its revocation: strict, only its own listed keys (withdrawn by
+  the rotation anyway; listing a sibling's anchor itself to gain standing
+  does not help, the sibling still lists it); shared, only anchors that
+  existed and were listed before its revocation, all of which the
+  rotation withdraws. Anchors created after the revocation (the refill)
+  are fresh keys it cannot know (the journal is sealed to members only).
+- **Consequence for strict class-off**: a device's empty revision buries
+  only its own keys at M. Each sibling buries its own when it folds the
+  class-off (`withdrawAfterClassOff`), so an offline sibling's keys stay
+  nameable at M until it is back (a ticket on them is refused by the
+  sibling, whose stock is withdrawn by then). Shared buries every anchor
+  of the person with one revision, as before.
+- Restore and enrolment: tombstones and `listed` are part of the view op
+  (journal) and of the state image (`fromJson`, projection), so a
+  restored or newly enrolled M device holds them (test T2).
+
+Tests: model (shared and strict, all 120 orders of listing, withdrawal,
+refill and a re-listing of buried anchors, with duplicates; revoked rule;
+image), T1 (Astra's probe in both variants: the `clears` revision is
+refused, tombstones for A1's anchors and an invented anchor; after the
+revocation every active A1 key stays nameable), T2 (restore of M1 from
+an image before the revocation, M3 enrolled after), R4 (B4 stays closed:
+every order and duplicates).
 
 ### Counter card through the sibling (8325.A5c)
 
@@ -493,8 +578,11 @@ under load). The default run (CI) takes seed 1 of each variant (97 s);
    it lists; 8485/8512 per device.
 7. **6270 receive contract**: receive never filters; conflicting proofs
    fold to the canonical smallest with both kept for the finding; empty
-   revisions (8535) carry their clearing marks signed, so withdrawal is
-   order-free (8535 under per-signer writers).
+   revisions (8535) name the anchors they withdraw (tombstones per anchor,
+   bound by standing: strict own listing, shared the person's listing; a
+   revoked signer's tombstone never buries a key an unrevoked writer still
+   lists), so withdrawal is order-free and bounded (8535 under per-signer
+   writers; review 34).
 
 ## Step 1 (18 October 2026)
 

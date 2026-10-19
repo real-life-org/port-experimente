@@ -86,7 +86,7 @@ async function base(candidate: MultiDeviceCandidate, thirds: string[] = [], step
 }
 
 /** Ursache einer verlorenen Vorstellung in X23, aus Messungen (Review 33 S2), nie aus dem Ergebnis erschlossen. */
-export type X23Cause = 'expired-unseen-8155' | 'card-not-produced-8110.5' | 'card-produced-not-connected'
+export type X23Cause = 'expired-unseen-8155' | 'card-not-produced-8110.5' | 'card-late-8110.5' | 'card-produced-not-connected'
 /** Beleg je verlorener Vorstellung (Tage seit Beginn; Online-Schritte = Schritte, in denen das Gerät online war). */
 export interface X23Loss {
   act: string
@@ -100,8 +100,14 @@ export interface X23Loss {
   /** Erstes Gerät der Person, das den Akt vor dem Schnitt hielt, und wann; null = nie. */
   seenDay: number | null
   consentedDay: number | null
-  /** Wann der Zuteiler die Karte erzeugte (eigene Karte im Zustand des Zuteilers); null = nie. */
+  /** Wann die Karte erzeugt wurde: Zeit der Operation im Journal, die sie erzeugte (K2 `produce`, K1a `consent` mit Karte; Review 34 S4); null = nie. */
   producedDay: number | null
+  /** Bei C: erste Ankunft einer Karte des Akts (gleich mit welchem Ausgang); null = keine. */
+  cardReceivedDay: number | null
+  /** Bei C: der Grund, mit dem C die Karte abwies (erste Abweisung, `cardLog`), etwa `after-acceptance-end-8110.5`; null = keine. */
+  cardRefusal: string | null
+  /** Bei C: Zeit der `expire`-Operation des Akts in Cs Journal; null = keine. */
+  actExpiredDayAtC: number | null
   /** Schritte zwischen Ausstellung und Schnitt, in denen der Halter online war und ein in dieser Runde empfangenes Ticket vor dem Schnitt noch hätte zeigen können (8155-Beleg). */
   holderOnlineStepsBeforeCutoff: number
   /** Schritte zwischen Zustimmung und Annahmeende, in denen der Zuteiler online war (8110.5-Beleg). */
@@ -124,10 +130,11 @@ export interface X23Refusal {
  * je Vorstellung: ungesehen (kein Gerät von A hielt den Akt vor dem Consent-Schnitt 8155), zugestimmt ohne Verbindung,
  * verbunden, sonst; dazu Vorstellungen, die M mangels benennbaren Schlüssels nicht ausstellen konnte. Review 33 S2: die
  * Ursache jedes Verlusts ist ein Beleg aus Messungen je Schritt (Online-Schritte des Halters vor dem Schnitt, des Zuteilers
- * vor dem Annahmeende, Erzeugungszeitpunkt der Karte), jede Verweigerung trägt Ms Vorrat in dem Moment. Der Nutzer
+ * vor dem Annahmeende); Review 34 S4: die Erzeugung der Karte zur Zeit ihrer Operation im Journal, bei C getrennt Ankunft der
+ * Karte, Abweisungsgrund und Ablauf des Akts. Jede Verweigerung trägt Ms Vorrat in dem Moment. Der Nutzer
  * bestätigt das Annahmebudget täglich (8515), der Geräteanteil ist aufgehoben (1000): gemessen wird nur die Zeit.
  */
-export async function timeModel(factory: (o: { stockLifetimeMs: number; budget: number }) => MultiDeviceCandidate, opts: { lifetimeDays: number; days?: number; dormant?: Array<[number, number]>; stepHours?: number; everyDays?: number }) {
+export async function timeModel(factory: (o: { stockLifetimeMs: number; budget: number }) => MultiDeviceCandidate, opts: { lifetimeDays: number; days?: number; dormant?: Array<[number, number]>; stepHours?: number; everyDays?: number; inspect?: (w: Welt15) => void }) {
   const days = opts.days ?? 30
   const dormant = opts.dormant ?? [[8, 22]]
   const stepMs = (opts.stepHours ?? 6) * 3600 * 1000
@@ -137,7 +144,7 @@ export async function timeModel(factory: (o: { stockLifetimeMs: number; budget: 
   const s = await base(factory({ stockLifetimeMs: lifetime, budget: 1000 }), names, stepMs)
   const start = Date.parse(s.w.clock.now())
   const dayOf = (t: number) => (t - start) / DAY
-  type Track = { C: HolderDevice; holder: string; issued: number; cutoff: number; expires: number; seenAt: number | null; consentedAt: number | null; producedAt: number | null; holderOnline: number; allocatorOnline: number; dormantKey: boolean; exposed: boolean }
+  type Track = { C: HolderDevice; holder: string; issued: number; cutoff: number; expires: number; seenAt: number | null; consentedAt: number | null; holderOnline: number; allocatorOnline: number; dormantKey: boolean; exposed: boolean }
   const acts = new Map<string, Track>()
   const refusals: X23Refusal[] = []
   // Gemessene Offline-Fenster je Gerät von A (aus den Umschaltungen, nicht aus der Vorgabe).
@@ -176,7 +183,7 @@ export async function timeModel(factory: (o: { stockLifetimeMs: number; budget: 
         const ma = s.Mm.state.mediatorActs.find((x) => x.id === r.act) ?? s.M2.state.mediatorActs.find((x) => x.id === r.act)!
         const key = [...s.A.state.relationships, ...s.A2.state.relationships].flatMap((x) => x.stock).find((x) => x.anchor === ma.a.key)
         const holder = key?.by ?? s.A.person
-        acts.set(r.act, { C: c.C, holder, issued: Date.parse(ma.issuedAt), cutoff: Date.parse(ma.expiresAt) - M.PARAM.consentReserveMs, expires: Date.parse(ma.expiresAt), seenAt: null, consentedAt: null, producedAt: null, holderOnline: 0, allocatorOnline: 0, dormantKey: key?.by === s.A2.name, exposed: key?.by === s.A2.name && !s.A2.online })
+        acts.set(r.act, { C: c.C, holder, issued: Date.parse(ma.issuedAt), cutoff: Date.parse(ma.expiresAt) - M.PARAM.consentReserveMs, expires: Date.parse(ma.expiresAt), seenAt: null, consentedAt: null, holderOnline: 0, allocatorOnline: 0, dormantKey: key?.by === s.A2.name, exposed: key?.by === s.A2.name && !s.A2.online })
       }
     }
     const now = Date.parse(s.w.clock.now())
@@ -189,7 +196,6 @@ export async function timeModel(factory: (o: { stockLifetimeMs: number; budget: 
       // nach dem der Schnitt noch nicht vorbei ist (Raster `stepHours`).
       if (now + stepMs <= x.cutoff && holderDevs.some((d) => d.online)) x.holderOnline++
       if (x.consentedAt !== null && now <= x.expires && holderDevs.some((d) => d.online)) x.allocatorOnline++
-      if (x.producedAt === null && holderDevs.some((d) => d.state.acts.some((a) => a.id === id && a.ownCard))) x.producedAt = now
       if (x.seenAt === null && online.length && now <= x.cutoff) x.seenAt = now
       if (x.seenAt !== null && x.consentedAt === null && now <= x.cutoff) {
         const d = online.find((y) => M.act(y.state, id).state === 'offered')
@@ -202,6 +208,16 @@ export async function timeModel(factory: (o: { stockLifetimeMs: number; budget: 
   if (!s.A2.online) offline.get(s.A2.name)!.at(-1)![1] = (Date.parse(s.w.clock.now()) - start) / DAY
   s.A2.online = true
   await s.w.rounds(3)
+  opts.inspect?.(s.w)
+  // Review 34 S4: Ereigniszeiten aus den Journalen (die Operation, die sie bewirkte), nicht aus der nächsten Beobachtung.
+  const opsOf = (d: HolderDevice) => ((d.cand as unknown as { journal?(): Array<{ ops: M.Op[] }> }).journal?.() ?? []).flatMap((b) => b.ops)
+  const produced = new Map<string, number>()
+  for (const d of s.w.of('A')) for (const o of opsOf(d)) if (o.kind === 'produce' || (o.kind === 'consent' && o.card)) produced.set(o.act, Math.min(produced.get(o.act) ?? Infinity, Date.parse(o.at)))
+  const expiredAt = (C: HolderDevice, act: string) => {
+    const t = opsOf(C).filter((o) => o.kind === 'expire' && o.act === act).map((o) => Date.parse(o.at))
+    return t.length ? Math.min(...t) : null
+  }
+  const SUCCESS = new Set(['buffered', 'repeat-8910.7', 'connected-8910.5', 'pending-8910.4'])
   let expiredUnseen = 0
   let missedCards = 0
   let connected = 0
@@ -219,11 +235,16 @@ export async function timeModel(factory: (o: { stockLifetimeMs: number; budget: 
     else if (x.consentedAt !== null) missedCards++
     else other++
     if (c?.state === 'connected') continue
-    // Ursache aus den Belegen: ungesehen vor dem Schnitt (8155); zugestimmt, aber der Zuteiler erzeugte bis zum
-    // Annahmeende keine Karte (8110.5); sonst erzeugt und nicht verbunden.
-    const cause: X23Cause = x.seenAt === null ? 'expired-unseen-8155' : x.producedAt === null || x.producedAt > x.expires ? 'card-not-produced-8110.5' : 'card-produced-not-connected'
+    // Ursache aus den Belegen: ungesehen vor dem Schnitt (8155); zugestimmt, aber bis zum Annahmeende keine Karte erzeugt
+    // (8110.5); erzeugt, aber C wies sie nach dem Annahmeende ab (8110.5 bei C, `card-late`); sonst erzeugt und nicht verbunden.
+    // Review 34 S4: erzeugt = Operation im Journal; bei C getrennt gemessen, wann die Karte ankam und mit welchem Grund C sie abwies.
+    const producedAt = produced.get(id) ?? null
+    const arrivals = x.C.cardLog.filter((e) => e.act === id)
+    const refusal = arrivals.find((e) => !SUCCESS.has(e.outcome))?.outcome ?? null
+    const cause: X23Cause = x.seenAt === null ? 'expired-unseen-8155' : producedAt === null || producedAt > x.expires ? 'card-not-produced-8110.5' : refusal === 'after-acceptance-end-8110.5' ? 'card-late-8110.5' : 'card-produced-not-connected'
     causes[cause] = (causes[cause] ?? 0) + 1
-    losses.push({ act: id.slice(0, 8), cause, holder: x.holder, issuedDay: dayOf(x.issued), cutoffDay: dayOf(x.cutoff), expiresDay: dayOf(x.expires), seenDay: x.seenAt === null ? null : dayOf(x.seenAt), consentedDay: x.consentedAt === null ? null : dayOf(x.consentedAt), producedDay: x.producedAt === null ? null : dayOf(x.producedAt), holderOnlineStepsBeforeCutoff: x.holderOnline, allocatorOnlineStepsBeforeExpiry: x.allocatorOnline, holderOffline: offline.get(x.holder) ?? [] })
+    const expC = expiredAt(x.C, id)
+    losses.push({ act: id.slice(0, 8), cause, holder: x.holder, issuedDay: dayOf(x.issued), cutoffDay: dayOf(x.cutoff), expiresDay: dayOf(x.expires), seenDay: x.seenAt === null ? null : dayOf(x.seenAt), consentedDay: x.consentedAt === null ? null : dayOf(x.consentedAt), producedDay: producedAt === null ? null : dayOf(producedAt), cardReceivedDay: arrivals.length ? dayOf(Date.parse(arrivals[0]!.at)) : null, cardRefusal: refusal, actExpiredDayAtC: expC === null ? null : dayOf(expC), holderOnlineStepsBeforeCutoff: x.holderOnline, allocatorOnlineStepsBeforeExpiry: x.allocatorOnline, holderOffline: offline.get(x.holder) ?? [] })
   }
   return { introductions: acts.size + refused, refused, issued: acts.size, onDormantKey: onDormant, onDormantKeyWhileAsleep: exposed, expiredUnseen, missedCards, connected, other, causes, losses, refusals, lifetimeDays: opts.lifetimeDays, dormantDays: dormant.reduce((n, [a, b]) => n + (b - a), 0), days }
 }

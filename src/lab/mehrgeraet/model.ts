@@ -141,6 +141,16 @@ export interface StockView {
    * Revision darüber. Verband (Maximum je Schreiber): in jeder Faltungsreihenfolge dasselbe.
    */
   clears?: Record<string, number>
+  /**
+   * K2, Review 34 B5: Grabsteine je Anker. Eine Rückzugsrevision nennt die konkreten Anker, die sie zurückzieht; je Anker die
+   * Signierer, die ihn genannt haben (wächst nur, Vereinigung: in jeder Reihenfolge und mit Duplikaten dasselbe). Ein
+   * Grabstein wirkt, wenn sein Signierer für den Anker Stand hat (`standing`), und dominiert jede Listung dieses Ankers.
+   */
+  tombstones?: Record<string, string[]>
+  /** K2: je Schreiber jeder Anker, den er in irgendeiner gefalteten Revision gelistet hat (wächst nur; Grundlage des Stands). */
+  listed?: Record<string, string[]>
+  /** K2: Stand eines Grabsteins: `own` (strict) nur für selbst gelistete Anker, `set` (shared) für jeden Anker, den ein Schreiber der Person gelistet hat. */
+  standing?: 'own' | 'set'
 }
 
 /** Beziehung je Holder (eine je Gegenüber, 6975.5: Zusammenhangskomponente der Herkunftskanten). */
@@ -352,6 +362,8 @@ export function fromJson(s: HolderState): HolderState {
     if (r.writers) r.writers = tableOf(r.writers)
     if (r.view?.writers) r.view.writers = tableOf(r.view.writers)
     if (r.view?.clears) r.view.clears = tableOf(r.view.clears)
+    if (r.view?.tombstones) r.view.tombstones = tableOf(r.view.tombstones)
+    if (r.view?.listed) r.view.listed = tableOf(r.view.listed)
   }
   for (const a of s.acts) if (a.cards) a.cards = tableOf(a.cards)
   if (s.sets) {
@@ -379,7 +391,7 @@ export type Op = { id: OpId; at: string } & (
   | { kind: 'revision'; rel: string; revision: number; keys: ListedKey[]; writer?: string } // 8500, je Schreiber (Schritt 4)
   | { kind: 'withdraw'; rel: string; anchors: Anchor[] } // 8475.S6
   | { kind: 'age'; rel: string; anchors: Anchor[] } // 8475.S5
-  | { kind: 'view'; rel: string; scope: string; revision: number; keys: ListedKey[]; writer?: string; clears?: Record<string, number> } // M: 8557/6270, je Schreiber (Schritt 4)
+  | { kind: 'view'; rel: string; scope: string; revision: number; keys: ListedKey[]; writer?: string; clears?: Record<string, number>; tombstones?: string[]; standing?: 'own' | 'set' } // M: 8557/6270, je Schreiber (Schritt 4); K2: Grabsteine je Anker (Review 34)
   | { kind: 'introduce'; act: MediatorAct } // M: 8605, 8570.2
   | { kind: 'ticket-accept'; act: Act } // 8640.14
   | { kind: 'ticket-refuse-budget'; rel: string; own: Anchor } // 8640.13
@@ -558,7 +570,7 @@ const OP_FIELDS: { [K in Op['kind']]: { [field: string]: Shape } } = {
   revision: { rel: id, revision: 'nat', keys: { array: SHAPES.listedKey }, writer: { optional: 'tag' } },
   withdraw: { rel: id, anchors: { array: id } },
   age: { rel: id, anchors: { array: id } },
-  view: { rel: id, scope: id, revision: 'nat', keys: { array: SHAPES.listedKey }, writer: { optional: 'tag' }, clears: { optional: { record: 'nat', key: 'tag' } } },
+  view: { rel: id, scope: id, revision: 'nat', keys: { array: SHAPES.listedKey }, writer: { optional: 'tag' }, clears: { optional: { record: 'nat', key: 'tag' } }, tombstones: { optional: { array: id } }, standing: { optional: { enum: ['own', 'set'] } } },
   introduce: { act: SHAPES.mediatorAct },
   'ticket-accept': { act: SHAPES.act },
   'ticket-refuse-budget': { rel: id, own: id },
@@ -773,6 +785,10 @@ function aggregateO(a: Act): void {
  * die Vereinigung der Schlüssel aller Schreiber, deren jüngste Revision über ihrer Aufhebungsmarke liegt (`clears`). Eine
  * leere Revision eines Schreibers hebt die Schlüssel aller Schreiber auf, die das empfangende Gerät bis dahin hielt (die
  * Operation trägt diese Marken); die Marken falten als Maximum. Neuer Scope (8557): die Sicht beginnt neu.
+ *
+ * K2 (Review 34 B5, Operation mit `standing`): statt Nummernmarken Grabsteine je Anker. Jede gefaltete Revision, auch eine
+ * niedrigere, vergrößert `listed` ihres Schreibers und die Grabsteine um die Anker, die sie nennt; beides wächst nur, die
+ * Sicht ist eine Funktion der gefalteten Menge (`viewKeys`), also reihenfolgefrei und idempotent.
  */
 function applyWriterView(s: HolderState, r: Relationship, op: Op & { kind: 'view' }, keys: ListedKey[]): void {
   const w = op.writer!
@@ -781,6 +797,11 @@ function applyWriterView(s: HolderState, r: Relationship, op: Op & { kind: 'view
   const writers = tableOf(v.writers)
   const clears = tableOf(v.clears)
   for (const [x, n] of Object.entries(op.clears ?? {})) put(clears, x, Math.max(own(clears, x) ?? 0, n))
+  const anchorBound = op.standing !== undefined ? { standing: op.standing, listed: tableOf(v.listed), tombstones: tableOf(v.tombstones) } : null
+  if (anchorBound) {
+    put(anchorBound.listed, w, [...new Set([...(own(anchorBound.listed, w) ?? []), ...keys.map((k) => k.anchor)])].sort())
+    for (const a of op.tombstones ?? []) put(anchorBound.tombstones, a, [...new Set([...(own(anchorBound.tombstones, a) ?? []), w])].sort())
+  }
   const held = own(writers, w)
   let take = !held || op.revision > held.revision
   if (held && op.revision === held.revision && canonical(keys) !== canonical(held.keys)) {
@@ -789,9 +810,32 @@ function applyWriterView(s: HolderState, r: Relationship, op: Op & { kind: 'view
     take = canonical(keys) < canonical(held.keys) // in jeder Reihenfolge dasselbe
   }
   if (take) put(writers, w, { revision: op.revision, keys })
-  const v2 = viewKeys(writers, clears)
+  const next: StockView = { scope: op.scope, revision: Math.max(0, ...Object.values(writers).map((x) => x.revision)), keys: [], writers, clears, ...(anchorBound ?? {}) }
+  const v2 = viewKeys(writers, clears, next)
   for (const anchor of v2.conflicts) keyValueConflict(s, anchor)
-  r.view = { scope: op.scope, revision: Math.max(0, ...Object.values(writers).map((x) => x.revision)), keys: v2.keys, writers, clears }
+  next.keys = v2.keys
+  r.view = next
+}
+
+/** K2, Review 34 B5: hat `signer` Stand für `anchor`? `own`: er hat ihn selbst gelistet; `set`: ein Schreiber der Person hat ihn gelistet. */
+export function hasStanding(v: Pick<StockView, 'listed' | 'standing'>, signer: string, anchor: string): boolean {
+  if (v.standing === 'own') return (own(v.listed, signer) ?? []).includes(anchor)
+  return Object.values(v.listed ?? {}).some((xs) => xs.includes(anchor))
+}
+
+/**
+ * K2, Review 34 B5: die wirksamen Grabsteine. Ein Anker ist begraben, wenn ein Signierer, der ihn genannt hat, dafür Stand
+ * hat; ist dieser Signierer widerrufen (`revoked`, Ms Wissen über die Menge der Gegenseite), zählt sein Grabstein nur, wenn
+ * kein nicht widerrufener Schreiber den Anker in seiner jüngsten Revision listet: ein widerrufenes Gerät nimmt nie einen
+ * Schlüssel weg, für den ein verbliebenes Gerät noch bürgt. Reine Funktion der gefalteten Menge.
+ */
+export function buried(v: Pick<StockView, 'tombstones' | 'listed' | 'standing' | 'writers'>, revoked?: Set<string>): Set<string> {
+  const out = new Set<string>()
+  for (const [a, signers] of Object.entries(v.tombstones ?? {})) {
+    const vouched = () => Object.entries(v.writers ?? {}).some(([w, x]) => !revoked?.has(w) && x.keys.some((k) => k.anchor === a))
+    if (signers.some((w) => hasStanding(v, w, a) && (!revoked?.has(w) || !vouched()))) out.add(a)
+  }
+  return out
 }
 
 /**
@@ -800,13 +844,16 @@ function applyWriterView(s: HolderState, r: Relationship, op: Op & { kind: 'view
  * kleinste Wert (in jeder Reihenfolge derselbe) und der Anker steht in `conflicts` (Befund, nie still). Mit der Aufteilung
  * der Nummern je Restklasse (K1a) kommt das nicht vor.
  */
-export function viewKeys(writers: Record<string, { revision: number; keys: ListedKey[] }>, clears: Record<string, number>): { keys: ListedKey[]; conflicts: string[] } {
+export function viewKeys(writers: Record<string, { revision: number; keys: ListedKey[] }>, clears: Record<string, number>, anchored?: Pick<StockView, 'tombstones' | 'listed' | 'standing' | 'writers'>, revoked?: Set<string>): { keys: ListedKey[]; conflicts: string[] } {
   const m = new Map<string, ListedKey>()
   const conflicts = new Set<string>()
+  // K2 (Review 34 B5): begrabene Anker fehlen in der Sicht, gleich welcher Schreiber sie listet (der Grabstein dominiert).
+  const gone = anchored?.standing !== undefined ? buried({ ...anchored, writers: anchored.writers ?? writers }, revoked) : new Set<string>()
   for (const w of Object.keys(writers).sort()) {
     const x = own(writers, w)!
     if (x.revision <= (own(clears, w) ?? 0)) continue
     for (const k of x.keys) {
+      if (gone.has(k.anchor)) continue
       const held = m.get(k.anchor)
       if (!held) m.set(k.anchor, k)
       else if (canonical(held) !== canonical(k)) {
@@ -1251,7 +1298,7 @@ export function project(s: HolderState, now: string): Projection {
       head: head(r).id,
       classOn: r.classOn,
       departed: r.departed,
-      view: r.view ? { scope: r.view.scope, revision: r.view.revision, keys: sortKeys(r.view.keys), ...(r.view.writers ? { writers: { ...r.view.writers }, clears: { ...(r.view.clears ?? {}) } } : {}) } : null,
+      view: r.view ? { scope: r.view.scope, revision: r.view.revision, keys: sortKeys(r.view.keys), ...(r.view.writers ? { writers: { ...r.view.writers }, clears: { ...(r.view.clears ?? {}) } } : {}), ...(r.view.standing ? { standing: r.view.standing, tombstones: { ...(r.view.tombstones ?? {}) }, listed: { ...(r.view.listed ?? {}) } } : {}) } : null,
       stock: Object.fromEntries(r.stock.map((k) => [k.anchor, { n: k.n, nonce: k.nonce, state: k.state, keyAgreement: k.keyAgreement, expiresAt: k.expiresAt }]).sort(([a], [b]) => (a as string).localeCompare(b as string))),
       nonce: r.nonce,
       nextN: r.nextN,

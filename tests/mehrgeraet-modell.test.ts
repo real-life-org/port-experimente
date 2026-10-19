@@ -466,3 +466,62 @@ describe('K1a Schritt 4: Ms Sicht über pseudonyme Schreiber (8500 und 6270 je S
     expect(s.effects.map((e) => e.id).filter((id) => id.startsWith('revision:')).sort()).toEqual(['revision:A:e1:w1:2', 'revision:A:e1:w2:1', 'revision:A:e1:w2:2'])
   })
 })
+
+describe('K2, Review 34 B5: Grabstein je Anker statt Nummern', () => {
+  const lk = (a: string, n = 1) => ({ n, anchor: a, keyAgreement: `r${a}`, expiresAt: t0 })
+  const view = (standing: 'own' | 'set', writer: string, revision: number, anchors: string[], tombstones?: string[]) => op({ kind: 'view', rel: 'A:e1', scope: 'A:e1', revision, keys: anchors.map((a) => lk(a)), writer, standing, ...(tombstones ? { tombstones } : {}) })
+  const fold = (ops: M.Op[]) => {
+    const s = withRel()
+    for (const o of ops) M.apply(s, o)
+    return s
+  }
+  const perms = <T,>(xs: T[]): T[][] => (xs.length <= 1 ? [xs] : xs.flatMap((x, i) => perms([...xs.slice(0, i), ...xs.slice(i + 1)]).map((p) => [x, ...p])))
+  const anchors = (s: M.HolderState) => M.rel(s, 'A:e1').view!.keys.map((k) => k.anchor)
+
+  it('shared: die leere Revision nennt die Anker, die sie zurückzieht (auch die einer Schwester); in jeder Reihenfolge, mit Duplikaten, dominiert der Grabstein auch eine Nachfüllung, die einen der Anker wieder listet; die Nachfüllung mit neuen Ankern gilt', () => {
+    const L1 = view('set', 'w1', 1, ['a', 'b'])
+    const L2 = view('set', 'w2', 1, ['c'])
+    const E = view('set', 'w1', 2, [], ['a', 'b', 'c'])
+    const R = view('set', 'w1', 3, ['d'])
+    const X = view('set', 'w2', 2, ['a', 'c']) // lists tombstoned anchors again
+    const E2 = { ...E, id: { writer: 'w', n: 9999 } } as M.Op // the same revision a second time (network duplicate, new op)
+    const want = M.canonical(M.rel(fold([L1, L2, E, R, X]), 'A:e1').view)
+    for (const p of perms([L1, L2, E, R, X])) {
+      const s = fold(p)
+      expect(anchors(s), p.map((o) => (o as { revision: number; writer: string }).writer + (o as { revision: number }).revision).join(' ')).toEqual(['d'])
+      expect(M.canonical(M.rel(s, 'A:e1').view)).toBe(want)
+      const d = fold([...p, E2, E])
+      expect(M.canonical(M.rel(d, 'A:e1').view)).toBe(want)
+    }
+  })
+
+  it('strict: ein Grabstein zählt nur für Anker, die der Aussteller selbst gelistet hat; Anker einer Schwester und nie gelistete bleiben unberührt (in jeder Reihenfolge)', () => {
+    const L1 = view('own', 'w1', 1, ['a', 'b'])
+    const L2 = view('own', 'w2', 1, ['c'])
+    const E2 = view('own', 'w2', 2, [], ['a', 'b', 'c', 'z']) // w2 names w1's anchors and an anchor nobody listed
+    for (const p of perms([L1, L2, E2])) expect(anchors(fold(p))).toEqual(['a', 'b'])
+    // Shared standing for the same ops: every listed anchor of the person counts.
+    const S = [view('set', 'w1', 1, ['a', 'b']), view('set', 'w2', 1, ['c']), view('set', 'w2', 2, [], ['a', 'b', 'c', 'z'])]
+    for (const p of perms(S)) expect(anchors(fold(p))).toEqual([])
+  })
+
+  it('Widerruf: Grabsteine eines widerrufenen Signierers zählen nicht für Anker, die ein nicht widerrufener Schreiber listet (auch wenn er sie sich vorher selbst gelistet hat)', () => {
+    // strict: w2 lists w1's anchor a itself (to gain standing), then tombstones it.
+    const ops = [view('own', 'w1', 1, ['a', 'b']), view('own', 'w2', 1, ['a']), view('own', 'w2', 2, [], ['a'])]
+    for (const p of perms(ops)) {
+      const v = M.rel(fold(p), 'A:e1').view!
+      expect(M.viewKeys(v.writers!, M.tableOf(v.clears), v).keys.map((k) => k.anchor)).toEqual(['b']) // w2 not known as revoked: it had standing
+      const unrevoked = M.table(Object.entries(v.writers!).filter(([w]) => w !== 'w2'))
+      expect(M.viewKeys(unrevoked, M.tableOf(v.clears), v, new Set(['w2'])).keys.map((k) => k.anchor)).toEqual(['a', 'b'])
+    }
+  })
+
+  it('Restore: Grabsteine und gelistete Anker überstehen das Abbild (JSON) und die Projektion trägt sie', () => {
+    const s = fold([view('set', 'w1', 1, ['a']), view('set', 'w1', 2, [], ['a'])])
+    const back = M.fromJson(JSON.parse(JSON.stringify(s)) as M.HolderState)
+    expect(M.canonical(M.rel(back, 'A:e1').view)).toBe(M.canonical(M.rel(s, 'A:e1').view))
+    expect(M.rel(back, 'A:e1').view!.tombstones).toEqual({ a: ['w1'] })
+    const p = M.project(back, t0).contacts[0]!.view as M.StockView
+    expect(p.tombstones).toEqual({ a: ['w1'] })
+  })
+})

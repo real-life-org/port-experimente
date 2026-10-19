@@ -35,6 +35,8 @@ import { runX15 } from '../src/lab/mehrgeraet/scenarios'
 import { k2 } from '../src/candidates/mehrgeraet-k2'
 import { k1a } from '../src/candidates/mehrgeraet-k1a'
 import type { MultiDeviceCandidate } from '../src/lab/mehrgeraet/holder'
+import { timeModel } from '../src/lab/mehrgeraet/geraetemengen'
+import * as M from '../src/lab/mehrgeraet/model'
 
 type Cell = 'bestanden' | 'nicht bestanden' | 'nicht abbildbar'
 type Expected = Record<string, { o: Cell; pc?: true }>
@@ -78,5 +80,53 @@ describe('E15 seed sweep (review 33 S3): every seed gives the NOTES table', () =
         }
       }, 600_000)
     }
+  }
+})
+
+// Review 34 S4: X23 took the production time from the next observation (the step after), so a card produced right at the
+// acceptance end counted as "never produced". Astra's counter-run (shared, seeds 2, 3, 5, 2 days, A2 asleep days 0–8, window
+// 30 days): the production time now comes from the journal (the op that produced the card); C's side is measured on its
+// own (card received at, refused with which reason, act expired at).
+describe('X23 evidence from the journal (review 34 S4)', () => {
+  for (const seed of [2, 3, 5]) {
+    it(`shared seed ${seed}: a loss counts as "card never produced" only if no device journal holds the production; a card produced in time but refused at C names C's reason`, async () => {
+      rng.n = seed
+      const uuid = vi.spyOn(globalThis.crypto, 'randomUUID').mockImplementation(() => rng.uuid() as `${string}-${string}-${string}-${string}-${string}`)
+      const values = vi.spyOn(globalThis.crypto, 'getRandomValues').mockImplementation(<T extends ArrayBufferView | null>(a: T): T => {
+        if (a) new Uint8Array(a.buffer, a.byteOffset, a.byteLength).set(rng.bytes(a.byteLength))
+        return a
+      })
+      try {
+        let produced = new Map<string, number>()
+        const r = await timeModel((o) => k2({ stock: 'shared', ...o }), {
+          lifetimeDays: 30,
+          days: 2,
+          dormant: [[0, 8]],
+          inspect: (w) => {
+            // Independent of timeModel: the production ops in every A device's journal, earliest `at` per act.
+            produced = new Map()
+            for (const d of w.of('A')) for (const b of (d.cand as unknown as { journal(): Array<{ ops: M.Op[] }> }).journal()) for (const o of b.ops) if (o.kind === 'produce') produced.set(o.act.slice(0, 8), Math.min(produced.get(o.act.slice(0, 8)) ?? Infinity, Date.parse(o.at)))
+          },
+        })
+        expect(r.losses.length).toBe(r.issued - r.connected)
+        // Astra's case: the card is produced at the acceptance end (A2 back on day 8) and reaches C after it.
+        expect(r.causes['card-late-8110.5'] ?? 0, JSON.stringify(r.losses)).toBeGreaterThan(0)
+        for (const l of r.losses) {
+          const what = JSON.stringify(l)
+          if (l.cause === 'card-not-produced-8110.5') expect(produced.has(l.act), what).toBe(false)
+          if (produced.has(l.act)) {
+            expect(l.producedDay, what).not.toBeNull()
+            expect(l.producedDay!, what).toBeLessThanOrEqual(l.expiresDay)
+          }
+          if (l.cause === 'card-late-8110.5') {
+            expect(l.cardReceivedDay, what).not.toBeNull()
+            expect(l.cardRefusal, what).toBe('after-acceptance-end-8110.5')
+          }
+        }
+      } finally {
+        uuid.mockRestore()
+        values.mockRestore()
+      }
+    }, 600_000)
   }
 })

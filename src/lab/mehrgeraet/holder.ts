@@ -393,6 +393,8 @@ export class HolderDevice {
   dispositions: string[] = []
   /** Empfangene Dokumente (Typ, Absender) für die Auswertung. */
   readonly log: Array<{ type: string; from: string; at: string; writer?: string; rel?: string }> = []
+  /** Messung (X23, Review 34 S4): jede Ankunft einer Karte an diesem Gerät mit Akt, Zeit und Ausgang (Grund). Nur lesend genutzt. */
+  readonly cardLog: Array<{ act: string; at: string; outcome: string }> = []
   online = true
   crashAt: CrashPoint | null = null
   readonly crashes: CrashPoint[] = []
@@ -1342,11 +1344,12 @@ export class HolderDevice {
     // K2 Schritt 2: jeder Schreiber listet seinen eigenen Anteil (der Signierer bürgt für die Schlüssel, die er hält); M vereinigt.
     const share = !!this.cand.stockShare
     const keys = r.stock.filter((k) => k.state === 'active' && (!share || k.by === this.me)).map((k) => ({ n: k.n, anchor: k.anchor, keyAgreement: k.keyAgreement, expiresAt: k.expiresAt }))
-    // K2, Review 33 B4: eine leere Revision trägt ihre Aufhebungsmarken signiert: je Schreiber der Person die höchste
-    // Revision im eigenen Zustand (über das Journal auch die der Schwestern), der eigene Schreiber mit dieser Nummer.
-    const clears = this.cand.signerWriters && tag && !keys.length ? M.table([...Object.entries(r.writers ?? {}).map(([w, x]): [string, number] => [w, x.revision]), [tag, revision]]) : undefined
+    // K2, Review 34 B5: eine leere Revision nennt die konkreten Anker, die sie zurückzieht (Grabstein je Anker, keine
+    // Nummernmarken): strict die eigenen (nur für sie hat der Signierer Stand), shared jeden Anker des gemeinsamen Vorrats
+    // (aus dem Journal; jedes Gerät hält den Seed). Verbrauchte nicht (8570.2 markiert sie bei M schon).
+    const tombstones = this.cand.signerWriters && tag && !keys.length ? r.stock.filter((k) => k.state !== 'consumed' && (this.cand.stockMode === 'shared' || k.by === this.me)).map((k) => k.anchor).sort() : undefined
     this.emit({ kind: 'revision', rel: r.id, revision, keys, ...(tag ? { writer: tag } : {}) })
-    await this.sendDoc(TYPES.revision, h.ownKey, h.peer, h.peerKeyAgreement, (await this.keysFor(h.ownKey)).rkid, { revision, keys, ...(tag && this.cand.writerTag ? { writer: tag } : {}), ...(clears ? { clears } : {}) }) // K2: der Schreiber ist der Signierer, kein Feld
+    await this.sendDoc(TYPES.revision, h.ownKey, h.peer, h.peerKeyAgreement, (await this.keysFor(h.ownKey)).rkid, { revision, keys, ...(tag && this.cand.writerTag ? { writer: tag } : {}), ...(tombstones ? { tombstones } : {}) }) // K2: der Schreiber ist der Signierer, kein Feld
   }
   /** Die Schreiberkennung dieses Geräts für die Beziehung eines Tupels (Schritt 4), als Nutzlastfeld; ohne Kennung leer. */
   private tagField(tupleId: string): { writer?: string } {
@@ -1360,7 +1363,7 @@ export class HolderDevice {
     const revoked = new Set<string>()
     for (const t of r.tuples) for (const a of M.setView(this.setOf(t.peer)).revoked) revoked.add(signerId(a))
     const writers = M.table(Object.entries(r.view!.writers ?? {}).filter(([w]) => !revoked.has(w)))
-    return M.viewKeys(writers, M.tableOf(r.view!.clears)).keys
+    return M.viewKeys(writers, M.tableOf(r.view!.clears), r.view!, revoked).keys
   }
   /**
    * Messung (X23, Review 33 S2): Ms Vorrat für eine Seite in diesem Moment, gezählt mit denselben Prüfungen wie die Wahl
@@ -2228,12 +2231,17 @@ export class HolderDevice {
         const t = this.tupleOfAddress(address)
         if (!t || !(await this.isPeer(doc.issuer, t.peer))) return false
         const r = M.relOfTuple(this.state, t.id)!
-        const p = doc.payload as unknown as { revision: number; keys: Array<{ n: number; anchor: string; keyAgreement: string; expiresAt: string }>; writer?: string; clears?: Record<string, number> }
+        const p = doc.payload as unknown as { revision: number; keys: Array<{ n: number; anchor: string; keyAgreement: string; expiresAt: string }>; writer?: string; clears?: Record<string, number>; tombstones?: string[] }
         if (this.cand.signerWriters) {
-          // K2: 6270 je Signierer; nur der Signierer (Review 31 B1). Review 33 B4: die Aufhebungsmarken einer leeren Revision
-          // stehen signiert in der Revision selbst (`clears`, nur bei leerer Liste), nie aus dem, was M gerade hält.
-          if (p.clears !== undefined && (p.keys.length !== 0 || M.shapeProblem(p.clears, { record: 'nat', key: 'tag' }, 'clears'))) return false
-          return this.foldSignerRevision(r, t, { revision: p.revision, keys: p.keys, writer: signerId(doc.issuer), clears: p.clears ? M.tableOf(p.clears) : undefined })
+          // K2: 6270 je Signierer; nur der Signierer (Review 31 B1). Review 34 B5: eine Rückzugsrevision nennt konkrete Anker
+          // (`tombstones`, nur bei leerer Liste); Nummernmarken (`clears`) gibt es unter Geräteschlüsseln nicht: Formfehler.
+          if (Object.hasOwn(p, 'clears')) {
+            const text = `revision ${String(p.revision)} von ${doc.issuer.slice(-8)}: clears unter Geräteschlüsseln (Aufhebung nur als Grabstein je Anker, Review 34): Formfehler`
+            if (!this.state.findings.includes(text)) this.emit({ kind: 'finding', text })
+            return false
+          }
+          if (p.tombstones !== undefined && (p.keys.length !== 0 || M.shapeProblem(p.tombstones, { array: 'ident' }, 'tombstones'))) return false
+          return this.foldSignerRevision(r, t, { revision: p.revision, keys: p.keys, writer: signerId(doc.issuer), tombstones: p.tombstones })
         }
         if (p.writer !== undefined && M.shapeProblem(p.writer, 'tag', 'writer')) return false // Review 28: Schreiberkennung nach ihrer Grammatik, sonst abgewiesen
         if (typeof p.writer === 'string') return this.acceptWriterRevision(r, t, doc.issuer, p as typeof p & { writer: string })
@@ -2307,18 +2315,20 @@ export class HolderDevice {
         if (!own) return false
         const p = doc.payload as unknown as { act: string; expiresAt: string; from: string; fromKeyAgreement: string; to: string; card: M.Card; set?: string }
         const to = own.anchor
+        // Messung (X23, Review 34 S4): jede Ankunft einer Karte mit ihrem Ausgang an diesem Gerät; ändert nichts am Verhalten.
+        const note = <T,>(outcome: string, result: T): T => (this.cardLog.push({ act: String(p.act), at: now, outcome }), result)
         if (this.sets) {
           // K2 Schritt 2, E2 (iv): die Karte erzeugt das Gerät, das den Vorrats-Schlüssel zugeteilt hat, und signiert mit ihm
           // selbst; eine Karte unter einem anderen Schlüssel kommt von außerhalb der Menge: abgewiesen ohne K (E3 (a), 8850.2 (b)).
-          if (p.to !== to || doc.issuer !== p.from) return false
+          if (p.to !== to || doc.issuer !== p.from) return note('binding-8850.2', false)
           // E1 (a): ohne den Mengennachweis wartet die Karte (kein V, kein K); ein bekannter Widerruf schlägt den älteren Bezug.
           const problem = this.cardSetProblem(p.card.anchor, typeof p.set === 'string' ? p.set : undefined)
           if (problem) {
             this.emit({ kind: 'finding', text: problem })
-            return false
+            return note('set-proof', false)
           }
-          if (p.card.keyAgreement !== this.setOf(p.card.anchor)!.rootKeyAgreement) return false // die Menge gehört zu dieser Karte
-        } else if (p.to !== to || !(await this.isPeer(doc.issuer, p.from))) return false // 8850.2 (b)
+          if (p.card.keyAgreement !== this.setOf(p.card.anchor)!.rootKeyAgreement) return note('set-root', false) // die Menge gehört zu dieser Karte
+        } else if (p.to !== to || !(await this.isPeer(doc.issuer, p.from))) return note('binding-8850.2', false) // 8850.2 (b)
         const v = await digestBytes(enc.encode(jcs({ act: p.act, card: p.card })))
         const a = this.state.acts.find((x) => x.own === to)
         if (!a) {
@@ -2326,36 +2336,36 @@ export class HolderDevice {
           const key = `${to}|${p.from}|${p.act}`
           const b = this.buffer.get(key)
           if (!b) this.buffer.set(key, { act: p.act, from: p.from, expiresAt: p.expiresAt, card: p.card, v, ...(this.sets && p.set ? { set: p.set } : {}), ...(this.sets ? { fromKeyAgreement: p.fromKeyAgreement } : {}) })
-          else if (b.v !== v) return false
-          return true
+          else if (b.v !== v) return note('buffer-conflict', false)
+          return note('buffered', true)
         }
-        if (a.id !== p.act || p.from !== a.voucher.anchor || p.expiresAt !== a.expiresAt) return false // 8850.6
+        if (a.id !== p.act || p.from !== a.voucher.anchor || p.expiresAt !== a.expiresAt) return note('binding-8850.6', false) // 8850.6
         if (this.sets && p.fromKeyAgreement !== a.voucher.keyAgreement) {
           this.emit({ kind: 'card-refused', act: a.id, v, k: true }) // 8850.6 (d): widersprüchliche Schlüsselbindung unter dem richtigen `from` (E3)
-          return false
+          return note('binding-8850.6d', false)
         }
-        if (Date.parse(now) > Date.parse(a.expiresAt) + M.PARAM.actSkewMs) return false // 8110.5: Annahmeende
+        if (Date.parse(now) > Date.parse(a.expiresAt) + M.PARAM.actSkewMs) return note('after-acceptance-end-8110.5', false) // 8110.5: Annahmeende
         if (a.v && a.v !== v) {
           this.emit({ kind: 'card-refused', act: a.id, v, k: true }) // 8910.8
-          return false
+          return note('conflict-8910.8', false)
         }
         // 8910.7: Wiederholung. Prüfstandregel für zwei Übergaben eines Akts (K1a Schritt 3, Regel 3; Spec-Folgepunkt
         // 8326/8910): mit einem Seed tragen beide Karten denselben Kartenschlüssel und dieselbe Nutzlast, also denselben
         // Vergleichsdigest V (8910.0 über die Nutzlast, 8913 unabhängig von den Dokumentbytes). B behält die erste geprüfte
         // Karte; die zweite ist eine Wiederholung des Akts: Quittung, keine zweite Verbindung, keine Konfliktmarke K.
         // Unterscheidet sich der Karteninhalt (Schlüssel je Gerät, K2), greift 8910.8: abgewiesen, K := yes.
-        if (a.v === v) return true
+        if (a.v === v) return note('repeat-8910.7', true)
         if (a.state === 'declined' || a.state === 'expired') {
           this.emit({ kind: 'card-refused', act: a.id, v, k: false }) // 8910.6
-          return true
+          return note(`refused-${a.state}-8910.6`, true)
         }
         if (a.state === 'consented' && this.submitted(a)) {
           this.emit({ kind: 'card-pending', act: a.id, card: p.card, v })
           await this.connect(a, p.card) // 8910.5
-          return true
+          return note('connected-8910.5', true)
         }
         this.emit({ kind: 'card-pending', act: a.id, card: p.card, v }) // 8910.4
-        return true
+        return note('pending-8910.4', true)
       }
       case TYPES.probe: {
         const t = this.tupleOfAddress(address)
@@ -2455,21 +2465,32 @@ export class HolderDevice {
   }
 
   /**
-   * K2, Review 33 B4: M faltet jede Revision eines Signierers (Vertrag wie die Mengen: der Empfang filtert nicht, die
-   * Faltung entscheidet). Je Schreiber zählt die höchste Revision, gleiche Nummer mit anderen Schlüsseln ist eine
-   * Equivokation (kanonisch kleinere, Befund), eine niedrigere ändert die Schlüssel nicht. Die Aufhebungsmarken einer
-   * leeren Revision (8535) nennt der Sender signiert (je Schreiber die höchste Revision, die er kennt); sie falten als
-   * Maximum, auch wenn die leere Revision nach der Nachfüllung desselben Schreibers ankommt: in jeder Reihenfolge dieselbe
-   * Sicht. Nur ein älterer Kopf wird abgewiesen (8557: neuer Scope).
+   * K2, Review 33 B4 / Review 34 B5: M faltet jede Revision eines Signierers (Vertrag wie die Mengen: der Empfang filtert
+   * nicht, die Faltung entscheidet). Je Schreiber zählt die höchste Revision, gleiche Nummer mit anderen Schlüsseln ist eine
+   * Equivokation (kanonisch kleinere, Befund), eine niedrigere ändert die Schlüssel nicht. Eine Rückzugsrevision (8535)
+   * nennt die Anker, die sie zurückzieht; die Faltung hält je Anker einen Grabstein (wächst nur, reihenfolgefrei), der
+   * jede Listung des Ankers dominiert, wenn der Signierer Stand hat (`M.hasStanding`: strict selbst gelistet, shared von
+   * einem Schreiber der Person gelistet). Einen Anker ohne Stand hält M als Befund fest; der Grabstein wirkt nicht (und erst,
+   * wenn eine Listung ihm Stand gibt, gleich in welcher Reihenfolge beides ankommt). Nur ein älterer Kopf wird abgewiesen
+   * (8557: neuer Scope).
    */
-  private foldSignerRevision(r: M.Relationship, t: M.Tuple, p: { revision: number; keys: M.ListedKey[]; writer: string; clears?: Record<string, number> }): boolean {
+  private foldSignerRevision(r: M.Relationship, t: M.Tuple, p: { revision: number; keys: M.ListedKey[]; writer: string; tombstones?: string[] }): boolean {
     if (r.view && r.view.scope !== t.id && t.record < M.tuple(this.state, r.view.scope).record) return false // älterer Kopf
     const same = r.view && r.view.scope === t.id ? r.view : null
     const held = M.own(same?.writers, p.writer)
     const whole = (ks: M.ListedKey[]) => M.canonical([...ks].sort((a, b) => a.anchor.localeCompare(b.anchor)))
-    const newMarks = Object.entries(p.clears ?? {}).some(([w, n]) => n > (M.own(same?.clears, w) ?? 0))
-    if (held && p.revision === held.revision && whole(p.keys) === whole(held.keys) && !newMarks) return true // Wiederholung
-    this.emit({ kind: 'view', rel: r.id, scope: t.id, revision: p.revision, keys: p.keys, writer: p.writer, ...(p.clears ? { clears: p.clears } : {}) })
+    const tombs = [...new Set(p.tombstones ?? [])].sort()
+    const newTombs = tombs.some((a) => !(M.own(same?.tombstones, a) ?? []).includes(p.writer))
+    if (held && p.revision === held.revision && whole(p.keys) === whole(held.keys) && !newTombs) return true // Wiederholung
+    const standing = this.cand.stockMode === 'shared' ? 'set' : 'own'
+    const listed = M.tableOf(same?.listed)
+    M.put(listed, p.writer, [...(M.own(listed, p.writer) ?? []), ...p.keys.map((k) => k.anchor)])
+    const without = tombs.filter((a) => !M.hasStanding({ listed, standing }, p.writer, a))
+    if (without.length) {
+      const text = `revision ${p.revision} von ${p.writer.slice(-8)}: Grabstein ohne Stand für ${without.map((a) => a.slice(-8)).join(', ')} (${standing === 'own' ? 'nie vom Signierer selbst' : 'von keinem Schreiber der Person'} gelistet): ohne Wirkung`
+      if (!this.state.findings.includes(text)) this.emit({ kind: 'finding', text })
+    }
+    this.emit({ kind: 'view', rel: r.id, scope: t.id, revision: p.revision, keys: p.keys, writer: p.writer, standing, tombstones: tombs })
     return true
   }
 

@@ -984,6 +984,67 @@ describe('K2 Schritt 2: Review 33, Empfang filtert nicht, die Faltung entscheide
   }, 300_000)
 })
 
+const unrevoked = (m: HolderDevice, relId: string) => (m as unknown as { unrevokedKeys(r: M.Relationship): M.ListedKey[] }).unrevokedKeys(M.rel(m.state, relId)).map((k) => k.anchor)
+
+describe('K2 Schritt 2: Review 34, Grabstein je Anker statt Nummern (B5)', () => {
+  for (const stock of ['strict', 'shared'] as const) {
+    it(`T1. ${stock}: Astras Probe: A2 signiert vor dem Widerruf Revision 0 mit \`clears: {A1: 1000000}\` (alte Form: abgewiesen, Befund) und mit Grabsteinen für A1s Anker und einen nie gelisteten Anker (Befund ohne Stand); nach Widerruf und Nachfüllung bleiben A1s Schlüssel für M benennbar`, async () => {
+      const { w, A, A2, Mm, am } = await world(k2({ stock }))
+      const mRel = () => M.relOfTuple(Mm.state, am.y.id)!.id
+      const h = M.head(M.rel(A2.state, am.x.id))
+      const rkid = (await A2.cand.keys.pair(h.ownKey)).rkid
+      const a1 = signerId((await A.cand.keys.pair(M.head(M.rel(A.state, am.x.id)).ownKey)).anchor)
+      const a1Anchors = M.rel(A.state, am.x.id).stock.filter((k) => k.by === 'A1' && k.state === 'active').map((k) => k.anchor)
+      expect(a1Anchors.length).toBeGreaterThan(0)
+      expect(a1Anchors.every((a) => unrevoked(Mm, mRel()).includes(a))).toBe(true)
+      const fake = (await A2.cand.keys.pair('pool/777')).anchor
+      const before = Mm.state.findings.length
+      const old = await raw(A2).sendDoc(TYPES.revision, h.ownKey, h.peer, h.peerKeyAgreement, rkid, { revision: 0, keys: [], clears: { [a1]: 1000000 } })
+      await raw(A2).sendDoc(TYPES.revision, h.ownKey, h.peer, h.peerKeyAgreement, rkid, { revision: 0, keys: [], tombstones: [...a1Anchors, fake] })
+      await w.rounds(3)
+      expect(raw(Mm).completed.has(old!.digest)).toBe(false)
+      const found = Mm.state.findings.slice(before)
+      expect(found.filter((f) => f.includes('clears')), found.join('\n')).toHaveLength(1)
+      expect(found.some((f) => f.includes('ohne Stand') && f.includes(fake.slice(-8))), found.join('\n')).toBe(true)
+      // strict: A2 never listed A1's keys, so they stay nameable before the revocation; shared: A2 knew them (standing).
+      if (stock === 'strict') expect(a1Anchors.every((a) => unrevoked(Mm, mRel()).includes(a))).toBe(true)
+      await w.revoke(A, A2)
+      await w.rounds(6)
+      const now = M.rel(A.state, am.x.id).stock.filter((k) => k.by === 'A1' && k.state === 'active').map((k) => k.anchor)
+      expect(now.length).toBeGreaterThan(0)
+      expect(now.filter((a) => !unrevoked(Mm, mRel()).includes(a)), stock).toEqual([])
+      expect(Mm.stockAt(mRel()).nameable, stock).toBeGreaterThan(0)
+    }, 120_000)
+  }
+
+  it('T2. shared: Grabsteine überstehen Restore und Enrollment auf Ms Seite: M1 aus einem Abbild vor dem Widerruf, M3 danach aufgenommen; kein alter Anker benennbar, die Nachfüllung schon', async () => {
+    const s = await world(k2({ stock: 'shared', devices: 3 }))
+    const M2 = await s.w.enrol(s.Mm, 'M2')
+    await s.w.rounds(4)
+    const backup = s.w.stores.get('M1')!.snapshot()
+    const old = M.rel(s.A.state, s.am.x.id).stock.filter((k) => k.state === 'active').map((k) => k.anchor)
+    expect(old.length).toBeGreaterThan(0)
+    await s.w.revoke(s.A, s.A2)
+    await s.w.rounds(6)
+    const check = (m: HolderDevice, what: string) => {
+      const listed = unrevoked(m, s.am.y.id)
+      expect(`${what}: ${listed.filter((a) => old.includes(a)).length}`).toBe(`${what}: 0`)
+      expect(listed.length, what).toBeGreaterThan(0)
+      expect(old.every((a) => (M.rel(m.state, s.am.y.id).view!.tombstones?.[a] ?? []).length > 0), what).toBe(true)
+    }
+    check(s.Mm, 'M1')
+    check(M2, 'M2')
+    s.w.stores.get('M1')!.restore(backup)
+    await s.Mm.reload()
+    await s.w.until(() => !s.Mm.syncPending, 20)
+    await s.w.rounds(2)
+    check(s.Mm, 'M1 nach Restore')
+    const M3 = await s.w.enrol(M2, 'M3')
+    await s.w.rounds(4)
+    check(M3, 'M3 aufgenommen')
+  }, 180_000)
+})
+
 describe('K2 Schritt 2: Messungen (X23, Diebesfenster, Rotation, Fan-out, Ankerpaar)', () => {
   it('M1. Ankerpaar-Orakel (X18): beide Personen halten dasselbe Paar samt Vereinbarungsschlüssel, jedes Mitglied öffnet, was die Gegenseite versiegelt; Gegenlauf: ein verfälschtes Paar fällt', async () => {
     const s = await world(k2())
@@ -1027,7 +1088,8 @@ describe('K2 Schritt 2: Messungen (X23, Diebesfenster, Rotation, Fan-out, Ankerp
         // Losses come only from tickets on the dormant device's keys issued while it sleeps (its listed share, MV-9).
         expect(r.expiredUnseen + r.missedCards).toBeLessThanOrEqual(r.onDormantKeyWhileAsleep)
         // Review 33 S2: the cause is measured per loss (M2b checks the evidence fields); here: one cause per variant, all on A2.
-        expect(r.losses.every((l) => l.holder === 'A2' && l.cause === (stock === 'strict' ? 'expired-unseen-8155' : 'card-not-produced-8110.5'))).toBe(true)
+        // Review 34 S4: shared loses after consent, either without a card by the acceptance end or with a card C refuses as late.
+        expect(r.losses.every((l) => l.holder === 'A2' && (stock === 'strict' ? l.cause === 'expired-unseen-8155' : l.cause === 'card-not-produced-8110.5' || l.cause === 'card-late-8110.5'))).toBe(true)
       }
     }
   }, 3_600_000)
@@ -1052,6 +1114,11 @@ describe('K2 Schritt 2: Messungen (X23, Diebesfenster, Rotation, Fan-out, Ankerp
           expect(l.consentedDay, name).not.toBeNull()
           expect(l.producedDay, `${name}: ${JSON.stringify(l)}`).toBeNull()
           expect(l.allocatorOnlineStepsBeforeExpiry, `${name}: ${JSON.stringify(l)}`).toBe(0)
+        } else if (l.cause === 'card-late-8110.5') {
+          // Review 34 S4: produced (journal) by the acceptance end, received at C after it, refused there with 8110.5.
+          expect(l.producedDay!, `${name}: ${JSON.stringify(l)}`).toBeLessThanOrEqual(l.expiresDay)
+          expect(l.cardReceivedDay!, `${name}: ${JSON.stringify(l)}`).toBeGreaterThan(l.expiresDay)
+          expect(l.cardRefusal, name).toBe('after-acceptance-end-8110.5')
         } else expect(l.cause, `${name}: ${JSON.stringify(l)}`).toBe('card-produced-not-connected')
       }
       expect(r.refusals.length, name).toBe(r.refused)
@@ -1060,7 +1127,7 @@ describe('K2 Schritt 2: Messungen (X23, Diebesfenster, Rotation, Fan-out, Ankerp
         // M refused: on at least one side no M device had a nameable key at that moment.
         expect(Object.values(x.stock).some((side) => Object.values(side).every((d) => d.nameable === 0)), `${name}: ${JSON.stringify(x)}`).toBe(true)
       }
-      if (name === 'strict') expect(r.causes['card-not-produced-8110.5'] ?? 0).toBe(0)
+      if (name === 'strict') expect((r.causes['card-not-produced-8110.5'] ?? 0) + (r.causes['card-late-8110.5'] ?? 0)).toBe(0)
       if (name === 'shared') expect(r.causes['expired-unseen-8155'] ?? 0).toBe(0)
     }
   }, 1_800_000)
