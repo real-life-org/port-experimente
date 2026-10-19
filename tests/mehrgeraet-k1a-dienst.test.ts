@@ -70,7 +70,7 @@ const states = (w: Welt15, act: string) => w.of('A').map((d) => `${M.act(d.state
 describe('K1a Schritt 6 (Variante): Journal beim Dienst', () => {
   it('Variante als zweiter Kandidateneintrag mit derselben Fabrik und der Prüfstandsoption selfLog', () => {
     const ids = multiDeviceCandidates.map((c) => c.id)
-    expect(ids).toEqual(['k0-one-seed', 'k1a-static', 'k1a-journal-service', 'k2-device-keys'])
+    expect(ids).toEqual(['k0-one-seed', 'k1a-static', 'k1a-journal-service', 'k2-device-keys', 'k2-shared-stock'])
     const v = multiDeviceCandidates.find((c) => c.id === 'k1a-journal-service')!.make()
     expect(v.bench).toEqual({ selfLog: true })
     expect(k1a().bench).toBeUndefined()

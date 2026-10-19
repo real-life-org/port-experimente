@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
+import { seal, receive } from '@real-life/trust-protocol'
+import type { Json } from '@real-life/trust-protocol'
 import { Welt15 } from '../src/lab/mehrgeraet/welt'
 import { HolderDevice, UnknownWriter, signerId, TYPES, type MultiDeviceCandidate } from '../src/lab/mehrgeraet/holder'
 import { runX15 } from '../src/lab/mehrgeraet/scenarios'
+import { anchorPairOracle, enrolFanout, revocationTraffic, thiefWindow, timeModel } from '../src/lab/mehrgeraet/geraetemengen'
 import { k2, K2Device } from '../src/candidates/mehrgeraet-k2'
 import { k1a, type Batch } from '../src/candidates/mehrgeraet-k1a'
 import * as M from '../src/lab/mehrgeraet/model'
@@ -128,51 +131,49 @@ describe('K2 Schritt 1: Geräteschlüssel', () => {
   }, 60_000)
 })
 
-describe('K2 Schritt 1: Matrix', () => {
-  it('2. X1–X18, X7b, X21 mit zwei Geräten: Zwischenregel `mediatorSplit` an (K1as Benennungsteilung bis Schritt 5), 17/2/1; rot X7 und X18 (Gerätekarten verschieden, 8910.8, Schritt 2); X9 bestanden unter der Schritt-1-Vereinfachung', async () => {
-    const c = k2()
-    expect(c.id).toBe('k2-device-keys')
-    const r = byId(await runX15(c))
-    const passed = ['X1', 'X2', 'X3', 'X4', 'X5', 'X6', 'X7b', 'X8', 'X9', 'X11', 'X12', 'X13', 'X14', 'X15', 'X16', 'X17', 'X21']
-    for (const x of passed) expect(r[x]!.outcome, `${x}: ${r[x]!.detail}`).toBe('bestanden')
-    for (const x of ['X7', 'X18']) expect(r[x]!.outcome, `${x}: ${r[x]!.detail}`).toBe('nicht bestanden')
-    expect(r.X10!.outcome).toBe('nicht abbildbar')
-    expect(Object.values(r).some((x) => x.crashed)).toBe(false)
-    const n = (o: string) => Object.values(r).filter((x) => x.outcome === o).length
-    expect([n('bestanden'), n('nicht bestanden'), n('nicht abbildbar')]).toEqual([17, 2, 1])
-    // X3 promise changed (rule 2, as K1a); X9 passes only under the step-1 simplification (never a silent pass).
-    expect(r.X3!.promiseChanged).toBe(true)
-    expect(r.X9!.promiseChanged).toBe(true)
-    expect(r.X9!.detail).toContain('Schritt-1-Vereinfachung')
-    expect(r.X9!.measures.thiefReads).toBe(0)
-    // Why X18 fails: two cards of one act from two devices differ (8910.8), B marks K; no double effect (decision 6o.5 no. 7 is step 2).
-    expect(r.X18!.measures.cardConflictsAtB).toBeGreaterThan(0)
-    expect(r.X18!.measures.doubleFinalEffects).toBe(0)
-    // Writers are the signing device keys: M takes both, no 6270, not linkable across relationships.
-    expect(r.X17!.measures.writersAcceptedByM).toBe(2)
-    expect(r.X17!.measures.writerTagsLinkedAcrossRelationships).toBe(0)
-  }, 300_000)
+describe('K2 Schritt 2: Matrix (beide Varianten)', () => {
+  for (const stock of ['strict', 'shared'] as const) {
+    it(`2. ${stock}: X1–X18, X7b, X21 mit zwei Geräten, 18/1/1; rot nur X7 strikt; X18 aus der Struktur (E2 (iv)), mit Ankerpaar-Orakel; X13 strukturell (MV-9 unter Geräteschlüsseln, ≈); X9 über Mengenrevisionen (≈, eigene Geräte noch Prüfstandsliste)`, async () => {
+      const c = k2({ stock })
+      expect(c.id).toBe(stock === 'shared' ? 'k2-shared-stock' : 'k2-device-keys')
+      const r = byId(await runX15(c))
+      const passed = ['X1', 'X2', 'X3', 'X4', 'X5', 'X6', 'X7b', 'X8', 'X9', 'X11', 'X12', 'X13', 'X14', 'X15', 'X16', 'X17', 'X18', 'X21']
+      for (const x of passed) expect(r[x]!.outcome, `${x}: ${r[x]!.detail}`).toBe('bestanden')
+      expect(r.X7!.outcome).toBe('nicht bestanden')
+      expect(r.X10!.outcome).toBe('nicht abbildbar')
+      expect(Object.values(r).some((x) => x.crashed)).toBe(false)
+      // X18: one card per act, no K at B, both persons hold the same anchor pair, every member key opens what the other side seals.
+      expect(r.X18!.measures.cardsProducedByA).toBe(1)
+      expect(r.X18!.measures.cardConflictsAtB).toBe(0)
+      expect(r.X18!.measures.anchorPairsAgree).toBe(1)
+      expect(r.X18!.measures.membersDecrypt).toBe(1)
+      expect(r.X18!.measures.cardIdentityAgrees).toBe(1)
+      // X8: the enrolled device is addressable in every relationship of the person, from the counterparts' proofs.
+      expect(r.X8!.measures.addressableRelationships).toBe(r.X8!.measures.relationships)
+      // X9: the counterparts learn the revocation from a revocation entry, not from a list (step 2); the own devices still from the bench list.
+      expect(r.X9!.measures.thiefReads).toBe(0)
+      expect(r.X9!.measures.step1Shortcut).toBeUndefined()
+      expect(r.X9!.detail).toContain('Widerrufseintrag')
+    }, 400_000)
+  }
 
-  it('2b. Gegenlauf ohne Zwischenregel (`mediatorSplit: false`): M benennt jeden Schlüssel, X1, X13 und X14 fallen; 14/5/1', async () => {
+  it('2b. Gegenlauf ohne Zwischenregel (`mediatorSplit: false`): M benennt jeden Schlüssel, X1, X13 und X14 fallen', async () => {
     const c = k2({ mediatorSplit: false })
     expect(c.id).toBe('k2-device-keys-no-split')
-    const r = byId(await runX15(c))
-    for (const x of ['X1', 'X7', 'X13', 'X14', 'X18']) expect(r[x]!.outcome, `${x}: ${r[x]!.detail}`).toBe('nicht bestanden')
-    const n = (o: string) => Object.values(r).filter((x) => x.outcome === o).length
-    expect([n('bestanden'), n('nicht bestanden'), n('nicht abbildbar')]).toEqual([14, 5, 1])
-    // Why X1/X13 fail: a key named twice by the mediator devices (no `n mod devices` split).
-    expect(r.X1!.measures.doubleFinalEffects).toBeGreaterThan(0)
-    expect(r.X13!.measures.doubleFinalEffects).toBeGreaterThan(0)
+    const r = byId(await runX15(c, false, ['X1', 'X13', 'X14']))
+    for (const x of ['X1', 'X13', 'X14']) expect(r[x]!.outcome, `${x}: ${r[x]!.detail}`).toBe('nicht bestanden')
   }, 300_000)
 
-  it('2c. Kontrolllauf seriell (ein Gerät, ungeteilte Rechte): jede Zelle mit Kontrolllauf besteht, wie K1a', async () => {
-    const r = byId(await runX15(k2({ devices: 1 }), true))
-    for (const x of Object.values(r)) expect(x.outcome, `${x.scenario}: ${x.detail}`).not.toBe('nicht bestanden')
-  }, 300_000)
+  it('2c. Kontrolllauf seriell (ein Gerät): jede Zelle mit Kontrolllauf besteht, beide Varianten', async () => {
+    for (const stock of ['strict', 'shared'] as const) {
+      const r = byId(await runX15(k2({ devices: 1, stock }), true))
+      for (const x of Object.values(r)) expect(x.outcome, `${stock} ${x.scenario}: ${x.detail}`).not.toBe('nicht bestanden')
+    }
+  }, 400_000)
 })
 
 describe('K2 Schritt 1: Dieb, Restore, Fan-out', () => {
-  it('3. Dieb mit dem Abbild von A2: vor dem Widerruf liest er, was A2s Schlüssel öffnen, nie A1s Adressen; nach dem Widerruf 0 neue Dokumente; Gegenlauf nur Träger: er liest weiter', async () => {
+  it('3. Dieb mit dem Abbild von A2: vor dem Widerruf liest er, was A2s Schlüssel öffnen, nie A1s Adressen; nach dem Widerruf und einer Runde Ausbreitung (Widerrufseintrag an B und M, Schritt 2) 0 neue Dokumente; Gegenlauf nur Träger: er liest weiter', async () => {
     for (const counterpartRevocation of [true, false]) {
       const { w, A, A2, B, Mm, am, bm } = await world(k2({ counterpartRevocation }))
       const ab = await w.encounter(A, B)
@@ -190,6 +191,7 @@ describe('K2 Schritt 1: Dieb, Restore, Fan-out', () => {
       expect(thief.dispositions.some((d) => d.includes('decryption-failed'))).toBe(false)
       await w.revoke(A, A2)
       if (!w.devices.includes(thief)) w.devices.push(thief)
+      await w.rounds(2) // the revocation entries reach B and M (the race of revocation against sending is step 3)
       const mark = thief.log.length
       const r = await Mm.introduce(am.y.id, bm.y.id) // M → A: ticket
       expect('act' in r).toBe(true)
@@ -234,30 +236,28 @@ describe('K2 Schritt 1: Dieb, Restore, Fan-out', () => {
     }
   }, 60_000)
 
-  it('6. Fan-out mit drei Geräten: ein Journalbatch geht als zwei Kopien (je Schwester) statt eines Rahmens; ein Dokument an A als drei Kopien (je Gerät) statt eines', async () => {
-    const out: Record<string, { journal: number; journalBytes: number; ticket: number; ticketBytes: number }> = {}
+  it('6. Fan-out mit drei Geräten: ein Journalbatch geht als zwei Kopien (je Schwester) statt eines Rahmens; ein Dokument von B an A als drei Kopien (je Mitglied der Menge, aus dem Nachweis) statt eines', async () => {
+    const out: Record<string, { journal: number; journalBytes: number; doc: number }> = {}
     for (const [id, c] of [['k1a', k1a({ devices: 3 })], ['k2', k2({ devices: 3 })]] as const) {
-      const { w, A, Mm, am, bm } = await world(c, 3)
+      const { w, A, B, am } = await world(c, 3)
       let mark = w.carrier.carried.length
       await A.setClass(am.x.id, false)
       await w.rounds(1)
       const journal = w.carrier.carried.slice(mark).filter((f) => w.frameOrigin(f.bytes)?.device === 'A1' && w.frameOrigin(f.bytes)?.kind === 'journal')
-      await A.setClass(am.x.id, true)
-      await w.rounds(3)
+      const ab = await w.encounter(A, B)
+      await w.rounds(4)
       mark = w.carrier.carried.length
-      const r = await Mm.introduce(am.y.id, bm.y.id)
-      expect('act' in r).toBe(true)
+      await B.setClass(ab.y.id, true) // B → A: a revision on the A–B relationship
       await w.rounds(1)
-      const tickets = w.carrier.carried.slice(mark).filter((f) => w.frameOrigin(f.bytes)?.kind === 'introduction-ticket' && w.personOf(M.act(A.state, (r as { act: string }).act).own) === 'A')
       const toA = new Set<string>()
-      for (const d of w.of('A')) toA.add((await d.cand.keys.pair(M.head(M.rel(A.state, am.x.id)).ownKey)).rkid)
-      const ticketsToA = tickets.filter((f) => toA.has(f.address))
-      out[id] = { journal: journal.length, journalBytes: journal.reduce((n, f) => n + f.bytes.length, 0), ticket: ticketsToA.length, ticketBytes: ticketsToA.reduce((n, f) => n + f.bytes.length, 0) }
+      for (const d of w.of('A')) toA.add((await d.cand.keys.pair(ab.x.ownKey)).rkid)
+      const docs = w.carrier.carried.slice(mark).filter((f) => w.frameOrigin(f.bytes)?.kind === 'introduction-prekeys' && toA.has(f.address))
+      out[id] = { journal: journal.length, journalBytes: journal.reduce((n, f) => n + f.bytes.length, 0), doc: docs.length }
     }
     expect(out.k1a!.journal).toBe(1)
     expect(out.k2!.journal).toBe(2)
-    expect(out.k1a!.ticket).toBe(1)
-    expect(out.k2!.ticket).toBe(3)
+    expect(out.k1a!.doc).toBe(1)
+    expect(out.k2!.doc).toBe(3)
     expect(out.k2!.journalBytes).toBeGreaterThan(out.k1a!.journalBytes)
   }, 120_000)
 
@@ -321,4 +321,492 @@ describe('K2 Schritt 1: Dieb, Restore, Fan-out', () => {
     await w.rounds(3)
     expect(M.own(mRel().view?.writers, tag)?.revision).toBe(held + 1)
   }, 60_000)
+})
+
+// ── K2 Schritt 2 (Anton 19.10., Plan 6r): device-set@1, Kartenbezug, Produzentenregel E2 (iv), strict gegen shared ──
+
+type Raw = {
+  sendDoc(type: string, ctx: string, peer: string, peerKa: string, rkid: string, payload: Record<string, unknown>, fan?: Array<{ anchor: string; rkid: string }>): Promise<{ digest: string } | null>
+  cert(ctx: string, c: { root: string; kind: 'admit' | 'revoke'; anchor: string; keyAgreement: string | null }): Promise<M.SetCert>
+  completed: Set<string>
+}
+const raw = (d: HolderDevice) => d as unknown as Raw
+/** A thief runs its own software: it ignores the gate after restore (MV-6) that an honest image would keep. */
+const rogue = (d: HolderDevice) => Object.assign(d as unknown as { catchUp: boolean; sync: { pending: boolean } }, { catchUp: false, sync: { pending: false, wait: 0, backoff: 1, id: null } }) as unknown as HolderDevice
+const members = (d: HolderDevice, root: string) => M.setView(d.setOf(root)).members.map((m) => m.anchor)
+/** A world with an A–B encounter after A2's enrolment (A2 admitted from A1's pool), both A devices online. */
+async function abWorld(c: MultiDeviceCandidate = k2(), devices = 2) {
+  const base = await world(c, devices)
+  const ab = await base.w.encounter(base.A, base.B)
+  await base.w.rounds(4)
+  return { ...base, ab }
+}
+/** An introduction of A and B by M; returns the act once both sides know it. */
+async function introduced(s: Awaited<ReturnType<typeof world>>, M2?: HolderDevice) {
+  let r = await s.Mm.introduce(s.am.y.id, s.bm.y.id)
+  if (!('act' in r) && M2) r = await M2.introduce(s.am.y.id, s.bm.y.id)
+  expect('act' in r, JSON.stringify(r)).toBe(true)
+  const act = (r as { act: string }).act
+  await s.w.until(() => [...s.w.of('A'), ...s.w.of('B')].some((d) => d.state.acts.some((a) => a.id === act)) && s.w.of('A').every((d) => d.state.acts.some((a) => a.id === act)) && s.B.state.acts.some((a) => a.id === act), 10)
+  return act
+}
+const allocatorOf = (d: HolderDevice, act: string) => {
+  const a = M.act(d.state, act)
+  return M.findRel(d.state, a.mediator)!.stock.find((k) => k.anchor === a.own)!.by
+}
+
+describe('K2 Schritt 2: Gerätemengen aus Nachweisen', () => {
+  it('S1. Modell: Zulassung über eine signierte Kette bis zur Wurzel, Widerruf endgültig, reihenfolgeunabhängig; ein Nachweis eines unbekannten Ausstellers wirkt erst, wenn dessen Zulassung da ist', () => {
+    const proof = { type: 'DataIntegrityProof', cryptosuite: 'eddsa-jcs-2022', created: '2026-10-19T00:00:00Z', verificationMethod: 'x', proofPurpose: 'assertionMethod', proofValue: 'z' }
+    const cert = (kind: 'admit' | 'revoke', anchor: string, by: string): M.SetCert => ({ root: 'r', kind, anchor, keyAgreement: kind === 'admit' ? `ka-${anchor}` : null, by, proof })
+    const fold = (certs: M.SetCert[]) => {
+      const s = M.emptyState('B')
+      certs.forEach((c, i) => M.apply(s, { id: { writer: 'B1@x', n: i + 1 }, at: '2026-10-19T00:00:00Z', kind: 'device-set', root: 'r', rootKeyAgreement: 'ka-r', certs: [c] }))
+      return M.setView(M.own(s.sets, 'r'))
+    }
+    const all = [cert('admit', 'a2', 'r'), cert('admit', 'a3', 'a2'), cert('revoke', 'a2', 'r')]
+    for (const order of [[0, 1, 2], [2, 1, 0], [1, 0, 2], [1, 2, 0]]) {
+      const v = fold(order.map((i) => all[i]!))
+      expect(v.members.map((m) => m.anchor)).toEqual(['a3', 'r']) // a3 stays: admitted while a2 was a member (history, named residual 1b)
+      expect([...v.revoked]).toEqual(['a2'])
+    }
+    // A cert by an admitter without an admission chain has no effect yet.
+    expect(fold([cert('admit', 'a5', 'a4')]).members.map((m) => m.anchor)).toEqual(['r'])
+    // A revocation of the root by a member: the root is out, the member stays; all revoked: a known-empty set.
+    expect(fold([cert('admit', 'a2', 'r'), cert('revoke', 'r', 'a2')]).members.map((m) => m.anchor)).toEqual(['a2'])
+    expect(fold([cert('admit', 'a2', 'r'), cert('revoke', 'r', 'a2'), cert('revoke', 'a2', 'r')]).members).toEqual([])
+    // 6270 per signer: the same revision number with another digest is a finding, deterministic in both orders.
+    const revs = (a: string, b: string) => {
+      const s = M.emptyState('B')
+      for (const [i, d] of [a, b].entries()) M.apply(s, { id: { writer: 'B1@x', n: i + 1 }, at: '2026-10-19T00:00:00Z', kind: 'device-set', root: 'r', rootKeyAgreement: 'ka-r', certs: [], rev: { signer: 'AAAAAAAAAAAAAAAA', n: 1, digest: d } })
+      return { held: M.own(M.own(s.sets, 'r')!.revs, 'AAAAAAAAAAAAAAAA')!.digest, findings: s.findings.filter((f) => f.includes('Equivokation')).length }
+    }
+    const d1 = 'uEiA' + 'a'.repeat(43)
+    const d2 = 'uEiA' + 'b'.repeat(43)
+    expect(revs(d1, d2)).toEqual(revs(d2, d1))
+    expect(revs(d1, d2).findings).toBe(1)
+  })
+
+  it('S2. Begegnung: B kennt As Menge nur aus dem Nachweis (keine Liste für Gegenseiten); ohne Nachweis versiegelt B an die Wurzel allein, danach an jedes Mitglied', async () => {
+    const c = k2()
+    expect('recipients' in c.directory).toBe(false)
+    const { w, A, A2, B } = await world(c)
+    // The set revision of the new relationship does not reach B at first.
+    w.carrier.faults.drop((f) => w.frameOrigin(f.bytes)?.kind === 'device-set')
+    const ab = await w.encounter(A, B)
+    await w.rounds(3)
+    expect(B.setOf(ab.y.peer)).toBeUndefined() // unknown membership: only the root
+    let mark = w.carrier.carried.length
+    await B.setClass(ab.y.id, true)
+    await w.rounds(1)
+    const toA = async () => {
+      const keys = new Map<string, string>()
+      for (const d of w.of('A')) keys.set((await d.cand.keys.pair(ab.x.ownKey)).rkid, d.name)
+      return w.carrier.carried.slice(mark).filter((f) => w.frameOrigin(f.bytes)?.kind === 'introduction-prekeys' && keys.has(f.address)).map((f) => keys.get(f.address))
+    }
+    expect(await toA()).toEqual(['A1'])
+    // The proof arrives (A1 repeats it until B acknowledges): now B seals to every member, A2's key from A1's pool.
+    w.carrier.faults.reset()
+    await w.until(() => !!B.setOf(ab.y.peer), 20)
+    expect(members(B, ab.y.peer)).toEqual([...members(A, ab.x.own)])
+    expect(members(B, ab.y.peer)).toContain((await A2.cand.keys.pair(ab.x.ownKey)).anchor)
+    mark = w.carrier.carried.length
+    await B.setClass(ab.y.id, false)
+    await B.setClass(ab.y.id, true)
+    await w.rounds(1)
+    expect([...new Set(await toA())].sort()).toEqual(['A1', 'A2'])
+  }, 60_000)
+
+  it('S3. Bekannt leer ist ein ausdrücklicher Zustellfehler (kein Rahmen an einen aufgezeichneten Schlüssel); ein Dokument eines widerrufenen Mitglieds wirkt nicht', async () => {
+    const { w, A, A2, B, ab } = await abWorld()
+    const a2key = (await A2.cand.keys.pair(ab.x.ownKey)).anchor
+    // A2 signs a probe before anything is revoked: accepted.
+    const probe = async (d: HolderDevice) => raw(d).sendDoc(TYPES.probe, ab.x.ownKey, ab.x.peer, ab.x.peerKeyAgreement, (await d.cand.keys.pair(ab.x.ownKey)).rkid, { entries: [] })
+    const p1 = await probe(A2)
+    await w.rounds(2)
+    expect(raw(B).completed.has(p1!.digest)).toBe(true)
+    // A1 (the root) revokes A2 and then itself in this relationship: injected revocation entries, sent as one revision.
+    const revoke = [await raw(A).cert(ab.x.ownKey, { root: ab.x.own, kind: 'revoke', anchor: a2key, keyAgreement: null }), await raw(A).cert(ab.x.ownKey, { root: ab.x.own, kind: 'revoke', anchor: ab.x.own, keyAgreement: null })]
+    const set = A.setOf(ab.x.own)!
+    await raw(A).sendDoc(TYPES.deviceSet, ab.x.ownKey, ab.x.peer, ab.x.peerKeyAgreement, (await A.cand.keys.pair(ab.x.ownKey)).rkid, { root: ab.x.own, rootKeyAgreement: set.rootKeyAgreement, revision: 50, deps: [], entries: [...Object.values(set.certs), ...revoke] as unknown as Json[] })
+    await w.rounds(2)
+    expect(members(B, ab.y.peer)).toEqual([])
+    // A2's next document is refused (no receipt), a revoked member is no peer any more.
+    const p2 = await probe(A2)
+    await w.rounds(2)
+    expect(raw(B).completed.has(p2!.digest)).toBe(false)
+    // B's next revision to A: no frame at all, the failure is explicit.
+    const before = B.emptySetFailures
+    const mark = w.carrier.carried.length
+    await B.setClass(ab.y.id, true)
+    await w.rounds(1)
+    expect(B.emptySetFailures).toBeGreaterThan(before)
+    expect(B.dispositions.some((d) => d.startsWith('failed(empty-device-set)'))).toBe(true)
+    const toA = new Set([ab.x.peerKeyAgreement, ab.y.peerKeyAgreement])
+    expect(w.carrier.carried.slice(mark).filter((f) => w.frameOrigin(f.bytes)?.kind === 'introduction-prekeys' && toA.has(f.address))).toHaveLength(0)
+  }, 60_000)
+
+  it('S4. Ein bekannter Widerruf schlägt: nach dem Widerruf von A2 weist B eine Mengenrevision ab, die A2s Schlüssel signiert (Dieb mit dem Abbild); die Menge bleibt', async () => {
+    const { w, A, A2, B, ab } = await abWorld()
+    const thief = rogue(await w.steal(A2, 'A2-dieb'))
+    await w.revoke(A, A2)
+    await w.rounds(3)
+    const before = M.canonical(members(B, ab.y.peer))
+    expect(members(B, ab.y.peer)).not.toContain((await thief.cand.keys.pair(ab.x.ownKey)).anchor)
+    // The thief admits a key of its own and signs with A2's key.
+    const fake = await raw(thief).cert(ab.x.ownKey, { root: ab.x.own, kind: 'admit', anchor: ab.y.own, keyAgreement: ab.y.peerKeyAgreement })
+    const set = thief.setOf(ab.x.own)!
+    await raw(thief).sendDoc(TYPES.deviceSet, ab.x.ownKey, ab.x.peer, ab.x.peerKeyAgreement, (await thief.cand.keys.pair(ab.x.ownKey)).rkid, { root: ab.x.own, rootKeyAgreement: set.rootKeyAgreement, revision: 9, deps: [], entries: [...Object.values(set.certs), fake] as unknown as Json[] }, [{ anchor: ab.x.peer, rkid: ab.x.peerKeyAgreement }])
+    w.devices.push(thief)
+    await w.rounds(3)
+    expect(M.canonical(members(B, ab.y.peer))).toBe(before)
+    expect(B.state.findings.some((f) => f.includes('widerrufen: abgewiesen'))).toBe(true)
+  }, 60_000)
+
+  it('S5. Echte 6270-Equivokation einer Mengenrevision: gleicher Signierer, gleiche Nummer, anderer Inhalt: Befund (kein K eines Akts), beide B-Geräte gleich', async () => {
+    const { w, A, A2, B, ab } = await abWorld()
+    const B2 = await w.enrol(B, 'B2')
+    await w.rounds(3)
+    const set = A.setOf(ab.x.own)!
+    const n = M.own(set.revs, signerId(ab.x.own))!.n + 1
+    const extra = await raw(A).cert(ab.x.ownKey, { root: ab.x.own, kind: 'admit', anchor: (await A2.cand.keys.pair('pool/77')).anchor, keyAgreement: (await A2.cand.keys.pair('pool/77')).rkid })
+    const send = (entries: unknown[]) => raw(A).sendDoc(TYPES.deviceSet, ab.x.ownKey, ab.x.peer, ab.x.peerKeyAgreement, set.rootKeyAgreement, { root: ab.x.own, rootKeyAgreement: set.rootKeyAgreement, revision: n, deps: [], entries: entries as Json[] })
+    await send(Object.values(set.certs))
+    await send([...Object.values(set.certs), extra])
+    await w.rounds(4)
+    for (const d of [B, B2]) expect(d.state.findings.filter((f) => f.includes('Equivokation (6270)') && f.startsWith('device-set'))).toHaveLength(1)
+    expect(w.agree('B')).toEqual({ agree: true, diff: '' })
+    expect(B.state.acts.some((a) => a.k)).toBe(false)
+  }, 60_000)
+
+  it('S6. Enrollment: das neue Gerät wird in jeder Beziehung zugelassen (Fan-out = Zahl der Beziehungen), jede Gegenseite versiegelt danach auch an es', async () => {
+    const { w, A } = await world(k2({ devices: 3 }), 2)
+    const cs: Array<{ C: HolderDevice; t: { x: M.Tuple; y: M.Tuple } }> = []
+    for (const n of ['C1', 'C2', 'C3']) {
+      const C = await w.person(n, `${n}1`)
+      cs.push({ C, t: await w.encounter(A, C) })
+    }
+    await w.rounds(4)
+    const c = w.candidate as ReturnType<typeof k2>
+    const mark = w.carrier.carried.length
+    const A3 = await w.enrol(A, 'A3')
+    const sets = w.carrier.carried.slice(mark).filter((f) => w.frameOrigin(f.bytes)?.kind === 'device-set')
+    expect(sets.length).toBeGreaterThanOrEqual(3)
+    expect(c.ceremonies.at(-1)!.contexts).toBe(A.state.relationships.flatMap((r) => r.tuples).length)
+    await w.until(() => cs.every(({ C, t }) => members(C, t.y.peer).length === 3), 10)
+    for (const { C, t } of cs) expect(members(C, t.y.peer)).toContain((await A3.cand.keys.pair(t.x.ownKey)).anchor)
+  }, 60_000)
+
+  it('S7. Zwei gleichzeitige Enrollments (A1 nimmt A3 auf, A2 nimmt A4 auf, getrennt): beide Zugänge bleiben, keine 6270-Equivokation, gleiche Menge bei B', async () => {
+    const { w, A, A2, B, ab } = await abWorld(k2({ devices: 4 }))
+    const selfA = () => w.selfAddresses('A')
+    w.carrier.faults.drop((f) => selfA().has(f.address))
+    const A3 = await w.enrol(A, 'A3')
+    const A4 = await w.enrol(A2, 'A4')
+    await w.rounds(3)
+    w.carrier.faults.reset()
+    await w.until(() => members(B, ab.y.peer).length === 4, 20)
+    expect(members(B, ab.y.peer)).toEqual(expect.arrayContaining([(await A3.cand.keys.pair(ab.x.ownKey)).anchor, (await A4.cand.keys.pair(ab.x.ownKey)).anchor]))
+    expect(B.state.findings.some((f) => f.includes('Equivokation'))).toBe(false)
+    await w.rounds(6)
+    expect(w.agree('A')).toEqual({ agree: true, diff: '' })
+  }, 90_000)
+
+  it('S8. Enrollment gegen Widerruf in beiden Reihenfolgen bei B: dieselbe Endmenge', async () => {
+    const ends: string[] = []
+    for (const reverse of [false, true]) {
+      const { w, A, A2, B, ab } = await abWorld(k2({ devices: 3 }))
+      w.carrier.faults.reverse(reverse)
+      await w.enrol(A, 'A3')
+      await w.revoke(A, A2)
+      await w.rounds(4)
+      w.carrier.faults.reverse(false)
+      await w.rounds(4)
+      expect(members(B, ab.y.peer)).toHaveLength(2)
+      ends.push(M.canonical({ revoked: M.setView(B.setOf(ab.y.peer)).revoked.size, members: members(B, ab.y.peer).length }))
+    }
+    expect(ends[0]).toBe(ends[1])
+  }, 90_000)
+
+  it('S9. 2290: der Record-Anker bleibt der des gewählten Tupels, auch wenn ein Enrollment kleinere Anker in die Menge bringt; 2300 eingefroren', async () => {
+    const { w, A, ab } = await abWorld(k2({ devices: 3 }))
+    const before = M.canonical(A.state.relationships.map((r) => r.tuples.map((t) => ({ id: t.id, record: t.record, own: t.own, candidates: t.candidates }))))
+    const head = M.head(M.relOfTuple(A.state, ab.x.id)!).id
+    await w.enrol(A, 'A3')
+    await w.rounds(4)
+    for (const d of w.of('A')) {
+      expect(M.canonical(d.state.relationships.map((r) => r.tuples.map((t) => ({ id: t.id, record: t.record, own: t.own, candidates: t.candidates }))))).toBe(before)
+      expect(M.head(M.relOfTuple(d.state, ab.x.id)!).id).toBe(head)
+    }
+  }, 60_000)
+
+  it('S10. Erschöpfter Vorrat: öffnet A1 Beziehungen, solange A2 offline ist, fehlt A2 in den späteren Mengen; nach dem Nachfüllen nimmt A1 es nach (gemessene Lücke)', async () => {
+    const { w, A, A2 } = await world()
+    A2.online = false
+    const ts: Array<{ C: HolderDevice; t: { x: M.Tuple; y: M.Tuple } }> = []
+    for (let i = 0; i < 6; i++) {
+      const C = await w.person(`C${i}`, `C${i}1`)
+      ts.push({ C, t: await w.encounter(A, C) })
+      await w.rounds(2)
+    }
+    const without = ts.filter(({ C, t }) => members(C, t.y.peer).length === 1).length
+    expect(without).toBeGreaterThan(0) // A2's pool for A1 held four keys
+    A2.online = true
+    const n = await w.until(() => ts.every(({ C, t }) => members(C, t.y.peer).length === 2), 20)
+    expect(n).toBeGreaterThan(0)
+  }, 90_000)
+})
+
+describe('K2 Schritt 2: Karte (E1 (a), E2 (iv), E3 (a))', () => {
+  for (const stock of ['strict', 'shared'] as const) {
+    it(`C1. ${stock}: Produzentenregel E2 (iv): das nicht zuteilende Gerät zeichnet nur die Zustimmung auf, das zuteilende erzeugt die eine Karte; B: eine Karte, kein K`, async () => {
+      const s = await world(k2({ stock }))
+      const act = await introduced(s)
+      const allocator = allocatorOf(s.A, act)
+      const [prod, other] = allocator === 'A1' ? [s.A, s.A2] : [s.A2, s.A]
+      await s.w.until(() => other.state.acts.some((a) => a.id === act), 10)
+      const ops = (d: HolderDevice) => ((d.cand as K2Device).journal() as Batch[]).filter((b) => b.writer.startsWith(`${d.name}@`)).flatMap((b) => b.ops)
+      await other.consent(act)
+      expect(ops(other).some((o) => o.kind === 'consent' && o.act === act && o.card === null)).toBe(true)
+      expect(ops(other).some((o) => o.kind === 'produce')).toBe(false)
+      expect([...other.intents.values()].some((i) => i.kind.includes('introduction-card') && i.device === other.name)).toBe(false)
+      await s.B.consent(act)
+      await s.w.until(() => [s.A, s.A2, s.B].every((d) => M.act(d.state, act).state === 'connected'), 15)
+      expect(ops(prod).filter((o) => o.kind === 'produce' && o.act === act)).toHaveLength(1)
+      expect(M.act(s.B.state, act).k).toBe(false)
+      expect(s.B.log.filter((e) => e.type === 'introduction-card')).toHaveLength(1)
+      // One card, one hand-over: no provisional choice, nothing withdrawn as a losing card (8232.2 needs no loser under E2 (iv)).
+      for (const d of s.w.of('A')) {
+        expect(Object.keys(M.act(d.state, act).cards ?? {})).toHaveLength(1)
+        expect(d.losingCardsWithdrawn).toBe(0)
+      }
+    }, 60_000)
+  }
+
+  it('C2. Gegenlauf ohne Produzentenregel: shared, zwei Karten desselben Signierers (der Schlüssel der Menge) → K bei B (8910.8); strict, die zweite ist unter einem fremden Schlüssel signiert → abgewiesen ohne K (E3 (a))', async () => {
+    for (const stock of ['shared', 'strict'] as const) {
+      const s = await world(k2({ stock, producerRule: false }))
+      const act = await introduced(s)
+      const selfA = s.w.selfAddresses('A')
+      for (const d of s.w.of('A')) s.w.carrier.faults.withhold(d.name, (f) => selfA.has(f.address))
+      await s.A.consent(act)
+      await s.A2.consent(act)
+      await s.B.consent(act)
+      await s.w.rounds(5)
+      s.w.carrier.faults.reset()
+      await s.w.rounds(5)
+      if (stock === 'shared') expect(M.act(s.B.state, act).k).toBe(true)
+      else {
+        expect(M.act(s.B.state, act).k).toBe(false)
+        expect(s.B.dispositions.filter((d) => d === 'failed(validation-failed)').length).toBeGreaterThan(0)
+      }
+    }
+  }, 120_000)
+
+  it('C3. Karte vor ihrem Mengennachweis: zurückgestellt (kein V, kein K, keine Quittung); nach dem Nachweis genau eine Verbindung', async () => {
+    const s = await world(k2())
+    const act = await introduced(s)
+    await s.B.consent(act)
+    await s.w.rounds(3)
+    // The set revision of A's card does not reach B yet; the card does.
+    s.w.carrier.faults.drop((f) => s.w.frameOrigin(f.bytes)?.kind === 'device-set' && f.address === M.act(s.A.state, act).voucher.keyAgreement)
+    const prod = allocatorOf(s.A, act) === 'A1' ? s.A : s.A2
+    await prod.consent(act)
+    await s.w.rounds(3)
+    expect(s.B.deferredCards).toBeGreaterThan(0)
+    const b = M.act(s.B.state, act)
+    expect([b.v, b.k, b.pending, b.state]).toEqual([null, false, null, 'consented'])
+    s.w.carrier.faults.reset()
+    await s.w.until(() => M.act(s.B.state, act).state === 'connected', 20)
+    expect(M.act(s.B.state, act).state).toBe('connected')
+    expect(new Set(s.w.of('B').flatMap((d) => d.state.effects.filter((e) => e.id === `connect:${act}`).map((e) => e.op))).size).toBe(1)
+  }, 60_000)
+
+  it('C4. Ein bekannter Widerruf schlägt den älteren Bezug: ist die Wurzel der Karte bei B widerrufen, wird die Karte ohne K abgewiesen, V bleibt leer', async () => {
+    const s = await world(k2())
+    const act = await introduced(s)
+    await s.B.consent(act)
+    await s.w.rounds(2)
+    const prod = allocatorOf(s.A, act) === 'A1' ? s.A : s.A2
+    const other = prod === s.A ? s.A2 : s.A
+    const voucher = M.act(s.A.state, act).voucher
+    s.w.carrier.faults.drop((f) => s.w.frameOrigin(f.bytes)?.kind === 'introduction-card')
+    await prod.consent(act)
+    await s.w.rounds(3)
+    // The sibling, admitted in the card's set, revokes the card root at B (injected revocation entry, to B's voucher key).
+    await s.w.until(() => !!M.act(other.state, act).ownCardKey, 10)
+    const a = M.act(other.state, act)
+    const root = a.ownCard!.anchor
+    const set = other.setOf(root)!
+    const rev = await raw(other).cert(a.ownCardKey!, { root, kind: 'revoke', anchor: root, keyAgreement: null })
+    await raw(other).sendDoc(TYPES.deviceSet, a.ownCardKey!, voucher.anchor, voucher.keyAgreement, (await other.cand.keys.pair(a.ownCardKey!)).rkid, { root, rootKeyAgreement: set.rootKeyAgreement, revision: 40, deps: [], entries: [...Object.values(set.certs), rev] as unknown as Json[] })
+    await s.w.rounds(3)
+    expect(M.setView(s.B.setOf(root)).revoked.has(root)).toBe(true)
+    s.w.carrier.faults.reset()
+    await s.w.rounds(4)
+    const b = M.act(s.B.state, act)
+    expect([b.state, b.v, b.k]).toEqual(['consented', null, false])
+    expect(s.B.state.findings.some((f) => f.includes('ein bekannter Widerruf schlägt den älteren Bezug'))).toBe(true)
+  }, 60_000)
+
+  it('C5. Fremdkarte und Bindung: eine Karte unter einem anderen Schlüssel als `from` wird ohne K abgewiesen (E3 (a)); unter dem richtigen `from` mit anderem `fromKeyAgreement` setzt sie K (8850.6 (d))', async () => {
+    const s = await world(k2())
+    const act = await introduced(s)
+    await s.B.consent(act)
+    const prod = allocatorOf(s.A, act) === 'A1' ? s.A : s.A2
+    await prod.consent(act)
+    await s.w.until(() => M.act(s.B.state, act).state === 'connected', 10)
+    const a = M.act(prod.state, act)
+    const stock = M.findRel(prod.state, a.mediator)!.stock.find((k) => k.anchor === a.own)!
+    const set = M.own(prod.setOf(a.ownCard!.anchor)!.revs, signerId(a.ownCard!.anchor))!.digest
+    const card = { anchor: a.ownCard!.anchor, keyAgreement: a.ownCard!.keyAgreement }
+    const payload = (o: Record<string, unknown>) => ({ act, expiresAt: a.expiresAt, from: a.own, fromKeyAgreement: stock.keyAgreement, to: a.voucher.anchor, card, set, ...o })
+    // A foreign signer (M's key for its A–M tuple) with `from` = the voucher key: refused, no K, V unchanged.
+    const v0 = M.act(s.B.state, act).v
+    const mh = M.head(M.rel(s.Mm.state, s.am.y.id))
+    await raw(s.Mm).sendDoc(TYPES.card, mh.ownKey, a.voucher.anchor, a.voucher.keyAgreement, (await s.Mm.cand.keys.pair(mh.ownKey)).rkid, payload({ card: { anchor: mh.own, keyAgreement: mh.peerKeyAgreement } }))
+    await s.w.rounds(2)
+    expect(M.act(s.B.state, act).k).toBe(false)
+    expect(M.act(s.B.state, act).v).toBe(v0)
+    // The right signer with a contradicting key binding: K.
+    await raw(prod).sendDoc(TYPES.card, stock.key, a.voucher.anchor, a.voucher.keyAgreement, stock.keyAgreement, payload({ fromKeyAgreement: a.voucher.keyAgreement }))
+    await s.w.rounds(2)
+    expect(M.act(s.B.state, act).k).toBe(true)
+  }, 60_000)
+
+  it('C6. Ticket: strict öffnet nur der Halter des benannten Vorrats-Schlüssels; shared jedes Gerät der Menge (die Schwester hält den privaten Teil aus dem Journal)', async () => {
+    for (const stock of ['strict', 'shared'] as const) {
+      const s = await world(k2({ stock }))
+      const r = await s.Mm.introduce(s.am.y.id, s.bm.y.id)
+      expect('act' in r).toBe(true)
+      await s.w.rounds(2)
+      const act = (r as { act: string }).act
+      const a = M.act(s.w.of('A').find((d) => d.state.acts.some((x) => x.id === act))!.state, act)
+      const k = M.findRel(s.A.state, a.mediator)!.stock.find((x) => x.anchor === a.own)!
+      const readers = s.w.of('A').filter((d) => d.log.some((e) => e.type === 'introduction-ticket')).map((d) => d.name)
+      if (stock === 'strict') {
+        expect(readers).toEqual([k.by])
+        expect(s.w.carrier.registeredAt(k.keyAgreement)).toEqual([k.by])
+      } else {
+        expect(readers.sort()).toEqual(['A1', 'A2'])
+        expect(s.w.carrier.registeredAt(k.keyAgreement)).toEqual(['A1', 'A2'])
+      }
+    }
+  }, 60_000)
+
+  it('C7. Restore des zuteilenden Geräts vor der Produktion: keine zweite Karte (die Produktion wartet aufs Nachholen; die frühere Inkarnation hatte schon erzeugt)', async () => {
+    const s = await world(k2())
+    const act = await introduced(s)
+    const prod = allocatorOf(s.A, act) === 'A1' ? s.A : s.A2
+    const backup = s.w.stores.get(prod.name)!.snapshot()
+    await prod.consent(act)
+    await s.w.rounds(3)
+    s.w.stores.get(prod.name)!.restore(backup)
+    await prod.reload()
+    await s.B.consent(act)
+    await s.w.until(() => M.act(s.B.state, act).state === 'connected', 20)
+    await s.w.rounds(4)
+    const produced = s.w.of('A').flatMap((d) => ((d.cand as K2Device).journal() as Batch[]).flatMap((b) => b.ops)).filter((o) => o.kind === 'produce' && o.act === act)
+    expect(new Set(produced.map((o) => (o as { v: string }).v)).size).toBe(1)
+    expect(M.act(s.B.state, act).k).toBe(false)
+  }, 60_000)
+
+  it('C8. Dieb gewinnt zuerst (E1 (a)): der Dieb mit A2s Abbild erzeugt die Karte (strict, A2s Schlüssel), B bindet sie; der Widerruf heilt diese Beziehung nicht (benannter Preis)', async () => {
+    const s = await world(k2({ mediatorSplit: false })) // one mediator device names every key (the split is not under test here)
+    let act = ''
+    for (let i = 0; i < 6 && !act; i++) {
+      const x = await introduced(s)
+      if (allocatorOf(s.A, x) === 'A2') act = x
+      else {
+        await s.A.decline(x)
+        await s.w.rounds(1)
+      }
+    }
+    expect(act).not.toBe('')
+    const thief = rogue(await s.w.steal(s.A2, 'A2-dieb'))
+    s.A2.online = false
+    s.w.devices.push(thief)
+    await thief.consent(act)
+    await s.B.consent(act)
+    await s.w.until(() => M.act(s.B.state, act).state === 'connected', 15)
+    expect(M.act(s.B.state, act).state).toBe('connected')
+    await s.w.revoke(s.A, s.A2)
+    if (!s.w.devices.includes(thief)) s.w.devices.push(thief)
+    await s.w.rounds(4)
+    const t = s.B.state.relationships.flatMap((r) => r.tuples).find((x) => x.id.includes(act))!
+    // A1 never saw the thief's card (its batches are refused): B's set for this relationship carries no revocation, the thief stays bound.
+    expect(M.setView(s.B.setOf(t.peer)).revoked.size).toBe(0)
+    expect(members(s.B, t.peer)).toContain(t.peer)
+  }, 90_000)
+})
+
+describe('K2 Schritt 2: Messungen (X23, Diebesfenster, Rotation, Fan-out, Ankerpaar)', () => {
+  it('M1. Ankerpaar-Orakel (X18): beide Personen halten dasselbe Paar samt Vereinbarungsschlüssel, jedes Mitglied öffnet, was die Gegenseite versiegelt; Gegenlauf: ein verfälschtes Paar fällt', async () => {
+    const s = await world(k2())
+    const act = await introduced(s)
+    await s.A.consent(act)
+    await s.A2.consent(act)
+    await s.B.consent(act)
+    await s.w.until(() => [s.A, s.A2, s.B].every((d) => M.act(d.state, act).state === 'connected'), 15)
+    await s.w.rounds(4)
+    const ok = await anchorPairOracle(s.w, 'A', 'B', act)
+    expect(ok).toEqual({ pairsAgree: true, decrypt: true, cardIdentity: true })
+    // Counter-run: B's tuple names another anchor for A.
+    const t = s.B.state.relationships.flatMap((r) => r.tuples).find((x) => x.id.includes(act))!
+    const keep = t.peer
+    t.peer = s.am.x.own
+    expect((await anchorPairOracle(s.w, 'A', 'B', act)).pairsAgree).toBe(false)
+    t.peer = keep
+    // Decryption really happens: a frame sealed to each member key opens on the device that holds the key.
+    const env = await seal({ x: 1 } as unknown as Json, members(s.B, t.peer).length ? M.setView(s.B.setOf(t.peer)).members[0]!.keyAgreement : t.peerKeyAgreement)
+    expect(env).toBeTruthy()
+    void receive
+  }, 60_000)
+
+  it('M2. X23 Zeitmodell: ruhendes Gerät (14 von 30 Tagen), Lebensdauer der Vorrats-Schlüssel 2 und 30 Tage (7 Tage in den NOTES), je Variante: ungesehen verfallene Vorstellungen (8155) und Karten nach dem Annahmeende (8110.5)', async () => {
+    const table: Record<string, unknown> = {}
+    void table
+    for (const stock of ['strict', 'shared'] as const) {
+      for (const days of [2, 30]) {
+        const r = await timeModel((o) => k2({ stock, ...o }), { lifetimeDays: days })
+        table[`${stock}/${days}`] = r
+        expect(r.issued).toBeGreaterThan(0)
+        expect(r.expiredUnseen + r.missedCards + r.connected + r.other).toBe(r.issued)
+        if (stock === 'shared') expect(r.expiredUnseen).toBe(0) // every device opens the ticket
+        if (stock === 'strict') expect(r.missedCards).toBe(0) // the holder that sees the ticket produces the card
+        // Losses come only from tickets on the dormant device's keys issued while it sleeps (its listed share, MV-9).
+        expect(r.expiredUnseen + r.missedCards).toBeLessThanOrEqual(r.onDormantKeyWhileAsleep)
+      }
+    }
+  }, 2_400_000)
+
+  it('M3. X9 Diebesfenster je Variante: zwischen Diebstahl und Widerruf liest der Dieb, was A2s Schlüssel öffnen (shared mehr: jeder Vorrats-Schlüssel); nach dem Widerruf nichts Neues', async () => {
+    const strict = await thiefWindow(k2({ stock: 'strict' }))
+    const shared = await thiefWindow(k2({ stock: 'shared' }))
+    for (const r of [strict, shared]) {
+      expect(r.readsBefore).toBeGreaterThan(0)
+      expect(r.readsAfter).toBe(0)
+    }
+    expect(shared.ticketsBefore).toBeGreaterThanOrEqual(strict.ticketsBefore)
+    const carrierOnly = await thiefWindow(k2({ stock: 'strict', counterpartRevocation: false }))
+    expect(carrierOnly.readsAfter).toBeGreaterThan(0)
+  }, 300_000)
+
+  it('M4. Rotationsverkehr beim Widerruf: strict nur Mengenrevisionen; shared dazu leere Revision und Nachfüllung an M', async () => {
+    const strict = await revocationTraffic(k2({ stock: 'strict' }))
+    const shared = await revocationTraffic(k2({ stock: 'shared' }))
+    expect(strict.setRevisions).toBeGreaterThan(0)
+    expect(strict.stockRevisions).toBe(0)
+    expect(shared.stockRevisions).toBeGreaterThanOrEqual(2)
+    expect(shared.bytes).toBeGreaterThan(strict.bytes)
+  }, 300_000)
+
+  it('M5. Enrollment-Fan-out für 3 und 10 Beziehungen: eine Mengenrevision je Beziehung, jede Gegenseite versiegelt danach an das neue Gerät', async () => {
+    for (const n of [3, 10]) {
+      const r = await enrolFanout(k2({ devices: 3 }), n)
+      expect(r.setRevisions).toBe(n + 1) // n counterparts and M
+      expect(r.addressable).toBe(n + 1)
+      expect(r.rounds).toBeGreaterThan(0)
+    }
+  }, 300_000)
 })

@@ -1,13 +1,333 @@
-# K2 step 1: device keys, registration per device, device-signed journal
+# K2: device keys (step 1), device sets and one card per act (step 2)
 
-Plan E15, section 6o.4 step 1 (`rltp/design/port-experimente-e15-mehrgeraet-plan-2026-10-17.md`),
-Anton's go for K2 on 18 October 2026. Candidate `k2-device-keys`
-(`index.ts`), tests `tests/mehrgeraet-k2.test.ts`. K2 reuses K1a's
-journal, holder and model (`src/lab/mehrgeraet/{holder,model,welt}.ts`,
-`src/candidates/mehrgeraet-k1a`); this note says what changes and what
-the bench measured.
+Plan E15, sections 6o.4, 6r and 6s (`rltp/design/port-experimente-e15-mehrgeraet-plan-2026-10-17.md`).
+Candidates `k2-device-keys` (K2-strict) and `k2-shared-stock` (K2-shared)
+in `index.ts`, counter-run `k2-device-keys-no-split`; tests
+`tests/mehrgeraet-k2.test.ts`; measurements `src/lab/mehrgeraet/geraetemengen.ts`.
+K2 reuses K1a's journal, holder and model (`src/lab/mehrgeraet/{holder,model,welt}.ts`,
+`src/candidates/mehrgeraet-k1a`). Step 2 comes first below; the step-1
+sections follow unchanged where they still hold, and say so where step 2
+replaced them.
 
-## Assumptions in force
+## Step 2 (19 October 2026)
+
+### Anton's decisions (plan 6r)
+
+- **Line:** state arises only from proof; what went out on proof holds;
+  where two valid proofs could collide, the structure makes sure only one
+  arises, instead of someone choosing.
+- **E1 (a):** a relationship B bound to a thief's card (valid membership
+  proof at the time) does not heal after revocation; a named price. The
+  card carries a signed device-set reference; a card before its proof is
+  deferred (no V, no K); a known revocation beats an older reference.
+- **E2 (iv):** only the device that allocated the named stock key
+  produces the card: one card per act, no selection, no new message.
+  Decision 6o.5 no. 7 is replaced: two cards of one act from one device
+  set do not occur structurally; if they do, it is equivocation of the
+  same holder (K). The selection receipt of the design review (6q 3a/3d)
+  is not built.
+- **E3 (a):** a card from outside the device set is refused without K;
+  K stays for two different cards of the same device, a contradicting key
+  binding (8850.6 (d)), and equivocation of a set revision is a finding of
+  its own (6270), not the K of an act.
+- **Two variants, measured side by side:** K2-strict (a stock key's
+  private part only on the allocating device, only it opens the ticket)
+  and K2-shared (the private part travels in the sealed journal, "the key
+  belongs to the set, production to the device").
+
+### What step 2 builds
+
+**`device-set@1`** (`https://real-life.org/rltp/e15/device-set/0.1`), a
+revisioned type for the 6270 list, one set per relationship context and
+person. The **root** is the anchor the counterpart verified first for
+this relationship: at an encounter the anchor of the QR, after an
+introduction the card anchor (the card is signed by the voucher key M
+named). The truth are the **proofs**: an admission
+`{root, kind: admit, anchor, keyAgreement, by}` or a revocation
+`{root, kind: revoke, anchor, by}`, each DI-signed by `by`. A key is a
+member if a chain of admissions leads from it to the root (`ever`) and no
+revocation by an ever-admitted key names it; revocations are final, an
+old list cannot bring a key back (`model.ts` `setView`). The fold is a
+two-phase set: proofs only grow, so any order of arrival gives the same
+set. A revision carries all proofs the signer knows (cumulative), the
+digests of the revisions it saw (`deps`, signed) and a number per signer;
+6270 per signer only detects repetition and equivocation (same signer,
+same number, other content: the finding `Equivokation (6270)`, never K).
+The signer of a revision must be the root or a key whose admission chain
+is in the revision itself (signed dependencies, never "in my list right
+now"). A revision signed by a key the receiver already knows as revoked
+is refused (a known revocation beats). Counterparts (B, M) know a
+person's set only from these proofs; the bench list of step 1 is gone for
+them (`DeviceDirectory` has no `recipients` any more).
+
+**Delivery** (`holder.ts` `recipientsOf`, `sendDoc`): no proof yet means
+unknown membership, the document goes to the root alone; a known set
+means one sealed copy per member; a **known-empty set** (every member
+revoked) is an explicit delivery failure (`failed(empty-device-set)`, no
+frame at all, never to the recorded key; review 31 S1 pulled forward). A
+signer is a peer only if it is a member.
+
+**Admission of siblings** (plan 6o.2): every device keeps a pool of public
+keys per sibling (`pool/<i>`, four, refilled below two; journal op
+`pool`). The device that opens a relationship (encounter, card) admits
+each sibling with the smallest unused key of that sibling's pool reserved
+for it (`pool-use`, from then on that sibling's key for the context) and
+publishes the set. Only the opening device admits by pool, so one device
+never gets two keys for one context. Without a pool key the sibling stays
+out until one arrives (`admitPending`, measured gap: test S10).
+
+**Enrolment** (QR between the own devices): the new device shows its key
+for every context of the person and a pool per sibling; the old device
+admits it in every set where it is a member and sends one revision per
+relationship (one step per root, so no journal frame exceeds 64 KiB).
+K2-shared: the new device adopts the journal and with it the stock key
+seeds.
+
+**Card** (`holder.ts` `produce`, dispatch `TYPES.card`): the producer is
+the device whose name the stock key carries (`StockKey.by`, set at
+allocation). A consent on any other device is a consent op without card
+(journal); the allocating device produces the card when it consents or
+when it folds the consent, never while catching up after a restore (a
+previous incarnation may already have produced: test C7), never after the
+act's expiry. The card payload names the digest of the producer's set
+revision (`set`), sent in the same step to B's voucher key. At B: the
+signer must be `from` itself (the voucher key; any other key is a card
+from outside the set, refused without K, E3 (a)); without the referenced
+proof the card is deferred (`Missing('device-set')`: rolled back, no V,
+no K, no receipt, the sender repeats; test C3); a revoked root is refused
+without K (test C4); a contradicting `fromKeyAgreement` under the right
+`from` sets K (8850.6 (d), test C5); two different cards of the same
+signer stay 8910.8 K. The same set check runs in the buffer branch
+(8910.1–.3: no buffer entry before the proof), in the buffer selection
+(8640.15: a revoked root is discarded) and before the pending re-check
+(8325.A5c). One card identity: the producer records the payload digest
+`ownCardV` (as V at B, 8910.0); `withdrawLosingCards` never withdraws a
+card as the loser of a digest comparison under device sets (there is no
+second card), only after a decline (rule 2). 2290: the record anchor stays
+that of the chosen tuple (the opener's), set changes never touch it
+(test S9); 2300 unchanged.
+
+**Ticket**: M seals the ticket to the named stock key (plan 6o.2: only the
+holder of the private part opens it); the side reads the channel as the
+relationship of that stock key and checks the signer against M's set on
+any of its tuples. K2-strict: only the allocating device registered the
+key; K2-shared: every device holds the seed and registered it (test C6).
+
+**MV-9 under device keys**: each device keeps its own share of the stock
+at M (⌈3/devices⌉ below, ⌈5/devices⌉ to) and lists only its own keys; an
+acceptance counts for the device that allocated the named key, whichever
+device accepted, and a device lists at most as many keys as it can still
+accept. So every key M can name can be accepted (strict: only its holder
+opens the ticket, a key of a device without quota would be dead), and
+two devices of K2-shared that accept the same ticket concurrently count it
+once (rule 1 for `accept:<act>`). An empty own list never goes out while
+the class is on (an empty revision is 8535's class-off signal, it clears
+every writer at M, MV-12).
+
+**Revocation** (`holder.ts` `revokeInSets`, after the carrier
+deregistration): the revoking device writes a revocation proof in every
+own set where the revoked device is a member and it is a member itself,
+and sends one revision per relationship. Rotation: K2-strict withdraws the
+revoked device's own stock keys in the state (M stops naming them because
+their signer is revoked in the set it holds for A); K2-shared withdraws
+every live stock key (the revoked device knew them all), sends the empty
+revision (8535) and refills. Counter-run `counterpartRevocation: false`:
+none of this (carrier only).
+
+**Bench-side in step 2** (named, step 3): the person's own devices still
+learn the set from the bench list (`DeviceDirectory`: journal writer check,
+self addresses, sibling names); the revocation is not a journalized
+operation; a pending card context (act not connected) gets revocation
+entries only from devices that are members of its set; enrolment and
+restore do not yet check revoked writers (review 31 S2). A thief that runs
+an honest image is held by the gate after restore (MV-6): the tests let it
+ignore the gate (`rogue`), as a thief's own software would.
+
+### Results (two devices, X1–X18, X7b, X21)
+
+| | K1a | K2 step 1 | K2-strict | K2-shared | note |
+|---|---|---|---|---|---|
+| X1 | ✓ | ✓ | ✓ | ✓ | interim rule `mediatorSplit` |
+| X2 | ✓ | ✓ | ✓ | ✓ | 0 blocked acceptances (step 1: 5); the 10th and 11th introduction take the authorized path (B6) |
+| X3 | ≈ | ≈ | ≈ | ≈ | rule 2 |
+| X4 | ✓ | ✓ | ✓ | ✓ | |
+| X5 | ✓ | ✓ | ✓ | ✓ | 0 new frames to B, 6 repeats |
+| X6 | ✓ | ✓ | ✓ | ✓ | |
+| X7 strict | ✗ | ✗ | ✗ | ✗ | frozen candidate lists (2300) |
+| X7b | ✓ | ✓ | ✓ | ✓ | |
+| X8 | ✓ | ✓ | ✓ | ✓ | state copy 5 538 B (sets and pools); A2 addressable in every relationship after 2 rounds, from the counterparts' proofs |
+| X9 | ✗ | ≈ | ≈ | ≈ | thief reads 0 after the revocation; step 2: counterparts from revocation entries, own devices still from the bench list |
+| X10 | – | – | – | – | K2b |
+| X11 | ✓ | ✓ | ✓ | ✓ | journal 60.8 kB / 57.3 kB (step 1: 28.1 kB) |
+| X12 | ✓ | ✓ | ✓ | ✓ | the allocating device consents and delivers (E2 (iv)) |
+| X13 | ✓ | ✓ | ≈ | ≈ | structural: at budget 9 A lists one acceptable key, M can issue only one, no race (MV-9 under device keys) |
+| X14–X17 | ✓ | ✓ | ✓ | ✓ | X17: M takes both signers, 2 findings 8435 |
+| X18 | ≈ | ✗ | ≈ | ≈ | one card, no K, anchor-pair oracle holds (below) |
+| X21 | ✓ | ✓ | ✓ | ✓ | restore repair 11 rounds (step 1: 7); self addresses 1 125 / 1 534 frames, 3.8 / 4.7 MB; journal after 53.4 / 58.0 kB |
+
+**K2-strict and K2-shared: 18 kept (X3, X9, X13, X18 under a changed
+promise), 1 not kept (X7 strict), 1 n/a (X10)**; K2 step 1 was 17/2/1
+(red X7, X18). Counter-run without the interim rule: X1, X13, X14 fail.
+Serial control (one device, both variants): no cell fails.
+
+### X23 time model
+
+`timeModel` (`geraetemengen.ts`): 30 days, steps of 6 hours, A2 offline
+from day 8 to day 22 (14 of 30 days), M introduces A to one of four
+persons every day, the user consents on the first A device that shows the
+act, the counterpart at once, the user confirms the acceptance budget
+daily (8515; the per-device share is lifted, budget 1000). Stock key
+lifetime = naming window beyond the act (8470 needs the whole act lifetime
+of remaining validity: expiresAt = allocation + act-lifetime + act-skew +
+window). One run per cell; counts per 30 introductions.
+
+| variant | window | issued (refused by M) | on A2's keys | of them while A2 sleeps | expired unseen (8155) | card after end of acceptance (8110.5) | connected |
+|---|---|---|---|---|---|---|---|
+| K1a | 2 d | 27 (3) | – | – | 0 | 0 | 27 |
+| K1a | 7 d | 29 (1) | – | – | 0 | 0 | 29 |
+| K1a | 30 d | 30 (0) | – | – | 0 | 0 | 30 |
+| K2-strict | 2 d | 27 (3) | 5 | 0 | 0 | 0 | 27 |
+| K2-strict | 7 d | 30 (0) | 12 | 3 | **3** | 0 | 27 |
+| K2-strict | 30 d | 30 (0) | 8 | 2 | **2** | 0 | 28 |
+| K2-shared | 2 d | 27 (3) | 8 | 0 | 0 | 0 | 27 |
+| K2-shared | 7 d | 30 (0) | 12 | 1 | 0 | **1** | 29 |
+| K2-shared | 30 d | 30 (0) | 11 | 3 | 0 | **2** | 28 |
+
+Reading: every loss is a ticket on a key of the sleeping device issued
+while it sleeps. K2-strict loses it before consent (only the holder opens
+the ticket, the consent cutoff passes unseen); K2-shared loses it after
+consent (any device sees and consents, the allocating device produces the
+card after the end of acceptance). The loss is bounded by the sleeping
+device's listed share (≤ 3 keys, MV-9 under device keys), not by the
+length of the sleep; a short window (2 days) lets those keys age out of
+M's view before they are named, at the price of three refusals by M for
+want of a nameable key (K1a the same). K1a (one seed, every device opens
+and produces) loses nothing.
+
+### X9 thief window, rotation, enrolment fan-out
+
+Thief window (`thiefWindow`: theft of A2's image, two rounds of activity by
+M and B before the revocation, two after; counted: documents the thief
+reads, receipts excluded):
+
+| | K1a | K2-strict | K2-shared | K2-strict, carrier only |
+|---|---|---|---|---|
+| reads before revocation | 7 | 7 | 9 | 7 |
+| of which tickets | 2 | 2 | 2 | 2 |
+| reads after revocation | 11 | **0** | **0** | 4 |
+| rounds until B / M know the revocation | – | 1 / 1 | 1 / 1 | – |
+
+Before the revocation K2-shared exposes more (the thief also holds the
+siblings' stock keys and reads tickets on them). After it, both variants
+read nothing new; the counter-run without revocation entries keeps
+reading, as K1a does.
+
+Rotation traffic on revocation (`revocationTraffic`: A with M, B and C, A1
+revokes A2; frames from A's devices to counterparts until quiet, receipts
+and journal excluded):
+
+| | K1a | K2-strict | K2-shared |
+|---|---|---|---|
+| set revisions (frames) | 0 | 4 | 4 |
+| stock revisions to M (frames) | 0 | 0 | 4 (empty, then refill; one copy per M device) |
+| total | 0 | 4 / 12.6 kB | 8 / 18.8 kB |
+| counterparts reached | 0 | 3 | 3 |
+
+Bench-side: the siblings learn the revocation from the bench list; a
+journalized revocation, revocation entries for pending card contexts
+where the revoker is no member, and the takeover of open intents are step
+3.
+
+Enrolment fan-out (`enrolFanout`: A with M and n encounters, enrol A2):
+
+| relationships | set revisions | bytes | rounds until addressable everywhere | ceremony (QR) |
+|---|---|---|---|---|
+| 3 + M | 4 | 9.2 kB | 1 | 1 571 B |
+| 10 + M | 11 | 25.4 kB | 1 | 2 523 B |
+
+### X18 and the anchor-pair oracle
+
+X18 passes in both variants from the structure, not from a missing K:
+one card (`cardsProducedByA` 1, one hand-over digest), no K at B, and the
+anchor-pair oracle (`geraetemengen.ts` `anchorPairOracle`, design review
+6q 5a) holds: every honest device of both persons holds the same tuple,
+A's own anchor is B's counter anchor and vice versa with both key
+agreement keys (the two cards), every key B seals to for A's root (and A
+for B's) opens a frame actually sealed to it on a device that holds the
+private key, and V on each side is the payload digest of the other's card.
+Counter-run: a forged counter anchor fails the oracle (test M1). Without
+the producer rule (`producerRule: false`) K2-shared shows K at B (8910.8:
+two cards of the same signer, the set's key) and K2-strict refuses the
+second card without K (signed under a key that is not `from`) (test C2).
+X18 stays marked as a changed promise: two consents (rule 1), the
+terminality of 8325 only after the fold.
+
+### Identity K0 and K1a
+
+Under controlled randomness all 120 result objects of K0, K1a and the K1a
+variant with the journal at the service (two devices and serial) are
+byte-identical to main 69c70a1. Shared changes take effect only under
+`deviceSets`: the commutative P rule after a connect (below), the new op
+kinds, the X2/X12/X13/X21 scenario adjustments (allocator consents,
+authorized path, structural X13, wait for the peer's ticket), and the
+X18 oracle (K0/K1a pass or fail it as before).
+
+### Limits of step 2
+
+- The own device list is still bench-side (above); full revocation
+  propagation, journalized revocation and the takeover of a revoked
+  device's intents (X20) are step 3.
+- E1 (a) is a price, measured: a thief that produces the card for an act
+  on its stolen stock key before the revocation binds B to its card; A1
+  never sees that card (the thief's batches are refused), so no
+  revocation reaches that relationship and the thief stays bound (test
+  C8).
+- A thief admitted before the revocation keeps what it admitted (chain
+  revocation is K2b); a revision of a revoked device that reached a
+  counterpart before the revocation stays (history, E1 (a)); after it, it
+  is refused. Mutual revocations (thief revokes the honest device first)
+  leave the honest device out: K2b root revocation.
+- K2-strict: a ticket on the key of an offline or lost device waits for
+  that device; K2-shared moves the wait to the card (the allocating device
+  produces). X23 measures both.
+- A set proof that arrives at a stock key for a card that never comes
+  stays in the state (bounded only by acts); `deps` grows with every
+  revision; a lower set revision is refused without receipt like 6270
+  revisions of the stock (the sender repeats until Delivery gives up).
+- The commutative P rule (a pending card does not set P after the act
+  connected) holds only for acts with a producer card (`ownCardV`); K1a's
+  fold keeps the old order-dependent rule to stay identical (it converges
+  in every K1a scenario; spec follow-up).
+- X21's restore repair takes 11 rounds instead of 7 (more batches: set
+  proofs, pools, revisions per writer).
+
+### Spec follow-ups (step 2)
+
+1. **`device-set@1` in the 6270 type list** with its scope (root per
+   relationship context), the fold (two-phase, chain to the root,
+   revocations final), cumulative revisions with signed `deps`, and the
+   rule that a known revocation beats a later revision of the revoked
+   key.
+2. **8910 K separation** (E3 (a)): K only for two cards of the same signer
+   and 8850.6 (d); a card under another key than `from` is refused before
+   8910 without K; set equivocation is a finding of its own.
+3. **Card set reference**: the card names the set revision of its root;
+   8910.1–.8, 8640.15, 8325.A5c defer a card without that proof and refuse
+   one whose root is revoked.
+4. **8155 and 8110.5 under device keys**: with keys per device the
+   consent cutoff can pass unseen (strict) and the end of acceptance can
+   pass before the producing device returns (shared); X23 gives the
+   numbers. 8640.2 (channel) reads as the relationship of the stock key the
+   ticket is sealed to.
+5. **HSC-120** (unchanged from step 1): takeover after revocation is a
+   re-production with the same effect identity (`card:<act>`), not the
+   same bytes; step 3.
+6. **MV-9 under device keys**: the quota per device travels with the keys
+   it lists; 8485/8512 per device.
+
+## Step 1 (18 October 2026)
+
+### Assumptions in force
 
 Fable's recommendations from plan 6o.5, adopted as working assumptions
 under Anton's go. Anton may overturn them; where cheap they are switches.
@@ -71,7 +391,7 @@ that re-registers A2's addresses after the revocation receives nothing,
 because no sender seals to A2 any more (X9); in the carrier-only
 counter-run it keeps reading.
 
-### Counterparts (step-1 simplification)
+### Counterparts (step-1 simplification; replaced in step 2 by `device-set@1`)
 
 A counterpart learns the person's device set through the bench list
 (`recipients`): it seals every document once per device of the current

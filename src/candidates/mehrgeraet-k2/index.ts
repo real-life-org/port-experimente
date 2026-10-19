@@ -1,50 +1,22 @@
-// K2 step 1: device keys (plan E15, section 6o.4 step 1; assumptions 6o.5 no. 1–5
-// under Anton's go of 18.10.2026). Every device has its own secret (random,
-// never derived from a seed shared by the person); every key of the device
-// (pair anchors, self key, stock keys, card keys, the journal signing key)
-// derives from that secret per context. The person's seed is not on any
-// device: the world still hands one to `first`, K2 ignores it. A thief with
-// one device's image therefore holds exactly that device's keys.
+// K2: device keys (plan E15, section 6o.4). Step 1 (assumptions 6o.5 no. 1–5 under Anton's go of 18.10.2026): every
+// device has its own secret (random, never derived from a seed shared by the person); every key of the device (pair
+// anchors, self key, stock keys, card keys, the journal signing key) derives from that secret per context. The person's
+// seed is not on any device. Step 2 (Anton's decisions of 19.10.2026, plan 6r): counterparts know a person's device set
+// per relationship only from received proofs (`device-set@1`); the bench list stays for the person's own devices only
+// (the journal's writer check and the siblings' set, until step 3); E2 (iv) one card per act from the device that
+// allocated the named stock key; two variants of the stock keys, measured side by side:
 //
-// K2 reuses K1a's journal, holder and model unchanged (assumption 6o.5 no. 1:
-// both K2 cuts keep the K1a journal; "without journal" stays a counter-run):
-// batches with writer incarnation and counter, heads, catch-up, the gate after
-// restore, fold rules 1–3, re-evaluation of kept probes, the shape table and
-// the static acceptance quota per device (MV-9). What changes:
+// - K2-strict (`k2-device-keys`): a stock key's private part lives only on the allocating device; only that device opens
+//   the ticket (sealed to the stock key), receives the counter card and produces the card.
+// - K2-shared (`k2-shared-stock`): the private part of every stock key travels to the siblings inside the sealed, signed
+//   journal batch ("the key belongs to the set, production to the device"): every device opens the ticket, consent
+//   anywhere, the allocating device produces the card. On revocation the siblings withdraw every key the revoked device
+//   knew (empty revision, 8535) and refill.
 //
-// - Keys per device (`deviceScheme`): ed/x for a context `ctx` are
-//   sha256(deviceSecret ‖ "ed/" ‖ ctx) and sha256(deviceSecret ‖ "x/" ‖ ctx);
-//   K1a used the person's seed in place of the device secret. Context names,
-//   relationship ids, tuple ids and record ids are unchanged; the anchor in a
-//   tuple, a stock key or a card is the one of the device that created it
-//   (recorded anchor), the sibling holds its own key for the same context.
-// - Carrier registration per device: each device registers its own rkid for
-//   every context it holds, its self address included (one self address per
-//   device). The carrier is not told the device set in step 1; the set is a
-//   bench-side list held by this candidate (`DeviceDirectory`), until step 2
-//   builds `device-set@1`.
-// - Counterparts (step-1 simplification, measured nothing about yet): a
-//   counterpart learns the device set of a person through the bench list
-//   (`recipients`): it seals every document once per device of the current
-//   set (one copy per device key, each at that device's own address) and
-//   accepts a signature by any device of the set for the context. Revocation
-//   updates the list at once (assumption 6o.5 no. 3 is step 3).
-// - Journal: every batch is signed by the producing device's journal key
-//   (Ed25519 over the canonical batch); the frame around it is signed by the
-//   sending device's self key and sealed once per sibling of the current set
-//   (fan-out per sibling, each at the sibling's own self address). A sync
-//   answer goes only to the requesting device. The fold verifies the batch
-//   signature against the device set: a batch whose writer is not in the
-//   current set, or whose signature is not its writer's, is the finding
-//   `journal:unknown-writer` and never state.
-// - Writer of a revision = the signing device key of the relationship (8500 and
-//   6270 per signer, `signerId` in holder.ts); no writer tag in the document.
-//   Stock: every device numbers its own keys under its own nonce (8430/8445
-//   per device); the person's stock is the union. Interim rule until step 5:
-//   M keeps K1a's `n mod devices` split of the keys it may name (switch
-//   `mediatorSplit`, default on; off = M names any key, counter-run).
-// - Incarnation stays: a restore brings the same device keys back from the
-//   image with an older journal, so the batch key must change (MV-3).
+// What step 2 adds to the candidate: keys a sibling assigned from this device's pool (`pool/<i>`, `pool-use` ops in the
+// journal) are this device's keys for that relationship's context; the enrolment ceremony carries the new device's keys
+// for every existing context and its pool (QR stand-in, measured) and the old device admits it in every set where it is
+// a member; the shared variant attaches the stock key seeds to the batch that allocates them.
 
 import { createPrivateKey, createPublicKey, randomBytes, sign, verify, type KeyObject } from 'node:crypto'
 import { edFromSeed, xFromSeed, anchorOfEd, mkOfX } from '@real-life/trust-protocol'
@@ -61,38 +33,41 @@ export interface K2Options {
   /** Devices per person, fixed as in K1a (rights are static, K1b is not in K2's scope: assumption 6o.5 no. 5). */
   devices?: number
   /**
-   * Step-1 simplification: a revocation also removes the device from the list the counterparts read (default on). Off =
-   * only the carrier registration and the siblings' list change (counter-run "carrier only", plan 6o.3): counterparts keep
-   * sealing to the revoked device.
+   * Counter-run "carrier only" (plan 6o.3): `false` = a revocation unregisters the device at the carrier and drops it from
+   * the siblings' list, but sends no revocation entries to the counterparts (they keep sealing to the revoked device).
    */
   counterpartRevocation?: boolean
   /**
    * Interim rule until step 5: keep K1a's split of the keys a mediator device may name (n mod devices, `mayName`). Default
-   * on; nothing in step 1 replaces it (the per-device allocation at M, 4.5 (b), is step 5). Off = counter-run, M names any
-   * key of the person's stock (X1, X13, X14 fail).
+   * on; off = counter-run, M names any key of the person's stock (X1, X13, X14 fail).
    */
   mediatorSplit?: boolean
+  /** Step 2 (Anton 19.10.): where the private part of a stock key lives: the allocating device (`strict`, default) or the set (`shared`). */
+  stock?: 'strict' | 'shared'
+  /** Counter-run of E2 (iv): `false` = every consenting device produces a card (step 1 behaviour). Default on. */
+  producerRule?: boolean
+  /** X23: lifetime of new stock keys (default 8465, 180 days). */
+  stockLifetimeMs?: number
 }
 
-/** Keys of one device for every context, derived from the device secret; `note` tells the bench list which key is whose. */
-export function deviceScheme(secret: Uint8Array, note?: (ctx: string, k: Keys) => void): KeyScheme {
+/** Keys of one device for every context, derived from the device secret (step 1); the self key and the journal key come from here. */
+export function deviceScheme(secret: Uint8Array): KeyScheme {
   const cache = new Map<string, Promise<Keys>>()
   return {
     pair(ctx) {
       let p = cache.get(ctx)
       if (!p) {
-        p = (async () => {
-          const ed = await edFromSeed(derive(secret, `ed/${ctx}`))
-          const x = await xFromSeed(derive(secret, `x/${ctx}`))
-          const k = { ed, x, anchor: anchorOfEd(ed.pubRaw), rkid: mkOfX(x.pubRaw) }
-          note?.(ctx, k)
-          return k
-        })()
+        p = keysOf(derive(secret, `ed/${ctx}`), derive(secret, `x/${ctx}`))
         cache.set(ctx, p)
       }
       return p
     },
   }
+}
+async function keysOf(edSeed: Uint8Array, xSeed: Uint8Array): Promise<Keys> {
+  const ed = await edFromSeed(edSeed)
+  const x = await xFromSeed(xSeed)
+  return { ed, x, anchor: anchorOfEd(ed.pubRaw), rkid: mkOfX(x.pubRaw) }
 }
 
 const PKCS8_ED25519 = Buffer.from('302e020100300506032b657004220420', 'hex')
@@ -102,66 +77,46 @@ function journalKey(secret: Uint8Array): { priv: KeyObject; pub: KeyObject; raw:
   const pub = createPublicKey(priv)
   return { priv, pub, raw: pub.export({ format: 'der', type: 'spki' }).subarray(-32).toString('base64url') }
 }
-/** What the device signs: the batch without its signature, canonical (sorted keys) after a JSON round trip. */
-const signedBytes = (b: Omit<SignedBatch, 'sig'>) => Buffer.from(M.canonical(JSON.parse(JSON.stringify(b))))
-
 interface SignedBatch extends Batch {
   /** Ed25519 signature of the producing device over the canonical batch (base64). */
   sig: string
+  /** K2-shared: the seeds of the stock keys this batch allocates (the private part belongs to the set; sealed per sibling). */
+  seeds?: Array<{ ctx: string; ed: string; x: string }>
 }
+/** What the device signs: the batch without its signature, canonical (sorted keys) after a JSON round trip. */
+const signedBytes = (b: Omit<SignedBatch, 'sig'>) => Buffer.from(M.canonical(JSON.parse(JSON.stringify(b))))
 
 interface Member {
   name: string
-  secret: Uint8Array
   scheme: KeyScheme
   journal: ReturnType<typeof journalKey>
 }
 
 /**
- * The bench-side device list (step 1; step 2 replaces it with `device-set@1` per relationship). Per person: every device
- * ever enrolled, the current set the siblings seal the journal to, and the set the counterparts read (`published`; equal
- * to the current set unless the counter-run keeps a revoked device in it). `byKey` maps every derived public key (anchor
- * and rkid) to the person and context, so a counterpart can find the keys of the other devices for the same context.
+ * The bench-side list of a person's OWN devices (step 1; in step 2 only the siblings read it: the journal's writer check,
+ * the self addresses and the sibling names; counterparts never do, they learn device sets from `device-set@1`). Per
+ * person: every device ever enrolled and the current set. Step 3 replaces it with a journalized revocation.
  */
 export class DeviceDirectory {
-  readonly persons = new Map<string, { members: Map<string, Member>; set: string[]; published: string[] }>()
-  readonly byKey = new Map<string, { person: string; ctx: string }>()
+  readonly persons = new Map<string, { members: Map<string, Member>; set: string[] }>()
   /** A fresh world for this person (the candidate object serves several worlds in turn). */
   reset(person: string) {
-    this.persons.set(person, { members: new Map(), set: [], published: [] })
+    this.persons.set(person, { members: new Map(), set: [] })
   }
-  member(person: string, name: string, secret: Uint8Array): Member {
-    const note = (ctx: string, k: Keys) => {
-      this.byKey.set(k.anchor, { person, ctx })
-      this.byKey.set(k.rkid, { person, ctx })
-    }
-    return { name, secret, scheme: deviceScheme(secret, note), journal: journalKey(secret) }
+  member(name: string, secret: Uint8Array): Member {
+    return { name, scheme: deviceScheme(secret), journal: journalKey(secret) }
   }
-  /** QR stand-in (6o.5 no. 4): the new device's public material reaches the set; nothing else is measured here. */
   add(person: string, m: Member) {
     const p = this.persons.get(person)!
     p.members.set(m.name, m)
     if (!p.set.includes(m.name)) p.set.push(m.name)
-    if (!p.published.includes(m.name)) p.published.push(m.name)
   }
-  remove(person: string, name: string, counterparts = true) {
+  remove(person: string, name: string) {
     const p = this.persons.get(person)
-    if (!p) return
-    p.set = p.set.filter((n) => n !== name)
-    if (counterparts) p.published = p.published.filter((n) => n !== name)
+    if (p) p.set = p.set.filter((n) => n !== name)
   }
-  /** Keys of every device of the current set for the context behind `key`; null if `key` is not a device key on the list. */
-  async recipients(key: string): Promise<Array<{ anchor: string; rkid: string }> | null> {
-    const info = this.byKey.get(key)
-    const p = info && this.persons.get(info.person)
-    if (!info || !p) return null
-    const names = info.ctx.startsWith('self/') ? p.set : p.published
-    const out: Array<{ anchor: string; rkid: string }> = []
-    for (const n of names) {
-      const k = await p.members.get(n)!.scheme.pair(info.ctx)
-      out.push({ anchor: k.anchor, rkid: k.rkid })
-    }
-    return out
+  names(person: string): string[] {
+    return [...(this.persons.get(person)?.set ?? [])]
   }
   async selfKeys(person: string): Promise<Array<{ device: string; anchor: string; rkid: string }>> {
     const p = this.persons.get(person)
@@ -188,6 +143,14 @@ export class K2Device extends K1aDevice {
   private secret: Uint8Array
   private member: Member
   readonly signerWriters = true
+  readonly deviceSets = true
+  /** Step 2: contexts of relationships a sibling opened, mapped to the key of this device's pool it assigned (`pool-use`). */
+  private assigned = new Map<string, number>()
+  /** Step 2, K2-shared: stock key seeds of the set (from the signed, sealed journal), per context. */
+  private seeds = new Map<string, { ed: string; x: string }>()
+  private cache = new Map<string, Promise<Keys>>()
+  /** The device whose image this candidate carries (`name` for a device of the set; a thief keeps the stolen device's name). */
+  owner: string
   constructor(
     person: string,
     name: string,
@@ -197,21 +160,44 @@ export class K2Device extends K1aDevice {
     budget: number,
     private readonly dir: DeviceDirectory,
     private readonly nameSplit = true,
+    readonly stockMode: 'strict' | 'shared' = 'strict',
+    readonly producerRule = true,
+    readonly revocationToCounterparts = true,
+    readonly stockLifetimeMs?: number,
   ) {
     super(person, name, new Uint8Array(32), index, slots, budget, false, false) // no writer tags, no number classes
+    this.owner = name
     this.secret = secret
-    this.member = dir.member(person, name, secret)
-    this.keys = { pair: (ctx) => this.member.scheme.pair(ctx) }
+    this.member = dir.member(name, secret)
+    this.keys = { pair: (ctx) => this.pairFor(ctx) }
   }
   get public(): Member {
     return this.member
   }
+  /**
+   * The device's key for a context: a key from its pool if a sibling assigned it to this context (step 2), the set's key
+   * for a shared stock key (K2-shared), otherwise its own derivation. Cached per source, so a later assignment is never
+   * shadowed by an earlier own derivation.
+   */
+  private pairFor(ctx: string): Promise<Keys> {
+    const i = this.assigned.get(ctx)
+    const seed = this.seeds.get(ctx)
+    const src = i !== undefined ? `pool/${i}` : seed ? `shared/${ctx}` : ctx
+    let p = this.cache.get(src)
+    if (!p) {
+      p = seed && i === undefined ? keysOf(new Uint8Array(Buffer.from(seed.ed, 'base64')), new Uint8Array(Buffer.from(seed.x, 'base64'))) : keysOf(derive(this.secret, `ed/${src}`), derive(this.secret, `x/${src}`))
+      this.cache.set(src, p)
+    }
+    return p
+  }
+  /** Assignments and shared seeds from a batch (verified first): monotone facts, safe to learn before the fold. */
+  private learn(b: SignedBatch): void {
+    for (const op of b.ops) if (op.kind === 'pool-use' && op.device === this.owner) this.assigned.set(op.ctx, op.i)
+    if (this.stockMode === 'shared') for (const x of b.seeds ?? []) if (!this.seeds.has(x.ctx)) this.seeds.set(x.ctx, { ed: x.ed, x: x.x })
+  }
   /** Interim rule: K1a's `n mod devices` split until step 5; off (counter-run) M names any key of the person's stock. */
   override mayName(anchor: string, rel: string, state: M.HolderState): boolean {
     return this.nameSplit ? super.mayName(anchor, rel, state) : true
-  }
-  recipients(key: string) {
-    return this.dir.recipients(key)
   }
   async selfPeers() {
     return (await this.dir.selfKeys(this.person)).filter((k) => k.device !== this.name).map(({ anchor, rkid }) => ({ anchor, rkid }))
@@ -219,86 +205,173 @@ export class K2Device extends K1aDevice {
   async selfDevice(anchor: string): Promise<string | null> {
     return (await this.dir.selfKeys(this.person)).find((k) => k.anchor === anchor)?.device ?? null
   }
+  siblingNames(): string[] {
+    return this.dir.names(this.person).filter((n) => n !== this.owner)
+  }
   /** Every device numbers its own stock under its own nonce (8430, 8445 per device), stable across a restore. */
   stockNonce(relationship: string): string {
     return Buffer.from(derive(this.secret, `nonce/${relationship}`)).toString('base64')
   }
+  /** Step 2: strict, only the allocating device holds the private part; shared, every device that has the seed from the journal. */
+  holdsStock(k: M.StockKey): boolean {
+    return k.by === this.owner || (this.stockMode === 'shared' && this.seeds.has(k.key))
+  }
+  /**
+   * MV-9 under device keys (step 2): the static quota per device travels with the keys the device lists. An acceptance
+   * counts for the device that allocated the named stock key, whichever device accepted the ticket (K2-shared: every
+   * device opens it, two may accept the same ticket concurrently, the act counts once); a device lists at most as many own
+   * keys as it has acceptances left (`quotaLeft`), so every key M can name can be accepted and no ticket waits for a quota.
+   * The person's hard limit stays at the side (8510, `budgetExhausted` in 8640.10).
+   */
+  protected override ownAccepted(rel: string, state: M.HolderState, now: string): number {
+    const r = M.findRel(state, rel)
+    if (!r) return 0
+    const since = Date.parse(now) - M.PARAM.budgetWindowMs
+    const mine = (act: string) => {
+      const a = state.acts.find((x) => x.id === act)
+      return !!a && r.stock.some((k) => k.anchor === a.own && k.by === this.owner)
+    }
+    return r.accepted.filter((e) => mine(e.act) && !r.confirmed.includes(e.act) && Date.parse(e.at) > since).length
+  }
+  /** Step 2: acceptance is not blocked per device: the key's allocator reserved it when it listed the key (`quotaLeft`). */
+  override authorize(op: M.Op, state: M.HolderState): boolean {
+    if (op.kind === 'ticket-accept') return true
+    return super.authorize(op, state)
+  }
+  /** Step 2: how many acceptances this device has left in the relationship (MV-9); it lists at most that many own keys. */
+  quotaLeft(rel: string, state: M.HolderState, now: string): number {
+    return Math.max(0, this.share - this.ownAccepted(rel, state, now))
+  }
+  /** Step 2: each device keeps its own share of the stock at M (8485 split across the fixed device count). */
+  stockShare() {
+    return { below: Math.ceil(M.PARAM.refillBelow / this.slots), to: Math.ceil(M.PARAM.refillTo / this.slots) }
+  }
+  poolKey(i: number): Promise<Keys> {
+    return this.pairFor(`pool/${i}`)
+  }
   override commit(tx: Parameters<K1aDevice['commit']>[0]): void {
     super.commit(tx)
     const b = this.batches[this.batches.length - 1] as SignedBatch
+    if (this.stockMode === 'shared') {
+      const seeds: Array<{ ctx: string; ed: string; x: string }> = []
+      for (const op of b.ops) if (op.kind === 'allocate') for (const k of op.keys) if (k.by === this.owner) seeds.push({ ctx: k.key, ed: Buffer.from(derive(this.secret, `ed/${k.key}`)).toString('base64'), x: Buffer.from(derive(this.secret, `x/${k.key}`)).toString('base64') })
+      if (seeds.length) b.seeds = seeds
+    }
     b.sig = sign(null, signedBytes(b), this.member.journal.priv).toString('base64')
+    this.learn(b)
   }
   /**
-   * The fold's entry for a journal batch (pure): signature first, against the writer's device key on the current list; a
-   * writer outside the set or a signature that is not its writer's is `UnknownWriter` (holder: finding
-   * `journal:unknown-writer`, never state, no receipt). Then K1a's shape and order checks on the batch without `sig`.
+   * The fold's entry for a journal batch (pure apart from monotone facts): signature first, against the writer's device key
+   * on the own list; a writer outside the set or a signature that is not its writer's is `UnknownWriter` (holder: finding
+   * `journal:unknown-writer`, never state, no receipt). Then the assignments and shared seeds of the batch are learnt and
+   * K1a's shape and order checks run on the batch without `sig` and `seeds`.
    */
   override receiveOwnFrame(body: Uint8Array) {
     const raw: unknown = JSON.parse(dec.decode(body))
     if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw new MalformedBatch('batch')
-    const { sig, ...rest } = raw as SignedBatch
+    const { sig, seeds, ...rest } = raw as SignedBatch
     if (!M.isBase64(sig)) throw new MalformedBatch('batch.sig')
+    if (seeds !== undefined && M.shapeProblem(seeds, SEEDS_SHAPE, 'batch.seeds')) throw new MalformedBatch('batch.seeds')
     const problem = batchProblem(rest)
     if (problem) throw new MalformedBatch(problem)
     const device = rest.writer.split('@')[0]!
     const pub = this.dir.journalPub(this.person, device)
     if (!pub) throw new UnknownWriter(`writer ${rest.writer} is not in the device set of ${this.person}`)
-    if (!verify(null, signedBytes(rest), pub, Buffer.from(sig, 'base64'))) throw new UnknownWriter(`batch ${rest.writer}#${rest.n} not signed by ${device}`)
+    if (!verify(null, signedBytes(seeds ? { ...rest, seeds } : rest), pub, Buffer.from(sig, 'base64'))) throw new UnknownWriter(`batch ${rest.writer}#${rest.n} not signed by ${device}`)
+    this.learn({ ...rest, sig, ...(seeds ? { seeds } : {}) })
     return super.receiveOwnFrame(enc.encode(JSON.stringify(rest)))
   }
+  override adopt(batches: Batch[]) {
+    super.adopt(batches)
+    for (const b of batches) this.learn(b as SignedBatch)
+  }
   override persist() {
-    return { ...super.persist(), secret: Buffer.from(this.secret).toString('base64') }
+    return { ...super.persist(), secret: Buffer.from(this.secret).toString('base64'), owner: this.owner }
   }
   override restore(data: unknown): void {
     super.restore(data)
-    const d = data as { secret?: string } | null
+    const d = data as { secret?: string; owner?: string } | null
     if (!d?.secret) return
     this.secret = new Uint8Array(Buffer.from(d.secret, 'base64'))
-    this.member = this.dir.member(this.person, this.name, this.secret)
+    this.owner = d.owner ?? this.name
+    this.member = this.dir.member(this.name, this.secret)
+    this.cache = new Map()
+    this.assigned = new Map()
+    this.seeds = new Map()
+    for (const b of this.batches) this.learn(b as SignedBatch)
   }
 }
+const SEEDS_SHAPE: M.Shape = { array: { object: { ctx: 'ident', ed: 'base64', x: 'base64' } } }
 
-export function k2(opts: K2Options = {}): MultiDeviceCandidate & { readonly directory: DeviceDirectory; readonly ceremonies: Array<{ person: string; device: string; bytesNewToOld: number; bytesOldToNew: number }> } {
+export type K2Candidate = MultiDeviceCandidate & {
+  readonly directory: DeviceDirectory
+  readonly ceremonies: Array<{ person: string; device: string; bytesNewToOld: number; bytesOldToNew: number; contexts: number }>
+}
+
+export function k2(opts: K2Options = {}): K2Candidate {
   const budget = opts.budget ?? M.PARAM.budget
   const slots = opts.devices ?? 2
   const counterparts = opts.counterpartRevocation ?? true
   const split = opts.mediatorSplit ?? true
+  const mode = opts.stock ?? 'strict'
+  const producer = opts.producerRule ?? true
   const dir = new DeviceDirectory()
   const devices = new Map<string, K2Device[]>()
-  const ceremonies: Array<{ person: string; device: string; bytesNewToOld: number; bytesOldToNew: number }> = []
+  const ceremonies: K2Candidate['ceremonies'] = []
   const secret = () => new Uint8Array(randomBytes(32))
-  /** QR stand-in: what one device shows the other (name, self key, journal key), measured as bytes. */
-  const qr = async (person: string, m: Member) => {
-    const k = await m.scheme.pair(`self/${person}`)
-    return Buffer.byteLength(JSON.stringify({ device: m.name, anchor: k.anchor, rkid: k.rkid, journal: m.journal.raw }), 'utf8')
-  }
+  const make = (person: string, name: string, index: number) => new K2Device(person, name, secret(), index, slots, budget, dir, split, mode, producer, counterparts, opts.stockLifetimeMs)
+  const id = mode === 'shared' ? 'k2-shared-stock' : split ? 'k2-device-keys' : 'k2-device-keys-no-split'
+  const size = (x: unknown) => Buffer.byteLength(JSON.stringify(x), 'utf8')
   return {
-    id: split ? 'k2-device-keys' : 'k2-device-keys-no-split',
-    title: 'K2 step 1: device keys, registration per device, device-signed journal',
-    capabilities: new Set(['journal', 'rights', 'device-keys'] as const),
+    id,
+    title: mode === 'shared' ? 'K2-shared: device keys, device-set@1, stock keys shared by the set' : 'K2-strict: device keys, device-set@1, stock keys per device',
+    capabilities: new Set(['journal', 'rights', 'device-keys', 'device-sets'] as const),
     directory: dir,
     ceremonies,
     async first(person, name) {
       dir.reset(person) // the seed of the person is ignored: no device holds it
-      const d = new K2Device(person, name, secret(), 0, slots, budget, dir, split)
+      const d = make(person, name, 0)
       dir.add(person, d.public)
       devices.set(person, [d])
       return d
     },
     async instance(person, name) {
       // A thief from an image (X9): an independent instance outside the set; `reload` brings the stolen device's secret.
-      return new K2Device(person, name, secret(), 0, slots, budget, dir, split)
+      return make(person, name, 0)
     },
     async enrol(from: HolderDevice, name, eo?: EnrolOptions) {
       const list = devices.get(from.person) ?? []
       if (list.length >= slots) throw new EnrolmentRefused(`K2: Gerätezahl fest auf ${slots}; Enrollment von ${name} verweigert`)
-      if (eo?.fromLog) throw new EnrolmentRefused('K2 Schritt 1: kein Enrollment aus der Ablage')
+      if (eo?.fromLog) throw new EnrolmentRefused('K2: kein Enrollment aus der Ablage')
       const old = from.cand as K2Device
-      const d = new K2Device(from.person, name, secret(), list.length, slots, budget, dir, split)
-      // QR between the two own devices (6o.5 no. 4): the new device shows its public keys, the old one answers with its own
-      // and the current set; the bench list takes the new device (step 1: the counterparts read the same list).
-      ceremonies.push({ person: from.person, device: name, bytesNewToOld: await qr(from.person, d.public), bytesOldToNew: await qr(from.person, old.public) })
+      const d = make(from.person, name, list.length)
+      // QR between the two own devices (6o.5 no. 4, plan 6o.2): the new device shows its name, self and journal keys, its key
+      // for every context of the person (one per own root: tuples and unconnected cards) and a pool for each sibling; the old
+      // device answers with its own keys. Measured as bytes; the old device then admits the new one in every set where it is a
+      // member and sends one revision per relationship (fan-out).
+      const roots: Array<{ root: string; ctx: string }> = []
+      for (const r of from.state.relationships) for (const t of r.tuples) roots.push({ root: t.own, ctx: t.ownKey })
+      for (const a of from.state.acts) if (a.ownCard && a.ownCardKey && !a.opened) roots.push({ root: a.ownCard.anchor, ctx: a.ownCardKey })
+      const entries: Array<{ root: string; anchor: string; keyAgreement: string }> = []
+      for (const { root, ctx } of roots) {
+        const k = await d.keys.pair(ctx)
+        entries.push({ root, anchor: k.anchor, keyAgreement: k.rkid })
+      }
+      const pool: Array<{ i: number; for: string; anchor: string; keyAgreement: string }> = []
+      let i = 0
+      for (const sib of [from.name, ...old.siblingNames()]) {
+        for (let j = 0; j < 4; j++, i++) {
+          const k = await d.poolKey(i)
+          pool.push({ i, for: sib, anchor: k.anchor, keyAgreement: k.rkid })
+        }
+      }
+      const self = async (m: Member) => {
+        const k = await m.scheme.pair(`self/${from.person}`)
+        return { device: m.name, anchor: k.anchor, rkid: k.rkid, journal: m.journal.raw }
+      }
+      ceremonies.push({ person: from.person, device: name, bytesNewToOld: size({ ...(await self(d.public)), entries: entries.map(({ anchor, keyAgreement }) => ({ anchor, keyAgreement })), pool }), bytesOldToNew: size(await self(old.public)), contexts: entries.length })
       dir.add(from.person, d.public)
+      await from.enrolMember(name, entries, pool)
       d.adopt(old.journal())
       for (const s of old.siblings()) d.meet(s)
       d.meet(from.name)
@@ -309,8 +382,8 @@ export function k2(opts: K2Options = {}): MultiDeviceCandidate & { readonly dire
       return { cand: d, state: M.cloneState(from.state), intents: [...from.intents.values()], probes }
     },
     async revoke(_from, device) {
-      // Step-1 simplification: the bench list drops the device for the siblings and (unless the counter-run) the counterparts.
-      for (const [person, list] of devices) if (list.some((d) => d.name === device)) dir.remove(person, device, counterparts)
+      // The siblings' list (bench, until step 3); the counterparts learn it from the revocation entries (holder `revokeInSets`).
+      for (const [person, list] of devices) if (list.some((d) => d.name === device)) dir.remove(person, device)
     },
     release(person, name) {
       dir.remove(person, name)

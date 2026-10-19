@@ -86,6 +86,8 @@ export interface K1aOptions {
    * self address into a log (`Welt15Options.selfLog`), catch-up and enrolment read from it. Default off (K1a as before).
    */
   journalAtService?: boolean
+  /** E15 X23 (K2 step 2, comparison): lifetime of new stock keys; default 8465 (180 days). */
+  stockLifetimeMs?: number
 }
 
 /** Step 4: the writer tag of a device in a relationship; the counterpart sees it, cannot compute it (seed) and cannot link it across relationships. */
@@ -157,11 +159,11 @@ export class K1aDevice implements CandidateDevice {
   get writer() {
     return `${this.name}@${this.inc}`
   }
-  private get share() {
+  protected get share() {
     return Math.floor(this.budget / this.slots)
   }
   /** Own acceptance ops across incarnations (the journal is the source of what this device consumed), unconfirmed and inside the 8510 window of `now` (S1). */
-  private ownAccepted(rel: string, state: M.HolderState, now: string): number {
+  protected ownAccepted(rel: string, state: M.HolderState, now: string): number {
     const r = M.findRel(state, rel)
     if (!r) return 0
     const own = new Set<string>()
@@ -291,6 +293,7 @@ export function k1a(opts: K1aOptions = {}): MultiDeviceCandidate {
     async first(person, name, seed) {
       seeds.set(person, seed)
       const d = new K1aDevice(person, name, seed, 0, slots, budget, tags, split)
+      if (opts.stockLifetimeMs !== undefined) Object.assign(d, { stockLifetimeMs: opts.stockLifetimeMs })
       devices.set(person, [d]) // eine neue Welt dieser Person: die Liste beginnt mit diesem Gerät
       return d
     },
@@ -303,6 +306,7 @@ export function k1a(opts: K1aOptions = {}): MultiDeviceCandidate {
       // Feste Gerätezahl (B4): die Plätze stehen von Anfang an fest, nichts wird umverteilt; darüber hinaus wird verweigert (versionierte Rechte = K1b).
       if (list.length >= slots) throw new EnrolmentRefused(`K1a: Gerätezahl fest auf ${slots}; Enrollment von ${name} verweigert`)
       const d = new K1aDevice(from.person, name, seeds.get(from.person)!, list.length, slots, budget, tags, split)
+      if (opts.stockLifetimeMs !== undefined) Object.assign(d, { stockLifetimeMs: opts.stockLifetimeMs })
       // Step 6: from the log the new device starts with an empty journal and folds the log; otherwise the journal is copied.
       if (!eo?.fromLog) d.adopt((from.cand as K1aDevice).journal())
       // Beide Seiten des Enrollments merken sich das andere Gerät (Teil des Abbilds): wer nach einem Restore nachholen muss,

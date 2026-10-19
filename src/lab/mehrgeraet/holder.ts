@@ -35,6 +35,10 @@ import * as M from './model'
 
 const enc = new TextEncoder()
 const dec = new TextDecoder()
+/** K2 Schritt 2: Vorrat öffentlicher Geräteschlüssel je Schwester (Prüfstandsparameter): unter zwei unbenutzten auf vier auffüllen. */
+const POOL = { below: 2, to: 4 } as const
+/** K2 Schritt 2: Form der Nutzlast von `device-set@1` (kumulativ: alle Nachweise der Wurzel, die der Signierer kennt). */
+const SET_SHAPE: M.Shape = { object: { root: 'ident', rootKeyAgreement: 'ident', revision: 'nat', deps: { array: 'digest' }, entries: { array: M.SHAPES.cert } } }
 
 // ── Schlüssel ────────────────────────────────────────────────────────────────
 
@@ -225,12 +229,33 @@ export interface CandidateDevice {
    */
   writerTag?(relationship: string): string
   /**
-   * K2 Schritt 1 (Prüfstandsliste statt `device-set@1`, das baut Schritt 2): die Schlüssel aller Geräte der aktuellen
-   * Gerätemenge einer Person für den Kontext hinter `key` (Anker oder rkid eines Geräteschlüssels), je {anchor, rkid}. Ein
-   * Absender versiegelt an jeden (eine Kopie je Gerät), ein Empfänger nimmt eine Signatur jedes Geräts der Menge an. Null:
-   * kein Geräteschlüssel der Liste (dann gilt der genannte Schlüssel allein). Ohne Methode (K0, K1a): ein Schlüssel je Kontext.
+   * K2 Schritt 2: Gerätemengen je Beziehung aus Nachweisen (`device-set@1`, Plan 6r). Mit `true` versiegelt das Gerät an
+   * jedes Mitglied der Menge, die es für die Wurzel der Gegenseite aus empfangenen Nachweisen kennt (unbekannt: die Wurzel
+   * allein; bekannt leer: ausdrücklicher Zustellfehler), nimmt eine Signatur nur eines Mitglieds an, veröffentlicht die
+   * eigene Menge jeder Beziehung und weist Schwestergeräten einer neuen Beziehung Schlüssel aus ihrem Vorrat zu. Ohne Feld
+   * (K0, K1a): ein Schlüssel je Kontext.
    */
-  recipients?(key: string): Promise<Array<{ anchor: string; rkid: string }> | null>
+  readonly deviceSets?: boolean
+  /** K2 Schritt 2: Vorrats-Schlüssel je Gerät (`strict`) oder der Menge (`shared`, privater Teil im versiegelten Journal). */
+  readonly stockMode?: 'strict' | 'shared'
+  /** K2 Schritt 2: hält dieses Gerät den privaten Teil des Vorrats-Schlüssels (strict: nur das zuteilende Gerät)? */
+  holdsStock?(k: M.StockKey): boolean
+  /** K2 Schritt 2: Nachfüllgrenzen für den eigenen Anteil am Vorrat (jedes Gerät hält seinen Anteil, 8485 je Gerät geteilt). */
+  stockShare?(): { below: number; to: number }
+  /** K2 Schritt 2: wie viele Annahmen dieses Gerät in der Mediatorbeziehung noch hat (MV-9); so viele Schlüssel listet es höchstens. */
+  quotaLeft?(rel: string, state: M.HolderState, now: string): number
+  /** K2 Schritt 2: Lebensdauer neuer Vorrats-Schlüssel (X23); ohne: 8465. */
+  readonly stockLifetimeMs?: number
+  /** K2 Schritt 2: der öffentliche Schlüssel Nummer `i` aus dem eigenen Vorrat für Schwestergeräte (Kontext `pool/<i>`). */
+  poolKey?(i: number): Promise<Keys>
+  /** K2 Schritt 2: die Namen der anderen Geräte der aktuellen eigenen Menge (Prüfstandsliste der eigenen Geräte bis Schritt 3). */
+  siblingNames?(): string[]
+  /** K2 Schritt 2, Gegenlauf: `false` = jedes zustimmende Gerät erzeugt eine Karte (ohne die Produzentenregel E2 (iv)). */
+  readonly producerRule?: boolean
+  /** K2 Schritt 2, Gegenlauf „nur Träger“: `false` = der Widerruf erreicht die Gegenseiten nicht (keine Mengenrevision). */
+  readonly revocationToCounterparts?: boolean
+  /** K2 Schritt 2: das Gerät, dessen Abbild dieser Kandidat trägt (ein Dieb mit dem Abbild von A2 hält A2s Schlüssel und Vorrat). */
+  readonly owner?: string
   /** K2: die Self-Schlüssel der anderen Geräte der aktuellen Gerätemenge (an sie wird das Journal je Schwester versiegelt). */
   selfPeers?(): Promise<Array<{ anchor: string; rkid: string }>>
   /** K2: das Gerät der aktuellen Gerätemenge der eigenen Person, dessen Self-Anker das ist; null sonst (Befund `journal:unknown-writer`). */
@@ -248,7 +273,7 @@ export interface CandidateDevice {
 export interface MultiDeviceCandidate {
   readonly id: string
   readonly title: string
-  readonly capabilities: ReadonlySet<'journal' | 'rights' | 'device-keys' | 'restricted-app' | 'writer-tags'>
+  readonly capabilities: ReadonlySet<'journal' | 'rights' | 'device-keys' | 'device-sets' | 'restricted-app' | 'writer-tags'>
   /** Erstes Gerät einer Person. */
   first(person: string, device: string, seed: Uint8Array): Promise<CandidateDevice>
   /** Eine Instanz, die kein Gerät der Person ist (Dieb aus einem Abbild, X9): unabhängig, ohne Eintrag in der Geräteliste des Kandidaten. Ohne Methode nimmt der Prüfstand `first`. */
@@ -281,6 +306,7 @@ export const TYPES = {
   mapping: 'https://real-life.org/rltp/e15/continuity-mapping/0.1',
   journal: 'https://real-life.org/rltp/e15/journal/0.1',
   journalSync: 'https://real-life.org/rltp/e15/journal-sync/0.1',
+  deviceSet: 'https://real-life.org/rltp/e15/device-set/0.1',
   ack: 'https://real-life.org/trust-tasks/delivery-ack/0.1',
 } as const
 
@@ -313,6 +339,8 @@ interface Buffered {
   expiresAt: string
   card: M.Card
   v: string
+  /** K2 Schritt 2: der Mengenbezug der Karte (Digest der Revision von `device-set@1`, die die Wurzel `card.anchor` trägt). */
+  set?: string
 }
 
 export interface DeviceState {
@@ -540,23 +568,48 @@ export class HolderDevice {
   get selfAddress(): string | null {
     return this.ownRkid
   }
-  /** K2 Schritt 1: eigene Schlüssel je Gerät, die Gerätemenge der Gegenseite kommt aus der Prüfstandsliste (`recipients`). */
-  private get deviceKeys(): boolean {
-    return !!this.cand.recipients
+  /** K2 Schritt 2: das Gerät, dessen Schlüssel und Vorrat dieser Holder führt (ein Dieb mit dem Abbild: das bestohlene). */
+  private get me(): string {
+    return this.cand.owner ?? this.name
   }
+  /** K2 Schritt 2: Gerätemengen je Beziehung aus Nachweisen (`device-set@1`), eigene Schlüssel je Gerät. */
+  private get sets(): boolean {
+    return !!this.cand.deviceSets
+  }
+  /** Was dieses Gerät über die Gerätemenge der Wurzel `root` weiß (eigene oder fremde), aus Nachweisen. */
+  setOf(root: string): M.DeviceSet | undefined {
+    return M.own(this.state.sets, root)
+  }
+  /**
+   * K2 Schritt 2: an wen ein Dokument für die Wurzel `root` geht. Null = unbekannte Mitgliedschaft (kein Nachweis: der
+   * genannte Schlüssel allein); leer = bekannt leere Menge (alle widerrufen: ausdrücklicher Zustellfehler, nie ein Rahmen an
+   * einen aufgezeichneten Schlüssel, Tor-Review 31 S1).
+   */
+  private recipientsOf(root: string): Array<{ anchor: string; rkid: string }> | null {
+    const set = this.setOf(root)
+    if (!set) return null
+    return M.setView(set).members.map((m) => ({ anchor: m.anchor, rkid: m.keyAgreement }))
+  }
+  /** K2 Schritt 2: Dokumente, die an einer bekannt leeren Gerätemenge scheiterten (ausdrücklicher Zustellfehler, kein Rahmen). */
+  emptySetFailures = 0
+  /** K2 Schritt 2: Karten, die vor ihrem Mengennachweis ankamen (zurückgestellt, kein V, kein K, keine Quittung). */
+  deferredCards = 0
+  /** Eigene Karten, die Regel 3 als verlierende Übergabe zurücknahm (K1a); unter E2 (iv) gibt es keine Verliererin (Messung). */
+  losingCardsWithdrawn = 0
   /** Nummeriert das Gerät Revisionen je Schreiber (K1a Schritt 4: Kennung; K2: Geräteschlüssel)? */
   private get perWriter(): boolean {
     return !!(this.cand.writerTag || this.cand.signerWriters)
   }
   /**
    * Ist `issuer` der Signierer, den das Gegenüber für den aufgezeichneten Schlüssel `recorded` zeigen darf? K0/K1a: genau
-   * dieser. K2: jedes Gerät der aktuellen Gerätemenge der Gegenperson für denselben Kontext (Prüfstandsliste, Schritt 1).
+   * dieser. K2 Schritt 2: ein Mitglied der Gerätemenge, die dieses Gerät für die Wurzel `recorded` aus empfangenen
+   * Nachweisen kennt (ohne Nachweis die Wurzel allein; ein widerrufenes Gerät nie: ein bekannter Widerruf schlägt).
    */
   private async isPeer(issuer: string, recorded: string): Promise<boolean> {
-    if (!this.cand.recipients) return issuer === recorded
-    const set = await this.cand.recipients(recorded)
+    if (!this.sets) return issuer === recorded
+    const set = this.setOf(recorded)
     if (!set) return issuer === recorded
-    return set.some((k) => k.anchor === issuer)
+    return M.setView(set).members.some((m) => m.anchor === issuer)
   }
   /** K2: der Kontext eines aufgezeichneten eigenen Ankers (der des Geräts, das ihn erzeugt hat): Tupel, Vorrat, Karte. */
   private recordedCtx(anchor: string): string | undefined {
@@ -605,7 +658,7 @@ export class HolderDevice {
     if (this.selfLog) this.carrierRef.retain(this.ownRkid) // Schritt 6: die Self-Adresse ist eine Ablage
     for (const r of this.state.relationships) {
       for (const t of r.tuples) await this.listen(t.ownKey)
-      for (const k of r.stock) await this.listen(k.key)
+      for (const k of r.stock) if (!this.cand.holdsStock || this.cand.holdsStock(k)) await this.listen(k.key) // K2 Schritt 2: nur, wer den privaten Teil hält
     }
     for (const a of this.state.acts) if (a.ownCardKey) await this.listen(a.ownCardKey)
     await this.resumeDuties()
@@ -647,6 +700,7 @@ export class HolderDevice {
     for (const i of tx.intents) if (!this.intents.has(i.digest)) this.intents.set(i.digest, i)
     await this.withdrawLosingCards()
     await this.relisten()
+    await this.produceOwed() // K2 Schritt 2, E2 (iv): eine Zustimmung aus dem Journal; das zuteilende Gerät erzeugt die Karte
     if ([...this.tupleIds()].some((id) => !known.has(id))) await this.reevaluate() // die eigene Tupelmenge ist gewachsen
     await this.refillAll()
   }
@@ -868,15 +922,22 @@ export class HolderDevice {
   // ── Senden ──
   /** Dokument signieren, versiegeln, aufzeichnen; eingeliefert wird nach dem nächsten Commit (`flush`, Rundenende). `recipient` ist der Anker, von dem die Quittung erwartet wird (#55). */
   /**
-   * K2 Schritt 1: `fan` (oder, für Gegenseiten, die Gerätemenge aus `recipients`) nennt die Geräteschlüssel, an die dasselbe
-   * signierte Dokument je einmal versiegelt wird (eine Kopie je Gerät an dessen eigene Adresse, eine Submission). Der
-   * aufgezeichnete Schlüssel geht zuerst, wenn er noch zur Menge gehört. Ohne Menge (K0, K1a): ein Rahmen an `toRkid`.
+   * K2: `fan` (oder, für Gegenseiten, die Gerätemenge der Wurzel `recipient` aus Nachweisen, Schritt 2) nennt die
+   * Geräteschlüssel, an die dasselbe signierte Dokument je einmal versiegelt wird (eine Kopie je Gerät an dessen eigene
+   * Adresse, eine Submission). Der aufgezeichnete Schlüssel geht zuerst, wenn er noch zur Menge gehört. Ohne Menge (K0,
+   * K1a): ein Rahmen an `toRkid`. Ist die Menge bekannt leer (Schritt 2), entsteht kein Rahmen: null, ausdrücklicher
+   * Zustellfehler (`failed(empty-device-set)`), nie ein Rahmen an den aufgezeichneten Schlüssel (Tor-Review 31 S1).
    */
-  private async sendDoc(type: string, issuerCtx: string, recipient: string, toRkid: string, replyTo: string, payload: Record<string, Json>, fan?: Array<{ anchor: string; rkid: string }>): Promise<{ digest: string; bytes: Uint8Array; address: string; frames: number; total: number }> {
+  private async sendDoc(type: string, issuerCtx: string, recipient: string, toRkid: string, replyTo: string, payload: Record<string, Json>, fan?: Array<{ anchor: string; rkid: string }>): Promise<{ digest: string; bytes: Uint8Array; address: string; frames: number; total: number } | null> {
+    const set = fan ?? (this.sets ? this.recipientsOf(recipient) : null)
+    if (set && !set.length) {
+      this.emptySetFailures++
+      this.dispositions.push(`failed(empty-device-set): ${type.split('/').slice(-2)[0] ?? type} an ${recipient.slice(-8)}`)
+      return null
+    }
     const k = await this.keysFor(issuerCtx)
     const unsigned: Doc = { id: crypto.randomUUID(), type, issuer: k.anchor, recipient, replyTo, issuedAt: this.clock.now(), payload }
     const doc = await diSign({ anchor: k.anchor, ed: { priv: k.ed.priv } }, unsigned as unknown as Record<string, Json>, this.clock.now())
-    const set = fan ?? (this.cand.recipients ? await this.cand.recipients(toRkid) : null)
     const to = set?.length ? [...set.filter((x) => x.rkid === toRkid), ...set.filter((x) => x.rkid !== toRkid)] : [{ anchor: recipient, rkid: toRkid }]
     const frames: Array<{ address: string; frame: Uint8Array }> = []
     for (const r of to) frames.push({ address: r.rkid, frame: enc.encode(jcs(await seal(doc as unknown as Json, r.rkid))) })
@@ -912,9 +973,243 @@ export class HolderDevice {
     const t: M.Tuple = { id: `${this.person}:${id}`, own: k.anchor, ownKey: ctx, peer: peer.anchor, peerKeyAgreement: peer.rkid, record: `${id}:${k.anchor}`, openedAt: this.clock.now(), candidates: this.candidates(), deactivated: false }
     await this.action(async () => {
       this.emit({ kind: 'open-tuple', rel: null, tuple: t, provenance: 'encounter', vouchedBy: null, act: null })
+      await this.admitSiblings(k.anchor, ctx, k.rkid) // K2 Schritt 2: die eigene Menge der neuen Beziehung, Wurzel = dieser Anker
+      await this.publishSets(k.anchor)
       await this.sendProbe(t)
     })
     return t
+  }
+
+  // ── K2 Schritt 2: Gerätemengen (`device-set@1`) und der Vorrat öffentlicher Geräteschlüssel ──
+
+  /** Ein Mengennachweis, signiert mit dem Schlüssel dieses Geräts für den Kontext `ctx` (DI über {root, kind, anchor, keyAgreement, by}). */
+  private async cert(ctx: string, c: { root: string; kind: 'admit' | 'revoke'; anchor: string; keyAgreement: string | null }): Promise<M.SetCert> {
+    const k = await this.keysFor(ctx)
+    const body = { root: c.root, kind: c.kind, anchor: c.anchor, keyAgreement: c.keyAgreement, by: k.anchor }
+    return (await diSign({ anchor: k.anchor, ed: { priv: k.ed.priv } }, body as unknown as Record<string, Json>, this.clock.now())) as unknown as M.SetCert
+  }
+  /** Form, Wurzelbindung und Signatur eines empfangenen Nachweises (vor jeder Faltung). */
+  private async certValid(c: unknown, root: string): Promise<boolean> {
+    if (M.shapeProblem(c, M.SHAPES.cert, 'cert')) return false
+    const x = c as M.SetCert
+    if (x.root !== root) return false
+    try {
+      return await diVerify(x as unknown as Doc & { proof: unknown }, x.by)
+    } catch {
+      return false
+    }
+  }
+  /**
+   * Der eigene Kontext einer eigenen Wurzel und wohin ihre Revision geht: ein eigenes Tupel (an die Wurzel der Gegenseite)
+   * oder eine noch nicht verbundene eigene Karte (an den Voucher der Gegenseite, mit der Karte). Undefined: keine eigene Wurzel.
+   */
+  private rootCtx(root: string): { ctx: string; to: { anchor: string; rkid: string } | null; departed: boolean } | undefined {
+    for (const r of this.state.relationships) for (const t of r.tuples) if (t.own === root) return { ctx: t.ownKey, to: { anchor: t.peer, rkid: t.peerKeyAgreement }, departed: r.departed }
+    for (const a of this.state.acts) if (a.ownCard?.anchor === root && a.ownCardKey) return { ctx: a.ownCardKey, to: a.opened || a.state === 'declined' || a.state === 'expired' ? null : { anchor: a.voucher.anchor, rkid: a.voucher.keyAgreement }, departed: false }
+    return undefined
+  }
+  /** Ist der Schlüssel dieses Geräts für eine eigene Wurzel Mitglied ihrer Menge? */
+  private async memberOf(set: M.DeviceSet, ctx: string): Promise<string | null> {
+    const me = (await this.keysFor(ctx)).anchor
+    return M.setView(set).members.some((m) => m.anchor === me) ? me : null
+  }
+  /**
+   * Schwestergeräte in die eigene Menge einer Wurzel aufnehmen, die dieses Gerät geöffnet hat (Plan 6o.2): je Schwester der
+   * kleinste unbenutzte Schlüssel ihres Vorrats, den sie diesem Gerät bestimmt hat (`pool-use`: ab jetzt ihr Schlüssel für
+   * den Kontext). Ohne Vorrat bleibt die Schwester draußen, bis einer ankommt (`admitPending`, gemessene Lücke).
+   */
+  private async admitSiblings(root: string, ctx: string, rootKa: string): Promise<void> {
+    if (!this.sets) return
+    const local = this.setOf(root)?.local
+    const have = new Set(Object.values(local ?? {}))
+    const certs: M.SetCert[] = []
+    const names: Record<string, string> = M.table([[root, this.me]])
+    for (const sib of this.cand.siblingNames?.() ?? []) {
+      if (have.has(sib)) continue
+      const pk = (M.own(this.state.pools, sib) ?? []).find((k) => k.for === this.me && k.used === null)
+      if (!pk) continue
+      certs.push(await this.cert(ctx, { root, kind: 'admit', anchor: pk.anchor, keyAgreement: pk.keyAgreement }))
+      M.put(names, pk.anchor, sib)
+      this.emit({ kind: 'pool-use', device: sib, i: pk.i, root, ctx })
+    }
+    if (!local || certs.length) this.emit({ kind: 'device-set', root, rootKeyAgreement: rootKa, certs, local: names })
+  }
+  /**
+   * Fällige Arbeit (B6): das öffnende Gerät nimmt Schwestern nach, für die bei der Öffnung kein Vorratsschlüssel da war.
+   * Nur das öffnende Gerät (eine Zuweisung je Schwester und Wurzel, keine zwei Schlüssel eines Geräts für einen Kontext).
+   */
+  private async admitPending(): Promise<void> {
+    if (!this.sets || this.catchUp) return
+    for (const set of Object.values(this.state.sets ?? {})) {
+      if (M.own(set.local, set.root) !== this.me) continue
+      const rc = this.rootCtx(set.root)
+      if (!rc || rc.departed || !M.setView(set).members.some((m) => m.anchor === set.root)) continue
+      const have = new Set(Object.values(set.local ?? {}))
+      const open = (this.cand.siblingNames?.() ?? []).some((sib) => !have.has(sib) && (M.own(this.state.pools, sib) ?? []).some((k) => k.for === this.me && k.used === null))
+      if (open) await this.guarded(() => this.admitSiblings(set.root, rc.ctx, set.rootKeyAgreement))
+    }
+  }
+  /** Fällige Arbeit (B6): der eigene Vorrat öffentlicher Geräteschlüssel je Schwester, unter zwei unbenutzten auf vier aufgefüllt. */
+  private async refillPools(): Promise<void> {
+    if (!this.sets || this.catchUp || !this.cand.poolKey) return
+    const mine = M.own(this.state.pools, this.me) ?? []
+    let next = Math.max(-1, ...mine.map((k) => k.i)) + 1
+    const keys: Array<{ i: number; for: string; anchor: string; keyAgreement: string }> = []
+    for (const sib of this.cand.siblingNames?.() ?? []) {
+      const free = mine.filter((k) => k.for === sib && k.used === null).length
+      if (free >= POOL.below) continue
+      for (let j = free; j < POOL.to; j++, next++) {
+        const k = await this.cand.poolKey(next)
+        keys.push({ i: next, for: sib, anchor: k.anchor, keyAgreement: k.rkid })
+      }
+    }
+    if (keys.length) await this.guarded(async () => void this.emit({ kind: 'pool', device: this.me, keys }))
+  }
+  /**
+   * Die eigene Menge jeder eigenen Wurzel veröffentlichen (fällige Arbeit, B6): ein Gerät sendet eine Revision (kumulativ:
+   * alle Nachweise der Wurzel; 6270 je Signierer nur Wiederholung und Equivokation), wenn es Nachweise signiert hat, die
+   * seine letzte Revision nicht trug, oder wenn es die Wurzel ist und noch keine sandte. Nur Mitglieder; während des
+   * Nachholens nach einem Neuaufbau nicht (Nummern wie MV-7).
+   */
+  private async publishSets(only?: string): Promise<void> {
+    if (!this.sets || this.catchUp) return
+    for (const set of Object.values(this.state.sets ?? {})) {
+      if (only !== undefined && set.root !== only) continue
+      const rc = this.rootCtx(set.root)
+      if (!rc || rc.departed || !rc.to) continue
+      const me = await this.memberOf(set, rc.ctx)
+      if (!me) continue
+      const held = M.own(set.revs, signerId(me))
+      const covered = new Set(held?.covered ?? [])
+      const mine = Object.values(set.certs).filter((c) => c.by === me)
+      if (held && mine.every((c) => covered.has(M.certKey(c)))) continue
+      if (!held && me !== set.root && !mine.length) continue
+      const entries = Object.values(set.certs).sort((x, y) => M.certKey(x).localeCompare(M.certKey(y)))
+      const n = (held?.n ?? 0) + 1
+      const payload = { root: set.root, rootKeyAgreement: set.rootKeyAgreement, revision: n, deps: [...set.seen].sort(), entries } as unknown as Record<string, Json>
+      const sent = await this.sendDoc(TYPES.deviceSet, rc.ctx, rc.to.anchor, rc.to.rkid, (await this.keysFor(rc.ctx)).rkid, payload)
+      this.emit({ kind: 'device-set', root: set.root, rootKeyAgreement: set.rootKeyAgreement, certs: [], rev: { signer: signerId(me), n, digest: sent?.digest ?? null, covered: entries.map(M.certKey) }, ...(sent ? { seen: sent.digest } : {}) })
+    }
+  }
+  /**
+   * Enrollment (Plan 6o.2, Zeremonie QR): das einschreibende Gerät nimmt das neue Gerät in jede eigene Menge auf, in der es
+   * selbst Mitglied ist (dessen Schlüssel je Kontext zeigt das neue Gerät in der Zeremonie), übernimmt den Vorrat
+   * öffentlicher Schlüssel des neuen Geräts ins Journal und sendet je Wurzel eine Revision an die Gegenseite (Fan-out =
+   * Zahl der Beziehungen). Wo es nicht Mitglied ist, nimmt das öffnende Gerät nach (`admitPending`).
+   */
+  async enrolMember(device: string, entries: Array<{ root: string; anchor: string; keyAgreement: string }>, pool: Array<{ i: number; for: string; anchor: string; keyAgreement: string }>): Promise<ActionResult> {
+    if (!this.sets) return 'ok'
+    // Ein Schritt je Wurzel (Zulassung und Revision in einem Batch), damit kein Journalrahmen die Grenze von 64 KiB sprengt.
+    let result: ActionResult = await this.action(async () => {
+      if (pool.length) this.emit({ kind: 'pool', device, keys: pool })
+    })
+    for (const e of entries) {
+      const r = await this.action(async () => {
+        const rc = this.rootCtx(e.root)
+        const set = this.setOf(e.root)
+        if (!rc || !set || !(await this.memberOf(set, rc.ctx))) return
+        const cert = await this.cert(rc.ctx, { root: e.root, kind: 'admit', anchor: e.anchor, keyAgreement: e.keyAgreement })
+        this.emit({ kind: 'device-set', root: e.root, rootKeyAgreement: set.rootKeyAgreement, certs: [cert], local: M.table([[e.anchor, device]]) })
+        await this.publishSets(e.root)
+      })
+      if (r !== 'ok') result = r
+    }
+    return result
+  }
+  /**
+   * Widerruf in den Mengen (K2 Schritt 2): dieses Gerät widerruft `device` in jeder eigenen Menge, in der es Mitglied ist
+   * (Widerrufseintrag, endgültig), und veröffentlicht die Revision an jede Gegenseite. Rotation des Vorrats: strict zieht
+   * die Schlüssel des widerrufenen Geräts zurück (ihr privater Teil lag nur dort; M schließt sie über den Widerruf ihres
+   * Signierers aus); shared zieht jeden Schlüssel zurück, den das widerrufene Gerät kannte, sendet eine leere Revision
+   * (8535) und füllt nach. Gegenlauf `revocationToCounterparts: false`: nichts davon (nur der Träger).
+   */
+  async revokeInSets(device: string): Promise<ActionResult | null> {
+    if (!this.sets || this.cand.revocationToCounterparts === false) return null
+    let result: ActionResult = 'ok'
+    // Ein Schritt je Wurzel (Widerrufseintrag und Revision in einem Batch), wie beim Enrollment.
+    for (const root of Object.keys(this.state.sets ?? {})) {
+      const r = await this.action(async () => {
+        const set = this.setOf(root)!
+        const rc = this.rootCtx(root)
+        if (!rc) return
+        const targets = Object.entries(set.local ?? {}).filter(([, d]) => d === device).map(([a]) => a)
+        if (!targets.length || !(await this.memberOf(set, rc.ctx))) return
+        const view = M.setView(set)
+        const certs: M.SetCert[] = []
+        for (const a of targets) if (!view.revoked.has(a)) certs.push(await this.cert(rc.ctx, { root, kind: 'revoke', anchor: a, keyAgreement: null }))
+        if (!certs.length) return
+        this.emit({ kind: 'device-set', root, rootKeyAgreement: set.rootKeyAgreement, certs })
+        await this.publishSets(root)
+      })
+      if (r !== 'ok') result = r
+    }
+    const rot = await this.action(async () => {
+      const shared = this.cand.stockMode === 'shared'
+      for (const r of this.state.relationships) {
+        if (r.departed) continue
+        const drop = r.stock.filter((k) => (k.state === 'active' || k.state === 'aging' || k.state === 'allocated' || k.state === 'registered') && (shared || k.by === device)).map((k) => k.anchor)
+        if (!drop.length) continue
+        this.emit({ kind: 'withdraw', rel: r.id, anchors: drop })
+        if (shared) {
+          await this.sendRevision(r.id, true) // 8535: leer, hebt bei M die Schlüssel aller Schreiber auf (MV-12)
+          await this.refill(r.id)
+        }
+      }
+    })
+    return rot !== 'ok' ? rot : result
+  }
+  /** Das allozierende Gerät des Vorrats-Schlüssels eines Akts (E2 (iv)): nur es erzeugt die Karte. */
+  private allocated(a: M.Act): boolean {
+    const k = M.findRel(this.state, a.mediator)?.stock.find((x) => x.anchor === a.own)
+    return !!k && k.by === this.me
+  }
+  /**
+   * 8725/8727 unter E2 (iv): das Gerät, das den benannten Vorrats-Schlüssel zugeteilt hat, erzeugt die eine Karte des
+   * Akts (frischer Kartenkontext, Schwestern über ihren Vorrat in die Menge der neuen Wurzel aufgenommen, Revision mit
+   * der Karte an den Voucher), sobald eine Zustimmung der Person vorliegt (eigene oder aus dem Journal). Ein anderes Gerät
+   * zeichnet nur die Zustimmung auf. Nicht nach dem Ablauf des Akts, nicht während des Nachholens nach einem Neuaufbau
+   * (sonst erzeugte eine frühere Inkarnation vielleicht schon eine Karte: zwei Karten desselben Geräts). `force` nur im
+   * Gegenlauf ohne Produzentenregel.
+   */
+  private async produce(actId: string, force = false): Promise<void> {
+    const a = M.act(this.state, actId)
+    if (a.ownCard || a.state !== 'consented' || this.catchUp) return
+    if (!force && !this.allocated(a)) return
+    if (Date.parse(this.clock.now()) > Date.parse(a.expiresAt)) return
+    const ctx = `card/${actId}/${this.person}`
+    const k = await this.listen(ctx)
+    const card = { anchor: k.anchor, keyAgreement: k.rkid }
+    const v = await digestBytes(enc.encode(jcs({ act: actId, card })))
+    await this.admitSiblings(k.anchor, ctx, k.rkid)
+    this.emit({ kind: 'produce', act: actId, card, cardKey: ctx, v })
+    await this.publishSets(k.anchor)
+    await this.handOverCard(actId)
+  }
+  /** Fällige Produktion (B6): ein Akt mit Zustimmung ohne Karte, dessen Vorrats-Schlüssel dieses Gerät zugeteilt hat. */
+  private async produceOwed(): Promise<void> {
+    if (!this.sets || this.catchUp || this.cand.producerRule === false) return
+    for (const a of this.state.acts.slice()) if (a.state === 'consented' && !a.ownCard && this.allocated(a)) await this.guarded(() => this.produce(a.id))
+  }
+  /** K2 Schritt 2: das eigene Tupel (Kopf) der Beziehung, deren Vorrats-Schlüssel diese Adresse ist (Ticket, Mengennachweis einer Vorstellung). */
+  private tupleOfStock(address: string): M.Tuple | undefined {
+    const ctx = this.ctxOfRkid.get(address)
+    if (!ctx) return undefined
+    const r = this.state.relationships.find((x) => !x.departed && x.stock.some((k) => k.key === ctx))
+    return r ? M.head(r) : undefined
+  }
+  /**
+   * Arrival of a card under device sets (E1 (a), E3 (a)): the card names the revision of `device-set@1` that carries its
+   * root (the card anchor). Without that proof the card waits (`Missing`: no V, no K, no receipt; the sender repeats); a
+   * known revocation of the root beats the older reference (refused, no K).
+   */
+  private cardSetProblem(root: string, ref: string | undefined): string | null {
+    const set = this.setOf(root)
+    if (!ref || !set || !set.seen.includes(ref)) {
+      this.deferredCards++
+      throw new M.Missing('device-set', (ref ?? '?').slice(-8), this.person)
+    }
+    if (M.setView(set).revoked.has(root)) return `karte von ${root.slice(-8)}: Wurzel widerrufen, ein bekannter Widerruf schlägt den älteren Bezug (E1 (a)): abgewiesen ohne K (E3 (a))`
+    return null
   }
   /** 2300/6730: eingefrorene Kandidatenliste = Gegenanker aller gehaltenen Beziehungen. */
   private candidates(): string[] {
@@ -964,18 +1259,24 @@ export class HolderDevice {
     if (this.perWriter && this.catchUp) return
     const r = M.rel(this.state, relId)
     if (!r.classOn || r.departed || M.budgetExhausted(r, this.clock.now())) return
-    const active = r.stock.filter((k) => k.state === 'active')
-    if (active.length >= M.PARAM.refillBelow) return
+    // K2 Schritt 2: jedes Gerät hält seinen eigenen Anteil am Vorrat bei M (Schlüssel je Gerät, 6o.2 (a)); K0/K1a: die Person.
+    const share = this.cand.stockShare?.()
+    const active = r.stock.filter((k) => k.state === 'active' && (!share || k.by === this.me))
+    if (active.length >= (share?.below ?? M.PARAM.refillBelow)) return
     const nonce = this.cand.stockNonce?.(r.id) ?? r.nonce ?? Buffer.from(derive(enc.encode(`${this.person}/${r.id}/${this.cand.writer}/${this.counter}`), 'nonce')).toString('base64')
     const keys: M.StockKey[] = []
     // Das Ziel zählt die aktiven Schlüssel der Person (alle Geräte, über das Journal), nicht je Restklasse: ein Gerät allein
     // hält M aus seinen eigenen Nummern versorgt (Review 21 B1).
-    for (let n = r.nextN; keys.length < M.PARAM.refillTo - active.length; n++) {
+    // K2 Schritt 2: ein Gerät listet nur so viele eigene Schlüssel, wie es noch annehmen kann (strict: nur der Halter öffnet
+    // das Ticket; ein Schlüssel eines Geräts ohne Kontingent wäre bei M ein toter Schlüssel, MV-9).
+    const cap = Math.min(share?.to ?? M.PARAM.refillTo, this.cand.quotaLeft?.(r.id, this.state, this.clock.now()) ?? Infinity)
+    for (let n = r.nextN; keys.length < cap - active.length; n++) {
       if (this.cand.mayAllocate && !this.cand.mayAllocate(n, r.id, this.state)) continue
       const ctx = `introduction/${nonce}/${n}`
       const k = await this.listen(ctx)
-      keys.push({ n, nonce, anchor: k.anchor, keyAgreement: k.rkid, key: ctx, expiresAt: new Date(Date.parse(this.clock.now()) + M.PARAM.prekeyLifetimeMs).toISOString(), state: 'active' })
+      keys.push({ n, nonce, anchor: k.anchor, keyAgreement: k.rkid, key: ctx, expiresAt: new Date(Date.parse(this.clock.now()) + (this.cand.stockLifetimeMs ?? M.PARAM.prekeyLifetimeMs)).toISOString(), state: 'active', ...(share ? { by: this.me } : {}) })
     }
+    if (!keys.length) return
     this.emit({ kind: 'allocate', rel: r.id, nonce, keys })
     await this.sendRevision(r.id)
   }
@@ -1010,9 +1311,12 @@ export class HolderDevice {
    * ist eins über der höchsten Revision dieses Schreibers im Zustand (8500 je Schreiber), die Kennung reist im Dokument;
    * während des Nachholens nach einem Neuaufbau wird nicht nummeriert, sondern vorgemerkt (`owed`).
    */
-  private async sendRevision(relId: string): Promise<void> {
+  private async sendRevision(relId: string, clearAll = false): Promise<void> {
     const r = M.rel(this.state, relId)
     if (r.departed) return
+    // K2 Schritt 2: jeder Schreiber listet nur seinen Anteil; eine leere Liste hiebe bei M die Schlüssel aller Schreiber auf
+    // (8535, MV-12). Sie geht nur bei Klasse aus oder ausdrücklich (Rotation nach Widerruf, shared); sonst keine Revision.
+    if (this.cand.stockShare && r.classOn && !clearAll && !r.stock.some((k) => k.state === 'active' && k.by === this.me)) return
     const tag = await this.writerOf(r.id)
     if (tag && this.catchUp) {
       this.owed.add(r.id)
@@ -1020,7 +1324,9 @@ export class HolderDevice {
     }
     const h = M.head(r)
     const revision = tag ? (M.own(r.writers, tag)?.revision ?? 0) + 1 : r.revision + 1
-    const keys = r.stock.filter((k) => k.state === 'active').map((k) => ({ n: k.n, anchor: k.anchor, keyAgreement: k.keyAgreement, expiresAt: k.expiresAt }))
+    // K2 Schritt 2: jeder Schreiber listet seinen eigenen Anteil (der Signierer bürgt für die Schlüssel, die er hält); M vereinigt.
+    const share = !!this.cand.stockShare
+    const keys = r.stock.filter((k) => k.state === 'active' && (!share || k.by === this.me)).map((k) => ({ n: k.n, anchor: k.anchor, keyAgreement: k.keyAgreement, expiresAt: k.expiresAt }))
     this.emit({ kind: 'revision', rel: r.id, revision, keys, ...(tag ? { writer: tag } : {}) })
     await this.sendDoc(TYPES.revision, h.ownKey, h.peer, h.peerKeyAgreement, (await this.keysFor(h.ownKey)).rkid, { revision, keys, ...(tag && this.cand.writerTag ? { writer: tag } : {}) }) // K2: der Schreiber ist der Signierer, kein Feld
   }
@@ -1031,14 +1337,23 @@ export class HolderDevice {
     return tag ? { writer: tag } : {}
   }
 
+  /** K2 Schritt 2: Ms Sicht ohne die Schreiber, deren Signierer die Seite in einer ihrer Mengen widerrufen hat (Vereinigung wie `viewKeys`). */
+  private unrevokedKeys(r: M.Relationship): M.ListedKey[] {
+    const revoked = new Set<string>()
+    for (const t of r.tuples) for (const a of M.setView(this.setOf(t.peer)).revoked) revoked.add(signerId(a))
+    const writers = M.table(Object.entries(r.view!.writers ?? {}).filter(([w]) => !revoked.has(w)))
+    return M.viewKeys(writers, M.tableOf(r.view!.clears)).keys
+  }
   /** M: zwei Seiten vorstellen (8605, 8570). Liefert die Akt-Id oder den Grund, warum nichts ging. */
   async introduce(relA: string, relB: string, nameA = 'A', nameB = 'B'): Promise<{ act: string } | { refused: string }> {
     const now = this.clock.now()
     const pick = (relId: string) => {
       const r = M.rel(this.state, relId)
       if (!r.view) return null
+      // K2 Schritt 2: Schlüssel eines Schreibers, dessen Signierer in der Gerätemenge der Seite widerrufen ist, nennt M nicht mehr.
+      const keys = this.sets && r.view.writers ? this.unrevokedKeys(r) : r.view.keys
       // 8570.4; kanonische Wahl (kleinster Anker), damit die Ankunftsreihenfolge nicht entscheidet (Review 4 B2); nur Schlüssel, die der Kandidat diesem Gerät zuteilt (K1a).
-      return [...r.view.keys].sort((a, b) => a.anchor.localeCompare(b.anchor)).find((k) => M.usable(k.expiresAt, now) && !this.state.consumed.includes(k.anchor) && (this.cand.mayName?.(k.anchor, r.id, this.state) ?? true)) ?? null
+      return [...keys].sort((a, b) => a.anchor.localeCompare(b.anchor)).find((k) => M.usable(k.expiresAt, now) && !this.state.consumed.includes(k.anchor) && (this.cand.mayName?.(k.anchor, r.id, this.state) ?? true)) ?? null
     }
     const ka = pick(relA)
     const kb = pick(relB)
@@ -1048,7 +1363,10 @@ export class HolderDevice {
       this.emit({ kind: 'introduce', act })
       const send = async (relId: string, own: { key: string; keyAgreement: string }, voucher: { key: string; keyAgreement: string }, name: string) => {
         const h = M.head(M.rel(this.state, relId))
-        await this.sendDoc(TYPES.ticket, h.ownKey, h.peer, h.peerKeyAgreement, (await this.keysFor(h.ownKey)).rkid, { act: act.id, issuedAt: act.issuedAt, expiresAt: act.expiresAt, own: own.key, voucher: { anchor: voucher.key, keyAgreement: voucher.keyAgreement, name } })
+        // K2 Schritt 2 (6o.2): das Ticket öffnet nur, wer den privaten Teil des benannten Vorrats-Schlüssels hält; es ist an
+        // diesen versiegelt (strict: das zuteilende Gerät; shared: jedes Gerät der Menge) und von ihm quittiert.
+        const fan = this.sets ? [{ anchor: own.key, rkid: own.keyAgreement }] : undefined
+        await this.sendDoc(TYPES.ticket, h.ownKey, fan ? own.key : h.peer, fan ? own.keyAgreement : h.peerKeyAgreement, (await this.keysFor(h.ownKey)).rkid, { act: act.id, issuedAt: act.issuedAt, expiresAt: act.expiresAt, own: own.key, voucher: { anchor: voucher.key, keyAgreement: voucher.keyAgreement, name } }, fan)
       }
       await send(relA, act.a, act.b, nameB)
       await send(relB, act.b, act.a, nameA)
@@ -1065,6 +1383,14 @@ export class HolderDevice {
         return
       }
       if (Date.parse(this.clock.now()) > Date.parse(a.expiresAt) - M.PARAM.consentReserveMs) return // 8155
+      if (this.sets) {
+        // K2 Schritt 2, E2 (iv): die Zustimmung gilt für die Person (Journal); die eine Karte erzeugt das Gerät, das den
+        // benannten Vorrats-Schlüssel zugeteilt hat, jetzt oder sobald es die Zustimmung faltet. Gegenlauf ohne
+        // Produzentenregel: jedes zustimmende Gerät erzeugt eine Karte.
+        this.emit({ kind: 'consent', act: actId, card: null, cardKey: null })
+        await this.produce(actId, this.cand.producerRule === false)
+        return
+      }
       const ctx = `card/${actId}/${this.person}`
       const k = await this.listen(ctx)
       this.emit({ kind: 'consent', act: actId, card: { anchor: k.anchor, keyAgreement: k.rkid }, cardKey: ctx })
@@ -1076,10 +1402,16 @@ export class HolderDevice {
     const a = M.act(this.state, actId)
     if (!a.ownCard || !a.ownCardKey) return
     // K2: der Vorrats-Schlüssel kann von einem Schwestergerät zugeteilt sein (aufgezeichneter Anker); dieses Gerät signiert mit seinem eigenen Schlüssel desselben Kontexts.
-    const ownCtx = this.ctxOfAnchor.get(a.own) ?? (this.deviceKeys ? this.recordedCtx(a.own) : undefined)
+    // K2 Schritt 2: der Produzent hat den Vorrats-Schlüssel zugeteilt (E2 (iv)) und signiert mit ihm selbst; im Gegenlauf ohne
+    // Produzentenregel signiert ein anderes Gerät (strict) mit seinem eigenen Schlüssel desselben Kontexts.
+    const ownCtx = this.ctxOfAnchor.get(a.own) ?? (this.sets ? this.recordedCtx(a.own) : undefined)
     if (!ownCtx) return
     const own = await this.keysFor(ownCtx)
-    const { digest, bytes, address } = await this.sendDoc(TYPES.card, ownCtx, a.voucher.anchor, a.voucher.keyAgreement, own.rkid, { act: actId, expiresAt: a.expiresAt, from: a.own, fromKeyAgreement: own.rkid, to: a.voucher.anchor, card: { anchor: a.ownCard.anchor, keyAgreement: a.ownCard.keyAgreement } })
+    // K2 Schritt 2 (E1 (a)): die Karte trägt den signierten Bezug auf die Revision von `device-set@1` ihrer Wurzel.
+    const set = this.sets ? M.own(this.setOf(a.ownCard.anchor)?.revs, signerId(a.ownCard.anchor))?.digest : undefined
+    const sent = await this.sendDoc(TYPES.card, ownCtx, a.voucher.anchor, a.voucher.keyAgreement, own.rkid, { act: actId, expiresAt: a.expiresAt, from: a.own, fromKeyAgreement: own.rkid, to: a.voucher.anchor, card: { anchor: a.ownCard.anchor, keyAgreement: a.ownCard.keyAgreement }, ...(set ? { set } : {}) })
+    if (!sent) return
+    const { digest, bytes, address } = sent
     this.sent.set(digest, { kind: 'card', act: actId, frame: bytes, address }) // the address the primary frame is sealed to (K2: may differ from the recorded key)
     this.emit({ kind: 'hand-over', act: actId, o: 'handed', digest })
   }
@@ -1129,10 +1461,13 @@ export class HolderDevice {
       }
       if (o !== 'handed') continue
       const declined = a.state === 'declined'
-      const loses = a.ownCardDigest !== null && a.ownCardDigest !== d
+      // K2 Schritt 2 (E2 (iv)): eine Karte je Akt, keine vorläufige Wahl zwischen Übergaben; zurückgenommen wird nur nach Regel 2
+      // (Ablehnung), nie aus einem Digestvergleich (Design-Review 6q 3c). K1a: Regel 3 wie bisher.
+      const loses = !this.sets && a.ownCardDigest !== null && a.ownCardDigest !== d
       if (!declined && !loses) continue
       if (!this.zusteller.demarcate(d)) continue
       drop(d)
+      if (loses) this.losingCardsWithdrawn++
       this.emit({ kind: 'hand-over', act: a.id, o: 'cancelled', digest: d })
     }
   }
@@ -1140,6 +1475,11 @@ export class HolderDevice {
   private async evaluatePending(actId: string): Promise<void> {
     const a = M.act(this.state, actId)
     if (a.state !== 'consented' || !this.submitted(a) || !a.pending) return
+    // K2 Schritt 2 (8325.A5c unter Mengen): ein bekannter Widerruf der Wurzel der wartenden Karte schlägt (E1 (a)).
+    if (this.sets && M.setView(this.setOf(a.pending.anchor)).revoked.has(a.pending.anchor)) {
+      this.emit({ kind: 'finding', text: `pending auf ${a.id}: Wurzel ${a.pending.anchor.slice(-8)} widerrufen (E1 (a)): nicht verbunden` })
+      return
+    }
     await this.connect(a, a.pending)
   }
   /** 8905: Tupel öffnen, Akt connected, Probe. */
@@ -1216,7 +1556,9 @@ export class HolderDevice {
   }
   private async sendMapping(arrival: M.Tuple, other: M.Tuple): Promise<void> {
     const pair = M.pairKey(arrival.id, other.id)
-    const { digest, bytes, address } = await this.sendDoc(TYPES.mapping, arrival.ownKey, arrival.peer, arrival.peerKeyAgreement, (await this.keysFor(arrival.ownKey)).rkid, { entry: this.blind(arrival, other.own), ...this.tagField(arrival.id) })
+    const sent = await this.sendDoc(TYPES.mapping, arrival.ownKey, arrival.peer, arrival.peerKeyAgreement, (await this.keysFor(arrival.ownKey)).rkid, { entry: this.blind(arrival, other.own), ...this.tagField(arrival.id) })
+    if (!sent) return
+    const { digest, bytes, address } = sent
     this.sent.set(digest, { kind: 'mapping', pair, frame: bytes, address }) // 6845.4 retries the primary frame at the address it is sealed to
     this.emit({ kind: 'duty', pair, state: 'hit', mappingDigest: digest })
   }
@@ -1364,7 +1706,9 @@ export class HolderDevice {
     const peers = to ?? (this.cand.selfPeers ? await this.cand.selfPeers() : undefined)
     if (peers && !peers.length) return
     const self = peers ? peers[0]!.anchor : (await this.keysFor(ctx)).anchor
-    const { frames, total } = await this.sendDoc(type, ctx, self, peers ? peers[0]!.rkid : this.ownRkid!, this.ownRkid!, payload, peers)
+    const sent = await this.sendDoc(type, ctx, self, peers ? peers[0]!.rkid : this.ownRkid!, this.ownRkid!, payload, peers)
+    if (!sent) return
+    const { frames, total } = sent
     this.measures.ownFramesOut += frames
     this.measures.ownBytesOut += total
     this.measures.framesOut -= frames
@@ -1629,6 +1973,14 @@ export class HolderDevice {
     }
     // B6: fällige Arbeit folgt aus dem Zustand, nicht aus dem Ereignis; `refill` ist leer, wenn nichts fehlt.
     await this.refillAll()
+    if (this.sets) {
+      // K2 Schritt 2: fällige Produktion (E2 (iv)), eigener Vorrat öffentlicher Geräteschlüssel, nachzuholende Aufnahmen, Revisionen.
+      await this.produceOwed()
+      await this.refillPools()
+      await this.admitPending()
+      // Je Wurzel ein eigener Schritt (ein Batch je Revision: die Absicht trägt die versiegelten Bytes, Grenze 64 KiB je Rahmen).
+      for (const root of Object.keys(this.state.sets ?? {})) await this.guarded(() => this.publishSets(root))
+    }
   }
 
   /** Zustellerberichte in Fachwirkung: Karte taken/given-up (8326), Mapping sent, Wiederholung nach `failed` (6845.4). */
@@ -1730,7 +2082,7 @@ export class HolderDevice {
         this.measures.unboundAcks++
         return
       }
-      if (want !== doc.issuer && !(this.deviceKeys && (await this.isPeer(doc.issuer, want)))) {
+      if (want !== doc.issuer && !(this.sets && (await this.isPeer(doc.issuer, want)))) {
         this.dispositions.push('failed(ack-from-unexpected-signer)')
         return
       }
@@ -1786,7 +2138,7 @@ export class HolderDevice {
         throw e
       }
       effect = true
-    } else effect = await this.dispatch(doc, address)
+    } else effect = await this.dispatch(doc, address, v.digest!)
     if (!effect) {
       this.dispositions.push('failed(validation-failed)')
       return
@@ -1836,7 +2188,7 @@ export class HolderDevice {
   }
 
   /** Fachliche Auswertung je Typ; true = Wirkung (quittieren), false = abgewiesen (keine Quittung). Jeder Zweig bindet das Dokument an den erwarteten Signierer (#55). */
-  private async dispatch(doc: Doc, address: string): Promise<boolean> {
+  private async dispatch(doc: Doc, address: string, digest: string): Promise<boolean> {
     const now = this.clock.now()
     switch (doc.type) {
       case TYPES.revision: {
@@ -1862,14 +2214,17 @@ export class HolderDevice {
         return true
       }
       case TYPES.ticket: {
-        // Seite: 8640.
-        const t = this.tupleOfAddress(address)
-        if (!t || !(await this.isPeer(doc.issuer, t.peer))) return false // 8640.2: Kanal und Signierer (K2: ein Gerät der Gegenperson)
+        // Seite: 8640. K2 Schritt 2: das Ticket ist an den benannten Vorrats-Schlüssel versiegelt (nur sein Halter öffnet es);
+        // Kanal ist dessen Beziehung, der Signierer ein Mitglied von Ms Menge auf einem ihrer Tupel.
+        const t = this.sets ? this.tupleOfStock(address) : this.tupleOfAddress(address)
+        if (!t) return false
         const r = M.relOfTuple(this.state, t.id)!
+        const peer = this.sets ? (await Promise.all(r.tuples.map((x) => this.isPeer(doc.issuer, x.peer)))).some(Boolean) : await this.isPeer(doc.issuer, t.peer)
+        if (!peer) return false // 8640.2: Kanal und Signierer (K2: ein Gerät der Gegenperson)
         const p = doc.payload as unknown as { act: string; issuedAt: string; expiresAt: string; own: string; voucher: { anchor: string; keyAgreement: string; name: string } }
         if (Date.parse(now) > Date.parse(p.expiresAt) || Date.parse(p.issuedAt) > Date.parse(now) + M.PARAM.actSkewMs) return false // 8640.3 / 8110
         if (this.state.acts.some((a) => a.id === p.act)) return true // 8640.4: Wiederholung
-        const own = r.stock.find((k) => k.anchor === p.own)
+        const own = r.stock.find((k) => k.anchor === p.own && (!this.sets || k.keyAgreement === address))
         if (!own) {
           this.emit({ kind: 'finding', text: `ticket ${p.act.slice(0, 8)}: own ${p.own.slice(-8)} nicht auf dieser Beziehung (8640.5)` })
           return false
@@ -1896,7 +2251,10 @@ export class HolderDevice {
         // 8640.15 mit demselben Prüfsatz wie bei direkter Ankunft (8850.6, B7): Akt, Absender, Ablauf müssen passen.
         const bkey = `${own.anchor}|${p.voucher.anchor}|${p.act}`
         const buffered = this.buffer.get(bkey)
-        if (buffered && buffered.from === a.voucher.anchor && buffered.expiresAt === a.expiresAt) {
+        // K2 Schritt 2: ein bekannter Widerruf der Wurzel der gepufferten Karte schlägt auch in der Pufferauswahl (E1 (a)).
+        const revokedRoot = !!buffered && this.sets && M.setView(this.setOf(buffered.card.anchor)).revoked.has(buffered.card.anchor)
+        if (buffered && revokedRoot) this.buffer.delete(bkey)
+        else if (buffered && buffered.from === a.voucher.anchor && buffered.expiresAt === a.expiresAt) {
           this.buffer.delete(bkey)
           this.emit({ kind: 'card-pending', act: a.id, card: buffered.card, v: buffered.v })
         }
@@ -1908,21 +2266,35 @@ export class HolderDevice {
         const ctx = this.ctxOfRkid.get(address)
         const own = ctx ? await this.keysFor(ctx) : undefined
         if (!own) return false
-        const p = doc.payload as unknown as { act: string; expiresAt: string; from: string; fromKeyAgreement: string; to: string; card: M.Card }
-        // K2 Schritt 1: die Karte nennt den aufgezeichneten Anker des Vorrats-Schlüssels (das Gerät, das ihn zugeteilt hat); dieses Gerät hat sie an seiner eigenen Adresse desselben Kontexts empfangen.
-        const to = this.deviceKeys && p.to !== own.anchor && this.recordedCtx(p.to) === ctx ? p.to : own.anchor
-        if (p.to !== to || !(await this.isPeer(doc.issuer, p.from))) return false // 8850.2 (b)
+        const p = doc.payload as unknown as { act: string; expiresAt: string; from: string; fromKeyAgreement: string; to: string; card: M.Card; set?: string }
+        const to = own.anchor
+        if (this.sets) {
+          // K2 Schritt 2, E2 (iv): die Karte erzeugt das Gerät, das den Vorrats-Schlüssel zugeteilt hat, und signiert mit ihm
+          // selbst; eine Karte unter einem anderen Schlüssel kommt von außerhalb der Menge: abgewiesen ohne K (E3 (a), 8850.2 (b)).
+          if (p.to !== to || doc.issuer !== p.from) return false
+          // E1 (a): ohne den Mengennachweis wartet die Karte (kein V, kein K); ein bekannter Widerruf schlägt den älteren Bezug.
+          const problem = this.cardSetProblem(p.card.anchor, typeof p.set === 'string' ? p.set : undefined)
+          if (problem) {
+            this.emit({ kind: 'finding', text: problem })
+            return false
+          }
+          if (p.card.keyAgreement !== this.setOf(p.card.anchor)!.rootKeyAgreement) return false // die Menge gehört zu dieser Karte
+        } else if (p.to !== to || !(await this.isPeer(doc.issuer, p.from))) return false // 8850.2 (b)
         const v = await digestBytes(enc.encode(jcs({ act: p.act, card: p.card })))
         const a = this.state.acts.find((x) => x.own === to)
         if (!a) {
           // Pufferzweig (8910.1–.3): die ganze Nutzlast, geprüft wird bei der Zuordnung (B7).
           const key = `${to}|${p.from}|${p.act}`
           const b = this.buffer.get(key)
-          if (!b) this.buffer.set(key, { act: p.act, from: p.from, expiresAt: p.expiresAt, card: p.card, v })
+          if (!b) this.buffer.set(key, { act: p.act, from: p.from, expiresAt: p.expiresAt, card: p.card, v, ...(this.sets && p.set ? { set: p.set } : {}) })
           else if (b.v !== v) return false
           return true
         }
         if (a.id !== p.act || p.from !== a.voucher.anchor || p.expiresAt !== a.expiresAt) return false // 8850.6
+        if (this.sets && p.fromKeyAgreement !== a.voucher.keyAgreement) {
+          this.emit({ kind: 'card-refused', act: a.id, v, k: true }) // 8850.6 (d): widersprüchliche Schlüsselbindung unter dem richtigen `from` (E3)
+          return false
+        }
         if (Date.parse(now) > Date.parse(a.expiresAt) + M.PARAM.actSkewMs) return false // 8110.5: Annahmeende
         if (a.v && a.v !== v) {
           this.emit({ kind: 'card-refused', act: a.id, v, k: true }) // 8910.8
@@ -1979,6 +2351,45 @@ export class HolderDevice {
         } else this.emit({ kind: 'edge', edge }) // 6975.3
         const duty = this.state.duties.find((d) => d.pair[0] === edge[0] && d.pair[1] === edge[1])
         if (!duty || duty.state === 'none') await this.sendMapping(t, other) // 6845.1 zweiter Auslöser
+        return true
+      }
+      case TYPES.deviceSet: {
+        // K2 Schritt 2: `device-set@1` (Revisionstyp der 6270-Liste). Die Wahrheit sind die signierten Nachweise (Zugänge,
+        // Widerrufe); die Revision ist kumulativ und je Signierer nummeriert (6270 nur Wiederholung und Equivokation).
+        if (!this.sets) return false
+        const p = doc.payload as unknown as { root: string; rootKeyAgreement: string; revision: number; deps: string[]; entries: unknown[] }
+        if (M.shapeProblem(p, SET_SHAPE, 'device-set')) return false
+        // Auf einem Tupel: nur für dessen Wurzel (der Anker, den dieses Gerät für die Gegenseite zuerst geprüft hat). An einem
+        // eigenen Vorrats-Schlüssel: die Menge einer neuen Beziehung aus einer Vorstellung, mit der Karte (Wurzel = Kartenanker).
+        const t = this.tupleOfAddress(address)
+        if (t ? t.peer !== p.root || t.peerKeyAgreement !== p.rootKeyAgreement : !this.tupleOfStock(address)) return false
+        const held = this.setOf(p.root)
+        for (const c of p.entries) {
+          if (await this.certValid(c, p.root)) continue
+          this.emit({ kind: 'finding', text: `device-set auf ${p.root.slice(-8)} von ${doc.issuer.slice(-8)}: ungültiger Nachweis, nichts gefaltet` })
+          return false
+        }
+        const entries = p.entries as M.SetCert[]
+        const merged: M.DeviceSet = { root: p.root, rootKeyAgreement: held?.rootKeyAgreement ?? p.rootKeyAgreement, certs: M.tableOf(held?.certs), revs: M.table(), seen: [] }
+        for (const c of entries) M.put(merged.certs, M.certKey(c), c)
+        // Signierer: die Wurzel oder ein Gerät, dessen Zugang eine signierte Kette bis zur Wurzel trägt (nie „gerade in meiner Liste“).
+        if (!M.setView(merged).ever.has(doc.issuer)) {
+          this.emit({ kind: 'finding', text: `device-set auf ${p.root.slice(-8)}: Signierer ${doc.issuer.slice(-8)} ohne Zugang: abgewiesen` })
+          return false
+        }
+        // Ein bekannter Widerruf schlägt: eine Revision eines widerrufenen Geräts wirkt nicht mehr (E1 (a)).
+        if (held && M.setView(held).revoked.has(doc.issuer)) {
+          this.emit({ kind: 'finding', text: `device-set auf ${p.root.slice(-8)}: Signierer ${doc.issuer.slice(-8)} widerrufen: abgewiesen` })
+          return false
+        }
+        const signer = signerId(doc.issuer)
+        const last = M.own(held?.revs, signer)
+        if (last && p.revision < last.n) {
+          this.emit({ kind: 'finding', text: `device-set auf ${p.root.slice(-8)}: Revision ${p.revision} von ${doc.issuer.slice(-8)} unter der gehaltenen ${last.n}: abgewiesen (6270)` })
+          return false
+        }
+        const fresh = entries.filter((c) => !M.own(held?.certs, M.certKey(c)))
+        this.emit({ kind: 'device-set', root: p.root, rootKeyAgreement: merged.rootKeyAgreement, certs: fresh, rev: { signer, n: p.revision, digest }, seen: digest })
         return true
       }
       default:
