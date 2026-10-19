@@ -155,7 +155,7 @@ ignore the gate (`rogue`), as a thief's own software would.
 | X6 | ✓ | ✓ | ✓ | ✓ | |
 | X7 strict | ✗ | ✗ | ✗ | ✗ | frozen candidate lists (2300) |
 | X7b | ✓ | ✓ | ✓ | ✓ | |
-| X8 | ✓ | ✓ | ✓ | ✓ | state copy 5 538 B (sets and pools); A2 addressable in every relationship after 2 rounds, from the counterparts' proofs |
+| X8 | ✓ | ✓ | ✓ | ✓ | state copy 5 538 B (sets and pools); A2 addressable in every relationship after 1 round, from the counterparts' proofs |
 | X9 | ✗ | ≈ | ≈ | ≈ | thief reads 0 after the revocation; step 2: counterparts from revocation entries, own devices still from the bench list |
 | X10 | – | – | – | – | K2b |
 | X11 | ✓ | ✓ | ✓ | ✓ | journal 60.8 kB / 57.3 kB (step 1: 28.1 kB) |
@@ -274,13 +274,36 @@ terminality of 8325 only after the fold.
 
 ### Identity K0 and K1a
 
-Under controlled randomness all 120 result objects of K0, K1a and the K1a
-variant with the journal at the service (two devices and serial) are
-byte-identical to main 69c70a1. Shared changes take effect only under
-`deviceSets`: the commutative P rule after a connect (below), the new op
-kinds, the X2/X12/X13/X21 scenario adjustments (allocator consents,
-authorized path, structural X13, wait for the peer's ticket), and the
-X18 oracle (K0/K1a pass or fail it as before).
+Under controlled randomness the 120 result objects of K0, K1a and the K1a
+variant with the journal at the service (two devices and serial) match
+main 69c70a1 byte for byte, with one exception: K0's X18 detail (failed on
+main and here) now also names the anchor-pair oracle's reasons. The
+oracle applies to every candidate, and its reasons are reported for every
+candidate (CodeRabbit #74). Outcomes and measures are the same in all
+120. Shared changes take effect only under `deviceSets`: the commutative
+P rule after a connect (below), the new op kinds, the X2/X12/X13/X21
+scenario adjustments (allocator consents, authorized path, structural
+X13, wait for the peer's ticket).
+
+### Device-set fold: conflicting proofs (CodeRabbit #74)
+
+Two certificates with the same key (kind, anchor, issuer) but different
+content (another key agreement or proof), or two different root key
+agreements for one root, are folded the same way in any order. The
+canonically smaller one stays, and each conflict is one finding (no K;
+test S1b). Before, the first one to arrive stayed.
+
+### Counter card through the sibling (8325.A5c)
+
+The counter card is sealed to every member of the set. If it first reaches
+a sibling that does not know the consent yet, it waits there as P
+(8910.4); the producer folds that P (and V) from the journal. If the
+producer's own card was already submitted by then, its own copy of the
+counter card counts as a repeat (8910.7, V known) and nothing connected:
+X15 K2-shared failed in 10 of 40 seeds. After a journal fold the producer
+now runs the A5c re-check (`connectOwed`, only the producer, so the person
+connects once; test C9). Afterwards 40 of 40 seeds pass for X15, and every
+cell of both variants gives the same outcome in 20 of 20 seeds.
 
 ### X21 phase end under device sets
 
