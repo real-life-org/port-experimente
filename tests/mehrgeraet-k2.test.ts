@@ -200,7 +200,13 @@ describe('K2 Schritt 1: Dieb, Restore, Fan-out', () => {
       const after = thief.log.slice(mark).filter((e) => e.type !== 'delivery-ack').length
       if (counterpartRevocation) expect(after).toBe(0)
       else expect(after).toBeGreaterThan(0) // carrier only: B and M keep sealing to A2's keys
-      expect(A.state.acts.length).toBe(1) // A1 still receives
+      if (counterpartRevocation) {
+        expect(A.state.acts.length).toBe(1) // A1 still receives: M names only keys of members
+        expect(thief.state.acts.length).toBe(0)
+      } else {
+        // carrier only: M does not know the revocation and may name a stock key of A2; then only the thief opens the ticket
+        expect(A.state.acts.length + thief.state.acts.length).toBe(1)
+      }
     }
   }, 120_000)
 
