@@ -195,6 +195,23 @@ async function untilStable(w: Welt15, person: string, max = 20): Promise<number>
   return -1
 }
 
+/**
+ * Phasenende in X21 (K2 Schritt 2): stabil wie `untilStable`, und solange noch Batches fehlen, während ein Gerät noch
+ * nachholt, weiter. Unter Gerätemengen kann ein Batch fehlen, dessen Inhalt schon über eine kumulative Revision einer
+ * Schwester im Zustand steht (Projektion gleich, Nachholen läuft noch); gemessen wird erst nach dem Nachholen. Fehlt ein
+ * Batch, ohne dass ein Gerät nachholt, endet die Phase sofort (das zählt als fehlend). Ohne fehlende Batches wie `untilStable`.
+ */
+async function untilSettled(w: Welt15, person: string, max = 40): Promise<number> {
+  const r = await untilStable(w, person, max)
+  if (r < 0) return r
+  let extra = 0
+  while ((missingBatches(w, person) ?? 0) > 0 && w.of(person).some((d) => d.syncPending) && extra < max) {
+    await w.rounds(1)
+    extra++
+  }
+  return r + extra
+}
+
 /** Beziehungen eines Geräts zu einer Gegenperson: Einträge und Tupel je Eintrag (B5: je Gerät geprüft). */
 function relationshipsTo(w: Welt15, d: HolderDevice, other: string): { entries: number; tuples: number } {
   const rs = d.state.relationships.filter((r) => !r.departed && r.tuples.some((t) => w.personOf(t.peer) === other))
@@ -1079,7 +1096,7 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       if (s.A.crashes.length) await s.A.reload()
       // Je Phase nach der Reparatur (Review 11 S2): fehlende Batch-Schlüssel und Geräte, deren Projektion nicht die Referenz ist.
       const settled = () => ({ missing: missingBatches(s.w, 'A') ?? -1, lost: s.w.of('A').filter((d) => M.canonical(d.projection()) !== ref).length })
-      const restore = await untilStable(s.w, 'A', 40)
+      const restore = await untilSettled(s.w, 'A', 40)
       const afterRestore = settled()
       s.w.carrier.faults.reset()
       // Phasen 2–5: je ein frischer Restore von A2, dann 15 Runden Verlust einer Art auf der Self-Adresse, dann ohne Fachoperation weiter.
@@ -1095,7 +1112,7 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
         await s.w.rounds(15)
         const b = behind()
         s.w.carrier.faults.reset()
-        const rounds = await untilStable(s.w, 'A', 40)
+        const rounds = await untilSettled(s.w, 'A', 40)
         return { behind: b, rounds, ...settled() }
       }
       const lf = s.w.carrier.logFaults
