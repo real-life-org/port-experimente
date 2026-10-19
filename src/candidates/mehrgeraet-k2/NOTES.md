@@ -50,13 +50,17 @@ revocation by an ever-admitted key names it; revocations are final, an
 old list cannot bring a key back (`model.ts` `setView`). The fold is a
 two-phase set: proofs only grow, so any order of arrival gives the same
 set. A revision carries all proofs the signer knows (cumulative), the
-digests of the revisions it saw (`deps`, signed) and a number per signer;
+digests of the revisions it knows (`deps`, signed) and a number per signer;
 6270 per signer only detects repetition and equivocation (same signer,
 same number, other content: the finding `Equivokation (6270)`, never K).
+Receive passes every valid revision to the fold, older or conflicting
+ones included; the fold decides in any order (below, "Receive passes
+everything to the fold").
 The signer of a revision must be the root or a key whose admission chain
 is in the revision itself (signed dependencies, never "in my list right
 now"). A revision signed by a key the receiver already knows as revoked
-is refused (a known revocation beats). Counterparts (B, M) know a
+is refused (a known revocation beats; the one receive-side filter left,
+see limit S1 below). Counterparts (B, M) know a
 person's set only from these proofs; the bench list of step 1 is gone for
 them (`DeviceDirectory` has no `recipients` any more).
 
@@ -90,7 +94,11 @@ allocation). A consent on any other device is a consent op without card
 when it folds the consent, never while catching up after a restore (a
 previous incarnation may already have produced: test C7), never after the
 act's expiry. The card payload names the digest of the producer's set
-revision (`set`), sent in the same step to B's voucher key. At B: the
+revision (`set`), sent in the same step to B's voucher key. The reference
+resolves against B's folded set state: it holds if B knows that revision
+itself or a folded revision covers it through its signed `deps`
+(cumulative revisions name every revision their signer knows), so a newer
+revision that overtakes the referenced one does not strand the card. At B: the
 signer must be `from` itself (the voucher key; any other key is a card
 from outside the set, refused without K, E3 (a)); without the referenced
 proof the card is deferred (`Missing('device-set')`: rolled back, no V,
@@ -99,8 +107,9 @@ without K (test C4); a contradicting `fromKeyAgreement` under the right
 `from` sets K (8850.6 (d), test C5); two different cards of the same
 signer stay 8910.8 K. The same set check runs in the buffer branch
 (8910.1–.3: no buffer entry before the proof), in the buffer selection
-(8640.15: a revoked root is discarded) and before the pending re-check
-(8325.A5c). One card identity: the producer records the payload digest
+(8640.15: a revoked root is discarded; the buffered card keeps its whole
+key binding and a contradicting `fromKeyAgreement` sets K there as on
+direct arrival, 8850.6 (d)) and before the pending re-check (8325.A5c). One card identity: the producer records the payload digest
 `ownCardV` (as V at B, 8910.0); `withdrawLosingCards` never withdraws a
 card as the loser of a digest comparison under device sets (there is no
 second card), only after a decline (rule 2). 2290: the record anchor stays
@@ -131,7 +140,11 @@ and sends one revision per relationship. Rotation: K2-strict withdraws the
 revoked device's own stock keys in the state (M stops naming them because
 their signer is revoked in the set it holds for A); K2-shared withdraws
 every live stock key (the revoked device knew them all), sends the empty
-revision (8535) and refills. Counter-run `counterpartRevocation: false`:
+revision (8535) and refills. The empty revision carries its clearing
+marks signed (`clears`: per writer of the person the highest revision the
+sender holds, siblings' writers from the journal, its own writer at the
+empty revision's number); M folds them as a maximum whenever the empty
+revision arrives, so the withdrawal dominates the refill in any order. Counter-run `counterpartRevocation: false`:
 none of this (carrier only).
 
 **Bench-side in step 2** (named, step 3): the person's own devices still
@@ -184,32 +197,66 @@ device opens which relationship, and so whose keys M names, varies with
 the seed); sums over 5 × 30 = 150 introductions, range per run in
 brackets.
 
-| variant | window | issued | refused by M | on A2's keys | of them while A2 sleeps | expired unseen (8155) | card after end of acceptance (8110.5) | connected |
-|---|---|---|---|---|---|---|---|---|
-| K1a | 2 d | 135 | 15 (3) | – | – | 0 | 0 | 135 |
-| K1a | 7 d | 145 | 5 (1) | – | – | 0 | 0 | 145 |
-| K1a | 30 d | 150 | 0 | – | – | 0 | 0 | 150 |
-| K2-strict | 2 d | 135 | 15 (3) | 40 (6–10) | 3 (0–1) | **3** (0–1) | 0 | 132 |
-| K2-strict | 7 d | 150 | 0 | 52 (9–14) | 9 (1–2) | **9** (1–2) | 0 | 141 |
-| K2-strict | 30 d | 150 | 0 | 34 (6–7) | 13 (2–3) | **13** (2–3) | 0 | 137 |
-| K2-shared | 2 d | 135 | 15 (3) | 40 (6–10) | 3 (0–1) | 0 | **3** (0–1) | 132 |
-| K2-shared | 7 d | 150 | 0 | 52 (9–14) | 9 (1–2) | 0 | **9** (1–2) | 141 |
-| K2-shared | 30 d | 150 | 0 | 59 (9–13) | 13 (2–3) | 0 | **13** (2–3) | 137 |
+| variant | window | issued | on A2's keys | of them while A2 sleeps | expired unseen (8155) | card never produced (8110.5) | connected |
+|---|---|---|---|---|---|---|---|
+| K1a | 2 d | 135 | – | – | 0 | 0 | 135 |
+| K1a | 7 d | 145 | – | – | 0 | 0 | 145 |
+| K1a | 30 d | 150 | – | – | 0 | 0 | 150 |
+| K2-strict | 2 d | 135 | 39 (6–10) | 3 (0–1) | **3** (0–1) | 0 | 132 |
+| K2-strict | 7 d | 150 | 53 (9–12) | 8 (1–2) | **8** (1–2) | 0 | 142 |
+| K2-strict | 30 d | 150 | 36 (6–9) | 9 (1–3) | **9** (1–3) | 0 | 141 |
+| K2-shared | 2 d | 135 | 39 (6–10) | 3 (0–1) | 0 | **3** (0–1) | 132 |
+| K2-shared | 7 d | 150 | 53 (9–12) | 8 (1–2) | 0 | **8** (1–2) | 142 |
+| K2-shared | 30 d | 150 | 52 (7–14) | 9 (1–3) | 0 | **9** (1–3) | 141 |
+
+Refusals by M (a row of their own, review 33 S2; reason and M's stock at
+that moment, `stockAt` on both M devices, counted with the same checks as
+the choice in `introduce`):
+
+| variant | window | refused | reason | stock at the refusal |
+|---|---|---|---|---|
+| K1a | 2 d | 15 (3) | no nameable key | both sides: listed, 0 usable (8470: less than the act lifetime left), on both M devices |
+| K1a | 7 d | 5 (1) | no nameable key | C's side: 5 listed, 0 usable; A's side nameable |
+| K2-strict, K2-shared | 2 d | 15 (3) | no nameable key | C's side: 3 listed, 0 usable; A's side nameable |
+| all | 30 d (K2 also 7 d) | 0 | | |
+
+**Evidence per loss** (review 33 S2: `timeModel` records, per lost
+introduction, the measured cause, never the outcome read backwards; test
+M2b checks the structure): the named key's device (holder; K2: the
+allocator), issue time, consent cutoff (8155), act expiry (8110.5), when a
+device of A first held the act, when the user consented, when the
+allocator produced the card, the steps in which the holder was online and
+a ticket received in that round could still have been shown before the
+cutoff, the steps in which the allocator was online between consent and
+expiry, and the holder's measured offline windows. Result over all 5 ×
+150 introductions: every 8155 loss (strict 3/8/9) is a ticket on A2's key,
+issued inside A2's offline window, with the cutoff inside it, and A2 online
+in 0 usable steps before the cutoff; every 8110.5 loss (shared 3/8/9) is
+consented, has no card on the allocator A2, and A2 was online in 0 steps
+between consent and act expiry (the producer does not produce after
+expiry, `produce`); no loss of another kind. The refusals are not losses
+of issued introductions: they come from the counterpart's stock (C, one
+device, introduced every fourth day: with a 2-day window its keys no
+longer have the act lifetime left when M would name them), not from A's
+sleeping device; in K1a at 2 days A's side is also unusable.
 
 Reading: every loss is a ticket on a key of the sleeping device issued
 while it sleeps, and in every run the loss equals that count. Both
 variants lose the same introductions: K2-strict before consent (only the
 holder opens the ticket, the consent cutoff passes unseen), K2-shared after
-consent (any device sees and consents, but the allocating device produces
-the card only after the end of acceptance). Shared stock keys move the
-loss from 8155 to 8110.5; they do not remove it, because production stays
-with the allocator (E2 (iv)). The loss is bounded by the sleeping
-device's listed share (≤ 3 keys, MV-9 under device keys), not by the
-length of the sleep; it grows with the window (2 % at 2 days, 6 % at 7, 9 %
-at 30), and a short window (2 days) lets those keys age out of M's view
-before they are named, at the price of three refusals by M per run for
-want of a nameable key (K1a the same). K1a (one seed, every device opens
-and produces) loses nothing.
+consent (any device sees and consents, but the allocating device stays
+offline until the act expires and produces no card). Shared stock keys
+move the loss from 8155 to 8110.5; they do not remove it, because
+production stays with the allocator (E2 (iv)). The loss is bounded by the
+sleeping device's listed share (≤ 3 keys, MV-9 under device keys), not by
+the length of the sleep; it grows with the window (2 % at 2 days, 5 % at
+7, 6 % at 30). K1a (one seed, every device opens and produces) loses
+nothing. These numbers replace the earlier 3/9/13 (a throwaway script
+whose seeding is not on record; review 33 confirmed only one seed). Now
+the seeds 1–5 of the seed-sweep generator, on the head with the review-33
+fix. Grid dependence: steps of 6 hours; a ticket counts as shown only
+from the step after its arrival, so a coarser grid can only move losses at
+the window edges (not measured separately).
 
 ### X9 thief window, rotation, enrolment fan-out
 
@@ -276,7 +323,8 @@ terminality of 8325 only after the fold.
 
 Under controlled randomness the 120 result objects of K0, K1a and the K1a
 variant with the journal at the service (two devices and serial) match
-main 69c70a1 byte for byte, with one exception: K0's X18 detail (failed on
+main 69c70a1 byte for byte (checked again after the review-33 fix), with
+one exception: K0's X18 detail (failed on
 main and here) now also names the anchor-pair oracle's reasons. The
 oracle applies to every candidate, and its reasons are reported for every
 candidate (CodeRabbit #74). Outcomes and measures are the same in all
@@ -285,13 +333,43 @@ P rule after a connect (below), the new op kinds, the X2/X12/X13/X21
 scenario adjustments (allocator consents, authorized path, structural
 X13, wait for the peer's ticket).
 
-### Device-set fold: conflicting proofs (CodeRabbit #74)
+### Receive passes everything to the fold (review 33)
 
-Two certificates with the same key (kind, anchor, issuer) but different
-content (another key agreement or proof), or two different root key
-agreements for one root, are folded the same way in any order. The
-canonically smaller one stays, and each conflict is one finding (no K;
-test S1b). Before, the first one to arrive stayed.
+Gate review 33 found four blockers of one class: the receive path
+filtered or discarded input before the fold saw it, so the result
+depended on arrival order. One contract replaces the four spots, modelled
+on the withdrawal marks of K1a step 4 (a fold as maximum, order-free):
+
+- **Set revisions** (`holder.ts` dispatch `TYPES.deviceSet`): every valid
+  revision reaches the fold with all its proofs, its number, its digest
+  and its signed `deps`; nothing is dropped as "already known" or "older".
+  The fold (`model.ts` op `device-set`) is a two-phase set; two proofs
+  with the same key (kind, anchor, issuer) and different content keep the
+  canonically smallest in the state, both versions are kept for the
+  finding (`equivocal`), one finding per conflict; per signer the highest
+  number counts, the same number with another digest is a 6270
+  equivocation (finding, canonically smaller digest). Test R1: two
+  conflicting revisions no. 99 in both orders and duplicated give the
+  same set (B1; S1b covers the model alone).
+- **Card set reference**: `seen` grows by every digest a folded revision
+  names in `deps`; a card on revision 1 resolves when only revision 2
+  (deps: revision 1) arrived, and the late revision 1 folds instead of
+  being refused (test R2, B2). A card whose root a covering revision
+  revokes is refused without K (E3 (a)); without any proof the card stays
+  deferred and the sender reports `failed(expired-by-adapter-policy)`
+  after twelve rounds, never silently (test R2b).
+- **Buffered card**: the buffer keeps `fromKeyAgreement`; on assignment
+  to the ticket 8850.6 (d) sets K, no connect (test R3, B3).
+- **Shared rotation**: the empty revision's clearing marks are signed in
+  the revision and fold as a maximum; M also folds a revision of a writer
+  lower than the one it holds (keys unchanged, marks folded) instead of
+  refusing it. Three devices, A3 offline, A1 revokes A2: in forward and
+  reverse arrival order and with every frame duplicated, no key of A3
+  that A2 knew stays nameable at either M device, and the refill stays
+  nameable (test R4, B4). K1a keeps its receiver-side marks (identical to
+  main).
+
+The one receive-side filter left is S1 (limits below).
 
 ### Counter card through the sibling (8325.A5c)
 
@@ -319,6 +397,24 @@ batches it equals `untilStable`, so K0 and K1a are unchanged (identity
 above). After the change 60 of 60 seeds pass for K2-shared and 30 of 30 for
 K2-strict.
 
+### Seed sweep (review 33 S3, standing bench rule)
+
+`tests/mehrgeraet-seeds.test.ts`: the X15 matrix under 20 fixed seeds
+(1–20) for K2-strict, K2-shared and K1a. Every random source is seeded
+from one versioned generator (LCG, version 1): `randomBytes` and
+`randomUUID` from `node:crypto`, the global `crypto.randomUUID` and
+`crypto.getRandomValues`. Each seed must give exactly the outcome table
+above (K2) and K1a's table (17/2/1, ≈ X3, X18), outcome, ≈ flag and crash
+flag per cell; a failure names the variant, the seed and the cells. Every
+counterexample a sweep finds becomes a permanent test (the review-33
+reorderings are R1–R4; the sweep after the fix found none).
+
+After the fix: 60 of 60 (20 seeds × 3 variants) give the table. Runtime:
+one matrix per seed and variant takes about 32 s on an idle machine, the
+full sweep about 32 minutes on one core (here six shards, 15–26 minutes
+under load). The default run (CI) takes seed 1 of each variant (97 s);
+`SEEDS=all` runs all 20, like `REPORT=1` for the report.
+
 ### Limits of step 2
 
 - The own device list is still bench-side (above); full revocation
@@ -332,15 +428,27 @@ K2-strict.
 - A thief admitted before the revocation keeps what it admitted (chain
   revocation is K2b); a revision of a revoked device that reached a
   counterpart before the revocation stays (history, E1 (a)); after it, it
-  is refused. Mutual revocations (thief revokes the honest device first)
+  is refused.
+- **S1, the remaining order dependence**: a revision signed by a key the
+  receiver already knows as revoked is refused before the fold. So the
+  proofs a revoked device admitted count only where its revision arrived
+  before the revocation: A2 admits a further key, A1 revokes A2; admission
+  first, the key stays a member at B; revocation first, it never becomes
+  one (review 33, reproduced). Order independence holds for everything
+  else on the receive path (proofs, numbers, deps, marks); for proofs of a
+  revoked issuer it holds only once chain revocation (K2b) makes every
+  proof by a revoked key void regardless of arrival. Mutual revocations (thief revokes the honest device first)
   leave the honest device out: K2b root revocation.
 - K2-strict: a ticket on the key of an offline or lost device waits for
   that device; K2-shared moves the wait to the card (the allocating device
   produces). X23 measures both.
 - A set proof that arrives at a stock key for a card that never comes
-  stays in the state (bounded only by acts); `deps` grows with every
-  revision; a lower set revision is refused without receipt like 6270
-  revisions of the stock (the sender repeats until Delivery gives up).
+  stays in the state (bounded only by acts); `deps` (and with it `seen`)
+  grows with every revision; a lower set revision or stock revision folds
+  and is receipted (it changes nothing the fold already holds). `deps` are
+  taken as signed: a member could name a digest that never existed, which
+  only resolves card references to its own set (the set content comes
+  from the proofs alone).
 - The commutative P rule (a pending card does not set P after the act
   connected) holds only for acts with a producer card (`ownCardV`); K1a's
   fold keeps the old order-dependent rule to stay identical (it converges
@@ -369,8 +477,10 @@ K2-strict.
    and 8850.6 (d); a card under another key than `from` is refused before
    8910 without K; set equivocation is a finding of its own.
 3. **Card set reference**: the card names the set revision of its root;
-   8910.1–.8, 8640.15, 8325.A5c defer a card without that proof and refuse
-   one whose root is revoked.
+   it resolves against the folded set state (the revision itself or a
+   revision covering it through `deps`); 8910.1–.8, 8640.15, 8325.A5c
+   defer a card without that proof, refuse one whose root is revoked, and
+   run the full 8850.6 check on every entry path (buffer included).
 4. **8155 and 8110.5 under device keys**: with keys per device the
    consent cutoff can pass unseen (strict) and the end of acceptance can
    pass before the producing device returns (shared); X23 gives the
@@ -381,6 +491,10 @@ K2-strict.
    same bytes; step 3.
 6. **MV-9 under device keys**: the quota per device travels with the keys
    it lists; 8485/8512 per device.
+7. **6270 receive contract**: receive never filters; conflicting proofs
+   fold to the canonical smallest with both kept for the finding; empty
+   revisions (8535) carry their clearing marks signed, so withdrawal is
+   order-free (8535 under per-signer writers).
 
 ## Step 1 (18 October 2026)
 
@@ -725,5 +839,6 @@ throwaway script, numbers from one run; the frame counts are asserted in
 ```sh
 export PATH=/home/fritz/.n/n/versions/node/24.21.0/bin:$PATH
 pnpm vitest run tests/mehrgeraet-k2.test.ts
+SEEDS=all pnpm vitest run tests/mehrgeraet-seeds.test.ts   # 20 seeds × K2-strict, K2-shared, K1a (default: seed 1)
 REPORT=1 pnpm vitest run report   # columns k2-device-keys and k2-shared-stock in the multi-device port
 ```

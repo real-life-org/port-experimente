@@ -830,6 +830,160 @@ describe('K2 Schritt 2: Gegenkarte über das Schwestergerät (8325.A5c)', () => 
   }, 120_000)
 })
 
+// Review 33 (gate review on a39f622): the receive path filtered or discarded before the fold saw the input, so the result
+// depended on arrival order. One contract: receive passes everything to the fold, the fold is order-free (like the
+// withdrawal marks of K1a step 4). Each test runs both arrival orders and with every frame duplicated.
+type Order = 'forward' | 'reverse' | 'duplicate'
+const ORDERS: Order[] = ['forward', 'reverse', 'duplicate']
+const submissionOf = (d: HolderDevice, digest: string) => (d as unknown as { zusteller: { submissions: Map<string, { report: { state: string; reason?: string } | null }> } }).zusteller.submissions.get(digest)
+
+describe('K2 Schritt 2: Review 33, Empfang filtert nicht, die Faltung entscheidet', () => {
+  it('R1. B1 am Empfangspfad: zwei widersprüchliche Nachweise (gleiche Art, Anker, Aussteller; anderer Vereinbarungsschlüssel) in zwei Revisionen Nr. 99: in jeder Reihenfolge und mit Duplikaten der kanonisch kleinere, beide Nachweise für den Befund gehalten, ein Befund je Konflikt', async () => {
+    for (const order of ORDERS) {
+      const { w, A, A2, B, ab } = await abWorld()
+      const key = await A2.cand.keys.pair('pool/999')
+      const alt = await A2.cand.keys.pair('pool/998')
+      const set = A.setOf(ab.x.own)!
+      const cs = await Promise.all([key.rkid, alt.rkid].map((keyAgreement) => raw(A).cert(ab.x.ownKey, { root: ab.x.own, kind: 'admit', anchor: key.anchor, keyAgreement })))
+      const smaller = [...cs].sort((x, y) => M.canonical(x).localeCompare(M.canonical(y)))[0]!
+      if (order === 'duplicate') w.carrier.faults.duplicate(true)
+      for (const c of order === 'reverse' ? [...cs].reverse() : cs) {
+        for (let i = 0; i < (order === 'duplicate' ? 2 : 1); i++) await raw(A).sendDoc(TYPES.deviceSet, ab.x.ownKey, ab.x.peer, ab.x.peerKeyAgreement, set.rootKeyAgreement, { root: ab.x.own, rootKeyAgreement: set.rootKeyAgreement, revision: 99, deps: [], entries: [...Object.values(set.certs), c] as unknown as Json[] })
+        await w.rounds(2)
+      }
+      w.carrier.faults.reset()
+      await w.rounds(2)
+      const got = M.setView(B.setOf(ab.x.own)).members.find((m) => m.anchor === key.anchor)!
+      expect(`${order}: ${got.keyAgreement}`).toBe(`${order}: ${smaller.keyAgreement}`)
+      const held = B.setOf(ab.x.own)!.equivocal?.[M.certKey(smaller)] ?? []
+      expect(held.map((c) => c.keyAgreement).sort(), order).toEqual(cs.map((c) => c.keyAgreement).sort())
+      expect(B.state.findings.filter((f) => f.includes('zweimal mit anderem Inhalt') && f.includes('Nachweis admit')), order).toHaveLength(1)
+      expect(B.state.findings.filter((f) => f.includes('Revision 99 zweimal mit anderem Inhalt')), order).toHaveLength(1)
+      expect(B.state.acts.some((a) => a.k), order).toBe(false)
+    }
+  }, 240_000)
+
+  it('R2. B2: Karte auf Revision 1, zuerst kommt nur die kumulative Revision 2 (deps: Revision 1) an: B verbindet; die spätere Revision 1 wird gefaltet, nicht abgewiesen', async () => {
+    for (const order of ['forward', 'duplicate'] as Order[]) {
+      const s = await world(k2())
+      const act = await introduced(s)
+      await s.B.consent(act)
+      await s.w.rounds(2)
+      const prod = allocatorOf(s.A, act) === 'A1' ? s.A : s.A2
+      s.w.carrier.faults.drop((f) => ['device-set', 'introduction-card'].includes(s.w.frameOrigin(f.bytes)?.kind ?? ''))
+      await prod.consent(act)
+      await s.w.rounds(2)
+      const a = M.act(prod.state, act)
+      const set = prod.setOf(a.ownCard!.anchor)!
+      const prev = M.own(set.revs, signerId(set.root))!
+      const newer = await raw(prod).sendDoc(TYPES.deviceSet, a.ownCardKey!, a.voucher.anchor, a.voucher.keyAgreement, set.rootKeyAgreement, { root: set.root, rootKeyAgreement: set.rootKeyAgreement, revision: prev.n + 1, deps: [prev.digest], entries: Object.values(set.certs) as unknown as Json[] })
+      s.w.carrier.faults.reset()
+      if (order === 'duplicate') s.w.carrier.faults.duplicate(true)
+      s.w.carrier.faults.drop((f) => s.w.frameOrigin(f.bytes)?.kind === 'device-set' && !Buffer.from(f.bytes).equals(Buffer.from(prod.intents.get(newer!.digest)!.bytes)))
+      await s.w.until(() => M.act(s.B.state, act).state === 'connected', 6)
+      expect(`${order}: ${M.act(s.B.state, act).state}`).toBe(`${order}: connected`)
+      s.w.carrier.faults.reset()
+      await s.w.rounds(4)
+      expect(s.B.setOf(set.root)!.seen.includes(prev.digest!)).toBe(true)
+      expect(s.B.state.findings.filter((f) => f.includes('unter der gehaltenen')), order).toEqual([])
+      expect(M.act(s.B.state, act).k).toBe(false)
+    }
+  }, 240_000)
+
+  it('R2b. B2, E3 (a): widerruft die kumulative Revision 2 die Wurzel der Karte (deps: Revision 1), wird die Karte auf Revision 1 ohne K abgewiesen; ohne jeden Mengennachweis bleibt die Karte zurückgestellt und der Sender meldet nach zwölf Runden `failed`, nie still', async () => {
+    const s = await world(k2())
+    const act = await introduced(s)
+    await s.B.consent(act)
+    await s.w.rounds(2)
+    const prod = allocatorOf(s.A, act) === 'A1' ? s.A : s.A2
+    const other = prod === s.A ? s.A2 : s.A
+    s.w.carrier.faults.drop((f) => ['device-set', 'introduction-card'].includes(s.w.frameOrigin(f.bytes)?.kind ?? ''))
+    await prod.consent(act)
+    await s.w.until(() => !!M.act(other.state, act).ownCardKey, 10)
+    const a = M.act(other.state, act)
+    const root = a.ownCard!.anchor
+    const set = other.setOf(root)!
+    const prev = M.own(set.revs, signerId(root))!
+    const rev = await raw(other).cert(a.ownCardKey!, { root, kind: 'revoke', anchor: root, keyAgreement: null })
+    const newer = await raw(other).sendDoc(TYPES.deviceSet, a.ownCardKey!, a.voucher.anchor, a.voucher.keyAgreement, (await other.cand.keys.pair(a.ownCardKey!)).rkid, { root, rootKeyAgreement: set.rootKeyAgreement, revision: 2, deps: [prev.digest], entries: [...Object.values(set.certs), rev] as unknown as Json[] })
+    s.w.carrier.faults.reset()
+    s.w.carrier.faults.drop((f) => s.w.frameOrigin(f.bytes)?.kind === 'device-set' && !Buffer.from(f.bytes).equals(Buffer.from(other.intents.get(newer!.digest)!.bytes)))
+    await s.w.rounds(6)
+    const b = M.act(s.B.state, act)
+    expect([b.state, b.v, b.k]).toEqual(['consented', null, false])
+    expect(s.B.state.findings.some((f) => f.includes('ein bekannter Widerruf schlägt den älteren Bezug'))).toBe(true)
+
+    // Bounded deferral: no set proof ever reaches B; the card waits (no V, no K), the sender reports failed.
+    const t = await world(k2())
+    const act2 = await introduced(t)
+    await t.B.consent(act2)
+    await t.w.rounds(2)
+    const prod2 = allocatorOf(t.A, act2) === 'A1' ? t.A : t.A2
+    t.w.carrier.faults.drop((f) => t.w.frameOrigin(f.bytes)?.kind === 'device-set' && t.w.carrier.registeredAt(f.address).some((d) => d.startsWith('B')))
+    await prod2.consent(act2)
+    await t.w.rounds(16)
+    const b2 = M.act(t.B.state, act2)
+    expect([b2.state, b2.v, b2.k]).toEqual(['consented', null, false])
+    expect(t.B.deferredCards).toBeGreaterThan(0)
+    const digest = M.act(prod2.state, act2).ownCardDigest!
+    expect(submissionOf(prod2, digest)?.report).toEqual({ state: 'failed', reason: 'expired-by-adapter-policy' })
+  }, 240_000)
+
+  it('R3. B3: eine gepufferte Karte behält ihre Schlüsselbindung (`fromKeyAgreement`); bei der Zuordnung zum Ticket setzt eine widersprüchliche Bindung K (8850.6 (d)), keine Verbindung', async () => {
+    const s = await world(k2())
+    s.w.carrier.faults.drop((f) => s.w.frameOrigin(f.bytes)?.kind === 'introduction-ticket' && s.w.carrier.registeredAt(f.address).includes('B1'))
+    const r = await s.Mm.introduce(s.am.y.id, s.bm.y.id)
+    expect('act' in r).toBe(true)
+    const act = (r as { act: string }).act
+    await s.w.rounds(3)
+    const prod = allocatorOf(s.A, act) === 'A1' ? s.A : s.A2
+    s.w.carrier.faults.drop((f) => s.w.frameOrigin(f.bytes)?.kind === 'introduction-card' || (s.w.frameOrigin(f.bytes)?.kind === 'introduction-ticket' && s.w.carrier.registeredAt(f.address).includes('B1')))
+    await prod.consent(act)
+    await s.w.rounds(3)
+    const a = M.act(prod.state, act)
+    const stock = M.findRel(prod.state, a.mediator)!.stock.find((k) => k.anchor === a.own)!
+    const set = M.own(prod.setOf(a.ownCard!.anchor)!.revs, signerId(a.ownCard!.anchor))!.digest
+    const sent = await raw(prod).sendDoc(TYPES.card, stock.key, a.voucher.anchor, a.voucher.keyAgreement, stock.keyAgreement, { act, expiresAt: a.expiresAt, from: a.own, fromKeyAgreement: a.voucher.keyAgreement, to: a.voucher.anchor, card: a.ownCard, set })
+    s.w.carrier.faults.reset()
+    s.w.carrier.faults.drop((f) => (s.w.frameOrigin(f.bytes)?.kind === 'introduction-card' && !Buffer.from(f.bytes).equals(Buffer.from(prod.intents.get(sent!.digest)!.bytes))) || (s.w.frameOrigin(f.bytes)?.kind === 'introduction-ticket' && s.w.carrier.registeredAt(f.address).includes('B1')))
+    await s.w.rounds(2)
+    expect((s.B as unknown as { buffer: Map<string, unknown> }).buffer.size).toBe(1)
+    s.w.carrier.faults.reset()
+    s.w.carrier.faults.drop((f) => s.w.frameOrigin(f.bytes)?.kind === 'introduction-card')
+    await s.w.rounds(3)
+    await s.B.consent(act)
+    await s.w.rounds(3)
+    const b = M.act(s.B.state, act)
+    expect(b.k).toBe(true)
+    expect(b.state).not.toBe('connected')
+  }, 120_000)
+
+  it('R4. B4: shared, drei Geräte, A3 offline, A1 widerruft A2: in jeder Ankunftsreihenfolge von leerer Revision und Nachfüllung bei M, und mit Duplikaten, ist kein Schlüssel von A3, den A2 kannte, für M noch benennbar', async () => {
+    for (const order of ORDERS) {
+      const s = await world(k2({ stock: 'shared', devices: 3 }), 3)
+      await s.w.rounds(4)
+      const A3 = s.As[2]!
+      const old = M.rel(s.A.state, s.am.x.id).stock.filter((k) => k.by === 'A3' && k.state === 'active')
+      const known = old.filter((k) => (s.A2.cand as K2Device).holdsStock(k))
+      expect(known.length).toBeGreaterThan(0)
+      A3.online = false
+      if (order === 'reverse') s.w.carrier.faults.reverse(true)
+      if (order === 'duplicate') s.w.carrier.faults.duplicate(true)
+      await s.w.revoke(s.A, s.A2)
+      await s.w.rounds(4)
+      s.w.carrier.faults.reset()
+      await s.w.rounds(3)
+      for (const m of s.w.of('M')) {
+        const r = M.rel(m.state, s.am.y.id)
+        const listed = (m as unknown as { unrevokedKeys(r: M.Relationship): M.ListedKey[] }).unrevokedKeys(r)
+        expect(`${order} ${m.name}: ${listed.filter((k) => known.some((o) => o.anchor === k.anchor)).length}`).toBe(`${order} ${m.name}: 0`)
+      }
+      // The refill after the withdrawal stays nameable (the mark clears only what the empty revision covered).
+      expect(s.w.of('M').some((m) => (m as unknown as { unrevokedKeys(r: M.Relationship): M.ListedKey[] }).unrevokedKeys(M.rel(m.state, s.am.y.id)).length > 0), order).toBe(true)
+    }
+  }, 300_000)
+})
+
 describe('K2 Schritt 2: Messungen (X23, Diebesfenster, Rotation, Fan-out, Ankerpaar)', () => {
   it('M1. Ankerpaar-Orakel (X18): beide Personen halten dasselbe Paar samt Vereinbarungsschlüssel, jedes Mitglied öffnet, was die Gegenseite versiegelt; Gegenlauf: ein verfälschtes Paar fällt', async () => {
     const s = await world(k2())
@@ -872,9 +1026,44 @@ describe('K2 Schritt 2: Messungen (X23, Diebesfenster, Rotation, Fan-out, Ankerp
         if (stock === 'strict') expect(r.missedCards).toBe(0) // the holder that sees the ticket produces the card
         // Losses come only from tickets on the dormant device's keys issued while it sleeps (its listed share, MV-9).
         expect(r.expiredUnseen + r.missedCards).toBeLessThanOrEqual(r.onDormantKeyWhileAsleep)
+        // Review 33 S2: the cause is measured per loss (M2b checks the evidence fields); here: one cause per variant, all on A2.
+        expect(r.losses.every((l) => l.holder === 'A2' && l.cause === (stock === 'strict' ? 'expired-unseen-8155' : 'card-not-produced-8110.5'))).toBe(true)
       }
     }
-  }, 2_400_000)
+  }, 3_600_000)
+
+  it('M2b. X23 belegt (Review 33 S2): jede verlorene Vorstellung trägt ihre gemessene Ursache (8155: Ticket ungesehen verfallen, mit Zeitpunkten und den Online-Schritten des Halters; 8110.5: Karte nie erzeugt, mit den Online-Schritten des Zuteilers bis zum Annahmeende), jede Verweigerung durch M ihren Grund und Ms Vorrat in dem Moment', async () => {
+    const runs = [
+      { name: 'strict', f: (o: { stockLifetimeMs: number; budget: number }) => k2({ stock: 'strict', ...o }) },
+      { name: 'shared', f: (o: { stockLifetimeMs: number; budget: number }) => k2({ stock: 'shared', ...o }) },
+      { name: 'k1a', f: (o: { stockLifetimeMs: number; budget: number }) => k1a(o) },
+    ]
+    for (const { name, f } of runs) {
+      const r = await timeModel(f, { lifetimeDays: name === 'k1a' ? 2 : 30, days: 12, dormant: [[3, 9]] })
+      expect(r.losses.length, name).toBe(r.issued - r.connected)
+      const sum = Object.values(r.causes).reduce((a, b) => a + b, 0)
+      expect(sum, name).toBe(r.losses.length)
+      for (const l of r.losses) {
+        if (l.cause === 'expired-unseen-8155') {
+          expect(l.seenDay, `${name}: ${JSON.stringify(l)}`).toBeNull()
+          expect(l.holderOnlineStepsBeforeCutoff, `${name}: ${JSON.stringify(l)}`).toBe(0)
+          expect(l.cutoffDay, name).toBeGreaterThan(l.issuedDay)
+        } else if (l.cause === 'card-not-produced-8110.5') {
+          expect(l.consentedDay, name).not.toBeNull()
+          expect(l.producedDay, `${name}: ${JSON.stringify(l)}`).toBeNull()
+          expect(l.allocatorOnlineStepsBeforeExpiry, `${name}: ${JSON.stringify(l)}`).toBe(0)
+        } else expect(l.cause, `${name}: ${JSON.stringify(l)}`).toBe('card-produced-not-connected')
+      }
+      expect(r.refusals.length, name).toBe(r.refused)
+      for (const x of r.refusals) {
+        expect(x.reason, name).toContain('kein benennbarer Schlüssel')
+        // M refused: on at least one side no M device had a nameable key at that moment.
+        expect(Object.values(x.stock).some((side) => Object.values(side).every((d) => d.nameable === 0)), `${name}: ${JSON.stringify(x)}`).toBe(true)
+      }
+      if (name === 'strict') expect(r.causes['card-not-produced-8110.5'] ?? 0).toBe(0)
+      if (name === 'shared') expect(r.causes['expired-unseen-8155'] ?? 0).toBe(0)
+    }
+  }, 1_800_000)
 
   it('M3. X9 Diebesfenster je Variante: zwischen Diebstahl und Widerruf liest der Dieb, was A2s Schlüssel öffnen (shared mehr: jeder Vorrats-Schlüssel); nach dem Widerruf nichts Neues', async () => {
     const strict = await thiefWindow(k2({ stock: 'strict' }))

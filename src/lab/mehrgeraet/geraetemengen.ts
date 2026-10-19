@@ -85,15 +85,47 @@ async function base(candidate: MultiDeviceCandidate, thirds: string[] = [], step
   return { w, A, A2, Mm, M2, am, cs, introduce }
 }
 
+/** Ursache einer verlorenen Vorstellung in X23, aus Messungen (Review 33 S2), nie aus dem Ergebnis erschlossen. */
+export type X23Cause = 'expired-unseen-8155' | 'card-not-produced-8110.5' | 'card-produced-not-connected'
+/** Beleg je verlorener Vorstellung (Tage seit Beginn; Online-Schritte = Schritte, in denen das Gerät online war). */
+export interface X23Loss {
+  act: string
+  cause: X23Cause
+  /** Gerät, dessen Vorrats-Schlüssel M benannt hat (K2: Zuteiler und, strict, einziger Halter); K1a: die Person. */
+  holder: string
+  issuedDay: number
+  /** Consent-Schnitt 8155 (Aktablauf − Reserve) und Annahmeende 8110.5 (Aktablauf). */
+  cutoffDay: number
+  expiresDay: number
+  /** Erstes Gerät der Person, das den Akt vor dem Schnitt hielt, und wann; null = nie. */
+  seenDay: number | null
+  consentedDay: number | null
+  /** Wann der Zuteiler die Karte erzeugte (eigene Karte im Zustand des Zuteilers); null = nie. */
+  producedDay: number | null
+  /** Schritte zwischen Ausstellung und Schnitt, in denen der Halter online war und ein in dieser Runde empfangenes Ticket vor dem Schnitt noch hätte zeigen können (8155-Beleg). */
+  holderOnlineStepsBeforeCutoff: number
+  /** Schritte zwischen Zustimmung und Annahmeende, in denen der Zuteiler online war (8110.5-Beleg). */
+  allocatorOnlineStepsBeforeExpiry: number
+  /** Gemessene Offline-Fenster des Halters (Tage). */
+  holderOffline: Array<[number, number | null]>
+}
+/** Beleg je Verweigerung durch M: Grund und Ms Vorrat je Seite und M-Gerät in dem Moment (`stockAt`). */
+export interface X23Refusal {
+  day: number
+  reason: string
+  stock: Record<'A' | 'C', Record<string, { listed: number; usable: number; unconsumed: number; nameable: number }>>
+}
+
 /**
  * X23 Zeitmodell (Plan 6r): ein ruhendes Gerät (A2, offline an den Tagen `dormant`, Vorgabe Tag 8 bis 22: 14 von 30), M
  * stellt A täglich jemandem vor, der Nutzer stimmt auf dem ersten Gerät zu, das den Akt zeigt, die Gegenperson sofort. Die
  * Lebensdauer der Vorrats-Schlüssel ist das Benennfenster `lifetimeDays` jenseits der Aktdauer (8470 verlangt, dass ein
  * Schlüssel beim Benennen noch die ganze Aktdauer gilt; expiresAt = Zuteilung + act-lifetime + act-skew + Fenster). Gezählt
- * je Vorstellung: ungesehen verfallen (kein Gerät von A hielt den Akt vor dem Consent-Schnitt 8155), Karte nach dem
- * Annahmeende (A hat zugestimmt, die Gegenperson ist nie verbunden: 8110.5), verbunden, sonst; dazu Vorstellungen, die M
- * mangels benennbaren Schlüssels nicht ausstellen konnte. Der Nutzer bestätigt das Annahmebudget täglich (8515), der
- * Geräteanteil ist aufgehoben (1000): gemessen wird nur die Zeit.
+ * je Vorstellung: ungesehen (kein Gerät von A hielt den Akt vor dem Consent-Schnitt 8155), zugestimmt ohne Verbindung,
+ * verbunden, sonst; dazu Vorstellungen, die M mangels benennbaren Schlüssels nicht ausstellen konnte. Review 33 S2: die
+ * Ursache jedes Verlusts ist ein Beleg aus Messungen je Schritt (Online-Schritte des Halters vor dem Schnitt, des Zuteilers
+ * vor dem Annahmeende, Erzeugungszeitpunkt der Karte), jede Verweigerung trägt Ms Vorrat in dem Moment. Der Nutzer
+ * bestätigt das Annahmebudget täglich (8515), der Geräteanteil ist aufgehoben (1000): gemessen wird nur die Zeit.
  */
 export async function timeModel(factory: (o: { stockLifetimeMs: number; budget: number }) => MultiDeviceCandidate, opts: { lifetimeDays: number; days?: number; dormant?: Array<[number, number]>; stepHours?: number; everyDays?: number }) {
   const days = opts.days ?? 30
@@ -104,15 +136,27 @@ export async function timeModel(factory: (o: { stockLifetimeMs: number; budget: 
   const names = ['C0', 'C1', 'C2', 'C3']
   const s = await base(factory({ stockLifetimeMs: lifetime, budget: 1000 }), names, stepMs)
   const start = Date.parse(s.w.clock.now())
-  const acts = new Map<string, { C: HolderDevice; cutoff: number; seenAt: number | null; consentedAt: number | null; dormantKey: boolean; exposed: boolean }>()
+  const dayOf = (t: number) => (t - start) / DAY
+  type Track = { C: HolderDevice; holder: string; issued: number; cutoff: number; expires: number; seenAt: number | null; consentedAt: number | null; producedAt: number | null; holderOnline: number; allocatorOnline: number; dormantKey: boolean; exposed: boolean }
+  const acts = new Map<string, Track>()
+  const refusals: X23Refusal[] = []
+  // Gemessene Offline-Fenster je Gerät von A (aus den Umschaltungen, nicht aus der Vorgabe).
+  const offline = new Map<string, Array<[number, number | null]>>(s.w.of('A').map((d) => [d.name, []]))
   const steps = Math.round((days * DAY) / stepMs)
   const tail = Math.round((M.PARAM.actLifetimeMs + 2 * DAY) / stepMs)
   let k = 0
   let refused = 0
+  const deviceOf = (name: string) => s.w.of('A').find((d) => d.name === name)
   for (let i = 1; i <= steps + tail; i++) {
     s.w.clock.advance(stepMs)
     const day = (Date.parse(s.w.clock.now()) - start) / DAY
+    const was = s.A2.online
     s.A2.online = !dormant.some(([a, b]) => day >= a && day < b)
+    if (was !== s.A2.online) {
+      const w = offline.get(s.A2.name)!
+      if (!s.A2.online) w.push([day, null])
+      else if (w.length) w[w.length - 1]![1] = day
+    }
     if (i % every === 0) {
       // 8515: der Nutzer bestätigt täglich die Annahmen, die er sieht (auf einem Gerät, das gerade da ist); so bindet die
       // harte Grenze 8510 nicht, gemessen wird die Zeit.
@@ -122,17 +166,30 @@ export async function timeModel(factory: (o: { stockLifetimeMs: number; budget: 
     }
     if (i <= steps && i % every === 0) {
       const c = s.cs[k++ % s.cs.length]!
+      const stock = { A: { [s.Mm.name]: s.Mm.stockAt(s.am.y.id), [s.M2.name]: s.M2.stockAt(s.am.y.id) }, C: { [s.Mm.name]: s.Mm.stockAt(c.mc), [s.M2.name]: s.M2.stockAt(c.mc) } }
       const r = await s.introduce(c.mc)
-      if (!('act' in r)) refused++
+      if (!('act' in r)) {
+        refused++
+        refusals.push({ day, reason: r.refused, stock })
+      }
       if ('act' in r) {
         const ma = s.Mm.state.mediatorActs.find((x) => x.id === r.act) ?? s.M2.state.mediatorActs.find((x) => x.id === r.act)!
         const key = [...s.A.state.relationships, ...s.A2.state.relationships].flatMap((x) => x.stock).find((x) => x.anchor === ma.a.key)
-        acts.set(r.act, { C: c.C, cutoff: Date.parse(ma.expiresAt) - M.PARAM.consentReserveMs, seenAt: null, consentedAt: null, dormantKey: key?.by === s.A2.name, exposed: key?.by === s.A2.name && !s.A2.online })
+        const holder = key?.by ?? s.A.person
+        acts.set(r.act, { C: c.C, holder, issued: Date.parse(ma.issuedAt), cutoff: Date.parse(ma.expiresAt) - M.PARAM.consentReserveMs, expires: Date.parse(ma.expiresAt), seenAt: null, consentedAt: null, producedAt: null, holderOnline: 0, allocatorOnline: 0, dormantKey: key?.by === s.A2.name, exposed: key?.by === s.A2.name && !s.A2.online })
       }
     }
     const now = Date.parse(s.w.clock.now())
     for (const [id, x] of acts) {
       const online = s.w.of('A').filter((d) => d.online && d.state.acts.some((a) => a.id === id))
+      // Belege je Schritt: der Halter (K1a: irgendein Gerät der Person) online vor dem Schnitt; der Zuteiler online nach
+      // der Zustimmung bis zum Annahmeende; die Karte im Zustand des Zuteilers.
+      const holderDevs = deviceOf(x.holder) ? [deviceOf(x.holder)!] : s.w.of('A')
+      // Ein Ticket, das in der Runde dieses Schritts ankommt, sieht der Nutzer im nächsten Schritt: es zählt nur ein Schritt,
+      // nach dem der Schnitt noch nicht vorbei ist (Raster `stepHours`).
+      if (now + stepMs <= x.cutoff && holderDevs.some((d) => d.online)) x.holderOnline++
+      if (x.consentedAt !== null && now <= x.expires && holderDevs.some((d) => d.online)) x.allocatorOnline++
+      if (x.producedAt === null && holderDevs.some((d) => d.state.acts.some((a) => a.id === id && a.ownCard))) x.producedAt = now
       if (x.seenAt === null && online.length && now <= x.cutoff) x.seenAt = now
       if (x.seenAt !== null && x.consentedAt === null && now <= x.cutoff) {
         const d = online.find((y) => M.act(y.state, id).state === 'offered')
@@ -142,6 +199,7 @@ export async function timeModel(factory: (o: { stockLifetimeMs: number; budget: 
     }
     await s.w.rounds(1)
   }
+  if (!s.A2.online) offline.get(s.A2.name)!.at(-1)![1] = (Date.parse(s.w.clock.now()) - start) / DAY
   s.A2.online = true
   await s.w.rounds(3)
   let expiredUnseen = 0
@@ -150,6 +208,8 @@ export async function timeModel(factory: (o: { stockLifetimeMs: number; budget: 
   let other = 0
   let onDormant = 0
   let exposed = 0
+  const losses: X23Loss[] = []
+  const causes: Partial<Record<X23Cause, number>> = {}
   for (const [id, x] of acts) {
     if (x.dormantKey) onDormant++
     if (x.exposed) exposed++
@@ -158,14 +218,14 @@ export async function timeModel(factory: (o: { stockLifetimeMs: number; budget: 
     else if (c?.state === 'connected') connected++
     else if (x.consentedAt !== null) missedCards++
     else other++
+    if (c?.state === 'connected') continue
+    // Ursache aus den Belegen: ungesehen vor dem Schnitt (8155); zugestimmt, aber der Zuteiler erzeugte bis zum
+    // Annahmeende keine Karte (8110.5); sonst erzeugt und nicht verbunden.
+    const cause: X23Cause = x.seenAt === null ? 'expired-unseen-8155' : x.producedAt === null || x.producedAt > x.expires ? 'card-not-produced-8110.5' : 'card-produced-not-connected'
+    causes[cause] = (causes[cause] ?? 0) + 1
+    losses.push({ act: id.slice(0, 8), cause, holder: x.holder, issuedDay: dayOf(x.issued), cutoffDay: dayOf(x.cutoff), expiresDay: dayOf(x.expires), seenDay: x.seenAt === null ? null : dayOf(x.seenAt), consentedDay: x.consentedAt === null ? null : dayOf(x.consentedAt), producedDay: x.producedAt === null ? null : dayOf(x.producedAt), holderOnlineStepsBeforeCutoff: x.holderOnline, allocatorOnlineStepsBeforeExpiry: x.allocatorOnline, holderOffline: offline.get(x.holder) ?? [] })
   }
-  const unseen = [...acts].filter(([, x]) => x.seenAt === null).map(([id, x]) => {
-    const ma = s.Mm.state.mediatorActs.find((y) => y.id === id) ?? s.M2.state.mediatorActs.find((y) => y.id === id)!
-    const key = s.A.state.relationships.flatMap((r) => r.stock).find((y) => y.anchor === ma.a.key)
-    return { id: id.slice(0, 8), by: key?.by, state: key?.state, dormantKey: x.dormantKey, issuedDay: (Date.parse(ma.issuedAt) - start) / DAY, findings: s.w.of('A').flatMap((d) => d.state.findings).filter((f) => f.includes(id.slice(0, 8))).slice(0, 2), registered: key ? s.w.carrier.registeredAt(key.keyAgreement) : [] }
-  })
-  if (process.env.X23_DEBUG) (globalThis as { x23debug?: unknown }).x23debug = unseen
-  return { introductions: acts.size + refused, refused, issued: acts.size, onDormantKey: onDormant, onDormantKeyWhileAsleep: exposed, expiredUnseen, missedCards, connected, other, lifetimeDays: opts.lifetimeDays, dormantDays: dormant.reduce((n, [a, b]) => n + (b - a), 0), days }
+  return { introductions: acts.size + refused, refused, issued: acts.size, onDormantKey: onDormant, onDormantKeyWhileAsleep: exposed, expiredUnseen, missedCards, connected, other, causes, losses, refusals, lifetimeDays: opts.lifetimeDays, dormantDays: dormant.reduce((n, [a, b]) => n + (b - a), 0), days }
 }
 
 /**

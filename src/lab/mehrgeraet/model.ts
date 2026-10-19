@@ -241,8 +241,14 @@ export interface DeviceSet {
   rootKeyAgreement: string
   certs: Record<string, SetCert>
   revs: Record<string, { n: number; digest: string | null; covered?: string[] }>
+  /**
+   * Revisionen, die dieses Gerät kennt: selbst empfangen oder durch die signierten `deps` einer gefalteten kumulativen
+   * Revision gedeckt (Review 33 B2: der Kartenbezug löst gegen den gefalteten Stand, nicht gegen eine exakt gesehene Revision).
+   */
   seen: string[]
   local?: Record<string, string>
+  /** Review 33 B1: je Nachweisschlüssel mit widersprüchlichem Inhalt alle gesehenen Fassungen (kanonisch sortiert) für den Befund; der Zustand trägt die kanonisch kleinste. */
+  equivocal?: Record<string, SetCert[]>
 }
 /** K2 Schritt 2: ein öffentlicher Geräteschlüssel aus dem Vorrat eines Geräts, den das Schwestergerät `for` einer neuen Beziehung zuweisen darf. */
 export interface PoolKey {
@@ -354,6 +360,7 @@ export function fromJson(s: HolderState): HolderState {
       set.certs = tableOf(set.certs)
       set.revs = tableOf(set.revs)
       if (set.local) set.local = tableOf(set.local)
+      if (set.equivocal) set.equivocal = tableOf(set.equivocal)
     }
   }
   if (s.pools) s.pools = tableOf(s.pools)
@@ -379,7 +386,7 @@ export type Op = { id: OpId; at: string } & (
   | { kind: 'finding'; text: string }
   | { kind: 'consent'; act: string; card: Card | null; cardKey: string | null } // 8325.A4; K2 Schritt 2: ohne Karte auf einem Gerät, das den Vorrats-Schlüssel nicht zugeteilt hat (E2 (iv))
   | { kind: 'produce'; act: string; card: Card; cardKey: string; v: string } // K2 Schritt 2: das zuteilende Gerät erzeugt die eine Karte (8727, E2 (iv))
-  | { kind: 'device-set'; root: string; rootKeyAgreement: string; certs: SetCert[]; local?: Record<string, string>; rev?: { signer: string; n: number; digest: string | null; covered?: string[] }; seen?: string } // K2 Schritt 2: device-set@1
+  | { kind: 'device-set'; root: string; rootKeyAgreement: string; certs: SetCert[]; local?: Record<string, string>; rev?: { signer: string; n: number; digest: string | null; covered?: string[] }; seen?: string; deps?: string[] } // K2 Schritt 2: device-set@1; `deps` die signierten Vorgänger einer empfangenen Revision (Review 33 B2)
   | { kind: 'pool'; device: string; keys: Array<{ i: number; for: string; anchor: Anchor; keyAgreement: string }> } // K2 Schritt 2
   | { kind: 'pool-use'; device: string; i: number; root: string; ctx: string } // K2 Schritt 2: Schlüssel `i` des Vorrats von `device` ist dessen Schlüssel für den Kontext `ctx` der Wurzel `root`
   | { kind: 'decline'; act: string } // 8325.A3
@@ -558,7 +565,7 @@ const OP_FIELDS: { [K in Op['kind']]: { [field: string]: Shape } } = {
   finding: { text: str },
   consent: { act: id, card: { nullable: SHAPES.card }, cardKey: { nullable: id } },
   produce: { act: id, card: SHAPES.card, cardKey: id, v: str },
-  'device-set': { root: id, rootKeyAgreement: id, certs: { array: SHAPES.cert }, local: { optional: { record: id } }, rev: { optional: { object: { signer: 'tag', n: 'nat', digest: { nullable: 'digest' }, covered: { optional: { array: str } } } } }, seen: { optional: 'digest' } },
+  'device-set': { root: id, rootKeyAgreement: id, certs: { array: SHAPES.cert }, local: { optional: { record: id } }, rev: { optional: { object: { signer: 'tag', n: 'nat', digest: { nullable: 'digest' }, covered: { optional: { array: str } } } } }, seen: { optional: 'digest' }, deps: { optional: { array: 'digest' } } },
   pool: { device: id, keys: { array: { object: { i: 'nat', for: id, anchor: id, keyAgreement: id } } } },
   'pool-use': { device: id, i: 'nat', root: id, ctx: id },
   decline: { act: id },
@@ -777,7 +784,8 @@ function applyWriterView(s: HolderState, r: Relationship, op: Op & { kind: 'view
   const held = own(writers, w)
   let take = !held || op.revision > held.revision
   if (held && op.revision === held.revision && canonical(keys) !== canonical(held.keys)) {
-    s.findings.push(`view auf ${r.id}: Schreiber ${w.slice(0, 8)} Revision ${op.revision} zweimal mit anderen Schlüsseln: Equivokation (6270)`)
+    const text = `view auf ${r.id}: Schreiber ${w.slice(0, 8)} Revision ${op.revision} zweimal mit anderen Schlüsseln: Equivokation (6270)`
+    if (!s.findings.includes(text)) s.findings.push(text) // einmal je Equivokation, auch wenn Duplikate die Faltung erreichen (Review 33)
     take = canonical(keys) < canonical(held.keys) // in jeder Reihenfolge dasselbe
   }
   if (take) put(writers, w, { revision: op.revision, keys })
@@ -1000,7 +1008,7 @@ function applyBody(s: HolderState, op: Op): void {
       // Equivokation (gleiche Nummer, anderer Inhalt: Befund, kein K eines Akts).
       const sets = tableOf(s.sets)
       const prev = own(sets, op.root)
-      const set: DeviceSet = prev ? { ...prev, certs: tableOf(prev.certs), revs: tableOf(prev.revs), seen: [...prev.seen], ...(prev.local ? { local: tableOf(prev.local) } : {}) } : { root: op.root, rootKeyAgreement: op.rootKeyAgreement, certs: table(), revs: table(), seen: [] }
+      const set: DeviceSet = prev ? { ...prev, certs: tableOf(prev.certs), revs: tableOf(prev.revs), seen: [...prev.seen], ...(prev.local ? { local: tableOf(prev.local) } : {}), ...(prev.equivocal ? { equivocal: tableOf(prev.equivocal) } : {}) } : { root: op.root, rootKeyAgreement: op.rootKeyAgreement, certs: table(), revs: table(), seen: [] }
       // Widersprüchliche Werte (CodeRabbit #74): in jeder Reihenfolge bleibt der kanonisch kleinere, je Konflikt ein Befund.
       const conflict = (text: string) => {
         if (!s.findings.includes(text)) s.findings.push(text)
@@ -1016,6 +1024,11 @@ function applyBody(s: HolderState, op: Op): void {
         else if (canonical(held) !== canonical(c)) {
           conflict(`device-set auf ${op.root.slice(-8)}: Nachweis ${c.kind} ${c.anchor.slice(-8)} von ${c.by.slice(-8)} zweimal mit anderem Inhalt`)
           if (canonical(c) < canonical(held)) put(set.certs, certKey(c), c)
+          // Review 33 B1: beide Fassungen bleiben für den Befund (Menge, kanonisch sortiert: in jeder Reihenfolge dieselbe).
+          const eq = tableOf(set.equivocal)
+          const all = new Map([...(own(eq, certKey(c)) ?? []), held, c].map((x) => [canonical(x), x]))
+          put(eq, certKey(c), [...all.keys()].sort().map((k) => all.get(k)!))
+          set.equivocal = eq
         }
       }
       if (op.local) {
@@ -1032,6 +1045,8 @@ function applyBody(s: HolderState, op: Op): void {
         } else if (!held || op.rev.n > held.n) put(set.revs, op.rev.signer, { n: op.rev.n, digest: op.rev.digest, ...(op.rev.covered ? { covered: op.rev.covered } : {}) })
       }
       if (op.seen && !set.seen.includes(op.seen)) set.seen.push(op.seen)
+      // Review 33 B2: was eine kumulative Revision signiert als Vorgänger nennt, ist gedeckt (wächst nur, reihenfolgefrei).
+      for (const d of op.deps ?? []) if (!set.seen.includes(d)) set.seen.push(d)
       put(sets, op.root, set)
       s.sets = sets
       return

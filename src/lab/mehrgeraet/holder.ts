@@ -341,6 +341,8 @@ interface Buffered {
   v: string
   /** K2 Schritt 2: der Mengenbezug der Karte (Digest der Revision von `device-set@1`, die die Wurzel `card.anchor` trägt). */
   set?: string
+  /** Review 33 B3: die volle Schlüsselbindung der Karte; bei der Zuordnung prüft 8850.6 (d) wie bei direkter Ankunft. */
+  fromKeyAgreement?: string
 }
 
 export interface DeviceState {
@@ -1340,8 +1342,11 @@ export class HolderDevice {
     // K2 Schritt 2: jeder Schreiber listet seinen eigenen Anteil (der Signierer bürgt für die Schlüssel, die er hält); M vereinigt.
     const share = !!this.cand.stockShare
     const keys = r.stock.filter((k) => k.state === 'active' && (!share || k.by === this.me)).map((k) => ({ n: k.n, anchor: k.anchor, keyAgreement: k.keyAgreement, expiresAt: k.expiresAt }))
+    // K2, Review 33 B4: eine leere Revision trägt ihre Aufhebungsmarken signiert: je Schreiber der Person die höchste
+    // Revision im eigenen Zustand (über das Journal auch die der Schwestern), der eigene Schreiber mit dieser Nummer.
+    const clears = this.cand.signerWriters && tag && !keys.length ? M.table([...Object.entries(r.writers ?? {}).map(([w, x]): [string, number] => [w, x.revision]), [tag, revision]]) : undefined
     this.emit({ kind: 'revision', rel: r.id, revision, keys, ...(tag ? { writer: tag } : {}) })
-    await this.sendDoc(TYPES.revision, h.ownKey, h.peer, h.peerKeyAgreement, (await this.keysFor(h.ownKey)).rkid, { revision, keys, ...(tag && this.cand.writerTag ? { writer: tag } : {}) }) // K2: der Schreiber ist der Signierer, kein Feld
+    await this.sendDoc(TYPES.revision, h.ownKey, h.peer, h.peerKeyAgreement, (await this.keysFor(h.ownKey)).rkid, { revision, keys, ...(tag && this.cand.writerTag ? { writer: tag } : {}), ...(clears ? { clears } : {}) }) // K2: der Schreiber ist der Signierer, kein Feld
   }
   /** Die Schreiberkennung dieses Geräts für die Beziehung eines Tupels (Schritt 4), als Nutzlastfeld; ohne Kennung leer. */
   private tagField(tupleId: string): { writer?: string } {
@@ -1356,6 +1361,20 @@ export class HolderDevice {
     for (const t of r.tuples) for (const a of M.setView(this.setOf(t.peer)).revoked) revoked.add(signerId(a))
     const writers = M.table(Object.entries(r.view!.writers ?? {}).filter(([w]) => !revoked.has(w)))
     return M.viewKeys(writers, M.tableOf(r.view!.clears)).keys
+  }
+  /**
+   * Messung (X23, Review 33 S2): Ms Vorrat für eine Seite in diesem Moment, gezählt mit denselben Prüfungen wie die Wahl
+   * in `introduce`: gelistet (geltende Sicht, ohne widerrufene Signierer), davon noch lang genug gültig (8470), davon nicht
+   * verbraucht (8570.2), davon diesem Gerät zugeteilt (`mayName`, K1a/K2-Zwischenregel) = benennbar. Nur lesend.
+   */
+  stockAt(relId: string): { listed: number; usable: number; unconsumed: number; nameable: number } {
+    const now = this.clock.now()
+    const r = M.rel(this.state, relId)
+    const keys = !r.view ? [] : this.sets && r.view.writers ? this.unrevokedKeys(r) : r.view.keys
+    const usable = keys.filter((k) => M.usable(k.expiresAt, now))
+    const unconsumed = usable.filter((k) => !this.state.consumed.includes(k.anchor))
+    const nameable = unconsumed.filter((k) => this.cand.mayName?.(k.anchor, r.id, this.state) ?? true)
+    return { listed: keys.length, usable: usable.length, unconsumed: unconsumed.length, nameable: nameable.length }
   }
   /** M: zwei Seiten vorstellen (8605, 8570). Liefert die Akt-Id oder den Grund, warum nichts ging. */
   async introduce(relA: string, relB: string, nameA = 'A', nameB = 'B'): Promise<{ act: string } | { refused: string }> {
@@ -2209,8 +2228,13 @@ export class HolderDevice {
         const t = this.tupleOfAddress(address)
         if (!t || !(await this.isPeer(doc.issuer, t.peer))) return false
         const r = M.relOfTuple(this.state, t.id)!
-        const p = doc.payload as unknown as { revision: number; keys: Array<{ n: number; anchor: string; keyAgreement: string; expiresAt: string }>; writer?: string }
-        if (this.cand.signerWriters) return this.acceptWriterRevision(r, t, doc.issuer, { ...p, writer: signerId(doc.issuer) }) // K2: 6270 je Signierer; nur der Signierer (Review 31 B1)
+        const p = doc.payload as unknown as { revision: number; keys: Array<{ n: number; anchor: string; keyAgreement: string; expiresAt: string }>; writer?: string; clears?: Record<string, number> }
+        if (this.cand.signerWriters) {
+          // K2: 6270 je Signierer; nur der Signierer (Review 31 B1). Review 33 B4: die Aufhebungsmarken einer leeren Revision
+          // stehen signiert in der Revision selbst (`clears`, nur bei leerer Liste), nie aus dem, was M gerade hält.
+          if (p.clears !== undefined && (p.keys.length !== 0 || M.shapeProblem(p.clears, { record: 'nat', key: 'tag' }, 'clears'))) return false
+          return this.foldSignerRevision(r, t, { revision: p.revision, keys: p.keys, writer: signerId(doc.issuer), clears: p.clears ? M.tableOf(p.clears) : undefined })
+        }
         if (p.writer !== undefined && M.shapeProblem(p.writer, 'tag', 'writer')) return false // Review 28: Schreiberkennung nach ihrer Grammatik, sonst abgewiesen
         if (typeof p.writer === 'string') return this.acceptWriterRevision(r, t, doc.issuer, p as typeof p & { writer: string })
         if (r.view && r.view.scope === t.id && p.revision <= r.view.revision) {
@@ -2269,7 +2293,9 @@ export class HolderDevice {
         if (buffered && revokedRoot) this.buffer.delete(bkey)
         else if (buffered && buffered.from === a.voucher.anchor && buffered.expiresAt === a.expiresAt) {
           this.buffer.delete(bkey)
-          this.emit({ kind: 'card-pending', act: a.id, card: buffered.card, v: buffered.v })
+          // Review 33 B3: jeder Eintrittspfad prüft wie der direkte; 8850.6 (d) unter dem richtigen `from` setzt K (E3).
+          if (this.sets && buffered.fromKeyAgreement !== a.voucher.keyAgreement) this.emit({ kind: 'card-refused', act: a.id, v: buffered.v, k: true })
+          else this.emit({ kind: 'card-pending', act: a.id, card: buffered.card, v: buffered.v })
         }
         await this.refill(r.id)
         return true
@@ -2299,7 +2325,7 @@ export class HolderDevice {
           // Pufferzweig (8910.1–.3): die ganze Nutzlast, geprüft wird bei der Zuordnung (B7).
           const key = `${to}|${p.from}|${p.act}`
           const b = this.buffer.get(key)
-          if (!b) this.buffer.set(key, { act: p.act, from: p.from, expiresAt: p.expiresAt, card: p.card, v, ...(this.sets && p.set ? { set: p.set } : {}) })
+          if (!b) this.buffer.set(key, { act: p.act, from: p.from, expiresAt: p.expiresAt, card: p.card, v, ...(this.sets && p.set ? { set: p.set } : {}), ...(this.sets ? { fromKeyAgreement: p.fromKeyAgreement } : {}) })
           else if (b.v !== v) return false
           return true
         }
@@ -2395,14 +2421,11 @@ export class HolderDevice {
           this.emit({ kind: 'finding', text: `device-set auf ${p.root.slice(-8)}: Signierer ${doc.issuer.slice(-8)} widerrufen: abgewiesen` })
           return false
         }
-        const signer = signerId(doc.issuer)
-        const last = M.own(held?.revs, signer)
-        if (last && p.revision < last.n) {
-          this.emit({ kind: 'finding', text: `device-set auf ${p.root.slice(-8)}: Revision ${p.revision} von ${doc.issuer.slice(-8)} unter der gehaltenen ${last.n}: abgewiesen (6270)` })
-          return false
-        }
-        const fresh = entries.filter((c) => !M.own(held?.certs, M.certKey(c)))
-        this.emit({ kind: 'device-set', root: p.root, rootKeyAgreement: merged.rootKeyAgreement, certs: fresh, rev: { signer, n: p.revision, digest }, seen: digest })
+        // Review 33 (B1, B2): der Empfang filtert nicht und verwirft nichts als „älter“. Jede gültige Revision erreicht die
+        // Faltung mit allen Nachweisen, ihrer Nummer und ihren signierten Vorgängern; die Faltung entscheidet reihenfolgefrei
+        // (Zwei-Phasen-Menge; bei widersprüchlichen Fassungen die kanonisch kleinste, beide für den Befund gehalten; je
+        // Signierer die höchste Nummer, gleiche Nummer mit anderem Inhalt Equivokation; `deps` decken frühere Revisionen).
+        this.emit({ kind: 'device-set', root: p.root, rootKeyAgreement: p.rootKeyAgreement, certs: entries, rev: { signer: signerId(doc.issuer), n: p.revision, digest }, seen: digest, deps: p.deps })
         return true
       }
       default:
@@ -2428,6 +2451,25 @@ export class HolderDevice {
     if (r.view && r.view.scope !== t.id && t.record < M.tuple(this.state, r.view.scope).record) return false // älterer Kopf
     const clears = p.keys.length === 0 && same?.writers ? Object.fromEntries(Object.entries(same.writers).map(([w, x]) => [w, x.revision])) : undefined
     this.emit({ kind: 'view', rel: r.id, scope: t.id, revision: p.revision, keys: p.keys, writer: p.writer, ...(clears ? { clears } : {}) })
+    return true
+  }
+
+  /**
+   * K2, Review 33 B4: M faltet jede Revision eines Signierers (Vertrag wie die Mengen: der Empfang filtert nicht, die
+   * Faltung entscheidet). Je Schreiber zählt die höchste Revision, gleiche Nummer mit anderen Schlüsseln ist eine
+   * Equivokation (kanonisch kleinere, Befund), eine niedrigere ändert die Schlüssel nicht. Die Aufhebungsmarken einer
+   * leeren Revision (8535) nennt der Sender signiert (je Schreiber die höchste Revision, die er kennt); sie falten als
+   * Maximum, auch wenn die leere Revision nach der Nachfüllung desselben Schreibers ankommt: in jeder Reihenfolge dieselbe
+   * Sicht. Nur ein älterer Kopf wird abgewiesen (8557: neuer Scope).
+   */
+  private foldSignerRevision(r: M.Relationship, t: M.Tuple, p: { revision: number; keys: M.ListedKey[]; writer: string; clears?: Record<string, number> }): boolean {
+    if (r.view && r.view.scope !== t.id && t.record < M.tuple(this.state, r.view.scope).record) return false // älterer Kopf
+    const same = r.view && r.view.scope === t.id ? r.view : null
+    const held = M.own(same?.writers, p.writer)
+    const whole = (ks: M.ListedKey[]) => M.canonical([...ks].sort((a, b) => a.anchor.localeCompare(b.anchor)))
+    const newMarks = Object.entries(p.clears ?? {}).some(([w, n]) => n > (M.own(same?.clears, w) ?? 0))
+    if (held && p.revision === held.revision && whole(p.keys) === whole(held.keys) && !newMarks) return true // Wiederholung
+    this.emit({ kind: 'view', rel: r.id, scope: t.id, revision: p.revision, keys: p.keys, writer: p.writer, ...(p.clears ? { clears: p.clears } : {}) })
     return true
   }
 
