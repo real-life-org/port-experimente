@@ -701,6 +701,7 @@ export class HolderDevice {
     await this.withdrawLosingCards()
     await this.relisten()
     await this.produceOwed() // K2 Schritt 2, E2 (iv): eine Zustimmung aus dem Journal; das zuteilende Gerät erzeugt die Karte
+    await this.connectOwed() // K2 Schritt 2, 8325.A5c: eine wartende Gegenkarte aus dem Journal beim Produzenten neu prüfen
     if ([...this.tupleIds()].some((id) => !known.has(id))) await this.reevaluate() // die eigene Tupelmenge ist gewachsen
     await this.refillAll()
   }
@@ -1189,6 +1190,16 @@ export class HolderDevice {
   private async produceOwed(): Promise<void> {
     if (!this.sets || this.catchUp || this.cand.producerRule === false) return
     for (const a of this.state.acts.slice()) if (a.state === 'consented' && !a.ownCard && this.allocated(a)) await this.guarded(() => this.produce(a.id))
+  }
+  /**
+   * 8325.A5c unter E2 (iv): kam die Gegenkarte zuerst auf einem Schwestergerät an, das die Zustimmung noch nicht kannte
+   * (P nach 8910.4), und faltet der Produzent dieses P erst, nachdem seine eigene Karte eingereicht ist, prüft er hier neu;
+   * seine eigene Kopie der Gegenkarte ist dann eine Wiederholung (8910.7, V schon bekannt) und verbindet nicht. Nur der
+   * Produzent (er hält die Einreichung), so verbindet die Person genau einmal.
+   */
+  private async connectOwed(): Promise<void> {
+    if (!this.sets || this.catchUp) return
+    for (const a of this.state.acts.slice()) if (a.state === 'consented' && a.pending && !a.opened && a.ownCardV && this.submitted(a) && this.allocated(a)) await this.guarded(() => this.evaluatePending(a.id))
   }
   /** K2 Schritt 2: das eigene Tupel (Kopf) der Beziehung, deren Vorrats-Schlüssel diese Adresse ist (Ticket, Mengennachweis einer Vorstellung). */
   private tupleOfStock(address: string): M.Tuple | undefined {

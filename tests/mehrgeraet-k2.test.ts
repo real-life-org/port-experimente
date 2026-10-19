@@ -768,6 +768,49 @@ describe('K2 Schritt 2: Karte (E1 (a), E2 (iv), E3 (a))', () => {
   }, 90_000)
 })
 
+describe('K2 Schritt 2: Gegenkarte über das Schwestergerät (8325.A5c)', () => {
+  it('C9. Die Gegenkarte erreicht zuerst das Schwestergerät, das die Zustimmung noch nicht kennt (P nach 8910.4), und kommt beim Produzenten erst nach dessen Faltung an (dort eine Wiederholung, 8910.7): der Produzent prüft P nach dem Falten neu und verbindet genau einmal', async () => {
+    const w = new Welt15(k2({ stock: 'shared' }))
+    const A = await w.person('A', 'A1')
+    const B = await w.person('B', 'B1')
+    const Mm = await w.person('M', 'M1')
+    const am = await w.encounter(A, Mm)
+    const bm = await w.encounter(B, Mm)
+    await w.rounds(2)
+    await A.setClass(am.x.id, true)
+    await B.setClass(bm.x.id, true)
+    await w.rounds(3)
+    await w.enrol(B, 'B2')
+    await w.rounds(3)
+    const r = await Mm.introduce(am.y.id, bm.y.id)
+    expect('act' in r).toBe(true)
+    const act = (r as { act: string }).act
+    expect(await w.until(() => w.of('B').every((d) => d.state.acts.some((a) => a.id === act)) && A.state.acts.some((a) => a.id === act), 10)).toBeGreaterThanOrEqual(0)
+    const producer = w.of('B').find((d) => allocatorOf(d, act) === d.name)!
+    const sibling = w.of('B').find((d) => d !== producer)!
+    // B's devices fold nothing of each other until the producer's own card is delivered; the producer gets A's card only later.
+    const selfB = w.selfAddresses('B')
+    for (const d of w.of('B')) w.carrier.faults.withhold(d.name, (f) => selfB.has(f.address))
+    w.carrier.faults.withhold(producer.name, (f) => w.frameOrigin(f.bytes)?.kind.includes('introduction-card') === true && w.frameOrigin(f.bytes)?.device.startsWith('A') === true)
+    await producer.consent(act)
+    await A.consent(act)
+    await w.rounds(6)
+    expect(M.act(sibling.state, act).pending).toBeTruthy() // 8910.4 on the sibling
+    expect(M.act(producer.state, act).state).toBe('consented')
+    expect(M.act(producer.state, act).o).toBe('delivered') // own card delivered, no P yet: the A5c check found nothing
+    expect(M.act(producer.state, act).pending).toBeFalsy()
+    // The sibling's journal (P and V) reaches the producer; A's card is still held back for it.
+    w.carrier.faults.reset()
+    w.carrier.faults.withhold(producer.name, (f) => w.frameOrigin(f.bytes)?.kind.includes('introduction-card') === true && w.frameOrigin(f.bytes)?.device.startsWith('A') === true)
+    await w.rounds(4)
+    w.carrier.faults.reset()
+    await w.until(() => [...w.of('A'), ...w.of('B')].every((d) => M.act(d.state, act).state === 'connected'), 15)
+    for (const d of [...w.of('A'), ...w.of('B')]) expect(`${d.name}: ${M.act(d.state, act).state}`).toBe(`${d.name}: connected`)
+    const connects = new Set(w.of('B').flatMap((d) => d.state.effects.filter((e) => e.id === `connect:${act}`).map((e) => JSON.stringify(e)))).size
+    expect(connects).toBe(1)
+  }, 120_000)
+})
+
 describe('K2 Schritt 2: Messungen (X23, Diebesfenster, Rotation, Fan-out, Ankerpaar)', () => {
   it('M1. Ankerpaar-Orakel (X18): beide Personen halten dasselbe Paar samt Vereinbarungsschlüssel, jedes Mitglied öffnet, was die Gegenseite versiegelt; Gegenlauf: ein verfälschtes Paar fällt', async () => {
     const s = await world(k2())
