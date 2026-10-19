@@ -348,10 +348,13 @@ K2-strict.
 - A known-empty counterpart set is an explicit delivery failure: nothing
   goes out, and a set revision that could not go out is not recorded as
   published (test S3b). If such a set fills again (a late, older admission
-  of a key that was never revoked), nothing resends the stock revision or
-  the own set revision until the next regular trigger (refill, enrolment,
-  card); a resend on "set no longer empty" belongs to step 3 together with
-  all entry paths (review 31 S2).
+  of a key that was never revoked), nothing resends what failed: the
+  stock revision, the own set revision, or a produced card (the card stays
+  undelivered until the act expires; the set revision waits for the next
+  regular trigger such as refill or enrolment). One class, one rule for
+  step 3: on "set no longer empty", resend every document that failed as
+  `empty-device-set`, together with all entry paths (review 31 S2;
+  CodeRabbit #74, three findings of this class).
 - X21's restore repair takes 11 rounds instead of 7 (more batches: set
   proofs, pools, revisions per writer).
 
