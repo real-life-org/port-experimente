@@ -113,6 +113,13 @@ with the anchor cycle failed X1, X4, X14, X17 under `devices: 2` slots;
 not a 2a change). K0, K1a and K1a with the journal at the service: no
 cell changed against main (K1a NOTES).
 
+**Verification 2a:** 232/232 tests in the 14 bench files on a75db3b
+(K2 file with M2/M2b; K1a and K1a-service 75/75), typecheck green; after
+the X21 branch forcing the K2 file again (49 + M2/M2b unchanged) and the
+seed sweep `SEEDS=all`: K2-strict 20/20 and K1a 20/20 give their tables;
+K0, K1a and K1a-service against main: no cell, no measure changed (only
+K0's X18 detail and X21 byte measures, as on #74). Report run once.
+
 **Tests 2a** (`tests/mehrgeraet-k2.test.ts`): matrix 2 (16/3/1), 2b
 (counter-run two M devices), 2c (serial); N1 (MV-30), N2 (rule (iii) at
 M, 8640.12 as a rule), C7 (restore artefact at A, consistent); the step-2
