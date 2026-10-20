@@ -86,9 +86,11 @@ describe('E15 seed sweep (review 33 S3): every seed gives the NOTES table', () =
 // Review 34 S4: X23 took the production time from the next observation (the step after), so a card produced right at the
 // acceptance end counted as "never produced". Astra's counter-run (shared, seeds 2, 3, 5, 2 days, A2 asleep days 0–8, window
 // 30 days): the production time now comes from the journal (the op that produced the card); C's side is measured on its
-// own (card received at, refused with which reason, act expired at).
+// own (card received at, refused with which reason, act expired at). Review 37 B8: the anchor cycle derives other stock
+// anchors, so under seeds 2 and 5 M's first pick is no longer a key of the sleeping A2 and nothing is lost (no case to
+// check); seed 3 still reproduces it, as do 6 and 11 (of seeds 1–20: 3, 6, 11, 13, 16, 17, 19, 20).
 describe('X23 evidence from the journal (review 34 S4)', () => {
-  for (const seed of [2, 3, 5]) {
+  for (const seed of [3, 6, 11]) {
     it(`shared seed ${seed}: a loss counts as "card never produced" only if no device journal holds the production; a card produced in time but refused at C names C's reason`, async () => {
       rng.n = seed
       const uuid = vi.spyOn(globalThis.crypto, 'randomUUID').mockImplementation(() => rng.uuid() as `${string}-${string}-${string}-${string}-${string}`)

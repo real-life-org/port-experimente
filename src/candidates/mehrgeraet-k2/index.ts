@@ -18,11 +18,29 @@
 // for every existing context and its pool (QR stand-in, measured) and the old device admits it in every set where it is
 // a member; the shared variant attaches the stock key seeds to the batch that allocates them.
 
-import { createPrivateKey, createPublicKey, randomBytes, sign, verify, type KeyObject } from 'node:crypto'
+import { createHash, createPrivateKey, createPublicKey, randomBytes, sign, verify, type KeyObject } from 'node:crypto'
 import { edFromSeed, xFromSeed, anchorOfEd, mkOfX } from '@real-life/trust-protocol'
 import { derive, EnrolmentRefused, UnknownWriter, type CandidateDevice, type EnrolOptions, type HolderDevice, type KeyScheme, type Keys, type MultiDeviceCandidate } from '../../lab/mehrgeraet/holder'
 import * as M from '../../lab/mehrgeraet/model'
 import { batchProblem, K1aDevice, MalformedBatch, type Batch } from '../mehrgeraet-k1a'
+
+/**
+ * Review 37 B8: the mediator slot of a stock key, from its anchor alone (SHA-256 of a domain tag and the anchor, first four
+ * bytes, mod the mediator's device count). Computed at M; A never learns M's device count from it.
+ */
+export function nameSlot(anchor: string, devices: number): number {
+  return createHash('sha256').update(`name-slot|${anchor}`).digest().readUInt32BE(0) % devices
+}
+
+/**
+ * Review 37 B8, starvation remedy: the cycle of stock anchors. A allocates key n under the first context
+ * (`introduction/<nonce>/<n>`, then `…/<n>/<j>`, j = 1, 2, …) whose anchor has `nameSlot(anchor, 12) = n mod 12`. For any
+ * mediator device count D dividing 12 (1, 2, 3, 4, 6, 12) `nameSlot(anchor, D) = n mod D`: an honest device's consecutive
+ * keys alternate across M's devices as K1a's `n mod devices` did, but the slot is a property of the anchor, so no later
+ * listing can move it. A uses a fixed public constant and learns nothing about M; M learns nothing new about A. Cost: on
+ * average 12 key derivations per stock key. For D not dividing 12 the split is near even, not exact.
+ */
+export const ANCHOR_CYCLE = 12
 
 const enc = new TextEncoder()
 const dec = new TextDecoder()
@@ -38,10 +56,17 @@ export interface K2Options {
    */
   counterpartRevocation?: boolean
   /**
-   * Interim rule until step 5: keep K1a's split of the keys a mediator device may name (n mod devices, `mayName`). Default
-   * on; off = counter-run, M names any key of the person's stock (X1, X13, X14 fail).
+   * Interim rule until step 5 (review 37 B8): a mediator device may name a stock key whose anchor hashes to its slot
+   * (`nameSlot`: hash of the anchor mod the mediator's device count), never by the mutable number n. Default on; off =
+   * counter-run, M names any key of the person's stock (X1, X13, X14 fail).
    */
   mediatorSplit?: boolean
+  /**
+   * Review 37 B8: A grinds every stock key so that its anchor's slot (`nameSlot` mod `ANCHOR_CYCLE`) is n mod
+   * `ANCHOR_CYCLE`; consecutive keys of a device then fall to M's devices in turn for every device count dividing 12,
+   * without A knowing M's count. Default on; off = counter-run (plain anchor hash: a mediator device can starve).
+   */
+  anchorCycle?: boolean
   /** Step 2 (Anton 19.10.): where the private part of a stock key lives: the allocating device (`strict`, default) or the set (`shared`). */
   stock?: 'strict' | 'shared'
   /** Counter-run of E2 (iv): `false` = every consenting device produces a card (step 1 behaviour). Default on. */
@@ -164,6 +189,7 @@ export class K2Device extends K1aDevice {
     readonly producerRule = true,
     readonly revocationToCounterparts = true,
     readonly stockLifetimeMs?: number,
+    private readonly anchorCycle = true,
   ) {
     super(person, name, new Uint8Array(32), index, slots, budget, false, false) // no writer tags, no number classes
     this.owner = name
@@ -196,11 +222,23 @@ export class K2Device extends K1aDevice {
     if (this.stockMode === 'shared') for (const x of b.seeds ?? []) if (!this.seeds.has(x.ctx)) this.seeds.set(x.ctx, { ed: x.ed, x: x.x })
   }
   /**
-   * Interim rule: K1a's `n mod devices` split until step 5 on the canonical value from `M.usableView` (review 36 B7: one
-   * computation of M's view, the split never reads a listing); off (counter-run) M names any key of the person's stock.
+   * Interim rule until step 5 (review 37 B8): the device responsible for a stock key is bound to the immutable anchor
+   * (`nameSlot`), not to the number n. n is a listed value: a later revision or a revocation can change the canonical n of
+   * an anchor after an act (A1 lists n=2, A2 the same anchor n=1; M2 names it at n=1; A2's empty revision moves it to n=2
+   * and K1a's `n mod devices` handed it to M1, a second act on one key). The anchor never changes, so responsibility is
+   * the same in every order and across every later revision. Off (counter-run) M names any key of the person's stock.
+   * K1a keeps `n mod devices` (its cells stay as on main).
    */
   override mayName(key: M.ListedKey): boolean {
-    return !this.nameSplit || super.mayName(key)
+    return !this.nameSplit || nameSlot(key.anchor, this.slots) === this.index
+  }
+  /** Review 37 B8: the context of stock key n whose anchor lies in slot n mod `ANCHOR_CYCLE` (deterministic, stable across a restore). */
+  async stockCtx(base: string, n: number): Promise<string> {
+    if (!this.anchorCycle) return base
+    for (let j = 0; ; j++) {
+      const ctx = j ? `${base}/${j}` : base
+      if (nameSlot((await this.keys.pair(ctx)).anchor, ANCHOR_CYCLE) === n % ANCHOR_CYCLE) return ctx
+    }
   }
   async selfPeers() {
     return (await this.dir.selfKeys(this.person)).filter((k) => k.device !== this.name).map(({ anchor, rkid }) => ({ anchor, rkid }))
@@ -322,7 +360,7 @@ export function k2(opts: K2Options = {}): K2Candidate {
   const devices = new Map<string, K2Device[]>()
   const ceremonies: K2Candidate['ceremonies'] = []
   const secret = () => new Uint8Array(randomBytes(32))
-  const make = (person: string, name: string, index: number) => new K2Device(person, name, secret(), index, slots, budget, dir, split, mode, producer, counterparts, opts.stockLifetimeMs)
+  const make = (person: string, name: string, index: number) => new K2Device(person, name, secret(), index, slots, budget, dir, split, mode, producer, counterparts, opts.stockLifetimeMs, opts.anchorCycle ?? true)
   const id = mode === 'shared' ? 'k2-shared-stock' : split ? 'k2-device-keys' : 'k2-device-keys-no-split'
   const size = (x: unknown) => Buffer.byteLength(JSON.stringify(x), 'utf8')
   return {

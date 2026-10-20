@@ -198,6 +198,12 @@ export interface CandidateDevice {
    * überspringt das Nachfüllen jede Nummer, die nicht diesem Gerät gehört. Ohne Methode: alle.
    */
   mayAllocate?(n: number, rel: string, state: M.HolderState): boolean
+  /**
+   * Kontext des Vorrats-Schlüssels Nummer n (K2, Review 37 B8): der Kandidat darf den Grundkontext `introduction/<nonce>/<n>`
+   * deterministisch abwandeln (Ankerzyklus: der Anker trägt seinen Platz unter Ms Geräten selbst). Ohne Methode: der
+   * Grundkontext (K0, K1a unverändert).
+   */
+  stockCtx?(base: string, n: number): Promise<string>
   /** Ein Schritt ist gelungen und committet: der Kandidat zeichnet ihn als Einheit auf, verbreitet ihn (oder nicht) und verbraucht hier, was er kostet. */
   commit(tx: Transaction): void
   /** Rahmen an die eigenen Geräte (Journal), an die eigene Adresse der Person (Plan Runde 3). */
@@ -1288,7 +1294,8 @@ export class HolderDevice {
     const cap = Math.min(share?.to ?? M.PARAM.refillTo, this.cand.quotaLeft?.(r.id, this.state, this.clock.now()) ?? Infinity)
     for (let n = r.nextN; keys.length < cap - active.length; n++) {
       if (this.cand.mayAllocate && !this.cand.mayAllocate(n, r.id, this.state)) continue
-      const ctx = `introduction/${nonce}/${n}`
+      const base = `introduction/${nonce}/${n}`
+      const ctx = this.cand.stockCtx ? await this.cand.stockCtx(base, n) : base
       const k = await this.listen(ctx)
       keys.push({ n, nonce, anchor: k.anchor, keyAgreement: k.rkid, key: ctx, expiresAt: new Date(Date.parse(this.clock.now()) + (this.cand.stockLifetimeMs ?? M.PARAM.prekeyLifetimeMs)).toISOString(), state: 'active', ...(share ? { by: this.me } : {}) })
     }

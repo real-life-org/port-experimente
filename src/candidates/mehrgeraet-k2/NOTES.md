@@ -445,7 +445,7 @@ M keeps a tombstone per anchor:
   there is nothing to accept. Before the fix M still named two of A2's
   keys and an introduction led to a connection.
 - **Naming split after a revocation** (found with the review-35 fix):
-  the interim split rule (`mayName`, n mod devices) read the key's
+  the interim split rule (`mayName`, then n mod devices) read the key's
   number from the stored view, which leaves out every anchor buried at
   fold time, so a restored key stayed unnameable after the revocation.
   The review-35 fix read the number from the writers' listings instead,
@@ -494,8 +494,8 @@ Consumers, all reading from it:
 
 - the key selection in `introduce` (`holder.ts`, via `nameable`);
 - the naming split: `mayName` now takes the canonical key
-  (`mayName(key)`, K1a `n mod devices`; K2 only adds the counter-run
-  switch), never an anchor to look up;
+  (`mayName(key)`, K1a `n mod devices`; K2 since review 37 the anchor's
+  slot, `nameSlot`), never an anchor to look up;
 - the rights check of an introduction (`authorize`, K1a, inherited by K2):
   the canonical key of each named anchor from `usableView`;
 - the stock count `stockAt` (X23 refusals and their stock record);
@@ -527,6 +527,84 @@ differently in the two (e.g. `Y` < `r` by code unit, `r` first in a
 locale), the test expected the other proof. Measured: 38 of 3000 random
 key pairs disagree (1.3 %), 3.7 % per R1 run (three orders); before the
 fix 1 failure in 30 runs alone without load, after it 0 in 40.
+
+### Responsibility bound to the anchor (review 37 B8)
+
+Review 37 B8 (nine counter-runs on the signed receive path): A1 lists a
+real stock key with n=2, A2 the same anchor with n=1; both M devices
+hold both listings (canonical n=1, so `n mod 2` gives it to M2); M2
+names it while M's journal is held back; A2 sends a higher empty
+revision (strict also: A1 revokes A2), the canonical n becomes 2 and
+M1, not knowing the consumption, named the same key again. Equality of
+the current canonical value does not give a responsibility that is
+stable over time: n is a listed value that later documents may change.
+
+Rule (Fable under the bench interim rule until step 5, Anton informed):
+**the M device responsible for a stock key is bound to the immutable
+anchor, never to n.** `nameSlot(anchor, D)` = first four bytes of
+SHA-256(`name-slot|` + anchor) mod D, D = M's device count;
+`K2Device.mayName` compares it with the device's index. The anchor never
+changes, so responsibility is the same in every receive order and across
+every later revision, revocation or tombstone; each device names a key
+at most once, from its own consumption marks. K1a keeps `n mod devices`
+(its cells stay as on main).
+
+**Starvation.** K1a step 1 had dropped an anchor hash because "hash
+parity starves a device" (K1a NOTES). With per-device stock (K2: each A
+device keeps 3 keys at M, refills below 2) a plain hash leaves an M
+device without any key of a side with p = 1/8 for three keys. M's
+refusal does not trigger A's refill: nothing goes to A on a refusal; A
+refills only from its own active count (`holder.ts` `refill`), so a
+starving class stays empty until A consumes and refills by chance.
+Remedy, without telling A anything about M: the **anchor cycle**. A
+allocates key n under the first context `introduction/<nonce>/<n>`, then
+`…/<n>/<j>` (j = 1, 2, …), whose anchor has `nameSlot(anchor, 12) = n mod
+12` (`ANCHOR_CYCLE`, candidate hook `stockCtx`, K2 only). For every D
+dividing 12, `nameSlot(anchor, D) = n mod D`: an honest device's
+consecutive keys alternate across M's devices exactly as `n mod devices`
+did, but the slot is a property of the anchor and no later listing moves
+it. Deterministic (stable across a restore, the context is in the state
+and in shared mode travels with the seed); cost ≈ 12 key derivations per
+stock key. An A that ignores the cycle only skews its own availability;
+for D not dividing 12 the split is near even, not exact. Counter-run
+`anchorCycle: false` (plain hash).
+
+Refusals per M device (refused/attempts; X23: per day M1 tries first,
+M2 when M1 refuses, "both" = the introduction failed), 5 seeds each:
+
+| cell | before (n mod 2, fd93398) | plain anchor hash | anchor + cycle (now) |
+|---|---|---|---|
+| X1 strict / shared | M1 0/5, M2 0/5 | M1 0/5, M2 0/5 | M1 0/5, M2 0/5 |
+| X13 strict / shared | M1 30/55, M2 5/30 | M1 31/56, M2 9/32, **3 of 5 seeds fail** | M1 30/55, M2 5/30 |
+| X14 strict / shared | no M introduction (A mediates) | same | same |
+| X23 2 days strict / shared | M1 34/150, M2 15/34, both 15 | M1 70/150, M2 27/70, both **27** | M1 35/150, M2 15/35, both 15 |
+| X23 30 days strict | M1 72/150, M2 0/72, both 0 | M1 91/150, M2 19/91, both **19** | M1 72/150, M2 0/72, both 0 |
+| X23 30 days shared | M1 67/150, M2 0/67, both 0 | M1 88/150, M2 20/88, both **20** | M1 67/150, M2 0/67, both 0 |
+
+X13's refusals are its structure (budget 9, one acceptable key); X23's
+2-day refusals are expiry (8470), as before. The plain hash starves (X13
+red in 3 of 5 seeds, X23 losses up to 20 of 150); with the cycle the
+numbers are those of `n mod 2`. No cell changed (report run; details
+that depend on which A device holds the named key differ, as between any
+two runs). What remains for step 5: the stock per M device stays a
+consequence of A's allocation; an M with a device count not dividing 12,
+or an A that does not cycle, gets an uneven split, and a device that
+holds no key of a side cannot introduce it (bench: the sibling does).
+Step 5's allocation per M device (4.5 (b)) replaces this interim rule.
+
+Tests: V3 (S7: two M states fold the same listings in their own seeded
+orders with duplicates, including a lower n that a higher empty revision
+and a revocation remove; after every fold both choose, check rights and
+`stockAt`, consume locally; responsibility per anchor is the same on both
+devices in every intermediate state, no anchor named twice; in more than
+100 of 200 runs some canonical n moved), V4 (Astra's nine counter-runs:
+strict and shared × empty revision, strict × revocation, forward /
+reverse / duplicates; shared × revocation as control: responsibility
+unchanged, exactly one act), V5 (anchor cycle: slots of every honest
+key for D = 2, 3, 4; both M devices hold nameable keys of both sides).
+The X23 evidence test now runs seeds 3, 6, 11: under seeds 2 and 5 the
+new anchors no longer put the first pick on the sleeping A2, so nothing
+is lost there.
 
 ### Counter card through the sibling (8325.A5c)
 
@@ -620,12 +698,13 @@ under load). The default run (CI) takes seed 1 of each variant (97 s);
   step 3: on "set no longer empty", resend every document that failed as
   `empty-device-set`, together with all entry paths (review 31 S2;
   CodeRabbit #74, three findings of this class).
-- One computation of M's view (review 36): before both M devices hold
-  both of two conflicting listings of the same anchor (only a
-  misbehaving A device produces them: honest devices list disjoint
-  anchors), each device judges by what it holds, so in that window two
-  devices can name the same key. Once both have folded both listings
-  they agree (V1); the conflict is a finding at M.
+- Conflicting listings of one anchor (only a misbehaving A device
+  produces them: honest devices list disjoint anchors) no longer move
+  responsibility (review 37 B8): the responsible M device follows from
+  the anchor alone, so neither the window before both M devices hold
+  both listings nor a later revision or revocation lets a second device
+  name the key. What stays per device is consumption: the responsible
+  device names a key once, from its own state.
 - X21's restore repair takes 11 rounds instead of 7 (more batches: set
   proofs, pools, revisions per writer).
 
@@ -796,8 +875,11 @@ devices, the set revision and its fan-out are steps 2 and 3.
   (nonce, n) and the anchor differs anyway. The model still reports a
   second nonce on a relationship (8435, "zweiter Vorrat"): that finding
   now marks the normal case (X17: 2) and is a spec follow-up.
-- **Interim rule until step 5: `mediatorSplit` on (default).** M keeps
-  K1a's `n mod devices` split of the keys a mediator device may name.
+- **Interim rule until step 5: `mediatorSplit` on (default).** M splits
+  the keys a mediator device may name among its devices; since review 37
+  by the anchor (`nameSlot`, hash of the anchor mod M's device count),
+  no longer by K1a's `n mod devices` (section "Responsibility bound to
+  the anchor").
   Nothing in step 1 replaces it: per-device keys remove writer tags and
   number classes, but not the case that two M devices name the same key
   of A's stock. The allocation per M device that A enforces (4.5 (b)) is
@@ -832,7 +914,7 @@ simplification); `device-set@1` and its fan-out are step 2.
 | writer tags (step 4, HMAC under a seed key, `writer` field in revision, probe, mapping) | removed; writer = signing device key, no field | with keys per device the signer is already a pseudonym per relationship |
 | number classes ⌊n/devices⌋ mod devices (review 21 B1) | removed (`allocationSplit` off) | own nonce per device: two devices never produce the same (nonce, n) anchor |
 | shared n under one nonce | removed | as above |
-| `n mod devices` split for M (`mayName`) | **kept as interim rule** (`mediatorSplit`, default on; off = counter-run) | nothing in step 1 replaces it; the allocation per M device that A enforces (4.5 (b)) is step 5 |
+| `n mod devices` split for M (`mayName`) | **kept as interim rule** (`mediatorSplit`, default on; off = counter-run); since review 37 bound to the anchor (`nameSlot`), not to n | nothing in step 1 replaces it; the allocation per M device that A enforces (4.5 (b)) is step 5 |
 | shared self anchor as signer of journal frames, one self address | removed | journal signed per device, one self address per device |
 | `conflict:key-value` | stays in the model, never fires | an anchor belongs to one device |
 
