@@ -102,7 +102,7 @@ image is (MV-6 new; measured in 2b).
 | X14 | ✓ | ✓ | ✓ | **✗** | A mediates on two devices: without a split both name the same key, B and C refuse the second act (8640.12, 12 findings); distributed mediator, not accepted in 2a (2b) |
 | X15–X17 | ✓ | ✓ | ✓ | ✓ | |
 | X18 | ≈ | ✗ | ≈ | ≈ | one card, no K, anchor-pair oracle holds |
-| X21 | ✓ | ✓ | ✓ | **✗** | no gate (MV-6 new): A2 restored from an image before both acts produces a card again from its reachable state (visible restore artefact: same card key, same V, B repetition); end state consistent (0 missing batches, 0 doubles, 0 conflicts, nobody catching up, both A devices equal) but not the state before (the hand-over digest moved), which X21's oracle requires; journal 19 → 35 batches |
+| X21 | ✓ | ✓ | ✓ | **✗** | branch forced (bench rule 6m): A2 allocated the first act's key (M's choice decides otherwise; A declines acts until M names a key of A2). No gate (MV-6 new): A2 restored from an image before both acts folds A1's consent before its own earlier production and produces the card again from its reachable state (visible restore artefact: same card key, same V, B repetition); end state consistent (0 missing batches, 0 doubles, 0 conflicts, nobody catching up, both A devices equal) but not the state before (the hand-over digest moved), which X21's oracle requires. In the branch "A1 allocates" X21 holds (11 of 20 seeds red before the branch was forced) |
 
 **K2 step 2a: 16 kept (X3, X9, X13, X18 under a changed promise), 3 not
 kept (X7 strict, X14, X21), 1 n/a (X10).** #74 strict was 18/1/1.

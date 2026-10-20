@@ -1062,12 +1062,35 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const oldA2 = s.w.stores.get('A2')!.snapshot() // A2 vor beiden Akten
       // Fachlicher Verlauf: ein Akt mit Zustimmung auf A1, einer mit Zustimmung auf A2 (A2s eigene Batches stehen danach nur noch in A1s Journal).
       const acts: string[] = []
+      // Prüfstandsregel 6m (jede Zelle in jedem Zweig): unter Gerätemengen hängt der Verlauf davon ab, welches A-Gerät den
+      // Vorrats-Schlüssel des ersten Akts zugeteilt hat (Ms Wahl, Zufall). Erzwungen wird der Zweig „A2 teilt zu“: A1 stimmt
+      // zu, A2 erzeugt die Karte nach dem Falten; ein Restore von A2 aus dem Abbild vor beiden Akten erzeugt sie seit MV-6
+      // neu (keine Sperre) aus dem erreichbaren Stand erneut. Andere Akte lehnt A ab, bis M einen Schlüssel von A2 benennt.
+      const sets = c.capabilities.has('device-sets')
+      const allocator = (act: string) => {
+        const a = M.act(s.A.state, act)
+        return M.findRel(s.A.state, a.mediator)?.stock.find((k) => k.anchor === a.own)?.by
+      }
+      let tries = 0
       for (const [other, dev, peer] of [[mc, s.A, C], [s.mb, s.A2, s.B]] as const) {
-        const r = await introduceAny(s, s.ma, other, serial)
-        if (!('act' in r)) return fail(`Vorstellung verweigert: ${r.refused}`)
+        const issue = async (): Promise<string | Body> => {
+          const r = await introduceAny(s, s.ma, other, serial)
+          if (!('act' in r)) return fail(`Vorstellung verweigert: ${r.refused}`)
+          // K2 Schritt 2: das Ticket an die Gegenseite öffnet nur der Halter ihres Vorrats-Schlüssels (strict); das zustimmende Gerät kennt den Akt erst nach dessen Journal.
+          if ((await s.w.until(() => knowsAct(s.w, 'A', r.act) && peer.state.acts.some((a) => a.id === r.act), 10)) < 0) return fail('Akt nicht auf beiden Geräten')
+          return r.act
+        }
+        let act = await issue()
+        if (typeof act !== 'string') return act
+        while (sets && dev === s.A && allocator(act) !== 'A2') {
+          if (++tries > 12) return fail('Zweig „A2 teilt den Schlüssel des ersten Akts zu“ nicht erreicht')
+          await s.A.decline(act)
+          await s.w.rounds(2)
+          act = await issue()
+          if (typeof act !== 'string') return act
+        }
+        const r = { act }
         acts.push(r.act)
-        // K2 Schritt 2: das Ticket an die Gegenseite öffnet nur der Halter ihres Vorrats-Schlüssels (strict); das zustimmende Gerät kennt den Akt erst nach dessen Journal.
-        if ((await s.w.until(() => knowsAct(s.w, 'A', r.act) && peer.state.acts.some((a) => a.id === r.act), 10)) < 0) return fail('Akt nicht auf beiden Geräten')
         await dev.consent(r.act)
         await peer.consent(r.act)
         await s.w.until(() => s.w.of('A').every((d) => M.act(d.state, r.act).state === 'connected'), 15)
@@ -1204,9 +1227,10 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const end = repaired
         ? `Reparatur beendet: kein Gerät mit ausstehendem Nachholen, still ab Runde ${quiet} über ${repair.window} Runden (größter Wiederanfrageabstand ${MAX_REREQUEST})`
         : `Reparatur nicht beendet: nach 60 Runden Nachholen ausstehend auf ${repair.pending.join(', ') || 'keinem Gerät'}, ${repair.selfFrames} Self-Rahmen in dieser Zeit, zuletzt still über ${repair.window} Runden`
+      if (sets) measures.forcedBranchDeclines = tries
       return {
         outcome: mark(ok),
-        detail: `Reparatur in Runden: Restore ${restore}, Anfrageverlust ${requests.rounds}, Antwortverlust ${answers.rounds}, Batchverlust bei zugestelltem Antwortkopf ${batches.rounds}, Quittungsverlust ${receipts.rounds} (zurück nach dem Verlust: ${[requests.behind, answers.behind, batches.behind, receipts.behind].join('/')}); je Phase danach fehlende Batches ${Object.values(perPhase).map((v) => v.missing).join('/')}, Geräte nicht auf der Referenz ${Object.values(perPhase).map((v) => v.lost).join('/')}; ${end}; fehlende Batches ${missing ?? 'nicht messbar (kein Nachholen)'}; Geräte mit anderem Stand als vorher ${lostState}; doppelte Wirkungen ${measures.doubleFinalEffects}, Konflikte ${measures.remainingConflicts}; Self-Adresse ${t.own.frames} Rahmen / ${t.own.bytes} B (Journal ${k('journal').frames}/${k('journal').bytes} B, Anfragen ${k('journal-sync').frames}, Antworten ${k('journal-sync-reply').frames}, Quittungen ${k('delivery-ack').frames}); Wiederholungen ${t.repeats}: ${t.repeatsOwn} auf der Self-Adresse, ${t.repeatsToPeer} an Gegenseiten; Antworten A1 ${answersBy('A1')}, A2 ${answersBy('A2')}${s.w.selfLog ? `, Dienst: ${measures.logRequests} Leseanfragen, ${measures.answersService} beim Träger, abgeschickt ${measures.serviceEntriesSent} Einträge / ${measures.serviceBytesSent} B, angekommen ${measures.serviceEntriesServed} / ${measures.serviceBytesServed} B, Anfragen ${measures.serviceRequestBytes} B, Köpfe ${measures.serviceHeadBytes} B; Ablage ${measures.logEntries} Einträge, ${measures.logBytes} B` : ''}; an Gegenseiten ${t.toPeer.frames} Rahmen; Journal ${measures.journalBatchesBefore ?? '–'} → ${measures.journalBatchesAfter ?? '–'} Batches`,
+        detail: `${sets ? `Zweig (6m): A2 teilt den Schlüssel des ersten Akts zu (${tries} Akt(e) abgelehnt, bis M einen Schlüssel von A2 benennt)${ok ? '' : '; nicht bestanden, abhängig vom Zuteiler: A2 erzeugt die Karte nach dem Restore aus dem Abbild erneut (MV-6 neu)'}; ` : ''}Reparatur in Runden: Restore ${restore}, Anfrageverlust ${requests.rounds}, Antwortverlust ${answers.rounds}, Batchverlust bei zugestelltem Antwortkopf ${batches.rounds}, Quittungsverlust ${receipts.rounds} (zurück nach dem Verlust: ${[requests.behind, answers.behind, batches.behind, receipts.behind].join('/')}); je Phase danach fehlende Batches ${Object.values(perPhase).map((v) => v.missing).join('/')}, Geräte nicht auf der Referenz ${Object.values(perPhase).map((v) => v.lost).join('/')}; ${end}; fehlende Batches ${missing ?? 'nicht messbar (kein Nachholen)'}; Geräte mit anderem Stand als vorher ${lostState}; doppelte Wirkungen ${measures.doubleFinalEffects}, Konflikte ${measures.remainingConflicts}; Self-Adresse ${t.own.frames} Rahmen / ${t.own.bytes} B (Journal ${k('journal').frames}/${k('journal').bytes} B, Anfragen ${k('journal-sync').frames}, Antworten ${k('journal-sync-reply').frames}, Quittungen ${k('delivery-ack').frames}); Wiederholungen ${t.repeats}: ${t.repeatsOwn} auf der Self-Adresse, ${t.repeatsToPeer} an Gegenseiten; Antworten A1 ${answersBy('A1')}, A2 ${answersBy('A2')}${s.w.selfLog ? `, Dienst: ${measures.logRequests} Leseanfragen, ${measures.answersService} beim Träger, abgeschickt ${measures.serviceEntriesSent} Einträge / ${measures.serviceBytesSent} B, angekommen ${measures.serviceEntriesServed} / ${measures.serviceBytesServed} B, Anfragen ${measures.serviceRequestBytes} B, Köpfe ${measures.serviceHeadBytes} B; Ablage ${measures.logEntries} Einträge, ${measures.logBytes} B` : ''}; an Gegenseiten ${t.toPeer.frames} Rahmen; Journal ${measures.journalBatchesBefore ?? '–'} → ${measures.journalBatchesAfter ?? '–'} Batches`,
         measures,
       }
     },

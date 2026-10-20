@@ -151,8 +151,10 @@ describe('K2 Schritt 2a: Matrix (strict, M als Ein-Schreiber-Fixture)', () => {
     expect(r.X14!.measures.mediatorConformanceFailures).toBeGreaterThan(0)
     // X21: no gate after restore (MV-6 new, MV-34); the restored A2 acts from its old image, its re-production of a card is a
     // visible restore artefact (same card key, same V; the person's hand-over digest moves), consistent: nothing missing at
-    // the end, no double effect, no conflict. The oracle (state as before) stays as it is.
+    // the end, no double effect, no conflict. The oracle (state as before) stays as it is. Bench rule 6m: the branch "A2
+    // allocated the first act's key" is forced (it depends on M's choice otherwise).
     expect(r.X21!.outcome, r.X21!.detail).toBe('nicht bestanden')
+    expect(r.X21!.detail).toContain('Zweig (6m): A2 teilt den Schlüssel des ersten Akts zu') // branch forced (plan 6m)
     expect(r.X21!.measures.missingBatches).toBe(0)
     expect(r.X21!.measures.doubleFinalEffects).toBe(0)
     expect(r.X21!.measures.remainingConflicts).toBe(0)
