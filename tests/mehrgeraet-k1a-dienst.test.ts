@@ -18,13 +18,14 @@ import * as M from '../src/lab/mehrgeraet/model'
 //   1. Träger: nur Ablage-Adressen behalten, geordnet; Lesen ab Position nur für registrierte Geräte; Antwort mit der
 //      nächsten Abholung; Störungen je Anfrage, Antwort, Eintrag.
 //   Hybrid nach Tor-Review 25 (Anton 18.10.: „das Log beim Dienst ist Beschleunigung, nie Freigabegrund“; Replication D1:
-//   Zurückhalten durch den Träger darf nie eine Freigabe bewirken): Daten aus der Ablage, Freigabe nach Restore nur mit dem
-//   Zeugnis einer Schwester oder dem Widerruf aller Schwestern, wie im Default.
-//   2. Restore-Gegenlauf, Schwester verloren: gefaltet nach 2 Runden, gesperrt bis zum Widerruf; Karte erreicht B nie.
-//   3. Schwester erreichbar: Sperre endet mit ihrem Zeugnis (eine Runde nach dem Default).
-//   4. B1: leere, verkürzte, umgeordnete Antwort gibt nichts frei.
-//   5. B2: beschädigte Einträge: Befund, Cursor bleibt, Backoff, Sperre hält.
-//   6. Restore mit verlorener Schwester und gültiger Karte: gesperrt bis Widerruf wie K1a.
+//   Zurückhalten durch den Träger darf nie eine Freigabe bewirken). Seit MV-6 neu / MV-34 (Anton 20.10.) gibt es nach
+//   einem Restore keine Freigabe-Sperre mehr, im Default wie hier: das Gerät handelt sofort aus dem erreichbaren Stand,
+//   die Ablage liefert nur Daten (MV-35: Beschleunigung). Die Tests prüfen die Datenspur unverändert und die Freigabe neu.
+//   2. Restore-Gegenlauf, Schwester verloren: gefaltet nach 2 Runden, keine Sperre; die Karte geht hinaus, Regel 2.
+//   3. Schwester erreichbar: keine Sperre, im Default dasselbe.
+//   4. B1: leere, verkürzte, umgeordnete Antwort faltet keine falschen Daten; ohne Daten bleibt die Verbindung offen.
+//   5. B2: beschädigte Einträge: Befund, Cursor bleibt, Backoff.
+//   6. Restore mit verlorener Schwester und gültiger Karte: keine Sperre, im Default dasselbe.
 //   7. Bindung (MV-5). 8. Träger unerreichbar. 9. S2: verlorene Antwort, nächste Runde neu.
 //   10. Enrollment aus der Ablage. 11. Alle Szenarien: dieselben Ausgänge wie K1a. 12. Was der Dienst lernt; Wachstum.
 //   Review 26 B2 (Rest): 13. Ablage, 14. Briefkasten, 15. Enrollment aus der Ablage: kaputte Form oder werfende Faltung
@@ -66,6 +67,8 @@ const a1CardDeposits = (A: HolderDevice, act: string) => {
   return [...A.zusteller.submissions.values()].filter((x) => x.address === a.voucher.keyAgreement && A.intents.get(x.digest)?.kind.includes('introduction-card') && x.deposits > 0).length
 }
 const states = (w: Welt15, act: string) => w.of('A').map((d) => `${M.act(d.state, act).state}/${M.act(d.state, act).o}`)
+/** Hat das Gerät die Ablehnung von A2 gefaltet (Daten aus Ablage oder Schwester), unabhängig davon, was Regel 2 entscheidet? */
+const declineFolded = (d: HolderDevice, act: string) => (M.act(d.state, act).decisions ?? []).some((x) => x.kind === 'decline')
 
 describe('K1a Schritt 6 (Variante): Journal beim Dienst', () => {
   it('Variante als zweiter Kandidateneintrag mit derselben Fabrik und der Prüfstandsoption selfLog', () => {
@@ -175,58 +178,56 @@ describe('K1a Schritt 6 (Variante): Journal beim Dienst', () => {
     return () => void (w.carrier.takeLogAnswers = take)
   }
 
-  it('2. Hybrid (Anton 18.10., Review 25 B1): A2 verloren und nicht widerrufen; die Ablage bringt die Ablehnung schnell (gefaltet, einig), die Sperre bleibt bis zum Widerruf wie im Default; die zurückgenommene Karte erreicht B nie', async () => {
+  it('2. Hybrid unter MV-6 neu: A2 verloren und nicht widerrufen; die Ablage bringt die Ablehnung schnell (gefaltet in 2 Runden); keine Sperre: die Karte des Abbilds geht sofort hinaus, die Faltung entscheidet nach Regel 2 für die Zustimmung, A1 verbindet mit der verdeckt gehaltenen Gegenkarte aus der Ablage (sichtbares Restore-Artefakt, konsistent)', async () => {
     const { w, A, B, act } = await restoredCounterRun(false)
     const g0 = A.gatedRounds
-    const folded = await w.until(() => !A.logPending && M.act(A.state, act).o === 'cancelled', 5)
+    const folded = await w.until(() => !A.logPending && declineFolded(A, act), 5)
     expect(folded).toBe(2) // Leseanfrage in Runde 1, Antwort gelesen und gefaltet in Runde 2
-    await w.rounds(20)
-    expect(A.gated).toBe(true) // die Antwort der Ablage beendet die Sperre nicht
-    expect(A.witnessPending).toBe(true)
-    expect(A.gatedRounds - g0).toBe(22)
-    expect(M.act(A.state, act)).toMatchObject({ state: 'declined', o: 'cancelled' }) // aktuell aus der Ablage, obwohl gesperrt
-    expect(a1CardDeposits(A, act)).toBe(0)
-    A.deviceRevoked('A2') // „Gerät entfernen“: erst jetzt fällt die Sperre
-    await w.rounds(3)
     expect(A.gated).toBe(false)
-    expect(a1CardDeposits(A, act)).toBe(0)
-    expect(M.act(B.state, act)).toMatchObject({ state: 'consented', pending: null })
+    expect(a1CardDeposits(A, act)).toBe(1)
+    expect(await w.until(() => M.act(A.state, act).state === 'connected' && M.act(B.state, act).state === 'connected', 20)).toBeGreaterThan(0)
+    expect(A.witnessPending).toBe(true) // die Schwester antwortet nie; das hält nichts auf
+    expect(A.gatedRounds - g0).toBe(0)
+    expect(A.state.findings.some((f) => f.includes(act) && f.includes('Regel 2') && f.includes('Zustimmung gilt'))).toBe(true)
   }, 300_000)
 
-  it('3. Hybrid mit erreichbarer Schwester: die Sperre endet erst mit dem Zeugnis von A2 (Antwort auf die laufende Anfrage, Köpfe gedeckt); die Daten kamen schon aus der Ablage; gleich viele gesperrte Runden wie der Default', async () => {
+  it('3. Hybrid mit erreichbarer Schwester: keine Sperre, die Karte geht in beiden Varianten sofort hinaus; die Daten kommen aus der Ablage (2 Runden), das Zeugnis der Schwester ist nur noch Daten; im Default dasselbe Ergebnis', async () => {
     const { w, A, B, act } = await restoredCounterRun(true)
-    const g0 = A.gatedRounds
     const folded = await w.until(() => !A.logPending, 5)
     expect(folded).toBe(2)
-    expect(A.gated).toBe(true) // gefaltet, aber noch kein Zeugnis
-    expect(M.act(A.state, act).o).toBe('cancelled')
-    expect(await w.until(() => !A.gated, 10)).toBeGreaterThan(0)
-    const gated = A.gatedRounds - g0
-    expect(a1CardDeposits(A, act)).toBe(0)
-    expect(M.act(B.state, act).state).toBe('consented')
-    // Gegenprobe Default (Briefkasten): derselbe Ablauf.
+    expect(declineFolded(A, act)).toBe(true)
+    expect(A.gated).toBe(false)
+    expect(a1CardDeposits(A, act)).toBe(1)
+    expect(await w.until(() => w.of('A').every((d) => M.act(d.state, act).state === 'connected') && M.act(B.state, act).state === 'connected' && w.agree('A').agree, 20)).toBeGreaterThan(0)
+    // Gegenprobe Default (Briefkasten): derselbe Ablauf, dasselbe Ergebnis.
     const mb = await restoredCounterRun(true, () => k1a())
-    const m0 = mb.A.gatedRounds
-    expect(await mb.w.until(() => !mb.A.gated, 10)).toBeGreaterThan(0)
-    expect(gated).toBe(mb.A.gatedRounds - m0 + 1) // eine Runde mehr: die Anfrage an die Schwester geht nach dem Falten hinaus
-    expect(a1CardDeposits(mb.A, mb.act)).toBe(0)
+    expect(mb.A.gated).toBe(false)
+    expect(await mb.w.until(() => mb.w.of('A').every((d) => M.act(d.state, mb.act).state === 'connected') && M.act(mb.B.state, mb.act).state === 'connected' && mb.w.agree('A').agree, 20)).toBeGreaterThan(0)
+    expect(a1CardDeposits(mb.A, mb.act)).toBe(1)
+    expect([A.gatedRounds, mb.A.gatedRounds]).toEqual([0, 0])
   }, 300_000)
 
   for (const mode of ['empty', 'truncated', 'reverse'] as const)
-    it(`4. Review 25 B1 (${mode}): eine leere, verkürzte oder umgeordnete Antwort der Ablage gibt nichts frei; mit verlorener Schwester bleibt die Sperre, mit erreichbarer bezeugt A2 und liefert, was fehlt`, async () => {
+    it(`4. Review 25 B1 (${mode}): eine leere, verkürzte oder umgeordnete Antwort der Ablage faltet keine falschen Daten; keine Sperre (MV-6 neu), die Karte geht hinaus; hält der Dienst alles zurück und ist die Schwester verloren, bleibt die Verbindung bei A offen, bis Daten kommen (benannter Preis, MV-35)`, async () => {
       for (const live of [false, true]) {
         const { w, A, B, act } = await restoredCounterRun(live)
         tamper(w, mode)
         await w.rounds(25)
-        expect(A.gated, `live=${live}`).toBe(!live)
-        expect(a1CardDeposits(A, act), `live=${live}`).toBe(0)
-        expect(M.act(B.state, act).state).toBe('consented')
-        if (live || mode !== 'empty') expect(M.act(A.state, act).o, `live=${live}`).toBe('cancelled')
-        else expect(M.act(A.state, act).o).toBe('handed') // der Dienst hielt alles zurück, die Sperre hält
+        expect(A.gated, `live=${live}`).toBe(false)
+        expect(a1CardDeposits(A, act), `live=${live}`).toBe(1)
+        expect(M.act(B.state, act).state, `live=${live}`).toBe('connected')
+        if (live || mode !== 'empty') {
+          expect(declineFolded(A, act), `live=${live}`).toBe(true)
+          expect(M.act(A.state, act).state, `live=${live}`).toBe('connected')
+        } else {
+          // Der Dienst hielt alles zurück, die Schwester ist verloren: A1 kennt weder die Ablehnung noch Bs Gegenkarte.
+          expect(declineFolded(A, act)).toBe(false)
+          expect(M.act(A.state, act).state).toBe('consented')
+        }
       }
     }, 300_000)
 
-  it('5. Review 25 B2: beschädigte Einträge zählen nie als gefaltet; Befund journal:corrupt-entry je Position, der Cursor bleibt davor, erneut mit Backoff; die Sperre hält; heil gelesen geht es weiter', async () => {
+  it('5. Review 25 B2: beschädigte Einträge zählen nie als gefaltet; Befund journal:corrupt-entry je Position, der Cursor bleibt davor, erneut mit Backoff; keine Sperre (MV-6 neu); heil gelesen geht es weiter', async () => {
     const { w, A, B, act } = await restoredCounterRun(false)
     const heal = tamper(w, 'corrupt')
     const r0 = A.logRequests
@@ -236,14 +237,13 @@ describe('K1a Schritt 6 (Variante): Journal beim Dienst', () => {
     expect(A.logCorrupt).toBeGreaterThan(0)
     expect(A.dispositions.filter((d) => d.startsWith('finding(journal:corrupt-entry@')).length).toBe(A.logCorrupt) // je Position einmal
     expect(A.logRequests - r0).toBeLessThanOrEqual(5) // Backoff 1, 2, 4, 8 statt jede Runde
-    expect(A.gated).toBe(true)
-    expect(a1CardDeposits(A, act)).toBe(0)
-    expect(M.act(A.state, act).o).toBe('handed')
+    expect(A.gated).toBe(false)
+    expect(a1CardDeposits(A, act)).toBe(1)
+    expect(declineFolded(A, act)).toBe(false) // nichts aus der beschädigten Antwort gefaltet
     heal()
     expect(await w.until(() => !A.logPending, 20)).toBeGreaterThan(0)
-    expect(M.act(A.state, act).o).toBe('cancelled')
-    expect(A.gated).toBe(true)
-    expect(M.act(B.state, act).state).toBe('consented')
+    expect(declineFolded(A, act)).toBe(true)
+    expect(await w.until(() => M.act(A.state, act).state === 'connected' && M.act(B.state, act).state === 'connected', 20)).toBeGreaterThan(0)
   }, 300_000)
 
   /** Restore A1 aus einem Backup mit gültiger Zustimmung (Karte nie beim Träger), A2 verloren (offline, antwortet nie, nicht widerrufen). */
@@ -261,18 +261,14 @@ describe('K1a Schritt 6 (Variante): Journal beim Dienst', () => {
     return p
   }
 
-  it('6. Restore mit verlorener Schwester und gültiger Karte: gefaltet und einig nach 2 Runden, gesperrt bis zum Widerruf wie K1a (20 von 20); danach geht die Karte hinaus', async () => {
+  it('6. Restore mit verlorener Schwester und gültiger Karte: gefaltet und einig nach 2 Runden; keine Sperre (MV-6 neu), die Karte geht sofort hinaus, ohne Widerruf; im Default dasselbe', async () => {
     const { w, A, B, act } = await restoredWithLostSibling()
     expect(await w.until(() => !A.logPending, 5)).toBe(2)
-    await w.rounds(18)
-    expect(A.gatedRounds).toBe(20)
-    expect(a1CardDeposits(A, act)).toBe(0)
-    const mb = await restoredWithLostSibling(() => k1a())
-    await mb.w.rounds(20)
-    expect(mb.A.gatedRounds).toBe(20)
-    expect(a1CardDeposits(mb.A, mb.act)).toBe(0)
-    A.deviceRevoked('A2')
     expect(await w.until(() => a1CardDeposits(A, act) === 1 && M.act(B.state, act).state === 'connected', 20)).toBeGreaterThan(0)
+    expect(A.gatedRounds).toBe(0)
+    const mb = await restoredWithLostSibling(() => k1a())
+    expect(await mb.w.until(() => a1CardDeposits(mb.A, mb.act) === 1 && M.act(mb.B.state, mb.act).state === 'connected', 20)).toBeGreaterThan(0)
+    expect(mb.A.gatedRounds).toBe(0)
   }, 300_000)
 
   it('7. Bindung (MV-5): eine Antwort der Ablage auf eine frühere Leseanfrage zählt nicht; erst die Antwort auf die laufende', async () => {
@@ -284,21 +280,22 @@ describe('K1a Schritt 6 (Variante): Journal beim Dienst', () => {
     await A.round()
     expect(A.staleSyncAnswers).toBe(1)
     expect(A.logPending).toBe(true)
-    expect(a1CardDeposits(A, act)).toBe(0)
+    expect(A.gated).toBe(false)
+    void act
     expect(await w.until(() => !A.logPending, 5)).toBeGreaterThan(0)
   }, 300_000)
 
-  it('8. Träger unerreichbar: Leseanfragen mit Backoff, gesperrt; danach gefaltet, die Freigabe wartet weiter auf Zeugnis oder Widerruf', async () => {
+  it('8. Träger unerreichbar: Leseanfragen mit Backoff, nichts kommt an; danach gefaltet; keine Sperre (MV-6 neu), die Karte geht hinaus, sobald der Träger erreichbar ist', async () => {
     const { w, A, act } = await restoredWithLostSibling()
     w.carrier.unreachable = true
     await w.rounds(6)
     expect(A.logPending).toBe(true)
     expect(A.logRequests).toBeLessThanOrEqual(3) // 1, 2, 4
-    expect(a1CardDeposits(A, act)).toBe(0)
+    expect(a1CardDeposits(A, act)).toBe(0) // der Träger nimmt nichts an
     w.carrier.unreachable = false
     expect(await w.until(() => !A.logPending, 20)).toBeGreaterThan(0)
-    expect(A.gated).toBe(true)
-    expect(a1CardDeposits(A, act)).toBe(0)
+    expect(A.gated).toBe(false)
+    expect(await w.until(() => a1CardDeposits(A, act) === 1, 20)).toBeGreaterThan(0)
   }, 300_000)
 
   it('9. Review 25 S2: eine verlorene Antwort der Ablage wird in der nächsten Runde neu angefragt (höchstens eine Leseanfrage je Runde); nach der Verlustphase gefaltet in einer Runde', async () => {
@@ -472,7 +469,7 @@ describe('K1a Schritt 6 (Variante): Journal beim Dienst', () => {
     ['Batch mit "__proto__"-Feld', batch({ ['__proto__']: { n: 99 } })],
   ]
 
-  it('13. Review 26 B2, Ablage: kaputte Form oder werfende Faltung ist ein Befund je Position, kein Abbruch; der Cursor bleibt, Backoff, die Sperre hält; der gültige Eintrag dahinter wird nicht gefaltet, solange der kaputte blockiert', async () => {
+  it('13. Review 26 B2, Ablage: kaputte Form oder werfende Faltung ist ein Befund je Position, kein Abbruch; der Cursor bleibt, Backoff; der gültige Eintrag dahinter wird nicht gefaltet, solange der kaputte blockiert (keine Sperre, MV-6 neu)', async () => {
     for (const [what, payload] of [...malformed('REL'), ['eingespritzte Ausnahme in applyRemote', batch({ ops: [xop({ kind: 'finding', text: 'x' })] })] as [string, unknown]]) {
       const { w, A, B, act } = await restoredCounterRun(false)
       const rel = A.state.relationships[0]!.id
@@ -494,22 +491,21 @@ describe('K1a Schritt 6 (Variante): Journal beim Dienst', () => {
       expect(A.snapshotState().logCursor, what).toBe(first)
       expect(A.logPending, what).toBe(true)
       expect(A.logRequests - r0, what).toBeLessThanOrEqual(5) // Backoff
-      expect(M.act(A.state, act).o, what).toBe('handed') // die Ablehnung dahinter ist nicht gefaltet (Blockieren)
+      expect(declineFolded(A, act), what).toBe(false) // die Ablehnung dahinter ist nicht gefaltet (Blockieren)
       expect(Object.keys(A.cand.heads!()).some((k) => k.startsWith('X@')), what).toBe(false) // nichts vom kaputten Batch im Journal
       expect(A.state.relationships.every((r) => Number.isInteger(r.nextN) && r.stock.every((k) => typeof k.anchor === 'string')), what).toBe(true)
       expect(A.state.relationships.every((r) => !r.view || r.view.keys.every((k) => typeof k === 'object' && k !== null)), what).toBe(true)
       expect(A.state.relationships.every((r) => Number.isFinite(r.view?.revision ?? 0) && Object.values(r.view?.clears ?? {}).every(Number.isFinite)), what).toBe(true) // Review 28: nie NaN
-      expect(A.gated, what).toBe(true)
-      expect(a1CardDeposits(A, act), what).toBe(0)
+      expect(A.gated, what).toBe(false)
+      expect(a1CardDeposits(A, act), what).toBe(1)
       ins.heal()
       expect(await w.until(() => !A.logPending, 20), what).toBeGreaterThan(0)
-      expect(M.act(A.state, act).o, what).toBe('cancelled')
-      expect(A.gated, what).toBe(true)
-      expect(M.act(B.state, act).state).toBe('consented')
+      expect(declineFolded(A, act), what).toBe(true)
+      expect(M.act(B.state, act).state, what).toBe('connected')
     }
   }, 900_000)
 
-  it('14. Review 26 B2, Briefkasten (Default-K1a): derselbe kaputte Rahmen ist ein Befund je Digest, keine Quittung, keine Wirkung; die Runde läuft weiter und spätere Rahmen falten; nach Restore hält die Sperre', async () => {
+  it('14. Review 26 B2, Briefkasten (Default-K1a): derselbe kaputte Rahmen ist ein Befund je Digest, keine Quittung, keine Wirkung; die Runde läuft weiter und spätere Rahmen falten; nach Restore ändert er nichts (keine Sperre, MV-6 neu)', async () => {
     const p = await withA2(() => k1a())
     const { w, A, A2, act } = p
     const rel = A.state.relationships[0]!.id
@@ -530,14 +526,14 @@ describe('K1a Schritt 6 (Variante): Journal beim Dienst', () => {
     expect(A.frameCorrupt).toBe(frames.length)
     expect(await A2.decline(act)).toBe('ok')
     expect(await w.until(() => M.act(A.state, act).state === 'declined', 5)).toBeGreaterThan(0) // spätere Rahmen falten
-    // Restore mit verlorener Schwester: der kaputte Rahmen ändert nichts an der Sperre.
+    // Restore mit verlorener Schwester: der kaputte Rahmen ist ein Befund und hält nichts auf.
     const q = await restoredWithLostSibling(() => k1a())
     const f = await selfFrame(q.w, q.A, batch({ ops: null }))
     q.w.carrier.deposit(f.rkid, f.bytes)
     await q.w.rounds(10)
     expect(q.A.frameCorrupt).toBe(1)
-    expect(q.A.gated).toBe(true)
-    expect(a1CardDeposits(q.A, q.act)).toBe(0)
+    expect(q.A.gated).toBe(false)
+    expect(a1CardDeposits(q.A, q.act)).toBe(1)
   }, 900_000)
 
   it('15. Review 26 B2, Enrollment aus der Ablage: ein kaputter erster Eintrag blockiert die Ablagespur (Befund, Cursor 0, kein Abbruch); Daten und Zeugnis kommen über die Schwesterspur von A1 (dieselbe Projektion); heil gelesen endet auch die Ablagespur', async () => {
@@ -638,16 +634,15 @@ describe('K1a Schritt 6 (Variante): Journal beim Dienst', () => {
         expect(A.snapshotState().logCursor).toBe(first)
         expect(A.state.findings.some((f) => f === 'MARKER' || f === 'P1')).toBe(false) // nichts von Position 1 und 2 bleibt
         expect(Object.keys(A.cand.heads!()).some((k) => k.startsWith('X@') || k.startsWith('Y@'))).toBe(false)
-        expect(M.canonical(A.projection())).toBe(before)
-        expect(M.act(A.state, act).o).toBe('handed')
+        expect(declineFolded(A, act)).toBe(false)
         ins.heal()
         expect(await w.until(() => !A.logPending, 20)).toBeGreaterThan(0)
-        expect(M.act(A.state, act).o).toBe('cancelled')
+        expect(declineFolded(A, act)).toBe(true)
       } else {
         expect(A.logCorrupt).toBe(0)
         expect(A.logPending).toBe(false) // eine Antwort, ein Schritt
         expect(A.state.findings).toEqual(expect.arrayContaining(['BOOM', 'P1', 'MARKER']))
-        expect(M.act(A.state, act).o).toBe('cancelled')
+        expect(declineFolded(A, act)).toBe(true)
       }
     }
   }, 600_000)

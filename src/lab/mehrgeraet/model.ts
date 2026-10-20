@@ -34,6 +34,8 @@
 
 // ── Parameter (Profil, vereinfacht) ──────────────────────────────────────────
 
+import { createHash } from 'node:crypto'
+
 export const PARAM = {
   /** 8510: zehn Annahmen je Mediatorbeziehung im Fenster. */
   budget: 10,
@@ -119,6 +121,8 @@ export interface StockKey {
   key: string // Kontextname (Ableitung beim Kandidaten)
   expiresAt: string
   state: StockState
+  /** K2 Schritt 2: das Gerät, das den Schlüssel zugeteilt hat (nur es erzeugt die Karte, E2 (iv); Anteil je Gerät). Ohne Feld (K0, K1a): die Person. */
+  by?: string
 }
 
 export type ListedKey = { n: number; anchor: Anchor; keyAgreement: string; expiresAt: string }
@@ -126,7 +130,10 @@ export type ListedKey = { n: number; anchor: Anchor; keyAgreement: string; expir
 export interface StockView {
   scope: string
   revision: number
-  /** Die gelisteten Schlüssel mit ihrer Nummer (8445): M teilt sie unter seinen Geräten nach der Nummer auf (K1a). Mit Schreibern: die Vereinigung der geltenden Schreiber (`viewKeys`). */
+  /**
+   * Die gelisteten Schlüssel mit ihrer Nummer (8445), wie die Faltung sie festhält (mit Schreibern: `viewKeys` ohne Wissen
+   * über Widerrufe). Entscheidungen lesen nie dieses Feld, sondern `usableView` (Review 36 B7: eine Rechnung für Ms Sicht).
+   */
   keys: ListedKey[]
   /**
    * K1a Schritt 4 (Anton 18.10., 3a): je pseudonymer Schreiberkennung die jüngste Revision dieses Schreibers im Scope.
@@ -139,6 +146,15 @@ export interface StockView {
    * Revision darüber. Verband (Maximum je Schreiber): in jeder Faltungsreihenfolge dasselbe.
    */
   clears?: Record<string, number>
+  /**
+   * K2, Review 34 B5: Grabsteine je Anker. Eine Rückzugsrevision nennt die konkreten Anker, die sie zurückzieht; je Anker die
+   * Signierer, die ihn genannt haben (wächst nur, Vereinigung: in jeder Reihenfolge und mit Duplikaten dasselbe). Ein
+   * Grabstein dominiert jede Listung dieses Ankers (Review 35 B6, Entscheidung 1b: Klasse aus ist Sache der Person, jedes
+   * Mitglied darf jeden Anker der Person begraben; ein widerrufener Signierer nur, wofür kein verbliebenes Gerät bürgt).
+   */
+  tombstones?: Record<string, string[]>
+  /** K2: Grabsteine je Anker gelten personenweit (`person`, beide Varianten); ohne das Feld (K0, K1a) keine Grabsteine. */
+  standing?: 'person'
 }
 
 /** Beziehung je Holder (eine je Gegenüber, 6975.5: Zusammenhangskomponente der Herkunftskanten). */
@@ -211,6 +227,75 @@ export interface Act {
   decisions?: Array<{ kind: 'consent' | 'decline'; op: string; at: string }>
   cards?: Record<string, HandOver>
   consentOp?: string
+  /** K2 Schritt 2: die Kartenidentität (Nutzlastdigest über {act, card}, wie V bei der Gegenseite, 8910.0); eine Karte je Akt (E2 (iv)). */
+  ownCardV?: string
+}
+
+/**
+ * K2 Schritt 2: ein Mitgliedschaftsnachweis in einer Gerätemenge (`device-set@1`). `admit`: `by` nimmt den Geräteschlüssel
+ * `anchor` (mit `keyAgreement`) in die Menge der Wurzel `root` auf; `revoke`: `by` widerruft `anchor` (endgültig). Jeder
+ * Eintrag ist von `by` signiert (DI); die Wurzel ist der Anker, den die Gegenseite zuerst für diese Beziehung geprüft hat
+ * (Begegnung: der Anker aus dem QR; Vorstellung: der Kartenanker, den der Voucher-Schlüssel signiert).
+ */
+export interface SetCert {
+  root: Anchor
+  kind: 'admit' | 'revoke'
+  anchor: Anchor
+  keyAgreement: string | null
+  by: Anchor
+  proof: { type: string; cryptosuite: string; created: string; verificationMethod: string; proofPurpose: string; proofValue: string }
+}
+/**
+ * K2 Schritt 2: was ein Gerät über eine Gerätemenge weiß (eigene und fremde gleich): die Nachweise (Zwei-Phasen-Menge,
+ * beide Teile wachsen nur), je Signierer die jüngste Revision (6270: nur Wiederholung und Equivokation), die gesehenen
+ * Revisionsdigests (Mengenbezug der Karte) und, nur bei eigenen Mengen, welcher Anker zu welchem eigenen Gerät gehört.
+ */
+export interface DeviceSet {
+  root: Anchor
+  rootKeyAgreement: string
+  certs: Record<string, SetCert>
+  revs: Record<string, { n: number; digest: string | null; covered?: string[] }>
+  /**
+   * Revisionen, die dieses Gerät kennt: selbst empfangen oder durch die signierten `deps` einer gefalteten kumulativen
+   * Revision gedeckt (Review 33 B2: der Kartenbezug löst gegen den gefalteten Stand, nicht gegen eine exakt gesehene Revision).
+   */
+  seen: string[]
+  local?: Record<string, string>
+  /** Review 33 B1: je Nachweisschlüssel mit widersprüchlichem Inhalt alle gesehenen Fassungen (kanonisch sortiert) für den Befund; der Zustand trägt die kanonisch kleinste. */
+  equivocal?: Record<string, SetCert[]>
+}
+/** K2 Schritt 2: ein öffentlicher Geräteschlüssel aus dem Vorrat eines Geräts, den das Schwestergerät `for` einer neuen Beziehung zuweisen darf. */
+export interface PoolKey {
+  i: number
+  for: string
+  anchor: Anchor
+  keyAgreement: string
+  used: string | null
+}
+export const certKey = (c: Pick<SetCert, 'kind' | 'anchor' | 'by'>) => `${c.kind}|${c.anchor}|${c.by}`
+/**
+ * Die Menge aus den Nachweisen (rein, reihenfolgeunabhängig): zugelassen ist die Wurzel und jeder Anker, dessen Zulassung
+ * über eine Kette signierter Zulassungen bis zur Wurzel reicht (`ever`); widerrufen ist jeder Anker mit einem Widerruf
+ * eines je zugelassenen Ausstellers (endgültig, eine alte Liste bringt ihn nicht zurück); Mitglieder = zugelassen ohne
+ * widerrufen, kanonisch nach Anker.
+ */
+export function setView(set: DeviceSet | undefined): { members: Array<{ anchor: Anchor; keyAgreement: string }>; revoked: Set<Anchor>; ever: Set<Anchor> } {
+  if (!set) return { members: [], revoked: new Set(), ever: new Set() }
+  const certs = Object.values(set.certs).sort((a, b) => certKey(a).localeCompare(certKey(b)))
+  const ever = new Set<Anchor>([set.root])
+  const ka = new Map<Anchor, string>([[set.root, set.rootKeyAgreement]])
+  for (let grew = true; grew; ) {
+    grew = false
+    for (const c of certs) {
+      if (c.kind !== 'admit' || !ever.has(c.by) || ever.has(c.anchor) || !c.keyAgreement) continue
+      ever.add(c.anchor)
+      ka.set(c.anchor, c.keyAgreement)
+      grew = true
+    }
+  }
+  const revoked = new Set(certs.filter((c) => c.kind === 'revoke' && ever.has(c.by)).map((c) => c.anchor))
+  const members = [...ever].filter((a) => !revoked.has(a)).sort().map((anchor) => ({ anchor, keyAgreement: ka.get(anchor)! }))
+  return { members, revoked, ever }
 }
 
 /** Ms Akt: nur Produktionsabsicht und Marken (8630). */
@@ -261,6 +346,10 @@ export interface HolderState {
   findings: string[]
   /** Angewandte Operationen (für Idempotenz und Journal). */
   applied: string[]
+  /** K2 Schritt 2: Gerätemengen je Wurzelanker, eigene und die der Gegenseiten (nur aus Nachweisen). Ohne Feld (K0, K1a): keine. */
+  sets?: Record<string, DeviceSet>
+  /** K2 Schritt 2: öffentliche Geräteschlüssel je eigenem Gerät, die ein Schwestergerät einer neuen Beziehung zuweisen kann. */
+  pools?: Record<string, PoolKey[]>
 }
 
 export function emptyState(person: string): HolderState {
@@ -277,8 +366,19 @@ export function fromJson(s: HolderState): HolderState {
     if (r.writers) r.writers = tableOf(r.writers)
     if (r.view?.writers) r.view.writers = tableOf(r.view.writers)
     if (r.view?.clears) r.view.clears = tableOf(r.view.clears)
+    if (r.view?.tombstones) r.view.tombstones = tableOf(r.view.tombstones)
   }
   for (const a of s.acts) if (a.cards) a.cards = tableOf(a.cards)
+  if (s.sets) {
+    s.sets = tableOf(s.sets)
+    for (const set of Object.values(s.sets)) {
+      set.certs = tableOf(set.certs)
+      set.revs = tableOf(set.revs)
+      if (set.local) set.local = tableOf(set.local)
+      if (set.equivocal) set.equivocal = tableOf(set.equivocal)
+    }
+  }
+  if (s.pools) s.pools = tableOf(s.pools)
   return s
 }
 /** Tiefer Klon des Zustands mit Tabellen ohne Prototyp. */
@@ -294,12 +394,16 @@ export type Op = { id: OpId; at: string } & (
   | { kind: 'revision'; rel: string; revision: number; keys: ListedKey[]; writer?: string } // 8500, je Schreiber (Schritt 4)
   | { kind: 'withdraw'; rel: string; anchors: Anchor[] } // 8475.S6
   | { kind: 'age'; rel: string; anchors: Anchor[] } // 8475.S5
-  | { kind: 'view'; rel: string; scope: string; revision: number; keys: ListedKey[]; writer?: string; clears?: Record<string, number> } // M: 8557/6270, je Schreiber (Schritt 4)
+  | { kind: 'view'; rel: string; scope: string; revision: number; keys: ListedKey[]; writer?: string; clears?: Record<string, number>; tombstones?: string[]; standing?: 'person' } // M: 8557/6270, je Schreiber (Schritt 4); K2: Grabsteine je Anker (Review 34)
   | { kind: 'introduce'; act: MediatorAct } // M: 8605, 8570.2
   | { kind: 'ticket-accept'; act: Act } // 8640.14
   | { kind: 'ticket-refuse-budget'; rel: string; own: Anchor } // 8640.13
   | { kind: 'finding'; text: string }
-  | { kind: 'consent'; act: string; card: Card; cardKey: string } // 8325.A4
+  | { kind: 'consent'; act: string; card: Card | null; cardKey: string | null } // 8325.A4; K2 Schritt 2: ohne Karte auf einem Gerät, das den Vorrats-Schlüssel nicht zugeteilt hat (E2 (iv))
+  | { kind: 'produce'; act: string; card: Card; cardKey: string; v: string } // K2 Schritt 2: das zuteilende Gerät erzeugt die eine Karte (8727, E2 (iv))
+  | { kind: 'device-set'; root: string; rootKeyAgreement: string; certs: SetCert[]; local?: Record<string, string>; rev?: { signer: string; n: number; digest: string | null; covered?: string[] }; seen?: string; deps?: string[] } // K2 Schritt 2: device-set@1; `deps` die signierten Vorgänger einer empfangenen Revision (Review 33 B2)
+  | { kind: 'pool'; device: string; keys: Array<{ i: number; for: string; anchor: Anchor; keyAgreement: string }> } // K2 Schritt 2
+  | { kind: 'pool-use'; device: string; i: number; root: string; ctx: string } // K2 Schritt 2: Schlüssel `i` des Vorrats von `device` ist dessen Schlüssel für den Kontext `ctx` der Wurzel `root`
   | { kind: 'decline'; act: string } // 8325.A3
   | { kind: 'hand-over'; act: string; o: HandOver; digest?: string } // 8326
   | { kind: 'card-pending'; act: string; card: Card; v: string } // 8910.4
@@ -419,10 +523,20 @@ const handOver: Shape = { enum: ['none', 'intent', 'handed', 'taken', 'delivered
 export const SHAPES = {
   tuple: { object: { id, own: id, ownKey: id, peer: id, peerKeyAgreement: id, record: id, openedAt: 'time', candidates: { array: id }, deactivated: 'boolean' } },
   stockKey: {
-    object: { n: 'nat', nonce: 'base64', anchor: id, keyAgreement: id, key: id, expiresAt: 'time', state: { enum: ['allocated', 'registered', 'active', 'aging', 'consumed', 'withdrawn', 'tombstoned'] satisfies StockState[] } },
+    object: { n: 'nat', nonce: 'base64', anchor: id, keyAgreement: id, key: id, expiresAt: 'time', state: { enum: ['allocated', 'registered', 'active', 'aging', 'consumed', 'withdrawn', 'tombstoned'] satisfies StockState[] }, by: { optional: id } },
   },
   listedKey: { object: { n: 'nat', anchor: id, keyAgreement: id, expiresAt: 'time' } },
   card: { object: { anchor: id, keyAgreement: id } },
+  cert: {
+    object: {
+      root: id,
+      kind: { enum: ['admit', 'revoke'] },
+      anchor: id,
+      keyAgreement: { nullable: id },
+      by: id,
+      proof: { object: { type: str, cryptosuite: str, created: 'time', verificationMethod: str, proofPurpose: str, proofValue: str } },
+    },
+  },
   act: {
     object: {
       id,
@@ -440,6 +554,7 @@ export const SHAPES = {
       o: handOver,
       ownCardDigest: { nullable: 'digest' },
       opened: { nullable: id },
+      ownCardV: { optional: str },
       decisions: { optional: { array: { object: { kind: { enum: ['consent', 'decline'] }, op: id, at: 'time' } } } },
       cards: { optional: { record: handOver, key: 'digest' } },
       consentOp: { optional: id },
@@ -458,12 +573,16 @@ const OP_FIELDS: { [K in Op['kind']]: { [field: string]: Shape } } = {
   revision: { rel: id, revision: 'nat', keys: { array: SHAPES.listedKey }, writer: { optional: 'tag' } },
   withdraw: { rel: id, anchors: { array: id } },
   age: { rel: id, anchors: { array: id } },
-  view: { rel: id, scope: id, revision: 'nat', keys: { array: SHAPES.listedKey }, writer: { optional: 'tag' }, clears: { optional: { record: 'nat', key: 'tag' } } },
+  view: { rel: id, scope: id, revision: 'nat', keys: { array: SHAPES.listedKey }, writer: { optional: 'tag' }, clears: { optional: { record: 'nat', key: 'tag' } }, tombstones: { optional: { array: id } }, standing: { optional: { enum: ['person'] } } },
   introduce: { act: SHAPES.mediatorAct },
   'ticket-accept': { act: SHAPES.act },
   'ticket-refuse-budget': { rel: id, own: id },
   finding: { text: str },
-  consent: { act: id, card: SHAPES.card, cardKey: id },
+  consent: { act: id, card: { nullable: SHAPES.card }, cardKey: { nullable: id } },
+  produce: { act: id, card: SHAPES.card, cardKey: id, v: str },
+  'device-set': { root: id, rootKeyAgreement: id, certs: { array: SHAPES.cert }, local: { optional: { record: id } }, rev: { optional: { object: { signer: 'tag', n: 'nat', digest: { nullable: 'digest' }, covered: { optional: { array: str } } } } }, seen: { optional: 'digest' }, deps: { optional: { array: 'digest' } } },
+  pool: { device: id, keys: { array: { object: { i: 'nat', for: id, anchor: id, keyAgreement: id } } } },
+  'pool-use': { device: id, i: 'nat', root: id, ctx: id },
   decline: { act: id },
   'hand-over': { act: id, o: handOver, digest: { optional: 'digest' } },
   'card-pending': { act: id, card: SHAPES.card, v: str },
@@ -504,11 +623,11 @@ export function findRel(s: HolderState, id: string): Relationship | undefined {
 /** Eine Voraussetzung fehlt im Zustand (Beziehung, Akt, Tupel): ein Journal stellt die Operation zurück, ein Empfang quittiert nicht. */
 export class Missing extends Error {
   constructor(
-    readonly what: 'relationship' | 'act' | 'tuple' | 'batch',
+    readonly what: 'relationship' | 'act' | 'tuple' | 'batch' | 'device-set' | 'pool',
     readonly ref: string,
     person: string,
   ) {
-    super(`${person}: ${what === 'relationship' ? 'unbekannte Beziehung' : what === 'act' ? 'unbekannter Akt' : what === 'batch' ? 'unbekannter Journal-Vorgänger' : 'unbekanntes Tupel'} ${ref}`)
+    super(`${person}: ${what === 'relationship' ? 'unbekannte Beziehung' : what === 'act' ? 'unbekannter Akt' : what === 'batch' ? 'unbekannter Journal-Vorgänger' : what === 'device-set' ? 'unbekannter Mengennachweis' : what === 'pool' ? 'unbekannter Geräteschlüssel im Vorrat' : 'unbekanntes Tupel'} ${ref}`)
   }
 }
 
@@ -669,6 +788,10 @@ function aggregateO(a: Act): void {
  * die Vereinigung der Schlüssel aller Schreiber, deren jüngste Revision über ihrer Aufhebungsmarke liegt (`clears`). Eine
  * leere Revision eines Schreibers hebt die Schlüssel aller Schreiber auf, die das empfangende Gerät bis dahin hielt (die
  * Operation trägt diese Marken); die Marken falten als Maximum. Neuer Scope (8557): die Sicht beginnt neu.
+ *
+ * K2 (Review 34 B5, Operation mit `standing`): statt Nummernmarken Grabsteine je Anker. Jede gefaltete Revision, auch eine
+ * niedrigere, vergrößert die Grabsteine um die Anker, die sie nennt (wächst nur); die Sicht ist eine Funktion der
+ * gefalteten Menge (`viewKeys`), also reihenfolgefrei und idempotent.
  */
 function applyWriterView(s: HolderState, r: Relationship, op: Op & { kind: 'view' }, keys: ListedKey[]): void {
   const w = op.writer!
@@ -677,16 +800,40 @@ function applyWriterView(s: HolderState, r: Relationship, op: Op & { kind: 'view
   const writers = tableOf(v.writers)
   const clears = tableOf(v.clears)
   for (const [x, n] of Object.entries(op.clears ?? {})) put(clears, x, Math.max(own(clears, x) ?? 0, n))
+  const anchorBound = op.standing !== undefined ? { standing: op.standing, tombstones: tableOf(v.tombstones) } : null
+  if (anchorBound) {
+    for (const a of op.tombstones ?? []) put(anchorBound.tombstones, a, [...new Set([...(own(anchorBound.tombstones, a) ?? []), w])].sort())
+  }
   const held = own(writers, w)
   let take = !held || op.revision > held.revision
   if (held && op.revision === held.revision && canonical(keys) !== canonical(held.keys)) {
-    s.findings.push(`view auf ${r.id}: Schreiber ${w.slice(0, 8)} Revision ${op.revision} zweimal mit anderen Schlüsseln: Equivokation (6270)`)
+    const text = `view auf ${r.id}: Schreiber ${w.slice(0, 8)} Revision ${op.revision} zweimal mit anderen Schlüsseln: Equivokation (6270)`
+    if (!s.findings.includes(text)) s.findings.push(text) // einmal je Equivokation, auch wenn Duplikate die Faltung erreichen (Review 33)
     take = canonical(keys) < canonical(held.keys) // in jeder Reihenfolge dasselbe
   }
   if (take) put(writers, w, { revision: op.revision, keys })
-  const v2 = viewKeys(writers, clears)
+  const next: StockView = { scope: op.scope, revision: Math.max(0, ...Object.values(writers).map((x) => x.revision)), keys: [], writers, clears, ...(anchorBound ?? {}) }
+  const v2 = viewKeys(writers, clears, next)
   for (const anchor of v2.conflicts) keyValueConflict(s, anchor)
-  r.view = { scope: op.scope, revision: Math.max(0, ...Object.values(writers).map((x) => x.revision)), keys: v2.keys, writers, clears }
+  next.keys = v2.keys
+  r.view = next
+}
+
+/**
+ * K2, Review 34 B5 / Review 35 B6: die wirksamen Grabsteine. Klasse aus ist Sache der Person (Entscheidung 1b, Vertrag 4.10):
+ * der Grabstein jedes Mitglieds zählt für jeden Anker der Person. Ist der Signierer widerrufen (`revoked`, Ms Wissen über
+ * die Menge der Gegenseite), zählt sein Grabstein nur, wenn kein nicht widerrufener Schreiber den Anker in seiner jüngsten
+ * Revision listet: ein widerrufenes Gerät nimmt nie einen Schlüssel weg, für den ein verbliebenes Gerät noch bürgt. Bis zum
+ * Widerruf kann ein gestohlenes Gerät alle Anker der Person begraben (benannter Preis; die Nachfüllung stellt her). Reine
+ * Funktion der gefalteten Menge.
+ */
+export function buried(v: Pick<StockView, 'tombstones' | 'standing' | 'writers'>, revoked?: Set<string>): Set<string> {
+  const out = new Set<string>()
+  for (const [a, signers] of Object.entries(v.tombstones ?? {})) {
+    const vouched = () => Object.entries(v.writers ?? {}).some(([w, x]) => !revoked?.has(w) && x.keys.some((k) => k.anchor === a))
+    if (signers.some((w) => !revoked?.has(w) || !vouched())) out.add(a)
+  }
+  return out
 }
 
 /**
@@ -695,13 +842,16 @@ function applyWriterView(s: HolderState, r: Relationship, op: Op & { kind: 'view
  * kleinste Wert (in jeder Reihenfolge derselbe) und der Anker steht in `conflicts` (Befund, nie still). Mit der Aufteilung
  * der Nummern je Restklasse (K1a) kommt das nicht vor.
  */
-export function viewKeys(writers: Record<string, { revision: number; keys: ListedKey[] }>, clears: Record<string, number>): { keys: ListedKey[]; conflicts: string[] } {
+export function viewKeys(writers: Record<string, { revision: number; keys: ListedKey[] }>, clears: Record<string, number>, anchored?: Pick<StockView, 'tombstones' | 'standing' | 'writers'>, revoked?: Set<string>): { keys: ListedKey[]; conflicts: string[] } {
   const m = new Map<string, ListedKey>()
   const conflicts = new Set<string>()
+  // K2 (Review 34 B5): begrabene Anker fehlen in der Sicht, gleich welcher Schreiber sie listet (der Grabstein dominiert).
+  const gone = anchored?.standing !== undefined ? buried({ ...anchored, writers: anchored.writers ?? writers }, revoked) : new Set<string>()
   for (const w of Object.keys(writers).sort()) {
     const x = own(writers, w)!
     if (x.revision <= (own(clears, w) ?? 0)) continue
     for (const k of x.keys) {
+      if (gone.has(k.anchor)) continue
       const held = m.get(k.anchor)
       if (!held) m.set(k.anchor, k)
       else if (canonical(held) !== canonical(k)) {
@@ -711,6 +861,49 @@ export function viewKeys(writers: Record<string, { revision: number; keys: Liste
     }
   }
   return { keys: sortKeys([...m.values()]), conflicts: [...conflicts].sort() }
+}
+
+/**
+ * K2: der Schreiber einer Revision ist der signierende Geräteschlüssel der Beziehung (8500/6270 je Signierer). Als
+ * Tabellenschlüssel (Form `tag`, 16 Zeichen base64url) dient ein Hash des Ankers; er reist nicht im Dokument, die Gegenseite
+ * bildet ihn aus dem Signierer.
+ */
+export const signerId = (anchor: string) => createHash('sha256').update(`signer|${anchor}`).digest().subarray(0, 12).toString('base64url')
+
+/** Ms nutzbare Sicht auf den Vorrat einer Seite in einem Moment (`usableView`): jede Stufe eine Teilmenge der vorigen. */
+export interface UsableView {
+  /** Geltende Schlüssel: je Anker der kanonische Wert über die nicht widerrufenen Schreiber, ohne begrabene Anker. */
+  listed: ListedKey[]
+  /** Davon noch lang genug gültig (8470). */
+  usable: ListedKey[]
+  /** Davon nicht verbraucht (8570.2). */
+  unconsumed: ListedKey[]
+}
+
+/**
+ * Review 36 B7 (Vertrag statt Patch-Kaskade): die eine Rechnung für Ms Sicht auf den Vorrat einer Seite. Jeder Verbraucher
+ * liest aus ihr: die Wahl des Schlüssels in einer Vorstellung, die Teilung unter Ms Geräten (`mayName` bekommt den Wert von
+ * hier, nie aus einer Listung), die Rechteprüfung der Vorstellung (`authorize`), die Zählung des Vorrats (`stockAt`, X23)
+ * und die Messungen der Szenarien. Rein, eine Funktion des gefalteten Zustands (Listungen je Schreiber, Grabsteine,
+ * Mengennachweise, Verbrauchsmarken) und der Zeit; damit in jeder Empfangsreihenfolge dieselbe.
+ *
+ * Schritte: Schreiber, deren Signierer die Seite in einer ihrer Mengen widerrufen hat, fallen weg (K2); Grabsteine wirken nach
+ * `buried` (ein widerrufener Signierer nur, wofür kein verbliebener Schreiber bürgt); je Anker gilt der kanonisch kleinste
+ * Wert (Review 21 B1, `viewKeys`); dann Ablauf (8470) und Verbrauch (8570.2). Ohne Schreiber (K0) die gefaltete Liste.
+ */
+export function usableView(s: HolderState, relId: string, now: string): UsableView {
+  const r = findRel(s, relId)
+  const v = r?.view
+  if (!r || !v) return { listed: [], usable: [], unconsumed: [] }
+  let listed = v.keys
+  if (v.writers) {
+    const revoked = new Set<string>()
+    for (const t of r.tuples) for (const a of setView(own(s.sets, t.peer)).revoked) revoked.add(signerId(a))
+    const writers = table(Object.entries(v.writers).filter(([w]) => !revoked.has(w)))
+    listed = viewKeys(writers, tableOf(v.clears), v, revoked).keys
+  }
+  const fresh = listed.filter((k) => usable(k.expiresAt, now))
+  return { listed, usable: fresh, unconsumed: fresh.filter((k) => !s.consumed.includes(k.anchor)) }
 }
 
 /** Review 21 B1: gleicher Anker, anderer Schlüsselwert; einmal je Anker als Befund festgehalten (reihenfolgeunabhängig). */
@@ -843,7 +1036,12 @@ function applyBody(s: HolderState, op: Op): void {
     }
     case 'ticket-accept': {
       const a = op.act
-      if (s.acts.some((x) => x.id === a.id)) return // Effekt-Identität: der Akt
+      if (s.acts.some((x) => x.id === a.id)) {
+        // Effekt-Identität: der Akt. Regel 1: nehmen zwei Geräte derselben Person dasselbe Ticket je für sich an (K2-shared:
+        // jedes Gerät öffnet es), ist das eine Annahme; die Wirkung trägt die kleinste Operation.
+        if (s.effects.some((e) => e.id === `accept:${a.id}`)) effectMin(s, op, `accept:${a.id}`)
+        return
+      }
       s.acts.push({ ...a, mediator: resolveId(s, a.mediator) })
       const r = rel(s, a.mediator)
       const k = r.stock.find((x) => x.anchor === a.own)
@@ -868,13 +1066,100 @@ function applyBody(s: HolderState, op: Op): void {
       const key = opKey(op.id)
       a.decisions = [...(a.decisions ?? []).filter((d) => d.op !== key), { kind: 'consent', op: key, at: op.at }]
       // Ein Seed: beide Geräte leiten denselben Kartenschlüssel ab; die Karte der kleinsten Zustimmung gilt (deterministisch).
-      if (!a.consentOp || (FOLD.sameDecision ? key < a.consentOp : false)) {
+      // K2 Schritt 2 (E2 (iv)): eine Zustimmung ohne Karte (das Gerät hat den Vorrats-Schlüssel nicht zugeteilt) wählt nichts.
+      if (op.card && op.cardKey && (!a.consentOp || (FOLD.sameDecision ? key < a.consentOp : false))) {
         a.consentOp = key
         a.ownCard = op.card
         a.ownCardKey = op.cardKey
       }
       if (a.o === 'none') a.o = 'intent'
       resolveDecision(s, a)
+      return
+    }
+    case 'produce': {
+      // K2 Schritt 2 (E2 (iv)): nur das zuteilende Gerät erzeugt die Karte, eine je Akt; es gibt nichts zu wählen. Eine
+      // zweite, andere Karte desselben Akts kommt strukturell nicht vor; käme sie doch, ist das ein Befund, der Akt behält die erste.
+      const a = act(s, op.act)
+      if (a.state === 'expired') return
+      if (a.ownCard && (a.ownCard.anchor !== op.card.anchor || a.ownCardV !== op.v)) {
+        s.findings.push(`produce auf ${a.id}: zweite Karte ${op.card.anchor.slice(-8)} neben ${a.ownCard.anchor.slice(-8)} (E2 (iv)): Equivokation desselben Holders`)
+        return
+      }
+      a.ownCard = op.card
+      a.ownCardKey = op.cardKey
+      a.ownCardV = op.v
+      if (a.o === 'none') a.o = 'intent'
+      return
+    }
+    case 'device-set': {
+      // K2 Schritt 2: Nachweise wachsen nur (Zwei-Phasen-Menge, `setView`); 6270 je Signierer nur für Wiederholung und
+      // Equivokation (gleiche Nummer, anderer Inhalt: Befund, kein K eines Akts).
+      const sets = tableOf(s.sets)
+      const prev = own(sets, op.root)
+      const set: DeviceSet = prev ? { ...prev, certs: tableOf(prev.certs), revs: tableOf(prev.revs), seen: [...prev.seen], ...(prev.local ? { local: tableOf(prev.local) } : {}), ...(prev.equivocal ? { equivocal: tableOf(prev.equivocal) } : {}) } : { root: op.root, rootKeyAgreement: op.rootKeyAgreement, certs: table(), revs: table(), seen: [] }
+      // Widersprüchliche Werte (CodeRabbit #74): in jeder Reihenfolge bleibt der kanonisch kleinere, je Konflikt ein Befund.
+      const conflict = (text: string) => {
+        if (!s.findings.includes(text)) s.findings.push(text)
+      }
+      if (prev && op.rootKeyAgreement !== set.rootKeyAgreement) {
+        conflict(`device-set auf ${op.root.slice(-8)}: zwei Vereinbarungsschlüssel der Wurzel`)
+        if (op.rootKeyAgreement < set.rootKeyAgreement) set.rootKeyAgreement = op.rootKeyAgreement
+      }
+      for (const c of op.certs) {
+        if (c.root !== op.root) continue
+        const held = own(set.certs, certKey(c))
+        if (!held) put(set.certs, certKey(c), c)
+        else if (canonical(held) !== canonical(c)) {
+          conflict(`device-set auf ${op.root.slice(-8)}: Nachweis ${c.kind} ${c.anchor.slice(-8)} von ${c.by.slice(-8)} zweimal mit anderem Inhalt`)
+          if (canonical(c) < canonical(held)) put(set.certs, certKey(c), c)
+          // Review 33 B1: beide Fassungen bleiben für den Befund (Menge, kanonisch sortiert: in jeder Reihenfolge dieselbe).
+          const eq = tableOf(set.equivocal)
+          const all = new Map([...(own(eq, certKey(c)) ?? []), held, c].map((x) => [canonical(x), x]))
+          put(eq, certKey(c), [...all.keys()].sort().map((k) => all.get(k)!))
+          set.equivocal = eq
+        }
+      }
+      if (op.local) {
+        const local = tableOf(set.local)
+        for (const [anchor, device] of Object.entries(op.local)) if (!own(local, anchor)) put(local, anchor, device)
+        set.local = local
+      }
+      if (op.rev) {
+        const held = own(set.revs, op.rev.signer)
+        if (held && held.n === op.rev.n && held.digest !== op.rev.digest) {
+          const text = `device-set auf ${op.root.slice(-8)}: Signierer ${op.rev.signer.slice(0, 8)} Revision ${op.rev.n} zweimal mit anderem Inhalt: Equivokation (6270)`
+          if (!s.findings.includes(text)) s.findings.push(text)
+          if ((op.rev.digest ?? '') < (held.digest ?? '')) put(set.revs, op.rev.signer, { n: op.rev.n, digest: op.rev.digest, ...(op.rev.covered ? { covered: op.rev.covered } : {}) }) // in jeder Reihenfolge dieselbe
+        } else if (!held || op.rev.n > held.n) put(set.revs, op.rev.signer, { n: op.rev.n, digest: op.rev.digest, ...(op.rev.covered ? { covered: op.rev.covered } : {}) })
+      }
+      if (op.seen && !set.seen.includes(op.seen)) set.seen.push(op.seen)
+      // Review 33 B2: was eine kumulative Revision signiert als Vorgänger nennt, ist gedeckt (wächst nur, reihenfolgefrei).
+      for (const d of op.deps ?? []) if (!set.seen.includes(d)) set.seen.push(d)
+      put(sets, op.root, set)
+      s.sets = sets
+      return
+    }
+    case 'pool': {
+      const pools = tableOf(s.pools)
+      const held = [...(own(pools, op.device) ?? [])]
+      for (const k of op.keys) if (!held.some((x) => x.i === k.i)) held.push({ ...k, used: null })
+      held.sort((x, y) => x.i - y.i)
+      put(pools, op.device, held)
+      s.pools = pools
+      return
+    }
+    case 'pool-use': {
+      const pools = tableOf(s.pools)
+      const held = (own(pools, op.device) ?? []).map((k) => ({ ...k }))
+      const k = held.find((x) => x.i === op.i)
+      if (!k) throw new Missing('pool', `${op.device}#${op.i}`, s.person)
+      if (k.used && k.used !== op.root) {
+        const text = `pool-use: Schlüssel ${op.device}#${op.i} zwei Beziehungen zugewiesen`
+        if (!s.findings.includes(text)) s.findings.push(text)
+        if (op.root < k.used) k.used = op.root
+      } else k.used = op.root
+      put(pools, op.device, held)
+      s.pools = pools
       return
     }
     case 'decline': {
@@ -905,8 +1190,13 @@ function applyBody(s: HolderState, op: Op): void {
     }
     case 'card-pending': {
       const a = act(s, op.act)
-      a.pending = op.card
       if (!a.v) a.v = op.v
+      // 8905 verbraucht P: nach der Verbindung (hier oder auf einem Schwestergerät gefaltet) setzt eine wartende Karte P nicht
+      // neu, sonst hinge der Zustand von der Faltungsreihenfolge ab (K2 Schritt 2: der Vorrats-Schlüssel der Menge, beide
+      // Geräte empfangen die Gegenkarte, eines verbindet, das andere stellt sie nach 8910.4 zurück). Nur für Akte mit einer
+      // Karte aus der Produzentenregel (`ownCardV`, E2 (iv)); K1a behält seine Faltung unverändert (Prüfstandsgleichheit).
+      if (a.opened && a.ownCardV) return
+      a.pending = op.card
       return
     }
     case 'card-refused': {
@@ -1034,6 +1324,10 @@ export interface Projection {
   consumed: string[]
   /** Pflichten je Paar mit Mapping-Digest. */
   duties: Record<string, { state: string; mappingDigest: string | null }>
+  /** K2 Schritt 2: Gerätemengen je Wurzel (Mitglieder und Widerrufene); ohne Mengen (K0, K1a) fehlt das Feld. */
+  sets?: Record<string, { members: string[]; revoked: string[]; revs: Record<string, { n: number; digest: string | null }> }>
+  /** K2 Schritt 2: der Vorrat öffentlicher Geräteschlüssel je Gerät (Nummer, Empfänger, Zuweisung). */
+  pools?: Record<string, Array<{ i: number; for: string; used: string | null }>>
 }
 
 const sortKeys = (keys: StockView['keys']) => [...keys].sort((a, b) => a.anchor.localeCompare(b.anchor))
@@ -1045,7 +1339,7 @@ export function project(s: HolderState, now: string): Projection {
       head: head(r).id,
       classOn: r.classOn,
       departed: r.departed,
-      view: r.view ? { scope: r.view.scope, revision: r.view.revision, keys: sortKeys(r.view.keys), ...(r.view.writers ? { writers: { ...r.view.writers }, clears: { ...(r.view.clears ?? {}) } } : {}) } : null,
+      view: r.view ? { scope: r.view.scope, revision: r.view.revision, keys: sortKeys(r.view.keys), ...(r.view.writers ? { writers: { ...r.view.writers }, clears: { ...(r.view.clears ?? {}) } } : {}), ...(r.view.standing ? { standing: r.view.standing, tombstones: { ...(r.view.tombstones ?? {}) } } : {}) } : null,
       stock: Object.fromEntries(r.stock.map((k) => [k.anchor, { n: k.n, nonce: k.nonce, state: k.state, keyAgreement: k.keyAgreement, expiresAt: k.expiresAt }]).sort(([a], [b]) => (a as string).localeCompare(b as string))),
       nonce: r.nonce,
       nextN: r.nextN,
@@ -1061,7 +1355,24 @@ export function project(s: HolderState, now: string): Projection {
   for (const a of [...s.acts].sort((x, y) => x.id.localeCompare(y.id))) put(acts, a.id, { state: a.state, pending: a.state === 'declined' ? null : a.pending, v: a.v, k: a.k, o: a.o, ownCard: a.ownCard, ownCardDigest: a.ownCardDigest, expiresAt: a.expiresAt, opened: a.opened })
   const duties: Projection['duties'] = {}
   for (const d of [...s.duties].sort((x, y) => x.pair.join().localeCompare(y.pair.join()))) put<Projection['duties'][string]>(duties, d.pair.join('|'), { state: d.state, mappingDigest: d.mappingDigest })
-  return { contacts, acts, consumed: [...s.consumed].sort(), duties }
+  const out: Projection = { contacts, acts, consumed: [...s.consumed].sort(), duties }
+  if (s.sets) {
+    const sets: NonNullable<Projection['sets']> = {}
+    for (const root of Object.keys(s.sets).sort()) {
+      const v = setView(own(s.sets, root))
+      const set = own(s.sets, root)!
+      const revs: Record<string, { n: number; digest: string | null }> = {}
+      for (const w of Object.keys(set.revs).sort()) put(revs, w, { n: own(set.revs, w)!.n, digest: own(set.revs, w)!.digest })
+      put(sets, root, { members: v.members.map((m) => m.anchor), revoked: [...v.revoked].sort(), revs })
+    }
+    out.sets = sets
+  }
+  if (s.pools) {
+    const pools: NonNullable<Projection['pools']> = {}
+    for (const d of Object.keys(s.pools).sort()) put(pools, d, own(s.pools, d)!.map((k) => ({ i: k.i, for: k.for, used: k.used })))
+    out.pools = pools
+  }
+  return out
 }
 
 /** Kanonische Serialisierung (sortierte Schlüssel), damit Gleichheit nicht von der Einfügereihenfolge abhängt. */

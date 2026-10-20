@@ -414,10 +414,10 @@ export const candidateEn: Record<string, { name: string; desc: string }> = {
   },
   "k1a-journal-service": {
     "name": "K1a + journal at the service",
-    "desc": "K1a's rules unchanged; the person's self address at the carrier keeps the journal as an ordered log: catch-up reads the log from the device's position (fast), a new device folds the log from the start; the gate after restore still ends only with a sibling's witness or the revocation of every sibling, never with the log answer (withholding by the service never causes a release); an option under study, not the default"
+    "desc": "K1a's rules unchanged; the person's self address at the carrier keeps the journal as an ordered log: catch-up reads the log from the device's position (fast), a new device folds the log from the start and is released by the enrolling device's witness, never by the log answer (withholding by the service never causes a release); no gate after restore (MV-6 new, as in K1a); an option under study, not the default"
   },
   "k2-device-keys": {
-    "name": "K2 step 1: device keys",
-    "desc": "K1a's journal and fold rules with keys per device: every device has its own secret (no person seed on any device), registers its own addresses, signs its journal batches and seals them once per sibling; the fold rejects a batch whose writer is not in the device set; revisions are numbered per signing device key; interim rule until step 5: mediators keep K1a's static split of the nameable stock keys. Step-1 simplification: counterparts read the device set from a bench list (seal to every device, accept every device's signature, revocation takes effect there at once)"
+    "name": "K2-strict: device keys, device sets",
+    "desc": "K1a's journal and fold rules with keys per device: every device has its own secret, registers its own addresses and signs its journal batches; counterparts know a person's device set per relationship only from received proofs (device-set@1: signed admissions and revocations, chained to the anchor first verified at the encounter or through the voucher); one card per act, produced by the device that allocated the named stock key; a stock key's private part stays on that device, only it opens the ticket; each device lists only as many own keys as it can still accept; no gate after restore (MV-6 new): a restored device acts from its reachable state, the counterpart catches duplicates (8640.12 as a rule); step 2a: the mediator runs as a single-writer fixture (one device), distributed mediator issuance is step 2b"
   }
 }

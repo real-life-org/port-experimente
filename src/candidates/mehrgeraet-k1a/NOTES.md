@@ -1,6 +1,7 @@
 # Port notes: K1a, one seed, operation journal, static rights (E15 steps 1 to 5)
 
-As of 18 October 2026. K1a is the first positive candidate of the
+As of 18 October 2026; since 20 October without a gate after restore
+(MV-6 new, MV-34, section "No gate after restore" at the end). K1a is the first positive candidate of the
 multi-device experiment: every device derives all keys from the same seed
 (like K0), but every committed step of a device travels as one journal
 batch to the person's own address, and the rights that consume a hard
@@ -258,36 +259,16 @@ operations, so K0 behaves as before.
   reached the carrier holds", as in rule 2); `delivered` is last (8326.10).
   Cancelled-then-delivered and delivered-then-cancelled fold to the same
   state on every device.
-- **No release before catch-up after a restore (gate review 18 B1a).**
-  After a rebuild from the store image, a device whose person has another
-  device (known from enrollment, or a foreign writer in its journal)
-  releases nothing to a counterpart (card, mapping, revision, receipt)
-  until its own catch-up has completed: the sibling answered the
-  `journal-sync` request and the own heads cover the sibling's. The
-  answer counts only if it is bound to the device's current request
-  (gate review 19 B1a): every request carries a fresh random request id,
-  the answerer echoes it, and an answer with an older or a foreign id is
-  dropped (`staleSyncAnswers`); an old, validly signed answer replayed
-  after the restore no longer ends the catch-up. The same answer a second
-  time changes nothing. Backoff re-requests and the answerer asking back
-  when the requester knows more are unchanged (X21 keeps its repair
-  rounds). Only
-  traffic on the self address (journal, catch-up, receipts on it) goes
-  out; held submissions neither deposit nor repeat, and their deadlines
-  do not run. After the catch-up the fold decides which of them are still
-  valid: a card the journal shows as `cancelled` is demarcated locally
-  without a new operation, a card the fold now declines or that lost rule
-  3 is withdrawn as usual, the rest goes out after the round's commit. A
-  device whose sibling never answers stays held (no deadlock for others,
-  but nothing leaves it); a device of a person with one device, or a K0
-  device without journal, holds nothing back. Revoking the sibling lifts
-  the hold (gate review 19, question 3): a revoked device no longer counts
-  as a sibling (the revoking device records it in its store image); when
-  the device waits only on revoked siblings, nobody is left to catch up
-  with, and in the next round the fold decides what goes out (restore A1,
-  A2 lost, A1 revokes A2: held for every round before the revocation,
-  released in the round after it, B connects once). In the bench only the
-  revoking device learns the revocation.
+- **No gate after restore (MV-6 new, MV-34, Anton 20 October; replaces
+  the hold of gate review 18 B1a).** A device rebuilt from the store waits
+  for nobody: it requests catch-up (acceleration, HSC-440) and acts at once
+  from its reachable state; whatever it sends twice or against a decision
+  taken meanwhile, the counterpart catches by the rules (rule 2: a card
+  that reached the carrier holds; 8640.12 at the side). The catch-up
+  answer still counts only if it is bound to the device's current request
+  (gate review 19 B1a, `staleSyncAnswers`), but it ends data catch-up, not
+  a hold. Details, prices and the tests that changed: "No gate after
+  restore" at the end.
 - **Local withdrawal (`Zusteller.demarcate`).** The bench's delivery
   adapter discards a submission that never reached the carrier (recorded,
   or `awaiting-transport` without a successful deposit), like a
@@ -326,11 +307,12 @@ compute a tag nor link the tags of one device across relationships. The
 tag is per device, not per incarnation: a per-incarnation tag would make
 every restore look like a new device to M (one more writer per restore,
 an inflated device count, a dead writer's keys left in M's view). The
-device's own counter is recovered instead: after a restore the device
-neither allocates keys nor numbers revisions until its catch-up has ended
-(the step-3 hold on release already waits for it); a revision that
-falls due meanwhile is recorded (`owed`, part of the device image) and
-goes out after catch-up with the then next number. Capability
+device's own counter comes from its image: since MV-6 new a restored
+device allocates and numbers at once from its reachable state; a number
+its lost incarnation already used is a named price (6270 equivocation at
+M, section "No gate after restore"). The `owed` mechanism remains only for
+enrolment from the log (step 6), the one case that still waits for a
+witness. Capability
 `writer-tags`, option `k1a({ writerTags: false })` for the counter-run;
 K0 has no tag and is unchanged.
 
@@ -373,8 +355,9 @@ serial, counter-run without tags (fails as before); one device in two
 relationships has two tags and the counterparts see different ones; the
 tag survives a restore; a writer that reuses a number with different
 content (restore without a sibling, counter lost) gets a 6270 finding at
-M; restore with a sibling: nothing allocated or numbered during catch-up,
-the counter continues after it (3 → 4, no gap, no reuse); class off on
+M; restore with a sibling (since MV-6 new): the same reuse of number 3 and
+the same finding, after healing the devices agree and the next number is
+4 at M; class off on
 A1 while A2 refills separated: M holds A2's keys for a while, after
 healing A2 sends an empty revision under its tag, M's view is empty on
 both M devices, no live keys on A, no 6270. Model: union of two writers
@@ -709,9 +692,7 @@ can infer that the person uses more than one device.
 
 - **Carrier:** not the tag itself, which is inside the sealed document;
   but every revision, probe and mapping grows by the field (the same
-  initial revision: 2389 bytes without tag, 2426 with), and a revision
-  owed after a restore goes out when the catch-up ends, at a time the
-  carrier observes. Neither size correlation nor send times are measured.
+  initial revision: 2389 bytes without tag, 2426 with). Neither size correlation nor send times are measured.
 - **M:** per relationship, one tag per device that sent it a revision
   (X17: 2 tags on the relationship to A with two devices, 1 serial; per M
   relationship 2/1/1 for A, B, C), so the number of the person's devices
@@ -764,10 +745,11 @@ can infer that the person uses more than one device.
   own class (the fold then records `conflict:key-value`). The tag is derived from the
   resolved relationship id; a union that keeps the other relationship's id
   gives the device a new tag there (a new view scope at M anyway, 8557).
-- A device restored without a sibling (no catch-up) continues its
-  writer's counter from the backup and can reuse a number its lost
-  incarnation sent; M records 6270 (test "Gegenlauf: derselbe Schreiber").
-  With a sibling the catch-up recovers the counter.
+- A restored device continues its writer's counter from the backup and
+  can reuse a number its lost incarnation sent; M records 6270 (tests
+  "Gegenlauf: derselbe Schreiber" and, with a sibling, "Restore mit
+  Schwester unter MV-6 neu"). Since MV-6 new this holds with a sibling
+  too (no wait for the catch-up).
 - M's union keeps keys from a writer's latest revision even if another
   writer consumed them meanwhile; M does not name them because its
   consumption marks are holder-wide (8570). Convergence to an empty view
@@ -803,13 +785,10 @@ can infer that the person uses more than one device.
   act under one seed are byte-identical in payload and B treats the second
   as a repetition (8910.7). A full card with its own `at`/`nonce` would
   differ and B would set K (8910.8); X18 passes for the simplified card.
-- After a restore a device holds back everything for its counterparts
-  until a sibling answers its current catch-up request. A restored device
-  with a lost, unrevoked sibling sends nothing to counterparts until the
-  sibling is revoked; no time bound, decision Anton pending. Measured:
-  restore A1 from a backup with a valid consent, A2 lost: after 70 rounds
-  A1 is still held (`gatedRounds` 70, no card at the carrier, B stays
-  `consented`). Taking over is X20.
+- Since MV-6 new nothing holds a restored device back; the lockout with a
+  lost, unrevoked sibling (formerly 70 of 70 rounds held) is gone, and
+  question 4.1 (time bound) is moot. Restore artefacts are the price
+  (section "No gate after restore"). Taking over is X20.
 - One seed: the revoked device still holds the self key, so an answer it
   sends to a current request would still count; the request id binds an
   answer to a request, not to a device (K2).
@@ -850,10 +829,13 @@ Log beschleunigt das Nachholen; die Freigabe bezeugt die Schwester oder
 der Widerruf.
 
 The lockout question (a restored device whose only sibling is lost stays
-gated until the user revokes that sibling) has no answer without trusting
-the service: whatever ends the gate on the service's word alone, the
-service can trigger by withholding. The gate until revocation or sibling
-witness stays.
+gated until the user revokes that sibling) had no answer without trusting
+the service. Since MV-6 new (20 October) there is no gate after restore at
+all, in this variant as in the default: the log brings data, nothing
+waits for the witness. Only enrolment from the log keeps the witness of
+the enrolling device (a live ceremony, MV-34 allows it). The results
+table below is from 18 October; its gate rows are superseded (section
+"No gate after restore" at the end).
 
 ### Design (hybrid)
 
@@ -1013,9 +995,9 @@ every repeat.
   branch from a reader; nothing in the log reveals it. `deps` detects
   inner gaps only (a batch whose predecessor is missing is deferred). This
   is exactly why the log is not a release ground.
-- The lockout stays: a restored device whose only sibling is lost is
-  gated until the user revokes it, as in K1a; the log makes it current
-  meanwhile, but releases nothing.
+- (Superseded 20 October, MV-6 new:) no lockout after restore any more;
+  the log only brings data. Without the log's data and without the
+  sibling, a restored device acts from its old image (named price).
 - Cost of the hybrid: both tracks run; the sibling still sends batches
   for stale requests its deliverer repeats (X21: 279 journal frames,
   1.16 MB), and the per-round re-read after a lost answer re-sends the
@@ -1035,6 +1017,94 @@ every repeat.
 
 ### Conclusion
 
-Journal beim Dienst = Beschleunigung, kein Freigabegrund; die Sperre bis
-Widerruf oder Schwesterzeugnis bleibt; der Dienst kann zurückhalten, aber
-nichts bewirken.
+Journal beim Dienst = Beschleunigung, kein Freigabegrund; seit MV-6 neu
+(20.10.) gibt es nach Restore keine Freigabe-Sperre mehr; der Dienst kann
+zurückhalten, aber nichts bewirken (MV-23, MV-35).
+
+## No gate after restore (MV-6 new, MV-34, 20 October 2026)
+
+Anton, 20 October (plan 6t, decision 2): restore rule (iii), **nobody
+waits for anybody** (MV-34) and **no service is a prerequisite** (MV-35).
+MV-6 new: a device rebuilt from the store waits for nobody; it catches up
+on what is reachable (sibling journal or log) and acts; whatever it sends
+twice or against a decision taken meanwhile, the counterpart catches by
+the rules (rule 2: a handed-over card holds; A keeps single use, 8640.12
+as a rule). Restore artefacts are a named price; how rare they are
+depends on how current the image is. Question 4.1 is moot.
+
+**What changed in the holder** (shared by K0, K1a and K2):
+
+- `reload` no longer sets the hold (`catchUp`); catch-up is requested as
+  before and still binds answers to the current request (gate review 19
+  B1a), but it only brings data. Released, refills and revision numbering
+  happen at once from the image (`parked`, `owed` and the gate checks in
+  `refill`, `sendRevision`, `produce`, `publishSets` stay only for
+  enrolment from the log, below).
+- **P kept after a decline (MV-31).** A counter card that arrives at an act
+  the person declined is refused as before (8910.6, `card-refused`, V
+  recorded), and its checked payload is kept as hidden P (`card-pending`;
+  the projection shows no P for a declined act, 8325.A3). Rule 2 can still
+  turn the decline into a consent (a restored device re-sends its card,
+  the carrier takes it); then the device whose own card is submitted
+  connects with that P (`connectOwed`, 8325.A5c; under device sets only
+  the producer, as before). Without this, the review-18 counter-run ended
+  with B connected and A consented without a tuple (B's card had been
+  refused and receipted).
+- **8640.12 as a rule.** A ticket on a stock key the side already consumed
+  is refused with the finding `… abgewiesen nach Regel 8640.12
+  (Einmalverbrauch bei A; Restore-Artefakt oder Konformitätsfehler des
+  Mediators)`, no act, no receipt; the mediator takes the next key (its
+  own consumption marks the key). Same behaviour as before, now a rule.
+- **Kept:** enrolment from the log (step 6, `startFromLog`) still releases
+  nothing until the enrolling device witnesses: the new device starts
+  empty, and enrolment is a live ceremony with the old device (MV-34
+  allows live ceremonies). Open for Anton whether it stays.
+
+**Cells.** None of K0, K1a or the K1a variant with the journal at the
+service changed: under controlled randomness all 120 result objects
+(two devices and serial) equal main 69c70a1 in outcome, promise flag,
+crash flag and measures; the only differences are K0's X18 detail (the
+anchor-pair oracle's reasons, since step 2) and X21's byte measures (a few
+bytes, the X18 oracle draws randomness; already so on #74). Why no cell
+moves: no scenario restores a device from an image that misses a decision
+its sibling made meanwhile and then lets the stale step reach a
+counterpart before the fold. X3 (consent against decline) has no restore;
+X6 and X21 restore with the sibling online, so data catch-up finishes
+within a round; whatever the restored device does from its image before
+that changes none of the measured outcomes or measures (compared, not
+argued).
+
+**Unit tests changed** (`tests/mehrgeraet-k1a.test.ts`, step 3: 4–7, step
+4: 4; `tests/mehrgeraet-k1a-dienst.test.ts`: 2–8, 13, 14, 17):
+
+- Review-18 counter-run (step 3, test 4): formerly "nothing leaves before
+  catch-up; the withdrawn card never reaches B". Now a **visible restore
+  artefact, consistent**: A1 restored from the backup re-sends the card
+  A2 had withdrawn (A1's journal held back three rounds, the card goes out
+  in the first round); B connects; A1 folds A2's decline and rule 2 decides
+  for the consent (the card reached the carrier); A1 connects with B's
+  card kept as hidden P; both A devices agree (`connected`), one connect
+  at B, the decline stays as conflict finding.
+- Mirror (5): the valid card goes out without waiting for catch-up.
+- Stale answer (6): still does not end data catch-up; acting does not
+  depend on it.
+- Lost sibling (7, formerly 7 and 8): the card goes out at once, no
+  revocation, no time bound, `gatedRounds` 0.
+- Writer tags (step 4, test 4): restore with a sibling now reuses revision
+  number 3 with other content; M records 6270, the ledger holds exactly
+  the double `revision:<rel>:<tag>:3`; after healing the devices agree and
+  the next revision (4) holds at M.
+- Variant with the log: the data track is unchanged (folded after 2
+  rounds, corrupt entries a finding per position, cursor, backoff, binding
+  to the current read, a log answer as one unit); the release assertions
+  now say "no gate, the card goes out". If the service withholds
+  everything and the sibling is lost (test 4, empty), A1 knows neither the
+  decline nor B's card: B is connected, A1 stays `consented` until data
+  arrives (named price, MV-35: the dependence on reachable data).
+
+**Named prices of the restore rule** (all consistent, none silent):
+re-sent withdrawn card (rule 2 turns the decline into a consent, conflict
+finding); revision number reused (6270 finding at M, a double in the
+ledger); a re-allocated stock key with the same anchor and another value
+(`conflict:key-value`); a connection that stays open on one side until the
+restored device reaches data (no sibling, no log).

@@ -91,6 +91,7 @@ export class Welt15 {
     if (i >= 0) this.devices.splice(i, 1)
     await this.candidate.revoke?.(by, device.name)
     by.deviceRevoked(device.name) // das widerrufende Gerät weiß es; wartet es aufs Nachholen nur noch auf dieses Gerät, fällt die Sperre (Review 19)
+    await by.revokeInSets(device.name) // K2 Schritt 2: Widerrufseinträge in jeder eigenen Menge, Revision an jede Gegenseite (sonst nichts)
   }
 
   device(name: string): HolderDevice {
