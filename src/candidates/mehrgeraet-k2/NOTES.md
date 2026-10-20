@@ -606,6 +606,62 @@ The X23 evidence test now runs seeds 3, 6, 11: under seeds 2 and 5 the
 new anchors no longer put the first pick on the sleeping A2, so nothing
 is lost there.
 
+### M's issuance follows ENG-INTENT-1, the gate re-checks what it held (review 38 B9, B10)
+
+Review 38 (restore class, both on fd93398 and eb1797e): B10, the tickets
+left M1 in `introduce` while the journal batch with the consumption went
+out a round later; a restore from an older backup in between removed the
+only evidence of the consumption, and M1 named the key again after its
+catch-up (A: 8640.12). B9, an act that M1 issued during the catch-up gate
+after a restore was released when the gate opened although the folded
+view by then held another act on the same key.
+
+Existing contract rules applied to M, no new decision:
+
+- **ENG-INTENT-1 (8605/8570.2).** The consumption mark and the ticket
+  bytes (intent, now with the act id) are one journal batch. With a
+  sibling, `introduce` sends that batch to the siblings at the commit
+  boundary and holds the tickets (`holdIssue`, `issuing` in the device
+  image); they leave only once a sibling has receipted every journal
+  frame of the batch, i.e. a sibling holds the step durably
+  (`releaseIssued`). Without a sibling nothing changes (no one to restore
+  from). A restore before the commit finds no consumption and no ticket
+  (nothing left anywhere); a restore between commit and send, or after
+  it, finds the step in the sibling's journal on catch-up and resumes
+  the tickets with the same bytes (HSC-120, `resumeTickets`; the
+  receiver deduplicates, 8640.4).
+- **Step-3 gate rule.** Nothing held is released during the catch-up
+  gate, and on release every held issuance is re-evaluated against the
+  folded state: if another act names one of its keys, its tickets are
+  cancelled (8232.1; they never left the device), the consumption stays
+  and a finding `ticket <act>: zurückgehaltene Ausgabe verworfen …` is
+  journalled (a cancelled act is never resumed and never counts as a
+  conflict). A resumed act (its step is with a sibling and may be out)
+  beats an act held only here; of two acts held only here the smaller id
+  goes.
+
+K1a and K0 are unchanged: the hold, the resume and the re-check run only
+with device sets (`sets`), the intent's `act` field is set only there
+(the shape admits it as optional), and the image field `issuing` is
+written only when non-empty.
+
+Tests: W1 (B10, strict and shared: Astra's flow, restore right after
+`introduce`: no ticket before the journal, M2 holds the act, M1 resumes
+the same act, exactly one act on the key at A, no 8640.12; restore before
+the commit: no act, no ticket), W2 (B9, strict and shared: α reaches A
+and M2, M1 from the backup issues β on the same key during the gate; β is
+cancelled with one finding, never reaches A, one act, no 8640.12); both
+red on eb1797e. V3 (S7) now selects and issues through the real
+`HolderDevice.introduce` on two holders (over 200 issuances in 200 runs;
+a throwing `introduce` fails it).
+
+Price: a ticket waits for a sibling's receipt of its journal batch (about
+two rounds; while every sibling is offline, M issues but nothing leaves).
+Residual for more than two M devices: the gate after a restore opens on
+the first covering sibling reply; a third device that has not folded the
+step yet can open it without the act. With two M devices the receipting
+sibling is the one that answers.
+
 ### Counter card through the sibling (8325.A5c)
 
 The counter card is sealed to every member of the set. If it first reaches
@@ -707,6 +763,16 @@ under load). The default run (CI) takes seed 1 of each variant (97 s);
   device names a key once, from its own state.
 - X21's restore repair takes 11 rounds instead of 7 (more batches: set
   proofs, pools, revisions per writer).
+- **Journal frame size (review 38 S8), a limit, not chunked.** A journal
+  batch travels base64 in one journal document under Delivery's bound
+  (plaintext ≤ 65 536 B), so a batch must stay below about 48.5 KB. The
+  largest batch is the old M device's enrolment batch: one device-set
+  document per counterpart device (intent copies), and that document
+  grows with the own device count, batch ≈ D × (576 + 1250·D) B plus ops.
+  Measured (D devices at A and at M): 8.3 KB (2), 15.3 (3), 24.8 (4),
+  36.8 (5), 51.4 KB (6, base64 68.5 KB). Five devices per side run, six
+  fail with `JournalOversize` (explicit, never silent; test J1). Splitting
+  a batch over several frames is step 3's frame-size question.
 
 ### Spec follow-ups (step 2)
 

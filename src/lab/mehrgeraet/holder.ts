@@ -106,6 +106,11 @@ export interface Intent {
    * ein Wiederanlauf liefert sie mit dem Hauptrahmen ein. Ohne Feld: ein Rahmen (K0, K1a).
    */
   copies?: Array<{ address: string; bytes: string }>
+  /**
+   * K2 (Review 38 B9/B10): der Mediatorakt eines Tickets. Damit nimmt das ausstellende Gerät nach einem Restore die Ausgabe
+   * aus dem Journal wieder auf (HSC-120) und prüft sie gegen die gefaltete Sicht. Ohne Feld: K0, K1a, andere Arten.
+   */
+  act?: string
 }
 
 /** Ein gelungener Schritt des Geräts als Einheit: die Operationen und die Absichten, die er erzeugt hat (Review 6: Batch statt einzelner `record`). */
@@ -145,6 +150,16 @@ export class CorruptFrame extends Error {
  * ist oder dessen Signatur nicht vom Geräteschlüssel des Schreibers stammt. Befund `journal:unknown-writer`, nie Zustand.
  */
 export class UnknownWriter extends Error {}
+/**
+ * Review 38 S8: Grenze des Prüfstands, ausdrücklich statt still. Ein Journalbatch reist base64 in einem Journaldokument,
+ * das die Größengrenze von Delivery (Klartext ≤ 65 536 B) einhält; ein Batch über rund 3/4 davon (abzüglich des
+ * Dokumentrahmens) passt nicht. Der Batch wird nicht auf mehrere Rahmen verteilt (Rahmengröße: Schritt 3, NOTES).
+ */
+export class JournalOversize extends Error {
+  constructor(readonly bytes: number, readonly device: string) {
+    super(`journal-oversize: Batch von ${device} mit ${bytes} B passt base64 nicht in ein Journaldokument (Delivery: Klartext ≤ 65 536 B)`)
+  }
+}
 /** K2: der Schreiber einer Revision ist der signierende Geräteschlüssel (`M.signerId`). */
 export const signerId = M.signerId
 const isRecord = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x)
@@ -152,7 +167,7 @@ const isRecord = (x: unknown): x is Record<string, unknown> => typeof x === 'obj
  * Form einer Absicht ohne ihre Bytes (Review 27 B2a), für beide Journalpfade: der Batch trägt die Bytes als strenges base64
  * (`batchProblem` im Kandidaten), die Transaktion als Uint8Array (`transactionProblem`).
  */
-export const INTENT_FIELDS = { digest: 'digest', kind: 'string', address: 'string', expected: 'string', replyTo: 'string', device: 'ident', writer: 'writer', copies: { optional: { array: { object: { address: 'string', bytes: 'base64' } } } } } as const satisfies Record<Exclude<keyof Intent, 'bytes'>, M.Shape>
+export const INTENT_FIELDS = { digest: 'digest', kind: 'string', address: 'string', expected: 'string', replyTo: 'string', device: 'ident', writer: 'writer', copies: { optional: { array: { object: { address: 'string', bytes: 'base64' } } } }, act: { optional: 'string' } } as const satisfies Record<Exclude<keyof Intent, 'bytes'>, M.Shape>
 /** Köpfe eines `journal-sync` (Review 28): Schreiberinkarnation → letzter Zähler. */
 const HEADS_SHAPE: M.Shape = { record: 'nat', key: 'writer' }
 const INTENT_SHAPE: M.Shape = { object: { ...INTENT_FIELDS, bytes: 'string' } } // `bytes` hier nur Platzhalter, geprüft unten
@@ -375,6 +390,19 @@ export interface DeviceState {
   logCursor?: number
   /** Schritt 6 (Variante): behaltene Proben aus der Enrollment-Zeremonie, übernommen, wenn das Falten der Ablage fertig ist. */
   deferredProbes?: Array<[string, string[]]>
+  /** K2 (Review 38 B10): ausgestellte Akte, deren Tickets auf die Quittung des Journalbatches warten (ENG-INTENT-1). */
+  issuing?: Array<[string, Issuing]>
+}
+/**
+ * K2 (Review 38 B9/B10, ENG-INTENT-1): ein ausgestellter Akt, dessen Tickets das Gerät noch hält. `journal`: die
+ * Journalrahmen, die Verbrauch und Absicht des Schritts tragen; die Tickets gehen erst hinaus, wenn eine Schwester jeden
+ * quittiert hat (dann hält sie den Schritt dauerhaft, ein Restore findet ihn beim Nachholen). `resumed`: aus dem Journal
+ * wieder aufgenommen (HSC-120), der Schritt ist schon bei einer Schwester.
+ */
+export interface Issuing {
+  journal: string[]
+  tickets: string[]
+  resumed?: boolean
 }
 
 export interface Measures {
@@ -452,6 +480,8 @@ export class HolderDevice {
   staleSyncAnswers = 0
   /** Runden, in denen das Gerät nach einem Neuaufbau nichts an Gegenseiten freigab (Messung, Review 19 Frage 3). */
   gatedRounds = 0
+  /** K2 (Review 38 B9): zurückgehaltene Ausgaben, die beim Freigeben gegen die gefaltete Sicht verworfen wurden. */
+  issuesCancelled = 0
   /** Widerrufene Geräte der Person (Teil des Abbilds): zählen nicht als Schwester, die nachholen hilft (Review 19 Frage 3). */
   private revoked = new Set<string>()
   /**
@@ -523,6 +553,8 @@ export class HolderDevice {
   readonly produced = new Map<string, string>()
   /** Produktionsabsichten (B4): eigene und die der anderen eigenen Geräte aus dem Journal; lesbar für Messungen. */
   intents = new Map<string, Intent>()
+  /** K2 (Review 38): Akt → zurückgehaltene Tickets bis zur Quittung ihres Journalbatches (`Issuing`). */
+  issuing = new Map<string, Issuing>()
   /** Aufgezeichnet, noch nicht eingeliefert: geht nach dem nächsten Commit hinaus. */
   private held: string[] = []
   /**
@@ -727,6 +759,7 @@ export class HolderDevice {
       buffer: new Map(this.buffer),
       expected: new Map(this.expected),
       intents: new Map(this.intents),
+      issuing: new Map([...this.issuing].map(([k, v]): [string, Issuing] => [k, structuredClone(v)])),
       probes: new Map(this.probes),
       owed: new Set(this.owed),
       cand: this.cand.snapshot?.(),
@@ -745,6 +778,7 @@ export class HolderDevice {
     this.buffer = c.buffer
     this.expected = c.expected
     this.intents = c.intents
+    this.issuing = c.issuing
     this.probes = c.probes
     this.owed = c.owed
     this.cand.rollback?.(c.cand)
@@ -811,6 +845,7 @@ export class HolderDevice {
       ...(this.owed.size ? { owed: [...this.owed] } : {}),
       ...(this.logMode ? { logCursor: this.logCursor } : {}),
       ...(this.deferredProbes ? { deferredProbes: this.deferredProbes.map(([id, e]): [string, string[]] => [id, [...e]]) } : {}),
+      ...(this.issuing.size ? { issuing: structuredClone([...this.issuing]) } : {}),
     }
   }
   commit() {
@@ -829,6 +864,7 @@ export class HolderDevice {
     this.buffer = new Map(s?.buffer ?? [])
     this.expected = new Map(s?.expected ?? [])
     this.intents = new Map(s?.intents ?? [])
+    this.issuing = new Map(s?.issuing ?? [])
     this.probes = new Map(s?.probes ?? [])
     this.revoked = new Set(s?.revoked ?? [])
     this.owed = new Set(s?.owed ?? [])
@@ -836,7 +872,9 @@ export class HolderDevice {
     this.deferredProbes = s?.deferredProbes ?? null
     this.dropDeparted()
     // Was im Store steht, ist committet: vorgemerkte, nie freigegebene Submissions gehen nach dem nächsten Commit hinaus.
-    this.held = this.zusteller.unreleased()
+    // K2 (Review 38 B10): Tickets, die auf die Quittung ihres Journalbatches warten, bleiben zurückgehalten.
+    const waiting = new Set([...this.issuing.values()].flatMap((e) => e.tickets))
+    this.held = this.zusteller.unreleased().filter((d) => !waiting.has(d))
     this.cand.restore(s?.candidate ?? null)
     this.down = false
     this.parked = []
@@ -910,18 +948,19 @@ export class HolderDevice {
    * (HSC-110, #56). Ein Absturz dort lässt das Gerät aus; die Submissions
    * stehen im Store und gehen nach dem Neuaufbau hinaus.
    */
-  private async flush(): Promise<void> {
+  private async flush(issue?: { act: string; tickets: string[] }): Promise<void> {
     this.crash('before-commit')
+    if (issue?.tickets.length) await this.holdIssue(issue.act, issue.tickets)
     this.commit()
     this.crash('before-send')
     this.release(this.held.splice(0))
   }
   /** Eine Nutzeraktion: blockiert (ganz zurückgenommen) oder abgestürzt heißt nicht fehlerhaft. */
-  private async action(f: () => Promise<void>): Promise<ActionResult> {
+  private async action(f: () => Promise<void>, issue?: { act: string; tickets: string[] }): Promise<ActionResult> {
     if (this.down) return 'crashed'
     try {
       if (!(await this.guarded(f))) return 'blocked'
-      await this.flush()
+      await this.flush(issue)
       return 'ok'
     } catch (e) {
       if (e instanceof Crashed) return 'crashed'
@@ -938,7 +977,7 @@ export class HolderDevice {
    * K1a): ein Rahmen an `toRkid`. Ist die Menge bekannt leer (Schritt 2), entsteht kein Rahmen: null, ausdrücklicher
    * Zustellfehler (`failed(empty-device-set)`), nie ein Rahmen an den aufgezeichneten Schlüssel (Tor-Review 31 S1).
    */
-  private async sendDoc(type: string, issuerCtx: string, recipient: string, toRkid: string, replyTo: string, payload: Record<string, Json>, fan?: Array<{ anchor: string; rkid: string }>): Promise<{ digest: string; bytes: Uint8Array; address: string; frames: number; total: number } | null> {
+  private async sendDoc(type: string, issuerCtx: string, recipient: string, toRkid: string, replyTo: string, payload: Record<string, Json>, fan?: Array<{ anchor: string; rkid: string }>, act?: string): Promise<{ digest: string; bytes: Uint8Array; address: string; frames: number; total: number } | null> {
     const set = fan ?? (this.sets ? this.recipientsOf(recipient) : null)
     if (set && !set.length) {
       this.emptySetFailures++
@@ -960,7 +999,7 @@ export class HolderDevice {
     this.held.push(digest)
     this.expected.set(digest, recipient)
     if (type !== TYPES.journal && type !== TYPES.journalSync) {
-      const intent: Intent = { digest, kind: type, bytes, address, expected: recipient, replyTo, device: this.name, writer: this.cand.writer, ...(extra.length ? { copies: extra.map((x) => ({ address: x.address, bytes: Buffer.from(x.frame).toString('base64') })) } : {}) }
+      const intent: Intent = { digest, kind: type, bytes, address, expected: recipient, replyTo, device: this.name, writer: this.cand.writer, ...(extra.length ? { copies: extra.map((x) => ({ address: x.address, bytes: Buffer.from(x.frame).toString('base64') })) } : {}), ...(act ? { act } : {}) }
       this.intents.set(digest, intent)
       this.pending?.intents.push(intent)
     }
@@ -1394,6 +1433,9 @@ export class HolderDevice {
     const kb = pick(relB)
     if (!ka || !kb) return { refused: `kein benennbarer Schlüssel (${ka ? '' : relA} ${kb ? '' : relB})`.trim() }
     const act: M.MediatorAct = { id: crypto.randomUUID(), a: { rel: M.resolveId(this.state, relA), key: ka.anchor, keyAgreement: ka.keyAgreement }, b: { rel: M.resolveId(this.state, relB), key: kb.anchor, keyAgreement: kb.keyAgreement }, issuedAt: now, expiresAt: new Date(Date.parse(now) + M.PARAM.actLifetimeMs).toISOString() }
+    // K2 (Review 38 B10, ENG-INTENT-1): Verbrauch und Ticketbytes gehen im selben Schritt ins Journal; die Tickets verlassen
+    // das Gerät erst, wenn eine Schwester diesen Batch quittiert hat (`holdIssue`, `releaseIssued`). K0/K1a: wie bisher.
+    const tickets: string[] = []
     const r = await this.action(async () => {
       this.emit({ kind: 'introduce', act })
       const send = async (relId: string, own: { key: string; keyAgreement: string }, voucher: { key: string; keyAgreement: string }, name: string) => {
@@ -1401,11 +1443,12 @@ export class HolderDevice {
         // K2 Schritt 2 (6o.2): das Ticket öffnet nur, wer den privaten Teil des benannten Vorrats-Schlüssels hält; es ist an
         // diesen versiegelt (strict: das zuteilende Gerät; shared: jedes Gerät der Menge) und von ihm quittiert.
         const fan = this.sets ? [{ anchor: own.key, rkid: own.keyAgreement }] : undefined
-        await this.sendDoc(TYPES.ticket, h.ownKey, fan ? own.key : h.peer, fan ? own.keyAgreement : h.peerKeyAgreement, (await this.keysFor(h.ownKey)).rkid, { act: act.id, issuedAt: act.issuedAt, expiresAt: act.expiresAt, own: own.key, voucher: { anchor: voucher.key, keyAgreement: voucher.keyAgreement, name } }, fan)
+        const sent = await this.sendDoc(TYPES.ticket, h.ownKey, fan ? own.key : h.peer, fan ? own.keyAgreement : h.peerKeyAgreement, (await this.keysFor(h.ownKey)).rkid, { act: act.id, issuedAt: act.issuedAt, expiresAt: act.expiresAt, own: own.key, voucher: { anchor: voucher.key, keyAgreement: voucher.keyAgreement, name } }, fan, this.sets ? act.id : undefined)
+        if (sent && this.sets) tickets.push(sent.digest)
       }
       await send(relA, act.a, act.b, nameB)
       await send(relB, act.b, act.a, nameA)
-    })
+    }, this.sets ? { act: act.id, tickets } : undefined)
     return r === 'ok' ? { act: act.id } : { refused: r }
   }
 
@@ -1661,6 +1704,7 @@ export class HolderDevice {
           }
         }
         if (this.catchUp) this.gatedRounds++
+        if (this.sets) await this.guarded(() => this.releaseIssued())
         await this.journalOut()
         await this.syncOut()
         this.crash('before-commit')
@@ -1680,10 +1724,111 @@ export class HolderDevice {
   }
 
   /** Journalrahmen des Kandidaten an die eigene Adresse der Person (B3; K0: keine). */
-  private async journalOut(): Promise<void> {
+  private async journalOut(): Promise<string[]> {
     const frames = this.cand.takeOwnFrames()
-    if (!frames.length || !this.ownRkid) return
-    for (const f of frames) await this.sendSelf(TYPES.journal, { b: Buffer.from(f.body).toString('base64') })
+    if (!frames.length || !this.ownRkid) return []
+    const out: string[] = []
+    for (const f of frames) {
+      const d = await this.sendJournal(f.body)
+      if (d) out.push(d)
+    }
+    return out
+  }
+  /** Ein Journalbatch an die Schwestern (oder an `to`); zu groß für ein Journaldokument: `JournalOversize` (S8), nie still. */
+  private async sendJournal(body: Uint8Array, to?: Array<{ anchor: string; rkid: string }>): Promise<string | null> {
+    try {
+      return await this.sendSelf(TYPES.journal, { b: Buffer.from(body).toString('base64') }, to)
+    } catch (e) {
+      if (e instanceof Error && e.message === 'oversize') throw new JournalOversize(body.length, this.name)
+      throw e
+    }
+  }
+
+  // ── K2: Ms Ausgabe nach ENG-INTENT-1 (Review 38 B9, B10) ──
+
+  /**
+   * Commit-Grenze einer Ausstellung mit Schwestern (8605/8570.2, ENG-INTENT-1): der Journalbatch mit Verbrauch und
+   * Ticketbytes geht jetzt an die Schwestern, die Tickets bleiben zurück, bis eine Schwester jeden Rahmen quittiert hat
+   * (`releaseIssued`). Ohne Schwester (oder ohne Journalrahmen) gehen die Tickets mit dem Commit wie bisher.
+   */
+  private async holdIssue(act: string, tickets: string[]): Promise<void> {
+    if (!this.hasSibling()) return
+    const journal = await this.journalOut()
+    if (!journal.length) return
+    this.held = this.held.filter((d) => !tickets.includes(d))
+    this.issuing.set(act, { journal, tickets })
+  }
+  /** Kennung des Befunds einer verworfenen zurückgehaltenen Ausgabe (aus dem Journal: nie wieder aufgenommen). */
+  private static cancelTag(act: string): string {
+    return `ticket ${act}: zurückgehaltene Ausgabe verworfen`
+  }
+  /**
+   * Ein anderer Akt, der einen Schlüssel dieses Akts benennt (gefaltete Sicht, `mediatorActs`), oder null. Zwei hier
+   * zurückgehaltene, nicht wieder aufgenommene Akte: der kleinere geht. Ein verworfener Akt zählt nicht. Ein wieder aufgenommener Akt (sein Schritt ist bei
+   * einer Schwester, er kann draußen sein) schlägt einen nur hier zurückgehaltenen.
+   */
+  private cancelled(act: string): boolean {
+    const tag = HolderDevice.cancelTag(act)
+    return this.state.findings.some((f) => f.startsWith(tag))
+  }
+  private conflictOf(id: string): { key: string; other: string } | null {
+    const a = this.state.mediatorActs.find((x) => x.id === id)
+    if (!a) return null
+    const mine = this.issuing.get(id)
+    for (const x of this.state.mediatorActs) {
+      if (x.id === id) continue
+      const key = [a.a.key, a.b.key].find((k) => k === x.a.key || k === x.b.key)
+      if (!key || this.cancelled(x.id)) continue // ein verworfener Akt hat das Gerät nie verlassen
+      const other = this.issuing.get(x.id)
+      if (other && !other.resumed && (mine?.resumed || x.id > id)) continue
+      return { key, other: x.id }
+    }
+    return null
+  }
+  /**
+   * HSC-120 nach einem Restore: eine Ticketabsicht dieses Geräts aus dem Journal, deren Submission das Abbild nicht kennt
+   * (Restore zwischen Commit und Versand, oder danach), wird mit denselben Bytes wieder aufgenommen, solange der Akt gilt
+   * und nicht verworfen ist. Der Empfänger dedupliziert (8640.4).
+   */
+  private resumeTickets(): void {
+    const now = Date.parse(this.clock.now())
+    for (const i of this.intents.values()) {
+      if (i.kind !== TYPES.ticket || !i.act || i.device !== this.name || this.zusteller.submissions.has(i.digest)) continue
+      const a = this.state.mediatorActs.find((x) => x.id === i.act)
+      if (!a || now > Date.parse(a.expiresAt)) continue
+      if (this.cancelled(i.act)) continue
+      this.zusteller.record(i.digest, i.bytes, i.address, i.copies?.map((c) => ({ address: c.address, frame: new Uint8Array(Buffer.from(c.bytes, 'base64')) })))
+      this.expected.set(i.digest, i.expected)
+      const e = this.issuing.get(i.act) ?? { journal: [], tickets: [], resumed: true }
+      if (!e.tickets.includes(i.digest)) e.tickets.push(i.digest)
+      this.issuing.set(i.act, e)
+    }
+  }
+  /**
+   * Zurückgehaltene Ausgaben freigeben (nie während der Sperre nach einem Restore). Bereit ist ein Akt, wenn eine
+   * Schwester jeden seiner Journalrahmen quittiert hat. Dann wird er gegen die gefaltete Sicht neu geprüft (Sperrenregel
+   * Schritt 3): benennt inzwischen ein anderer Akt einen seiner Schlüssel, werden seine Tickets verworfen (8232.1; sie
+   * haben das Gerät nie verlassen) und der Verbrauch bleibt als Konfliktbefund stehen, nie freigegeben.
+   */
+  private async releaseIssued(): Promise<void> {
+    if (this.catchUp) return
+    this.resumeTickets()
+    const sibling = this.hasSibling()
+    for (const [act, e] of [...this.issuing]) {
+      if (sibling && !e.journal.every((j) => { const s = this.zusteller.submissions.get(j); return !s || s.report?.state === 'delivered' })) continue
+      const conflict = this.conflictOf(act)
+      this.issuing.delete(act)
+      if (!conflict) {
+        this.held.push(...e.tickets)
+        continue
+      }
+      for (const t of e.tickets) {
+        this.zusteller.demarcate(t)
+        this.expected.delete(t)
+      }
+      this.issuesCancelled++
+      this.emit({ kind: 'finding', text: `${HolderDevice.cancelTag(act)}: Schlüssel ${conflict.key.slice(-8)} auch von Akt ${conflict.other} benannt, nie freigegeben (8232.1); Konflikt, der Verbrauch bleibt` })
+    }
   }
 
   /**
@@ -1736,18 +1881,19 @@ export class HolderDevice {
    * Dokument je Schwester der aktuellen Gerätemenge versiegelt, an deren eigene Self-Adresse (`to`: nur diese, etwa der
    * Anfragende einer Nachholantwort); ohne Schwester geht nichts hinaus.
    */
-  private async sendSelf(type: string, payload: Record<string, Json>, to?: Array<{ anchor: string; rkid: string }>): Promise<void> {
+  private async sendSelf(type: string, payload: Record<string, Json>, to?: Array<{ anchor: string; rkid: string }>): Promise<string | null> {
     const ctx = `self/${this.person}`
     const peers = to ?? (this.cand.selfPeers ? await this.cand.selfPeers() : undefined)
-    if (peers && !peers.length) return
+    if (peers && !peers.length) return null
     const self = peers ? peers[0]!.anchor : (await this.keysFor(ctx)).anchor
     const sent = await this.sendDoc(type, ctx, self, peers ? peers[0]!.rkid : this.ownRkid!, this.ownRkid!, payload, peers)
-    if (!sent) return
+    if (!sent) return null
     const { frames, total } = sent
     this.measures.ownFramesOut += frames
     this.measures.ownBytesOut += total
     this.measures.framesOut -= frames
     this.measures.bytesOut -= total
+    return sent.digest
   }
   /**
    * Schritt 6: eine Antwort der Ablage lesen. Nur die Antwort auf die laufende Leseanfrage zählt (MV-5); jeder Eintrag wird
@@ -2151,7 +2297,7 @@ export class HolderDevice {
       } else {
         // K2 Schritt 1: die Antwort geht nur an das anfragende Gerät (versiegelt an dessen Self-Schlüssel), nicht an jede Schwester.
         const asker = this.cand.selfPeers ? (await this.cand.selfPeers()).filter((k) => k.anchor === doc.issuer) : undefined
-        for (const f of this.cand.batchesAfter?.(heads) ?? []) await this.sendSelf(TYPES.journal, { b: Buffer.from(f.body).toString('base64') }, asker)
+        for (const f of this.cand.batchesAfter?.(heads) ?? []) await this.sendJournal(f.body, asker)
         if (this.cand.heads) await this.sendSelf(TYPES.journalSync, { heads: this.cand.heads(), reply: true, ...(typeof p.req === 'string' ? { req: p.req } : {}) }, asker)
         // Weiß der Anfragende mehr als wir, holen wir selbst nach.
         if (!this.covers(heads) && !this.sync.pending) this.requestSync()

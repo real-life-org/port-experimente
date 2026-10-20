@@ -3,7 +3,7 @@ import { seal, receive } from '@real-life/trust-protocol'
 import type { Json } from '@real-life/trust-protocol'
 import { Welt15 } from '../src/lab/mehrgeraet/welt'
 import { Carrier, VirtualClock } from '../src/lab/zustellung'
-import { HolderDevice, UnknownWriter, signerId, TYPES, type MultiDeviceCandidate } from '../src/lab/mehrgeraet/holder'
+import { HolderDevice, JournalOversize, UnknownWriter, signerId, TYPES, type MultiDeviceCandidate } from '../src/lab/mehrgeraet/holder'
 import { runX15 } from '../src/lab/mehrgeraet/scenarios'
 import { anchorPairOracle, enrolFanout, revocationTraffic, thiefWindow, timeModel } from '../src/lab/mehrgeraet/geraetemengen'
 import { k2, K2Device, DeviceDirectory, nameSlot } from '../src/candidates/mehrgeraet-k2'
@@ -1247,12 +1247,20 @@ describe('K2 Schritt 2: Review 36, eine Rechnung für Ms Sicht (B7)', () => {
 })
 
 describe('K2 Schritt 2: Review 37, die Zuständigkeit hängt am Anker (B8, S7)', () => {
-  it('V3. Eigenschaft über die Zeit (S7): M1 und M2 falten dieselben Listungen je in eigener zufälliger Reihenfolge (fester Seed, mit Duplikaten, darunter eine niedrigere Nummer, die später durch eine höhere leere Revision und einen Widerruf wegfällt), Ms Journal bleibt zurück; nach jeder Faltung wählen sie und verbrauchen lokal: die Zuständigkeit je Anker ist in jedem Zwischenzustand auf beiden Geräten dieselbe, genau ein Gerät, Wahl, Rechteprüfung und `stockAt` lesen sie, kein Anker wird zweimal benannt', () => {
-    const { t0, exp, d2, op, lk, view, cert, set, ops: ops2, base, cands } = viewFixture()
+  it('V3. Eigenschaft über die Zeit (S7): M1 und M2 falten dieselben Listungen je in eigener zufälliger Reihenfolge (fester Seed, mit Duplikaten, darunter eine niedrigere Nummer, die später durch eine höhere leere Revision und einen Widerruf wegfällt), Ms Journal bleibt zurück; nach jeder Faltung wählen sie und verbrauchen lokal: die Zuständigkeit je Anker ist in jedem Zwischenzustand auf beiden Geräten dieselbe, genau ein Gerät, Wahl, Rechteprüfung und `stockAt` lesen sie, kein Anker wird zweimal benannt; gewählt und ausgestellt wird über den echten `HolderDevice.introduce` (Review 38 S7)', async () => {
+    const { t0, exp, d2, op, lk, view, cert, set, ops: ops2, base: base0, cands, broot } = viewFixture()
     const d4 = 'm-d4'
     // Astra's B8 in the model: d4 lists x with n=1 (canonical while it stands), then sends a higher empty revision; d2 (x:3)
     // is revoked. The canonical n of x moves 1 → 2 (and 3 → 2) over time, the anchor stays.
-    const ops = [...ops2, set([cert('admit', d4)]), view('M:e1', d4, 1, [lk('x', 1), lk('v', 5)]), view('M:e1', d4, 2, []), view('M:e1', d2, 3, [lk('u', 9)])]
+    // Real tickets (S7): every listed key carries one sealable key agreement (the fixture's `r<anchor>` cannot be sealed to).
+    const rk = (await cands[0]!.keys.pair('v3/key-agreement')).rkid
+    const sealable = (o: M.Op) => (o.kind === 'view' ? ({ ...o, keys: o.keys.map((k) => ({ ...k, keyAgreement: rk })) } as M.Op) : o)
+    const ops = [...ops2, set([cert('admit', d4)]), view('M:e1', d4, 1, [lk('x', 1), lk('v', 5)]), view('M:e1', d4, 2, []), view('M:e1', d2, 3, [lk('u', 9)])].map(sealable)
+    const base = () => {
+      const s = base0()
+      M.apply(s, sealable(view('M:e2', broot, 2, Array.from({ length: 8 }, (_, i) => lk(`b${i}`, i)))))
+      return s
+    }
     let rnd = 37
     const next = () => ((rnd = (rnd * 1103515245 + 12345) % 2 ** 31) / 2 ** 31)
     const shuffled = () => {
@@ -1261,8 +1269,9 @@ describe('K2 Schritt 2: Review 37, die Zuständigkeit hängt am Anker (B8, S7)',
       return order
     }
     let moved = 0
+    let issued = 0
     for (let run = 0; run < 200; run++) {
-      const states = [base(), base()]
+      const hs = cands.map((c) => new HolderDevice(c.name, 'M', c, new Carrier(), new VirtualClock(t0), undefined, base()))
       const orders = [shuffled(), shuffled()]
       const responsible = new Map<string, number>()
       const named = new Map<string, string[]>()
@@ -1270,7 +1279,8 @@ describe('K2 Schritt 2: Review 37, die Zuständigkeit hängt am Anker (B8, S7)',
       const steps = Math.max(...orders.map((o) => o.length))
       for (let i = 0; i < steps; i++) {
         for (const d of [0, 1]) {
-          const s = states[d]!
+          const h = hs[d]!
+          const s = h.state
           const o = orders[d]![i]
           if (o) M.apply(s, { ...o, id: { writer: 'w', n: 10_000 + i } } as M.Op)
           const c = cands[d]!
@@ -1285,17 +1295,22 @@ describe('K2 Schritt 2: Review 37, die Zuständigkeit hängt am Anker (B8, S7)',
             ns.set(k.anchor, (ns.get(k.anchor) ?? new Set()).add(k.n))
           }
           const mine = uv.unconsumed.filter((k) => c.mayName(k))
-          const h = new HolderDevice(c.name, 'M', c, new Carrier(), new VirtualClock(t0), undefined, s)
           expect(h.stockAt('M:e1'), what).toEqual({ listed: uv.listed.length, usable: uv.usable.length, unconsumed: uv.unconsumed.length, nameable: mine.length })
           if (next() < 0.5) continue
-          // The selection of `introduce` (smallest anchor among the nameable), then the rights check, then local consumption.
+          // The real selection and issuance (`HolderDevice.introduce`, review 38 S7): smallest nameable anchor on each side, the
+          // rights check of the candidate, local consumption, two tickets.
           const ka = [...mine].sort((a, b) => a.anchor.localeCompare(b.anchor))[0]
           const kb = M.usableView(s, 'M:e2', t0).unconsumed.filter((k) => c.mayName(k)).sort((a, b) => a.anchor.localeCompare(b.anchor))[0]
-          if (!ka || !kb) continue
-          const intro = op({ kind: 'introduce', act: { id: `act-${run}-${i}-${d}`, a: { rel: 'M:e1', key: ka.anchor, keyAgreement: ka.keyAgreement }, b: { rel: 'M:e2', key: kb.anchor, keyAgreement: kb.keyAgreement }, issuedAt: t0, expiresAt: exp } })
-          expect(c.authorize(intro, s), what).toBe(true)
-          M.apply(s, intro)
-          expect(s.consumed, what).toContain(ka.anchor)
+          const r = await h.introduce('M:e1', 'M:e2')
+          if (!ka || !kb) {
+            expect('refused' in r, `${what}: ${JSON.stringify(r)}`).toBe(true)
+            continue
+          }
+          if (!('act' in r)) throw new Error(`${what}: ${JSON.stringify(r)}`)
+          issued++
+          const act = h.state.mediatorActs.find((a) => a.id === r.act)!
+          expect([act.a.key, act.b.key], what).toEqual([ka.anchor, kb.anchor])
+          expect(h.state.consumed, what).toContain(ka.anchor)
           named.set(ka.anchor, [...(named.get(ka.anchor) ?? []), c.name])
         }
       }
@@ -1304,7 +1319,8 @@ describe('K2 Schritt 2: Review 37, die Zuständigkeit hängt am Anker (B8, S7)',
     }
     // The property is exercised: in most runs some anchor's canonical number moved between two intermediate states.
     expect(moved).toBeGreaterThan(100)
-  })
+    expect(issued).toBeGreaterThan(200)
+  }, 300_000)
 
   it('V5. Ankerzyklus (Verhungern, Review 37): jedes ehrliche Gerät teilt Schlüssel n so zu, dass der Platz des Ankers n mod 12 ist; für 2, 3 und 4 M-Geräte wechseln die Plätze aufeinanderfolgender Schlüssel ab, beide M-Geräte halten benennbare Schlüssel jeder Seite; der Schlüssel öffnet sich wie jeder andere (Kontext im Zustand)', async () => {
     for (const stock of ['strict', 'shared'] as const) {
@@ -1487,3 +1503,118 @@ describe('K2 Schritt 2: Messungen (X23, Diebesfenster, Rotation, Fan-out, Ankerp
     }
   }, 300_000)
 })
+
+describe('K2 Schritt 2: Review 38, Ms Ausgabe nach ENG-INTENT-1 und die Sperre prüft Zurückgehaltenes neu (B9, B10)', () => {
+  type S = Awaited<ReturnType<typeof world>>
+  const atA = (s: S, key: string) => [...new Set([s.A, s.A2].flatMap((d) => d.state.acts.filter((a) => a.own === key).map((a) => a.id)))]
+  const nonconformant = (s: S) => [s.A, s.A2, s.B].flatMap((d) => d.state.findings.filter((f) => f.includes('8640.12')))
+  const actOf = (m: HolderDevice, id: string) => m.state.mediatorActs.find((a) => a.id === id)!
+  for (const stock of ['strict', 'shared'] as const) {
+    it(`W1. ${stock}: Astras Gegenlauf B10: Backup von M1, M1 stellt vor, Restore sofort danach (das Ticket darf vor dem Journal nicht hinaus), M1 holt nach und stellt erneut vor: genau ein Akt auf dem Schlüssel, derselbe Akt mit denselben Bytes (HSC-120), kein 8640.12; Restore vor dem Commit: nichts`, async () => {
+      const s = await world(k2({ stock }))
+      const M2 = await s.w.enrol(s.Mm, 'M2')
+      await s.w.rounds(4)
+      const backup = s.w.stores.get('M1')!.snapshot()
+      const r1 = await s.Mm.introduce(s.am.y.id, s.bm.y.id)
+      if (!('act' in r1)) throw new Error(JSON.stringify(r1))
+      const alpha = actOf(s.Mm, r1.act)
+      const ticketsOut = () => s.w.carrier.carried.filter((f) => w15Origin(s, f.bytes) === 'M1:introduction-ticket').length
+      expect(ticketsOut(), `${stock}: kein Ticket vor dem Journal`).toBe(0)
+      s.w.stores.get('M1')!.restore(backup)
+      await s.Mm.reload()
+      await s.w.until(() => !s.Mm.syncPending, 20)
+      await s.w.rounds(4)
+      expect(M2.state.mediatorActs.some((a) => a.id === alpha.id), stock).toBe(true)
+      const r2 = await s.Mm.introduce(s.am.y.id, s.bm.y.id)
+      if ('act' in r2) expect(actOf(s.Mm, r2.act).a.key, stock).not.toBe(alpha.a.key)
+      await s.w.rounds(6)
+      expect(atA(s, alpha.a.key), stock).toEqual([alpha.id])
+      expect(nonconformant(s), stock).toEqual([])
+      // Restore before the commit: the step is gone, nothing named, nothing sent.
+      const t = await world(k2({ stock }))
+      await t.w.enrol(t.Mm, 'M2')
+      await t.w.rounds(4)
+      const mark = t.w.carrier.carried.length
+      t.Mm.crashAt = 'before-commit'
+      expect('refused' in (await t.Mm.introduce(t.am.y.id, t.bm.y.id)), stock).toBe(true)
+      await t.Mm.reload()
+      await t.w.rounds(6)
+      expect(t.w.of('M').flatMap((m) => m.state.mediatorActs), stock).toEqual([])
+      expect(t.w.carrier.carried.slice(mark).filter((f) => w15Origin(t, f.bytes) === 'M1:introduction-ticket'), stock).toEqual([])
+    }, 180_000)
+
+    it(`W2. ${stock}: Astras Gegenlauf B9: Backup von M1, Akt α erreicht A und M2; M1 aus dem Backup stellt während der Sperre auf demselben Schlüssel vor (β); beim Öffnen der Sperre wird β gegen die gefaltete Sicht neu geprüft und verworfen (8232.1, Konfliktbefund), nie freigegeben: genau ein Akt, kein 8640.12`, async () => {
+      const s = await world(k2({ stock }))
+      const M2 = await s.w.enrol(s.Mm, 'M2')
+      await s.w.rounds(4)
+      const backup = s.w.stores.get('M1')!.snapshot()
+      const r1 = await s.Mm.introduce(s.am.y.id, s.bm.y.id)
+      if (!('act' in r1)) throw new Error(JSON.stringify(r1))
+      const alpha = actOf(s.Mm, r1.act)
+      await s.w.rounds(6)
+      expect(atA(s, alpha.a.key), stock).toEqual([alpha.id])
+      expect(M2.state.consumed, stock).toContain(alpha.a.key)
+      s.w.stores.get('M1')!.restore(backup)
+      await s.Mm.reload()
+      expect(s.Mm.gated, stock).toBe(true)
+      const r2 = await s.Mm.introduce(s.am.y.id, s.bm.y.id)
+      if (!('act' in r2)) throw new Error(JSON.stringify(r2))
+      const beta = actOf(s.Mm, r2.act)
+      expect(beta.a.key, `${stock}: Voraussetzung`).toBe(alpha.a.key)
+      await s.w.until(() => !s.Mm.gated, 20)
+      await s.w.rounds(6)
+      expect(atA(s, alpha.a.key), stock).toEqual([alpha.id])
+      expect([s.A, s.A2, s.B].flatMap((d) => d.state.acts.filter((a) => a.id === beta.id)), stock).toEqual([])
+      expect(nonconformant(s), stock).toEqual([])
+      expect(s.Mm.state.findings.filter((f) => f.startsWith(`ticket ${beta.id}`) && f.includes('8232.1')), s.Mm.state.findings.join('\n')).toHaveLength(1)
+    }, 180_000)
+  }
+})
+
+describe('K2 Schritt 2: Review 38, Grenze des Journalrahmens (S8)', () => {
+  // The enrolment batch of the old M device carries one device-set document per counterpart device (copies), and that
+  // document grows with the own device count: batch ≈ D × (576 + 1250·D) B base64 + ops. Base64 in one journal document
+  // under Delivery's bound (plaintext ≤ 65 536 B): 5 devices at A and at M fit (36.8 KB), 6 do not (51.4 KB → 68.5 KB).
+  const grow = async (D: number) => {
+    const w = new Welt15(k2({ devices: D }))
+    const A = await w.person('A', 'A1')
+    const B = await w.person('B', 'B1')
+    const Mm = await w.person('M', 'M1')
+    const am = await w.encounter(A, Mm)
+    const bm = await w.encounter(B, Mm)
+    await w.rounds(2)
+    await A.setClass(am.x.id, true)
+    await B.setClass(bm.x.id, true)
+    await w.rounds(3)
+    for (let i = 2; i <= D; i++) {
+      await w.enrol(A, `A${i}`)
+      await w.rounds(2)
+    }
+    for (let i = 2; i <= D; i++) {
+      await w.enrol(Mm, `M${i}`)
+      await w.rounds(2)
+    }
+    await w.rounds(4)
+    return w
+  }
+  it('J1 (Review 38 S8). fünf Geräte bei A und M laufen; sechs scheitern ausdrücklich mit `JournalOversize` (Batch base64 über 65 536 B), nie still', async () => {
+    const five = await grow(5)
+    expect(five.devices.length).toBe(11)
+    let caught: unknown = null
+    try {
+      await grow(6)
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(JournalOversize)
+    const e = caught as JournalOversize
+    expect(e.device).toBe('M1')
+    expect(4 * Math.ceil(e.bytes / 3)).toBeGreaterThan(65_536)
+    expect(e.message).toMatch(/^journal-oversize/)
+  }, 300_000)
+})
+
+function w15Origin(s: { w: Welt15 }, bytes: Uint8Array): string | undefined {
+  const o = s.w.frameOrigin(bytes)
+  return o ? `${o.device}:${o.kind}` : undefined
+}
