@@ -12,6 +12,7 @@ import type { Outcome } from '../types'
 import { EnrolmentRefused, frameHash, HolderDevice, type MultiDeviceCandidate } from './holder'
 import * as M from './model'
 import { Welt15 } from './welt'
+import { anchorPairOracle } from './geraetemengen'
 
 export interface X15Result {
   scenario: string
@@ -65,7 +66,8 @@ async function setup(candidate: MultiDeviceCandidate, serial: boolean, thirds: s
   await pre?.(base) // weitere Begegnungen vor dem Enrollment: auch ein Gerät ohne Journal (K0) kennt sie
   const A2 = serial ? A : await w.enrol(A, 'A2')
   const B2 = serial ? B : await w.enrol(B, 'B2')
-  const M2 = serial ? Mm : await w.enrol(Mm, 'M2')
+  // K2 Schritt 2a (Plan 6t): M als Ein-Schreiber-Fixture (`bench.singleDevice`); verteilter M-Betrieb ist nicht abgenommen.
+  const M2 = serial || candidate.bench?.singleDevice?.includes('M') ? Mm : await w.enrol(Mm, 'M2')
   await w.rounds(2)
   return { ...base, A2, B2, M2 }
 }
@@ -194,6 +196,23 @@ async function untilStable(w: Welt15, person: string, max = 20): Promise<number>
   return -1
 }
 
+/**
+ * Phasenende in X21 (K2 Schritt 2): stabil wie `untilStable`, und solange noch Batches fehlen, während ein Gerät noch
+ * nachholt, weiter. Unter Gerätemengen kann ein Batch fehlen, dessen Inhalt schon über eine kumulative Revision einer
+ * Schwester im Zustand steht (Projektion gleich, Nachholen läuft noch); gemessen wird erst nach dem Nachholen. Fehlt ein
+ * Batch, ohne dass ein Gerät nachholt, endet die Phase sofort (das zählt als fehlend). Ohne fehlende Batches wie `untilStable`.
+ */
+async function untilSettled(w: Welt15, person: string, max = 40): Promise<number> {
+  const r = await untilStable(w, person, max)
+  if (r < 0) return r
+  let extra = 0
+  while ((missingBatches(w, person) ?? 0) > 0 && w.of(person).some((d) => d.syncPending) && extra < max) {
+    await w.rounds(1)
+    extra++
+  }
+  return r + extra
+}
+
 /** Beziehungen eines Geräts zu einer Gegenperson: Einträge und Tupel je Eintrag (B5: je Gerät geprüft). */
 function relationshipsTo(w: Welt15, d: HolderDevice, other: string): { entries: number; tuples: number } {
   const rs = d.state.relationships.filter((r) => !r.departed && r.tuples.some((t) => w.personOf(t.peer) === other))
@@ -316,18 +335,23 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       }
       const before = acceptedActs(s.w, 'A').size
       const rkidA = await addressesFor(s.w, 'A', M.head(M.rel(s.A.state, s.am)).ownKey)
+      // K2 Schritt 2: das Ticket geht an den benannten Vorrats-Schlüssel, und A listet nur Schlüssel, die ein Gerät noch annehmen
+      // kann (MV-9): M vertritt sich über den autorisierten Pfad (B6), wie in der Vorphase.
+      const sets = c.capabilities.has('device-sets')
+      const stockA = new Set(sets ? M.rel(s.A.state, s.am).stock.map((k) => k.keyAgreement) : [])
+      const intro = (i: number) => (sets ? introduceAny(s, s.ma, cs[i]!, serial) : s.Mm.introduce(s.ma, cs[i]!))
       // Zehntes Ticket: nur A1 ist da; A2 bekommt es nie (für A2 verworfen). Dann ist nur A2 da und bekommt das elfte.
       s.A2.online = false
       const mark10 = s.w.carrier.carried.length
-      await s.Mm.introduce(s.ma, cs[9]!)
-      const t10 = s.w.carrier.carried.slice(mark10).filter((f) => rkidA.has(f.address)).map((f) => f.id)
+      await intro(9)
+      const t10 = s.w.carrier.carried.slice(mark10).filter((f) => rkidA.has(f.address) || stockA.has(f.address)).map((f) => f.id)
       if (!serial) s.w.carrier.faults.withhold(s.A2.name, (f) => t10.includes(f.id))
       await rounds(3)
       if (!serial) {
         s.A.online = false
         s.A2.online = true
       }
-      await s.Mm.introduce(s.ma, cs[10]!)
+      await intro(10)
       await rounds(3)
       s.A.online = true
       await rounds(6)
@@ -414,11 +438,11 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       if (offline === 'blocked') await s.w.rounds(1), await s.A.consent(lastAct)
       const n = await untilStable(s.w, 'A')
       const equivocation = s.w.of('M').flatMap((d) => d.state.findings).filter((f) => f.includes('Equivokation')).length
-      const viewKeys = s.w.of('M').map((d) => `${d.name}: ${M.rel(d.state, s.ma).view?.keys.length ?? 0}`)
+      const viewKeys = s.w.of('M').map((d) => `${d.name}: ${M.usableView(d.state, s.ma, s.w.clock.now()).listed.length}`)
       const act4 = 'act' in r4 ? s.w.of('A').map((d) => `${d.name}: ${d.state.acts.find((a) => a.id === r4.act)?.state ?? 'abgewiesen'}`) : ['keine vierte Vorstellung']
       const cont = s.w.of('A').map((d) => M.act(d.state, lastAct).state)
       const agree = s.w.agree('A')
-      const ok = equivocation === 0 && agree.agree && s.w.of('M').every((d) => (M.rel(d.state, s.ma).view?.keys.length ?? 0) === 0) && cont.every((x) => x === 'connected') // 8232.2, 8925: der laufende Akt läuft weiter
+      const ok = equivocation === 0 && agree.agree && s.w.of('M').every((d) => M.usableView(d.state, s.ma, s.w.clock.now()).listed.length === 0) && cont.every((x) => x === 'connected') // 8232.2, 8925: der laufende Akt läuft weiter
       return { outcome: mark(ok), detail: `Equivokationen bei M: ${equivocation}; Ms Sicht auf A (Schlüssel): ${viewKeys.join(', ')}; vierte Vorstellung: ${act4.join(', ')}; Akt mit Karte: ${cont.join('/')}; Zustimmung offline ${offline}; Projektion gleich nach ${n} Runden: ${agree.agree ? 'ja' : 'nein'}`, measures: { equivocations: equivocation, projectionAgrees: agree.agree ? 1 : 0, roundsToConverge: n, offlineBlocked: offline === 'blocked' ? 1 : 0 } }
     },
   },
@@ -570,12 +594,30 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const gated = s.w.selfLog ? A2.gatedRounds - g0 : 0
       const bytes = Buffer.byteLength(JSON.stringify(A2.state), 'utf8') // Größe der Zustandskopie; K0 kennt keinen Enrollment-Verkehr
       const same = M.canonical(A2.projection()) === M.canonical(s.A.projection())
+      // K2 Schritt 2: das neue Gerät ist in jeder Beziehung der Person adressierbar, aus den Nachweisen der Gegenseiten (Fan-out).
+      const sets = c.capabilities.has('device-sets')
+      const roots = sets ? s.A.state.relationships.flatMap((x) => x.tuples) : []
+      const addressable = async () => {
+        let k = 0
+        for (const t of roots) {
+          const key = (await A2.cand.keys.pair(t.ownKey)).anchor
+          if (s.w.devices.filter((d) => d.person === s.w.personOf(t.peer)).some((d) => M.setView(d.setOf(t.own)).members.some((m) => m.anchor === key))) k++
+        }
+        return k
+      }
+      let addrRounds = 0 // rounds actually run until addressable (CodeRabbit #74: counted before, one too many)
+      if (sets) while (addrRounds < 10 && (await addressable()) < roots.length) {
+        await s.w.rounds(1)
+        addrRounds++
+      }
+      const addr = sets ? await addressable() : 0
       await A2.consent(r.act)
       await s.B.consent(r.act)
       const n = await s.w.until(() => M.act(A2.state, r.act).state === 'connected' && M.act(s.B.state, r.act).state === 'connected')
-      const ok = same && n > 0 && fold >= 0
+      const ok = same && n > 0 && fold >= 0 && (!sets || addr === roots.length)
       if (s.w.selfLog) return { outcome: mark(ok), detail: `aus der Ablage gefaltet nach ${fold} Runde(n): ${A2.logEntriesRead} Einträge, ${A2.logBytesRead} B gelesen (keine Zustandskopie; Zustand danach ${bytes} B UTF-8); Freigabe nach dem Zeugnis von A1: ${gated} Runde(n) gesperrt; Projektion gleich: ${same ? 'ja' : 'nein'}; A2 verbunden nach ${n} Runden`, measures: { enrolRounds: fold, enrolGatedRounds: gated, enrolLogEntries: A2.logEntriesRead, enrolLogBytes: A2.logBytesRead, stateBytes: bytes, rounds: n } }
-      return { outcome: mark(ok), detail: `Projektion nach Enrollment gleich: ${same ? 'ja' : 'nein'}; A2 verbunden nach ${n} Runden; Zustandskopie ${bytes} B UTF-8 (K0: Kopie, kein gemessener Enrollment-Verkehr)`, measures: { stateCopyBytes: bytes, rounds: n } }
+      const setNote = sets ? `; A2 in ${addr} von ${roots.length} Beziehung(en) adressierbar (aus den Mengennachweisen der Gegenseiten) nach ${addrRounds} Runde(n)` : ''
+      return { outcome: mark(ok), detail: `Projektion nach Enrollment gleich: ${same ? 'ja' : 'nein'}; A2 verbunden nach ${n} Runden; Zustandskopie ${bytes} B UTF-8 (K0: Kopie, kein gemessener Enrollment-Verkehr)${setNote}`, measures: { stateCopyBytes: bytes, rounds: n, ...(sets ? { relationships: roots.length, addressableRelationships: addr, addressableRounds: addrRounds } : {}) } }
     },
   },
   {
@@ -603,9 +645,12 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       // K2 Schritt 1: die Gegenseiten lesen die Gerätemenge aus der Prüfstandsliste, der Widerruf wirkt dort sofort. Ein ✓
       // gilt nur unter dieser Vereinfachung (Ersatz für die Mengenrevision an jede Gegenseite, Schritt 3), nie als Erfüllung.
       const shortcut = c.capabilities.has('device-keys')
+      const sets = c.capabilities.has('device-sets')
       const promiseChanged = ok && shortcut
-      const note = promiseChanged ? `; Schritt-1-Vereinfachung: B und M erfahren den Widerruf über die Prüfstandsliste der Gerätemenge, nicht über eine Mengenrevision (Schritt 3); der Dieb hält nur die Schlüssel von A2, versiegelt wird nach dem Widerruf an A1 allein` : ''
-      return { outcome: mark(ok), ...(shortcut ? { promiseChanged } : {}), detail: `Vorstellung ${'act' in r ? 'ausgegeben' : 'verweigert'}; A1 erhält ${legit} Ticket(s) und ${legitFromB} Revision(en) von B; der Dieb liest ${reads} Dokument(e) und hält ${thief.state.acts.length} Akt(e)${note}`, measures: { thiefReads: reads, legitimateDelivery: legit, legitimateDeliveryFromPeer: legitFromB, ...(shortcut ? { step1Shortcut: 1 } : {}) } }
+      const note = !promiseChanged ? '' : sets
+        ? `; Schritt 2: B und M erfahren den Widerruf aus dem Widerrufseintrag der Gerätemenge (device-set@1, Nachweis), die eigenen Geräte noch aus der Prüfstandsliste (journalisierter Widerruf: Schritt 3); der Dieb hält nur die Schlüssel von A2`
+        : `; Schritt-1-Vereinfachung: B und M erfahren den Widerruf über die Prüfstandsliste der Gerätemenge, nicht über eine Mengenrevision (Schritt 3); der Dieb hält nur die Schlüssel von A2, versiegelt wird nach dem Widerruf an A1 allein`
+      return { outcome: mark(ok), ...(shortcut ? { promiseChanged } : {}), detail: `Vorstellung ${'act' in r ? 'ausgegeben' : 'verweigert'}; A1 erhält ${legit} Ticket(s) und ${legitFromB} Revision(en) von B; der Dieb liest ${reads} Dokument(e) und hält ${thief.state.acts.length} Akt(e)${note}`, measures: { thiefReads: reads, legitimateDelivery: legit, legitimateDeliveryFromPeer: legitFromB, ...(shortcut && !sets ? { step1Shortcut: 1 } : {}) } }
     },
   },
   {
@@ -657,21 +702,25 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       await s.B.consent(r.act)
       await s.w.rounds(3)
       const act = M.act(s.A.state, r.act)
-      const ownRkid = (await s.A.cand.keys.pair(M.rel(s.A.state, s.am).stock.find((k) => k.anchor === act.own)!.key)).rkid
+      const stock = M.rel(s.A.state, s.am).stock.find((k) => k.anchor === act.own)!
+      // K2 Schritt 2 (E2 (iv)): die Karte erzeugt das Gerät, das den benannten Vorrats-Schlüssel zugeteilt hat; es stimmt zu und
+      // liefert, das andere Gerät ist getrennt (die Verfügbarkeit bei getrenntem Zuteiler misst X23).
+      const [d1, d2] = c.capabilities.has('device-sets') && stock.by === s.A2.name ? [s.A2, s.A] : [s.A, s.A2]
+      const ownRkid = (await d1.cand.keys.pair(stock.key)).rkid
       s.w.carrier.dropDeliveryTo.add(ownRkid) // die erste Quittung an A geht verloren
-      if (!serial) s.A2.online = false
-      await s.A.consent(r.act)
+      if (!serial) d2.online = false
+      await d1.consent(r.act)
       await s.w.rounds(1)
       s.w.carrier.unreachable = true
       await s.w.rounds(2)
       s.w.carrier.unreachable = false
-      const n = await s.w.until(() => M.act(s.A.state, r.act).o === 'delivered' && M.act(s.A.state, r.act).state === 'connected')
-      if (!serial) s.A2.online = true
+      const n = await s.w.until(() => M.act(d1.state, r.act).o === 'delivered' && M.act(d1.state, r.act).state === 'connected')
+      if (!serial) d2.online = true
       const m = await untilStable(s.w, 'A')
       const connectsAtB = ledger(s.w, 'B').get(`connect:${r.act}`)?.size ?? 0
       const dup = s.B.dispositions.filter((d) => d === 'duplicate-known').length
       const ok = n > 0 && connectsAtB === 1 && dup >= 1 && m > 0
-      return { outcome: mark(ok), detail: `A1: Karte ${M.act(s.A.state, r.act).o} nach ${n} Runden; B: Verbindung ${connectsAtB}×, ${dup}× duplicate-known; A-Geräte gleich nach ${m} Runden`, measures: { rounds: n, duplicateKnownAtB: dup, doubleFinalEffects: Math.max(0, connectsAtB - 1), roundsToConverge: m } }
+      return { outcome: mark(ok), detail: `${d1.name}: Karte ${M.act(d1.state, r.act).o} nach ${n} Runden; B: Verbindung ${connectsAtB}×, ${dup}× duplicate-known; A-Geräte gleich nach ${m} Runden`, measures: { rounds: n, duplicateKnownAtB: dup, doubleFinalEffects: Math.max(0, connectsAtB - 1), roundsToConverge: m } }
     },
   },
   {
@@ -715,8 +764,11 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const fe = finalEffects(s.w, 'M')
       const agree = s.w.agree('A')
       const perDevice = s.w.of('A').map((d) => `${d.name}: ${M.budgetUsed(M.rel(d.state, s.am), s.w.clock.now())}`)
-      const ok = overrun === 0 && before === 9 && issued === 2 && accepted === M.PARAM.budget && fe.doubleConsumption === 0 && agree.agree
-      return { outcome: mark(ok), detail: `vorher ${before}; offline ausgestellt ${offline} von 2, insgesamt ${issued}; angenommene Akte der Person: ${accepted} (Budget ${M.PARAM.budget}), Überschreitung im Verlauf höchstens ${overrun}; je Gerät ${perDevice.join(', ')}; blockiert: ${blocked(s.w, 'A')}; doppelt benannte Schlüssel bei M: ${fe.doubleConsumption}; A-Geräte gleich: ${agree.agree ? 'ja' : 'nein'}`, measures: { budgetOverrun: overrun, acceptedActs: accepted, issuedOffline: offline, issued, blockedOperations: blocked(s.w, 'A'), doubleFinalEffects: fe.doubleConsumption, projectionAgrees: agree.agree ? 1 : 0 } }
+      // K2 Schritt 2 (MV-9 unter Geräteschlüsseln): A listet nur so viele Schlüssel, wie seine Geräte noch annehmen können; bei
+      // Budget 9 kann M nur einen benennen, das Wettrennen entsteht nicht (Struktur statt Wahl). Das ist eine geänderte Zusage.
+      const structural = c.capabilities.has('device-sets') && issued === 1
+      const ok = overrun === 0 && before === 9 && (issued === 2 || structural) && accepted === M.PARAM.budget && fe.doubleConsumption === 0 && agree.agree
+      return { outcome: mark(ok), ...(structural && ok ? { promiseChanged: true } : {}), detail: `vorher ${before}; offline ausgestellt ${offline} von 2, insgesamt ${issued}${structural ? ' (A listet bei Budget 9 nur einen annehmbaren Schlüssel, MV-9 unter Geräteschlüsseln)' : ''}; angenommene Akte der Person: ${accepted} (Budget ${M.PARAM.budget}), Überschreitung im Verlauf höchstens ${overrun}; je Gerät ${perDevice.join(', ')}; blockiert: ${blocked(s.w, 'A')}; doppelt benannte Schlüssel bei M: ${fe.doubleConsumption}; A-Geräte gleich: ${agree.agree ? 'ja' : 'nein'}`, measures: { budgetOverrun: overrun, acceptedActs: accepted, issuedOffline: offline, issued, blockedOperations: blocked(s.w, 'A'), doubleFinalEffects: fe.doubleConsumption, projectionAgrees: agree.agree ? 1 : 0 } }
     },
   },
   {
@@ -878,7 +930,7 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const ownActs = new Set(s.w.of('A').flatMap((d) => d.state.acts.filter((a) => a.own === named).map((a) => a.id)))
       const acceptLedger = ledger(s.w, 'A')
       const acceptOps = [...ownActs].reduce((sum, id) => sum + (acceptLedger.get(`accept:${id}`)?.size ?? 0), 0)
-      const viewKeys = s.w.of('M').map((d) => M.rel(d.state, s.ma).view?.keys.length ?? 0)
+      const viewKeys = s.w.of('M').map((d) => M.usableView(d.state, s.ma, s.w.clock.now()).listed.length)
       const equivocation = s.w.of('M').flatMap((d) => d.state.findings).filter((f) => f.includes('Equivokation')).length
       const classOn = s.w.of('A').filter((d) => M.rel(d.state, s.am).classOn).length
       const agree = s.w.agree('A')
@@ -939,7 +991,7 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const tagsAtM = seen.perRelationship.get(M.resolveId(s.Mm.state, s.ma))?.size ?? 0
       const tagged = aWriters.size > 0
       const ok = reused === 0 && equivocation === 0 && keyValueConflicts === 0 && progress === 1 && conformance === 0 && agree.agree && mAgree.agree && n > 0 && (!tagged || (accepted === aWriters.size && seen.linked === 0))
-      const tagDetail = tagged ? `; Schreiber bei A ${aWriters.size}, davon mit ihrer letzten Revision in Ms Sicht (alle M-Geräte) ${accepted}; Ms Sicht ${mViews.map((v) => `${Object.keys(v?.writers ?? {}).length} Schreiber/${v?.keys.length ?? 0} Schlüssel`).join(', ')}; was M lernt: ${tagsAtM} Schreiberkennung(en) auf der Beziehung zu A, ${[...seen.perRelationship.values()].map((x) => x.size).join('/')} je Beziehung von M, über Beziehungen verknüpfbar ${seen.linked}` : ''
+      const tagDetail = tagged ? `; Schreiber bei A ${aWriters.size}, davon mit ihrer letzten Revision in Ms Sicht (alle M-Geräte) ${accepted}; Ms Sicht ${s.w.of('M').map((d, i) => `${Object.keys(mViews[i]?.writers ?? {}).length} Schreiber/${M.usableView(d.state, s.ma, s.w.clock.now()).listed.length} Schlüssel`).join(', ')}; was M lernt: ${tagsAtM} Schreiberkennung(en) auf der Beziehung zu A, ${[...seen.perRelationship.values()].map((x) => x.size).join('/')} je Beziehung von M, über Beziehungen verknüpfbar ${seen.linked}` : ''
       return { outcome: mark(ok), detail: `Revision vorher ${rev0}, getrennt je Gerät ${revs.join('/')}; Revisionsnummern mit mehr als einer Operation: ${reused}; Befunde 6270 bei M: ${equivocation}; zweiter Vorrat (8435) bei A: ${secondStock}; gleicher Anker mit anderem Wert: ${keyValueConflicts}; nächste Vorstellung ${'act' in r ? (progress ? 'angenommen' : 'nicht angenommen') : 'verweigert'}, Konformitätsfehler bei A: ${conformance}; Projektion gleich nach ${n} Runden: ${agree.agree ? 'ja' : 'nein'}, M-Geräte gleich: ${mAgree.agree ? 'ja' : 'nein'}${tagDetail}; Probe-Sequenz (6680) und Mapping-Revision sind im Prüfstand nicht modelliert`, measures: { revisionNumbersReused: reused, equivocations: equivocation, secondStockFindings: secondStock, keyValueConflicts, progressAfterHeal: progress, mediatorConformanceFailures: conformance, projectionAgrees: agree.agree ? 1 : 0, mediatorDevicesAgree: mAgree.agree ? 1 : 0, roundsToConverge: n, ...(tagged ? { writersAtA: aWriters.size, writersAcceptedByM: accepted, writerTagsSeenByM: tagsAtM, writerTagsLinkedAcrossRelationships: seen.linked } : {}) } }
     },
   },
@@ -980,14 +1032,22 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const feB = finalEffects(s.w, 'B')
       const kindsA = [...new Set(feA.doubleIds.map((id) => id.split(':')[0]!))].sort().join(', ')
       const doubles = feA.total + feB.total
-      const ok = nA > 0 && nB > 0 && doubles === 0 && connectsAtB === 1 && conflicts === 0 && tuplesAtB.every((x) => x === 1) && agree.agree && states.every((x) => x.endsWith('connected'))
+      // Ankerpaar-Orakel (Design-Review 6q 5a): dieselbe Wahl auf allen Geräten beider Personen, As Anker = Bs Gegenanker und
+      // umgekehrt samt Vereinbarungsschlüsseln, jedes Mitglied öffnet einen tatsächlich versiegelten Rahmen, V = Nutzlastdigest der Karte.
+      const pair = await anchorPairOracle(s.w, 'A', 'B', r.act)
+      const sets = c.capabilities.has('device-sets')
+      const ok = nA > 0 && nB > 0 && doubles === 0 && connectsAtB === 1 && conflicts === 0 && tuplesAtB.every((x) => x === 1) && agree.agree && states.every((x) => x.endsWith('connected')) && pair.pairsAgree && pair.decrypt && pair.cardIdentity
       // K1a Schritt 3: zwei Geräte haben je zugestimmt (Zustimmungen von zwei Schreibern im Akt). Dass das eine Wirkung ist
       // (Regel 1) und die kleinere Übergabe gewinnt (Regel 3), ist eine Ersatzregel für 8325.A4: „Zusage geändert“.
       const writers = new Set((M.act(s.A.state, r.act).decisions ?? []).filter((d) => d.kind === 'consent').map((d) => d.op.split('#')[0])).size
+      // K2 Schritt 2 (E2 (iv)): zwei Zustimmungen, eine Karte vom zuteilenden Gerät: Regel 1 trägt die Zustimmung, eine Auswahl
+      // zwischen Karten gibt es nicht. Die Terminalität nach Faltung (8325) bleibt eine geänderte Zusage.
       const promiseChanged = ok && writers > 1
       const cardsOut = cardFramesOut(s.w, 'A', r.act)
-      const reasons = [doubles > 0 ? `doppelte Endwirkungen (A ${feA.total}${kindsA ? `: ${kindsA}` : ''}, B ${feB.total})` : '', !agree.agree ? 'die Projektionen von A bleiben verschieden' : ''].filter(Boolean)
-      return { outcome: mark(ok), promiseChanged, detail: `${writers > 1 ? 'Regeln 1 und 3: zwei Zustimmungen, eine Wirkung, die kleinere Übergabe gewinnt; ' : ''}${states.join(', ')}; A: ${cards} Karten-Dokument(e), davon ${cardsOut} beim Träger, ${cardKeys} Kartenschlüssel, Zustimmung aus ${consents} Operation(en) von ${writers} Gerät(en), Verbindung aus ${connectsA} Operation(en); doppelte Endwirkungen bei A: ${feA.total}${kindsA ? ` (${kindsA} je aus zwei Operationen)` : ''}, bei B: ${feB.total}; B: Karten empfangen ${cardsAtB.join('/')}, verbunden ${connectsAtB}×, Konfliktmarke K auf ${conflicts} Gerät(en), Tupel des Akts je Gerät ${tuplesAtB.join('/')}; Übergabe-Digests des Akts auf den A-Geräten: ${handOvers}; A stabil gleich nach ${nA} Runden: ${agree.agree ? 'ja' : 'nein'}, B nach ${nB}${reasons.length ? `; nicht bestanden wegen: ${reasons.join('; ')}` : ''}`, measures: { cardsProducedByA: cards, cardFramesToB: cardsOut, consentWriters: writers, promiseChanged: promiseChanged ? 1 : 0, cardKeys, consentOperations: consents, connectOperationsA: connectsA, connectsAtB, cardConflictsAtB: conflicts, doubleFinalEffects: doubles, doubleFinalEffectsA: feA.total, doubleFinalEffectsB: feB.total, doubleEffectKindsA: kindsA || '–', handOverDigestsOnA: handOvers, projectionAgrees: agree.agree ? 1 : 0, roundsToConverge: nA } }
+      const reasons = [doubles > 0 ? `doppelte Endwirkungen (A ${feA.total}${kindsA ? `: ${kindsA}` : ''}, B ${feB.total})` : '', !agree.agree ? 'die Projektionen von A bleiben verschieden' : '', !pair.pairsAgree ? 'die Ankerpaare beider Seiten stimmen nicht überein' : '', !pair.decrypt ? 'ein Mitglied öffnet nicht, was die Gegenseite versiegelt' : '', !pair.cardIdentity ? 'V der Gegenseite ist nicht der Nutzlastdigest der Karte' : ''].filter(Boolean)
+      const rule = sets ? (writers > 1 ? 'E2 (iv): zwei Zustimmungen (Regel 1), eine Karte vom zuteilenden Gerät, keine Auswahl; ' : '') : writers > 1 ? 'Regeln 1 und 3: zwei Zustimmungen, eine Wirkung, die kleinere Übergabe gewinnt; ' : ''
+      const pairDetail = sets ? `; Ankerpaar beidseitig gleich: ${pair.pairsAgree ? 'ja' : 'nein'}, jedes Mitglied öffnet: ${pair.decrypt ? 'ja' : 'nein'}, V = Kartenidentität: ${pair.cardIdentity ? 'ja' : 'nein'}` : ''
+      return { outcome: mark(ok), promiseChanged, detail: `${rule}${states.join(', ')}; A: ${cards} Karten-Dokument(e), davon ${cardsOut} beim Träger, ${cardKeys} Kartenschlüssel, Zustimmung aus ${consents} Operation(en) von ${writers} Gerät(en), Verbindung aus ${connectsA} Operation(en); doppelte Endwirkungen bei A: ${feA.total}${kindsA ? ` (${kindsA} je aus zwei Operationen)` : ''}, bei B: ${feB.total}; B: Karten empfangen ${cardsAtB.join('/')}, verbunden ${connectsAtB}×, Konfliktmarke K auf ${conflicts} Gerät(en), Tupel des Akts je Gerät ${tuplesAtB.join('/')}; Übergabe-Digests des Akts auf den A-Geräten: ${handOvers}; A stabil gleich nach ${nA} Runden: ${agree.agree ? 'ja' : 'nein'}, B nach ${nB}${pairDetail}${reasons.length ? `; nicht bestanden wegen: ${reasons.join('; ')}` : ''}`, measures: { ...(sets ? { anchorPairsAgree: pair.pairsAgree ? 1 : 0, membersDecrypt: pair.decrypt ? 1 : 0, cardIdentityAgrees: pair.cardIdentity ? 1 : 0 } : {}), cardsProducedByA: cards, cardFramesToB: cardsOut, consentWriters: writers, promiseChanged: promiseChanged ? 1 : 0, cardKeys, consentOperations: consents, connectOperationsA: connectsA, connectsAtB, cardConflictsAtB: conflicts, doubleFinalEffects: doubles, doubleFinalEffectsA: feA.total, doubleFinalEffectsB: feB.total, doubleEffectKindsA: kindsA || '–', handOverDigestsOnA: handOvers, projectionAgrees: agree.agree ? 1 : 0, roundsToConverge: nA } }
     },
   },
   {
@@ -1002,11 +1062,41 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const oldA2 = s.w.stores.get('A2')!.snapshot() // A2 vor beiden Akten
       // Fachlicher Verlauf: ein Akt mit Zustimmung auf A1, einer mit Zustimmung auf A2 (A2s eigene Batches stehen danach nur noch in A1s Journal).
       const acts: string[] = []
+      // Prüfstandsregel 6m (jede Zelle in jedem Zweig): unter Gerätemengen hängt der Verlauf davon ab, welches A-Gerät den
+      // Vorrats-Schlüssel des ersten Akts zugeteilt hat (Ms Wahl, Zufall). Erzwungen wird der Zweig „A2 teilt zu“: A1 stimmt
+      // zu, A2 erzeugt die Karte nach dem Falten; ein Restore von A2 aus dem Abbild vor beiden Akten erzeugt sie seit MV-6
+      // neu (keine Sperre) aus dem erreichbaren Stand erneut. Andere Akte lehnt A ab, bis M einen Schlüssel von A2 benennt.
+      const sets = c.capabilities.has('device-sets')
+      const allocator = (act: string) => {
+        const a = M.act(s.A.state, act)
+        return M.findRel(s.A.state, a.mediator)?.stock.find((k) => k.anchor === a.own)?.by
+      }
+      let tries = 0
       for (const [other, dev, peer] of [[mc, s.A, C], [s.mb, s.A2, s.B]] as const) {
-        const r = await introduceAny(s, s.ma, other, serial)
-        if (!('act' in r)) return fail(`Vorstellung verweigert: ${r.refused}`)
+        const issue = async (): Promise<string | Body> => {
+          const r = await introduceAny(s, s.ma, other, serial)
+          if (!('act' in r)) return fail(`Vorstellung verweigert: ${r.refused}`)
+          // K2 Schritt 2: das Ticket an die Gegenseite öffnet nur der Halter ihres Vorrats-Schlüssels (strict); das zustimmende Gerät kennt den Akt erst nach dessen Journal.
+          if ((await s.w.until(() => knowsAct(s.w, 'A', r.act) && peer.state.acts.some((a) => a.id === r.act), 10)) < 0) return fail('Akt nicht auf beiden Geräten')
+          return r.act
+        }
+        let act = await issue()
+        if (typeof act !== 'string') return act
+        while (sets && dev === s.A && allocator(act) !== 'A2') {
+          if (++tries > 12) return fail('Zweig „A2 teilt den Schlüssel des ersten Akts zu“ nicht erreicht')
+          await s.A.decline(act)
+          await s.w.rounds(2)
+          act = await issue()
+          // Jede Ablehnung verbraucht einen Vorrats-Schlüssel; findet M nach mehreren Ablehnungen keinen benennbaren mehr,
+          // wartet der Prüfstand das Nachfüllen ab (sonst hinge der erzwungene Zweig an Ms Zufallswahl, flaky).
+          for (let wait = 0; typeof act !== 'string' && act.detail.startsWith('Vorstellung verweigert') && wait < 6; wait++) {
+            await s.w.rounds(2)
+            act = await issue()
+          }
+          if (typeof act !== 'string') return act
+        }
+        const r = { act }
         acts.push(r.act)
-        if ((await s.w.until(() => knowsAct(s.w, 'A', r.act), 10)) < 0) return fail('Akt nicht auf beiden Geräten')
         await dev.consent(r.act)
         await peer.consent(r.act)
         await s.w.until(() => s.w.of('A').every((d) => M.act(d.state, r.act).state === 'connected'), 15)
@@ -1039,7 +1129,7 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       if (s.A.crashes.length) await s.A.reload()
       // Je Phase nach der Reparatur (Review 11 S2): fehlende Batch-Schlüssel und Geräte, deren Projektion nicht die Referenz ist.
       const settled = () => ({ missing: missingBatches(s.w, 'A') ?? -1, lost: s.w.of('A').filter((d) => M.canonical(d.projection()) !== ref).length })
-      const restore = await untilStable(s.w, 'A', 40)
+      const restore = await untilSettled(s.w, 'A', 40)
       const afterRestore = settled()
       s.w.carrier.faults.reset()
       // Phasen 2–5: je ein frischer Restore von A2, dann 15 Runden Verlust einer Art auf der Self-Adresse, dann ohne Fachoperation weiter.
@@ -1055,7 +1145,7 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
         await s.w.rounds(15)
         const b = behind()
         s.w.carrier.faults.reset()
-        const rounds = await untilStable(s.w, 'A', 40)
+        const rounds = await untilSettled(s.w, 'A', 40)
         return { behind: b, rounds, ...settled() }
       }
       const lf = s.w.carrier.logFaults
@@ -1143,9 +1233,10 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const end = repaired
         ? `Reparatur beendet: kein Gerät mit ausstehendem Nachholen, still ab Runde ${quiet} über ${repair.window} Runden (größter Wiederanfrageabstand ${MAX_REREQUEST})`
         : `Reparatur nicht beendet: nach 60 Runden Nachholen ausstehend auf ${repair.pending.join(', ') || 'keinem Gerät'}, ${repair.selfFrames} Self-Rahmen in dieser Zeit, zuletzt still über ${repair.window} Runden`
+      if (sets) measures.forcedBranchDeclines = tries
       return {
         outcome: mark(ok),
-        detail: `Reparatur in Runden: Restore ${restore}, Anfrageverlust ${requests.rounds}, Antwortverlust ${answers.rounds}, Batchverlust bei zugestelltem Antwortkopf ${batches.rounds}, Quittungsverlust ${receipts.rounds} (zurück nach dem Verlust: ${[requests.behind, answers.behind, batches.behind, receipts.behind].join('/')}); je Phase danach fehlende Batches ${Object.values(perPhase).map((v) => v.missing).join('/')}, Geräte nicht auf der Referenz ${Object.values(perPhase).map((v) => v.lost).join('/')}; ${end}; fehlende Batches ${missing ?? 'nicht messbar (kein Nachholen)'}; Geräte mit anderem Stand als vorher ${lostState}; doppelte Wirkungen ${measures.doubleFinalEffects}, Konflikte ${measures.remainingConflicts}; Self-Adresse ${t.own.frames} Rahmen / ${t.own.bytes} B (Journal ${k('journal').frames}/${k('journal').bytes} B, Anfragen ${k('journal-sync').frames}, Antworten ${k('journal-sync-reply').frames}, Quittungen ${k('delivery-ack').frames}); Wiederholungen ${t.repeats}: ${t.repeatsOwn} auf der Self-Adresse, ${t.repeatsToPeer} an Gegenseiten; Antworten A1 ${answersBy('A1')}, A2 ${answersBy('A2')}${s.w.selfLog ? `, Dienst: ${measures.logRequests} Leseanfragen, ${measures.answersService} beim Träger, abgeschickt ${measures.serviceEntriesSent} Einträge / ${measures.serviceBytesSent} B, angekommen ${measures.serviceEntriesServed} / ${measures.serviceBytesServed} B, Anfragen ${measures.serviceRequestBytes} B, Köpfe ${measures.serviceHeadBytes} B; Ablage ${measures.logEntries} Einträge, ${measures.logBytes} B` : ''}; an Gegenseiten ${t.toPeer.frames} Rahmen; Journal ${measures.journalBatchesBefore ?? '–'} → ${measures.journalBatchesAfter ?? '–'} Batches`,
+        detail: `${sets ? `Zweig (6m): A2 teilt den Schlüssel des ersten Akts zu (${tries} Akt(e) abgelehnt, bis M einen Schlüssel von A2 benennt)${ok ? '' : '; nicht bestanden, abhängig vom Zuteiler: A2 erzeugt die Karte nach dem Restore aus dem Abbild erneut (MV-6 neu)'}; ` : ''}Reparatur in Runden: Restore ${restore}, Anfrageverlust ${requests.rounds}, Antwortverlust ${answers.rounds}, Batchverlust bei zugestelltem Antwortkopf ${batches.rounds}, Quittungsverlust ${receipts.rounds} (zurück nach dem Verlust: ${[requests.behind, answers.behind, batches.behind, receipts.behind].join('/')}); je Phase danach fehlende Batches ${Object.values(perPhase).map((v) => v.missing).join('/')}, Geräte nicht auf der Referenz ${Object.values(perPhase).map((v) => v.lost).join('/')}; ${end}; fehlende Batches ${missing ?? 'nicht messbar (kein Nachholen)'}; Geräte mit anderem Stand als vorher ${lostState}; doppelte Wirkungen ${measures.doubleFinalEffects}, Konflikte ${measures.remainingConflicts}; Self-Adresse ${t.own.frames} Rahmen / ${t.own.bytes} B (Journal ${k('journal').frames}/${k('journal').bytes} B, Anfragen ${k('journal-sync').frames}, Antworten ${k('journal-sync-reply').frames}, Quittungen ${k('delivery-ack').frames}); Wiederholungen ${t.repeats}: ${t.repeatsOwn} auf der Self-Adresse, ${t.repeatsToPeer} an Gegenseiten; Antworten A1 ${answersBy('A1')}, A2 ${answersBy('A2')}${s.w.selfLog ? `, Dienst: ${measures.logRequests} Leseanfragen, ${measures.answersService} beim Träger, abgeschickt ${measures.serviceEntriesSent} Einträge / ${measures.serviceBytesSent} B, angekommen ${measures.serviceEntriesServed} / ${measures.serviceBytesServed} B, Anfragen ${measures.serviceRequestBytes} B, Köpfe ${measures.serviceHeadBytes} B; Ablage ${measures.logEntries} Einträge, ${measures.logBytes} B` : ''}; an Gegenseiten ${t.toPeer.frames} Rahmen; Journal ${measures.journalBatchesBefore ?? '–'} → ${measures.journalBatchesAfter ?? '–'} Batches`,
         measures,
       }
     },

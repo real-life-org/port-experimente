@@ -613,7 +613,7 @@ describe('K1a Schritt 3: Entscheidung und Übergabe', () => {
   }
   const states = (w: Welt15, act: string) => w.of('A').map((d) => `${M.act(d.state, act).state}/${M.act(d.state, act).o}`)
 
-  it('4. Tor-Review 18 B1a: Restore aus einem Backup vor der Rücknahme gibt nichts frei, bevor das eigene Journal nachgeholt ist; die zurückgenommene Karte erreicht B nie, A bleibt abgelehnt und einig', async () => {
+  it('4. Tor-Review 18 B1a unter MV-6 neu (keine Sperre, MV-34): A1 aus einem Backup vor der Rücknahme gibt die zurückgenommene Karte sofort wieder frei, ohne auf das eigene Journal zu warten; B verbindet; die Faltung entscheidet nach Regel 2 (übergebene Karte gilt): A verbunden, beide A-Geräte einig, die Ablehnung wird Konfliktbefund (sichtbares Restore-Artefakt, konsistent)', async () => {
     const { w, A, A2, B, act } = await withA2()
     // Astras Gegenlauf (Review 18): A1 stimmt offline zu (Karte beim Adapter, nie beim Träger), Backup.
     A.online = A2.online = false
@@ -629,27 +629,27 @@ describe('K1a Schritt 3: Entscheidung und Übergabe', () => {
     // X3-Heilung: beide A abgelehnt, die Karte zurückgenommen.
     expect(states(w, act)).toEqual(['declined/cancelled', 'declined/cancelled'])
     expect(a1CardDeposits(A, act)).toBe(0)
-    // Restore auf A1, das Self-Journal drei Runden zurückgehalten: keine Freigabe vor dem Nachholen.
+    // Restore auf A1, das Self-Journal drei Runden zurückgehalten: A1 wartet nicht, die Karte des Backups geht hinaus.
     w.stores.get('A1')!.restore(backup)
     await A.reload()
+    expect(A.gated).toBe(false)
     expect(M.act(A.state, act).o).toBe('handed') // der Stand des Backups
     const self = (await A.cand.keys.pair('self/A')).rkid
     w.carrier.faults.withhold('A1', (f) => f.address === self)
     await w.rounds(3)
-    expect(A.syncPending).toBe(true)
-    expect(a1CardDeposits(A, act)).toBe(0)
-    expect(M.act(B.state, act).state).toBe('consented')
+    expect(A.syncPending).toBe(true) // die Daten fehlen noch, gehandelt wird trotzdem
+    expect(a1CardDeposits(A, act)).toBe(1)
     w.carrier.faults.reset()
-    expect(await w.until(() => !A.syncPending, 30)).toBeGreaterThan(0)
-    await w.rounds(30)
-    expect(a1CardDeposits(A, act)).toBe(0)
-    expect(M.act(B.state, act)).toMatchObject({ state: 'consented', pending: null })
-    expect(states(w, act)).toEqual(['declined/cancelled', 'declined/cancelled'])
+    expect(await w.until(() => [...w.of('A'), B].every((d) => M.act(d.state, act).state === 'connected') && w.agree('A').agree, 40)).toBeGreaterThan(0)
+    await w.rounds(10)
+    expect(states(w, act)).toEqual(['connected/' + M.act(A.state, act).o, 'connected/' + M.act(A.state, act).o])
     expect(w.agree('A').agree).toBe(true)
+    expect(ledgerOf(w, 'B').get(`connect:${act}`)?.size).toBe(1)
     expect(doubles(w, 'A')).toEqual([])
+    for (const d of w.of('A')) expect(d.state.findings.some((f) => f.includes(act) && f.includes('Regel 2') && f.includes('Zustimmung gilt')), d.name).toBe(true)
   }, 300_000)
 
-  it('5. Spiegel zu 4: Restore, nach dem die Karte rechtmäßig gilt (keine Ablehnung); sie wartet auf das Nachholen und geht danach hinaus; A und B verbunden', async () => {
+  it('5. Spiegel zu 4: Restore, nach dem die Karte rechtmäßig gilt (keine Ablehnung); sie geht ohne Warten auf das Nachholen hinaus; A und B verbunden', async () => {
     const { w, A, A2, B, act } = await withA2()
     A.online = false
     expect(await A.consent(act)).toBe('ok')
@@ -663,7 +663,7 @@ describe('K1a Schritt 3: Entscheidung und Übergabe', () => {
     A.online = true
     await w.rounds(3)
     expect(A.syncPending).toBe(true)
-    expect(a1CardDeposits(A, act)).toBe(0)
+    expect(a1CardDeposits(A, act)).toBe(1)
     w.carrier.faults.reset()
     expect(await w.until(() => [...w.of('A'), B].every((d) => M.act(d.state, act).state === 'connected') && w.agree('A').agree, 30)).toBeGreaterThan(0)
     expect(a1CardDeposits(A, act)).toBe(1)
@@ -672,14 +672,13 @@ describe('K1a Schritt 3: Entscheidung und Übergabe', () => {
     void A2
   }, 300_000)
 
-  it('6. Tor-Review 19 B1a: eine alte, gültig signierte Schwesterantwort, nach dem Restore erneut zugestellt, beendet das Nachholen nicht; erst eine Antwort auf die laufende Anfrage', async () => {
+  it('6. Tor-Review 19 B1a: eine alte, gültig signierte Schwesterantwort, nach dem Restore erneut zugestellt, beendet das Nachholen nicht (die Daten fehlen weiter); erst eine Antwort auf die laufende Anfrage. Gehandelt wird unabhängig davon sofort (MV-34)', async () => {
     const { w, A, A2, B, act } = await withA2()
     const self = (await A.cand.keys.pair('self/A')).rkid
     A.online = A2.online = false
     expect(await A.consent(act)).toBe('ok')
     A.commit()
     const backup = w.stores.get('A1')!.snapshot()
-    expect(await B.consent(act)).toBe('ok')
     // Eine echte Antwort von A2 aufzeichnen (A1 holt nach, empfängt aber nichts an der eigenen Adresse; A2 sieht kein Journal).
     const mark = w.carrier.carried.length
     await A.reload()
@@ -689,34 +688,25 @@ describe('K1a Schritt 3: Entscheidung und Übergabe', () => {
     await w.rounds(3)
     const old = w.carrier.carried.slice(mark).find((f) => w.frameOrigin(f.bytes)?.device === 'A2' && w.frameOrigin(f.bytes)?.kind === 'journal-sync-reply')
     expect(old).toBeTruthy()
-    // A2 lehnt ab, die Geräte heilen: beide abgelehnt, die Karte zurückgenommen.
-    expect(await A2.decline(act)).toBe('ok')
-    await A2.round()
     w.carrier.faults.reset()
-    await w.rounds(30)
-    expect(states(w, act)).toEqual(['declined/cancelled', 'declined/cancelled'])
+    await w.rounds(10)
     // Restore auf A1; nur die alte Antwort kommt an, das aktuelle Self-Journal bleibt zurückgehalten.
     w.stores.get('A1')!.restore(backup)
     await A.reload()
     w.carrier.faults.withhold('A1', (f) => f.address === self && Buffer.compare(f.bytes, old!.bytes) !== 0)
     w.carrier.deposit(self, old!.bytes)
     await w.rounds(3)
-    expect(a1CardDeposits(A, act)).toBe(0)
     expect(A.syncPending).toBe(true)
-    expect(M.act(B.state, act)).toMatchObject({ state: 'consented', pending: null })
     expect(A.staleSyncAnswers).toBeGreaterThan(0)
-    // Eine frische Antwort auf die laufende Anfrage beendet das Nachholen; die Faltung entscheidet: abgelehnt, nichts an B.
+    expect(A.gated).toBe(false)
+    // Eine frische Antwort auf die laufende Anfrage beendet das Nachholen.
     w.carrier.faults.reset()
     expect(await w.until(() => !A.syncPending, 30)).toBeGreaterThan(0)
-    await w.rounds(30)
-    expect(a1CardDeposits(A, act)).toBe(0)
-    expect(M.act(B.state, act)).toMatchObject({ state: 'consented', pending: null })
-    expect(states(w, act)).toEqual(['declined/cancelled', 'declined/cancelled'])
-    expect(w.agree('A').agree).toBe(true)
+    expect(await w.until(() => w.agree('A').agree, 30)).toBeGreaterThan(0)
+    void B
   }, 300_000)
 
-  /** Restore A1 aus einem Backup mit gültiger Zustimmung (Karte nie beim Träger), A2 verloren (offline, antwortet nie). */
-  async function restoredWithLostSibling() {
+  it('7. Frage 3 (Review 19) unter MV-6 neu: verlorene, nicht widerrufene Schwester; A1 aus dem Backup gibt sofort frei, ohne Widerruf und ohne Zeitgrenze (4.1 gegenstandslos); A und B verbunden', async () => {
     const p = await withA2()
     const { w, A, A2, B, act } = p
     A.online = A2.online = false
@@ -727,35 +717,10 @@ describe('K1a Schritt 3: Entscheidung und Übergabe', () => {
     w.stores.get('A1')!.restore(backup)
     await A.reload()
     A.online = true
-    return p
-  }
-
-  it('7. Frage 3 (Review 19): wird das einzige Schwestergerät widerrufen, hebt der Widerruf die Sperre; A1 gibt nach dem Stand der Faltung frei', async () => {
-    const { w, A, A2, B, act } = await restoredWithLostSibling()
-    await w.rounds(10)
-    expect(A.syncPending).toBe(true)
-    expect(a1CardDeposits(A, act)).toBe(0)
-    const gatedBefore = A.gatedRounds
-    expect(gatedBefore).toBe(10)
-    await w.revoke(A, A2)
-    const after = await w.until(() => a1CardDeposits(A, act) === 1 && M.act(B.state, act).state === 'connected', 20)
-    expect(after).toBeGreaterThan(0)
-    expect(A.gatedRounds - gatedBefore).toBeLessThanOrEqual(1) // die Sperre fällt in der Runde nach dem Widerruf
-    expect(M.act(A.state, act).state).toBe('connected')
+    expect(await w.until(() => a1CardDeposits(A, act) === 1 && M.act(B.state, act).state === 'connected' && M.act(A.state, act).state === 'connected', 10)).toBeGreaterThan(0)
+    expect(A.syncPending).toBe(true) // die Schwester antwortet nie; das hält nichts auf
+    expect(A.gatedRounds).toBe(0)
     expect(ledgerOf(w, 'B').get(`connect:${act}`)?.size).toBe(1)
-    // Ein späterer Neuaufbau sperrt nicht erneut: der Widerruf steht im Abbild.
-    await A.reload()
-    await w.rounds(1)
-    expect(A.gatedRounds - gatedBefore).toBeLessThanOrEqual(1)
-  }, 300_000)
-
-  it('8. Grenze (Review 19, Frage 3): ein wiederhergestelltes Gerät mit verlorenem, nicht widerrufenem Schwestergerät gibt nichts an Gegenseiten frei; keine Zeitgrenze', async () => {
-    const { w, A, B, act } = await restoredWithLostSibling()
-    await w.rounds(70)
-    expect(A.syncPending).toBe(true)
-    expect(A.gatedRounds).toBe(70)
-    expect(a1CardDeposits(A, act)).toBe(0)
-    expect(M.act(B.state, act).state).toBe('consented')
   }, 300_000)
 })
 
@@ -1137,7 +1102,7 @@ describe('K1a Schritt 4: pseudonyme Schreiberkennung je Beziehung (Entscheidung 
     expect(M.rel(Mm.state, am.y.id).view!.writers![tagOf(A, am.x.id)]!.revision).toBe(3)
   }, 300_000)
 
-  it('4. Restore mit Schwester: die Kennung bleibt, der Zähler setzt nach dem Nachholen fort (keine Lücke, keine Wiederverwendung); während des Nachholens wird nichts zugeteilt und nichts nummeriert', async () => {
+  it('4. Restore mit Schwester unter MV-6 neu (keine Sperre, MV-34): die Kennung bleibt; A1 wartet nicht auf das Nachholen, teilt aus dem Abbild zu und nummeriert (Revision 3 noch einmal, anderer Inhalt): M meldet Equivokation (6270) als Restore-Artefakt wie ohne Schwester (3); nach dem Nachholen sind die Geräte einig, die nächste Revision des Schreibers ist 4 und gilt bei M', async () => {
     const { w, A, A2, Mm, M2, am, ma } = await world()
     const tag = tagOf(A, am.x.id)
     const revs = (d: HolderDevice) => M.rel(d.state, am.x.id).writers![tag]!.revision
@@ -1152,24 +1117,27 @@ describe('K1a Schritt 4: pseudonyme Schreiberkennung je Beziehung (Entscheidung 
     // Restore auf A1 aus dem Stand vor Revision 3, das Self-Journal zurückgehalten; der Nutzer schaltet die Klasse (wieder) an.
     w.stores.get('A1')!.restore(backup)
     await A.reload()
+    expect(A.gated).toBe(false)
     const self = (await A.cand.keys.pair('self/A')).rkid
     w.carrier.faults.withhold('A1', (f) => f.address === self)
     expect(await A.setClass(am.x.id, true)).toBe('ok')
     await w.rounds(3)
     expect(A.syncPending).toBe(true)
-    // Nichts zugeteilt (die Nummern 8445 der früheren Inkarnation fehlen noch) und nichts nummeriert (8500).
-    expect(M.rel(A.state, am.x.id).stock.filter((k) => k.state === 'active')).toEqual([])
-    expect(revs(A)).toBe(2)
+    // Zugeteilt und nummeriert aus dem Abbild: dieselbe Nummer 3 mit anderen Ablaufzeiten (8500 je Schreiber: der Zähler der früheren Inkarnation fehlt).
+    expect(M.rel(A.state, am.x.id).stock.filter((k) => k.state === 'active').length).toBeGreaterThan(0)
+    expect(revs(A)).toBe(3)
+    expect(mFindings(w).some((f) => f.includes('Equivokation')), mFindings(w).join(' | ')).toBe(true)
     w.carrier.faults.reset()
-    expect(await w.until(() => !A.syncPending, 30)).toBeGreaterThan(0)
+    expect(await w.until(() => !A.syncPending && w.agree('A').agree, 30)).toBeGreaterThan(0)
     await w.rounds(8)
-    expect([revs(A), revs(A2)]).toEqual([3, 3]) // Revision 3 der früheren Inkarnation gilt; der Vorrat ist voll, nichts nachzufüllen
-    expect(await A.setClass(am.x.id, false)).toBe('ok') // die nächste Revision dieses Schreibers ist 4
+    expect(revs(A)).toBe(revs(A2))
+    const next = revs(A) + 1
+    expect(await A.setClass(am.x.id, false)).toBe('ok') // die nächste Revision dieses Schreibers
     await w.rounds(6)
-    expect([revs(A), revs(A2)]).toEqual([4, 4])
-    for (const m of [Mm, M2]) expect(M.rel(m.state, ma).view!.writers![tag]!.revision).toBe(4)
-    expect(mFindings(w)).toEqual([])
-    expect(doubles(w, 'A').filter((id) => id.startsWith('revision:'))).toEqual([])
+    expect([revs(A), revs(A2)]).toEqual([next, next])
+    for (const m of [Mm, M2]) expect(M.rel(m.state, ma).view!.writers![tag]!.revision).toBe(next)
+    // Der benannte Preis im Ledger: genau die wiederverwendete Nummer 3 dieses Schreibers trägt zwei Operationen.
+    expect(doubles(w, 'A').filter((id) => id.startsWith('revision:'))).toEqual([`revision:${M.rel(A.state, am.x.id).id}:${tag}:3`])
     expect(w.agree('A').agree, w.agree('A').diff).toBe(true)
   }, 300_000)
 

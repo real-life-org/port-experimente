@@ -12,8 +12,9 @@ export interface Welt15Options {
   stores?: boolean
   /**
    * E15 Schritt 6 (Variante „Journal beim Dienst“): die Self-Adresse jeder Person ist beim Träger eine Ablage statt eines
-   * Briefkastens; Nachholen und Enrollment lesen aus ihr, die Freigabe nach Restore bezeugt weiter eine Schwester oder der
-   * Widerruf (holder.ts `selfLog`, Hybrid nach Tor-Review 25). Default: was der
+   * Briefkastens; Nachholen und Enrollment lesen aus ihr (Daten, MV-35). Nach Restore gibt es keine Sperre (MV-6 neu,
+   * MV-34); nur das Enrollment aus der Ablage gibt erst nach dem Zeugnis einer Schwester oder dem Widerruf frei
+   * (holder.ts `selfLog`, `startFromLog`). Default: was der
    * Kandidat als Prüfstandsoption wählt (`bench.selfLog`), sonst aus.
    */
   selfLog?: boolean
@@ -90,7 +91,8 @@ export class Welt15 {
     const i = this.devices.indexOf(device)
     if (i >= 0) this.devices.splice(i, 1)
     await this.candidate.revoke?.(by, device.name)
-    by.deviceRevoked(device.name) // das widerrufende Gerät weiß es; wartet es aufs Nachholen nur noch auf dieses Gerät, fällt die Sperre (Review 19)
+    by.deviceRevoked(device.name) // das widerrufende Gerät weiß es; wartet es in einer Enrollment-Zeremonie nur noch auf dieses Gerät, endet sie (Review 19)
+    await by.revokeInSets(device.name) // K2 Schritt 2: Widerrufseinträge in jeder eigenen Menge, Revision an jede Gegenseite (sonst nichts)
   }
 
   device(name: string): HolderDevice {

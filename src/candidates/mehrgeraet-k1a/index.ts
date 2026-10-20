@@ -86,6 +86,8 @@ export interface K1aOptions {
    * self address into a log (`Welt15Options.selfLog`), catch-up and enrolment read from it. Default off (K1a as before).
    */
   journalAtService?: boolean
+  /** E15 X23 (K2 step 2, comparison): lifetime of new stock keys; default 8465 (180 days). */
+  stockLifetimeMs?: number
 }
 
 /** Step 4: the writer tag of a device in a relationship; the counterpart sees it, cannot compute it (seed) and cannot link it across relationships. */
@@ -157,11 +159,11 @@ export class K1aDevice implements CandidateDevice {
   get writer() {
     return `${this.name}@${this.inc}`
   }
-  private get share() {
+  protected get share() {
     return Math.floor(this.budget / this.slots)
   }
   /** Own acceptance ops across incarnations (the journal is the source of what this device consumed), unconfirmed and inside the 8510 window of `now` (S1). */
-  private ownAccepted(rel: string, state: M.HolderState, now: string): number {
+  protected ownAccepted(rel: string, state: M.HolderState, now: string): number {
     const r = M.findRel(state, rel)
     if (!r) return 0
     const own = new Set<string>()
@@ -169,12 +171,12 @@ export class K1aDevice implements CandidateDevice {
     const since = Date.parse(now) - M.PARAM.budgetWindowMs
     return r.accepted.filter((e) => own.has(e.act) && !r.confirmed.includes(e.act) && Date.parse(e.at) > since).length
   }
-  /** Ein fremder Vorrats-Schlüssel gehört dem Gerät, dessen Platz seine Nummer trifft (8445: n mod Geräte); so wechseln sich die Geräte ab. */
-  mayName(anchor: string, rel: string, state: M.HolderState): boolean {
-    const r = M.findRel(state, rel)
-    const k = r?.view?.keys.find((x) => x.anchor === anchor)
-    if (!k) return false
-    return k.n % this.slots === this.index
+  /**
+   * Ein fremder Vorrats-Schlüssel gehört dem Gerät, dessen Platz seine Nummer trifft (8445: n mod Geräte); so wechseln sich
+   * die Geräte ab. Die Nummer ist der kanonische Wert aus `M.usableView` (Review 36 B7: eine Rechnung für Ms Sicht).
+   */
+  mayName(key: M.ListedKey): boolean {
+    return key.n % this.slots === this.index
   }
   /**
    * Review 21 B1: eigene Vorrats-Nummern nur aus der eigenen Klasse, disjunkt über die Schreiber. Die Klasse ist die
@@ -187,7 +189,7 @@ export class K1aDevice implements CandidateDevice {
   }
   authorize(op: M.Op, state: M.HolderState): boolean {
     if (op.kind === 'ticket-accept') return this.ownAccepted(op.act.mediator, state, op.at) < this.share
-    if (op.kind === 'introduce') return this.mayName(op.act.a.key, op.act.a.rel, state) && this.mayName(op.act.b.key, op.act.b.rel, state)
+    if (op.kind === 'introduce') return [op.act.a, op.act.b].every((x) => { const k = M.usableView(state, x.rel, op.at).listed.find((y) => y.anchor === x.key); return !!k && this.mayName(k) })
     return true
   }
   /** The last batch seen from every writer. */
@@ -291,6 +293,7 @@ export function k1a(opts: K1aOptions = {}): MultiDeviceCandidate {
     async first(person, name, seed) {
       seeds.set(person, seed)
       const d = new K1aDevice(person, name, seed, 0, slots, budget, tags, split)
+      if (opts.stockLifetimeMs !== undefined) Object.assign(d, { stockLifetimeMs: opts.stockLifetimeMs })
       devices.set(person, [d]) // eine neue Welt dieser Person: die Liste beginnt mit diesem Gerät
       return d
     },
@@ -303,6 +306,7 @@ export function k1a(opts: K1aOptions = {}): MultiDeviceCandidate {
       // Feste Gerätezahl (B4): die Plätze stehen von Anfang an fest, nichts wird umverteilt; darüber hinaus wird verweigert (versionierte Rechte = K1b).
       if (list.length >= slots) throw new EnrolmentRefused(`K1a: Gerätezahl fest auf ${slots}; Enrollment von ${name} verweigert`)
       const d = new K1aDevice(from.person, name, seeds.get(from.person)!, list.length, slots, budget, tags, split)
+      if (opts.stockLifetimeMs !== undefined) Object.assign(d, { stockLifetimeMs: opts.stockLifetimeMs })
       // Step 6: from the log the new device starts with an empty journal and folds the log; otherwise the journal is copied.
       if (!eo?.fromLog) d.adopt((from.cand as K1aDevice).journal())
       // Beide Seiten des Enrollments merken sich das andere Gerät (Teil des Abbilds): wer nach einem Restore nachholen muss,
