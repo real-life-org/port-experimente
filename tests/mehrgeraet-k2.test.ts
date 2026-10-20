@@ -1294,3 +1294,109 @@ function w15Origin(s: { w: Welt15 }, bytes: Uint8Array): string | undefined {
   const o = s.w.frameOrigin(bytes)
   return o ? `${o.device}:${o.kind}` : undefined
 }
+
+describe('K2 Schritt 2a: Tor-Review 40 B1, unvollständige Empfangsdokumente sind Formfehler (MV-24)', () => {
+  const form = (d: HolderDevice, kind: string, field: string) => d.state.findings.filter((f) => f.includes('Formfehler') && f.includes(kind) && f.includes(field))
+
+  it('B1a. Signierte Revision mit `tombstones`, ohne `keys`: Befund, keine Quittung, keine Ausnahme; die Runde und jede Folgerunde laufen weiter, die nächste echte Revision gilt', async () => {
+    const { w, A, A2, Mm, am } = await world(k2())
+    const h = M.head(M.rel(A2.state, am.x.id))
+    const rkid = (await A2.cand.keys.pair(h.ownKey)).rkid
+    const bad = await raw(A2).sendDoc(TYPES.revision, h.ownKey, h.peer, h.peerKeyAgreement, rkid, { revision: 90, tombstones: [] })
+    await w.rounds(3)
+    expect(raw(Mm).completed.has(bad!.digest)).toBe(false)
+    expect(form(Mm, 'revision', 'keys'), Mm.state.findings.join('\n')).toHaveLength(1)
+    // Folgerunden: dieselbe Wiederholung des Senders wirft nicht, ein Befund je Form.
+    await w.rounds(3)
+    expect(form(Mm, 'revision', 'keys')).toHaveLength(1)
+    const a1 = signerId((await A.cand.keys.pair(M.head(M.rel(A.state, am.x.id)).ownKey)).anchor)
+    const mRel = () => M.relOfTuple(Mm.state, am.y.id)!
+    const held = M.own(mRel().view?.writers, a1)?.revision ?? 0
+    await (A as unknown as { sendRevision(rel: string): Promise<void> }).sendRevision(am.x.id)
+    await w.rounds(3)
+    expect(M.own(mRel().view?.writers, a1)?.revision).toBe(held + 1)
+  }, 120_000)
+
+  it('B1b. Signierte, passend adressierte Karte ohne `card`: Befund bei B, keine Quittung, keine Ausnahme, auch in Folgerunden; die echte Karte verbindet danach', async () => {
+    const s = await world(k2())
+    const act = await introduced(s)
+    await s.B.consent(act)
+    const prod = allocatorOf(s.A, act) === 'A1' ? s.A : s.A2
+    await s.w.until(() => prod.state.acts.some((a) => a.id === act), 10)
+    const a = M.act(prod.state, act)
+    const stock = M.findRel(prod.state, a.mediator)!.stock.find((k) => k.anchor === a.own)!
+    const bad = await raw(prod).sendDoc(TYPES.card, stock.key, a.voucher.anchor, a.voucher.keyAgreement, stock.keyAgreement, { act, expiresAt: a.expiresAt, from: a.own, fromKeyAgreement: stock.keyAgreement, to: a.voucher.anchor })
+    await s.w.rounds(3)
+    expect(raw(s.B).completed.has(bad!.digest)).toBe(false)
+    expect(form(s.B, 'card', 'card'), s.B.state.findings.join('\n')).toHaveLength(1)
+    await s.w.rounds(2)
+    expect(form(s.B, 'card', 'card')).toHaveLength(1)
+    const b = M.act(s.B.state, act)
+    expect([b.v, b.k]).toEqual([null, false])
+    await prod.consent(act)
+    await s.w.until(() => M.act(s.B.state, act).state === 'connected', 15)
+    expect(M.act(s.B.state, act).state).toBe('connected')
+  }, 120_000)
+})
+
+describe('K2 Schritt 2a: Tor-Review 40 B3/B4, Restore-Artefakte als benannter Preis mit Befund', () => {
+  const double = (d: HolderDevice, key: string) => d.state.findings.filter((f) => f.startsWith(`consumption:double-accept:${key}`))
+
+  it('B3. A und M je aus einem Abbild vor α, A2 mit dem Stand nach α eingeschrieben, β erreicht A1 vor dem Schwesterjournal: A1 nimmt β auf demselben Schlüssel an, B weist β ab (8640.12); nach der Heilung halten beide A-Geräte übereinstimmend zwei Akte auf dem Schlüssel und den Befund `consumption:double-accept` (benannter Preis 2a, 2b: D1 (b))', async () => {
+    const s = await world(k2(), 1)
+    const backupA = s.w.stores.get('A1')!.snapshot()
+    const backupM = s.w.stores.get('M1')!.snapshot()
+    const ra = await s.Mm.introduce(s.am.y.id, s.bm.y.id)
+    expect('act' in ra).toBe(true)
+    const alpha = s.Mm.state.mediatorActs.find((a) => a.id === (ra as { act: string }).act)!
+    await s.w.until(() => [s.A, s.B].every((d) => d.state.acts.some((a) => a.id === alpha.id)), 10)
+    const A2 = await s.w.enrol(s.A, 'A2')
+    await s.w.rounds(3)
+    expect(A2.state.acts.some((a) => a.id === alpha.id)).toBe(true)
+    s.w.stores.get('A1')!.restore(backupA)
+    s.w.stores.get('M1')!.restore(backupM)
+    const selfA = s.w.selfAddresses('A')
+    s.w.carrier.faults.withhold('A1', (f) => selfA.has(f.address))
+    await s.A.reload()
+    await s.Mm.reload()
+    const rb = await s.Mm.introduce(s.am.y.id, s.bm.y.id)
+    expect('act' in rb).toBe(true)
+    const beta = s.Mm.state.mediatorActs.find((a) => a.id === (rb as { act: string }).act)!
+    expect(beta.a.key, 'Voraussetzung: dieselbe Wahl aus dem alten Abbild').toBe(alpha.a.key)
+    await s.w.until(() => s.A.state.acts.some((a) => a.id === beta.id), 10)
+    expect(M.act(s.A.state, beta.id).own).toBe(alpha.a.key)
+    expect(s.B.state.acts.some((a) => a.id === beta.id), 'B weist β ab').toBe(false)
+    s.w.carrier.faults.reset()
+    await s.w.until(() => s.w.of('A').every((d) => d.state.acts.some((a) => a.id === alpha.id) && d.state.acts.some((a) => a.id === beta.id)), 20)
+    await s.w.rounds(3)
+    for (const d of s.w.of('A')) {
+      expect(d.state.acts.filter((a) => a.own === alpha.a.key).map((a) => a.id).sort(), d.name).toEqual([alpha.id, beta.id].sort())
+      expect(double(d, alpha.a.key), `${d.name}: ${d.state.findings.join('\n')}`).toHaveLength(1)
+    }
+    expect(s.w.agree('A')).toEqual({ agree: true, diff: '' })
+  }, 120_000)
+
+  it('B4. A1 aus einem Abbild nach der Bereitstellung von A2s Pool, vor dem Nachholen eine zweite neue Beziehung: derselbe Schwester-Pooleintrag geht an C und an D (C und D können die Beziehungen über A2s Anker verknüpfen); beide A-Geräte melden `pool-use` und sind einig (benannter Preis 2a; 2b: ein neu aufgebautes Gerät verwirft Pooleinträge von vor dem Abbild)', async () => {
+    const s = await world(k2())
+    const backup = s.w.stores.get('A1')!.snapshot()
+    const C = await s.w.person('C', 'C1')
+    const tC = await s.w.encounter(s.A, C)
+    await s.w.rounds(2)
+    s.w.stores.get('A1')!.restore(backup)
+    const selfA = s.w.selfAddresses('A')
+    s.w.carrier.faults.withhold('A1', (f) => selfA.has(f.address))
+    await s.A.reload()
+    const D = await s.w.person('D', 'D1')
+    const tD = await s.w.encounter(s.A, D)
+    await s.w.rounds(2)
+    const atC = members(C, tC.y.peer).filter((a) => a !== tC.y.peer)
+    const atD = members(D, tD.y.peer).filter((a) => a !== tD.y.peer)
+    const shared = atC.filter((a) => atD.includes(a))
+    expect(shared, 'C und D sehen denselben A2-Anker').toHaveLength(1)
+    s.w.carrier.faults.reset()
+    await s.w.rounds(6)
+    const reuse = (d: HolderDevice) => d.state.findings.filter((f) => f.startsWith('pool-use: Schlüssel A2#') && f.includes('zwei Beziehungen'))
+    for (const d of s.w.of('A')) expect(reuse(d), `${d.name}: ${d.state.findings.join('\n')}`).toHaveLength(1)
+    expect(s.w.agree('A')).toEqual({ agree: true, diff: '' })
+  }, 120_000)
+})

@@ -841,3 +841,53 @@ describe('K1a Schritt 6 (Variante): Journal beim Dienst', () => {
     expect(M.canonical(A2.cand.heads!())).toBe(M.canonical(p.A.cand.heads!()))
   }, 300_000)
 })
+
+describe('Tor-Review 40 B2: das Enrollment aus der Ablage überlebt ein Neuladen mitten in der Zeremonie', () => {
+  const relsTo = (w: Welt15, d: HolderDevice, other: string) => d.state.relationships.filter((r) => !r.departed && r.tuples.some((t) => w.personOf(t.peer) === other))
+  const isProbeOf = (w: Welt15, person: string) => (f: { bytes: Uint8Array }) => {
+    const o = w.frameOrigin(f.bytes)
+    return o?.kind === 'continuity-probe' && w.of(person).some((d) => d.name === o.device)
+  }
+  // Astras Ablauf: A2 behält Bs Probe auf dem zweiten Tupel, A3 wird aus A2 über die Ablage eingeschrieben (die Probe
+  // reist als `deferredProbes` mit der Zeremonie), A2 geht offline. Ohne Neuladen vereinigt A3; mit sofortigem Neuladen
+  // muss die Zeremonie (das Warten auf das Zeugnis, `owed`, `deferredProbes`) aus dem Abbild weiterlaufen.
+  async function flow(reload: boolean) {
+    const w = new Welt15(k1a({ journalAtService: true, devices: 3 }))
+    const A = await w.person('A', 'A1')
+    const B = await w.person('B', 'B1')
+    const Mm = await w.person('M', 'M1')
+    await w.encounter(A, Mm)
+    await w.encounter(B, Mm)
+    await w.rounds(2)
+    const A2 = await w.enrol(A, 'A2')
+    await w.until(() => !A2.gated, 10)
+    await w.rounds(2)
+    const selfA = (await A.cand.keys.pair('self/A')).rkid
+    w.carrier.faults.drop(isProbeOf(w, 'A'))
+    for (const d of w.of('A')) w.carrier.faults.withhold(d.name, (f) => f.address === selfA)
+    await w.encounter(A, B)
+    const second = await w.encounter(A2, B)
+    await w.rounds(3)
+    expect(A2.keptProbes().get(second.x.id), 'A2 behält Bs Probe auf dem zweiten Tupel').toHaveLength(2)
+    w.carrier.faults.reset()
+    w.carrier.faults.drop(isProbeOf(w, 'A'))
+    const A3 = await w.enrol(A2, 'A3')
+    expect(A3.gated, 'Zeremonie läuft').toBe(true)
+    A2.online = false
+    if (reload) {
+      await A3.reload()
+      expect(A3.gated, 'die Zeremonie überlebt das Neuladen').toBe(true)
+    }
+    for (let i = 0; i < 35 && !(relsTo(w, A, 'B').length === 1 && relsTo(w, A3, 'B').length === 1 && relsTo(w, B, 'A').length === 1); i++) await w.rounds(1)
+    return { w, A, A3, B }
+  }
+  for (const reload of [false, true]) {
+    it(`B2 ${reload ? 'mit Neuladen' : 'ohne Neuladen (Kontrolle)'}: A3 übernimmt die Probe der Zeremonie und vereinigt; nach der Heilung je eine Beziehung bei A1, A3 und B`, async () => {
+      const { w, A, A3, B } = await flow(reload)
+      expect(A3.gated).toBe(false)
+      expect(A3.syncPending).toBe(false)
+      for (const d of [A, A3]) expect(relsTo(w, d, 'B').map((r) => r.tuples.length), d.name).toEqual([2])
+      expect(relsTo(w, B, 'A').map((r) => r.tuples.length), 'B1').toEqual([2])
+    }, 180_000)
+  }
+})

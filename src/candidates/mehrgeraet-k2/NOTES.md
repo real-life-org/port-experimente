@@ -85,6 +85,34 @@ the person's hand-over digest moves to the canonically smaller one (test
 C7). These are named prices; their frequency depends on how current the
 image is (MV-6 new; measured in 2b).
 
+**Limit of the single-use promise (gate review 40 B3).** A holds single
+use only while A's reachable state holds the consumption. If A and M are
+both restored from images before act α, and a second act β on the same
+key reaches the restored A device before its sibling's journal, A accepts
+β (B refuses it, its key is consumed). After healing both A devices hold
+two accepted acts on one key; the fold reports it
+(`consumption:double-accept:<key>`, the same finding on every A device in
+every fold order) and both A devices agree (test B3). Named price in 2a;
+2b closes it with decision D1 (b): a rebuilt device withdraws its stock
+keys from before the image and refills with fresh anchors.
+
+**Sibling pool keys after restore (gate review 40 B4).** A device restored
+from an image taken after a sibling's pool arrived, which opens a new
+relationship before catching up, picks the same free pool entry it had
+already assigned to a relationship opened after the image. Two
+counterparts (C and D) then hold the same sibling anchor with its key
+agreement and can link the two relationships through it. The fold
+reports `pool-use: Schlüssel <device>#<i> zwei Beziehungen zugewiesen` on
+both A devices, which agree (test B4). Named price in 2a; 2b (note only):
+a rebuilt device discards pool entries from before its image and uses
+only entries provided after it.
+
+**No progress guarantee across restores (gate review 40 (c)).** "M takes
+the next key" holds per call from the reachable state. Restoring M again
+and again to the same old image names the same consumed key each time
+(each refused by 8640.12); progress across restores is not promised in
+2a. 2b's D1 (b) gives it (the rebuilt device's old keys are withdrawn).
+
 **Results (two devices at A and B, M one device; X1–X18, X7b, X21):**
 
 | | K1a | K2 step 1 | K2 step 2 (#74, strict) | K2 step 2a | note |
@@ -752,8 +780,26 @@ under load). The default run (CI) takes seed 1 of each variant (97 s);
   Named artefacts: M names a consumed key again (refused by rule 8640.12,
   a dead ticket at the side whose key was fresh), A produces a card again
   (same V, repetition at B; X21 red because the hand-over digest moves),
-  a revision number reused (6270 finding). Frequency against image age is
-  measured in 2b.
+  a revision number reused (6270 finding), two accepted acts on one key
+  when A and M are both restored (finding `consumption:double-accept`,
+  review 40 B3), one sibling pool key assigned to two relationships
+  (finding `pool-use`, linkable by the two counterparts, review 40 B4),
+  and no progress guarantee when M is restored repeatedly to the same
+  image (review 40 (c)). Frequency against image age is measured in 2b;
+  B3, B4 and (c) close with D1 (b) in 2b.
+- Received documents are checked against their form before any field
+  access (MV-24, `DOC_SHAPES` in the model; review 40 B1): a signed
+  revision without `keys` or a card without `card` is a form error
+  (finding, no receipt, no effect), the round goes on (tests B1a, B1b).
+- Enrolment from the log is a live ceremony that survives a reload of the
+  new device: the image carries `ceremony`, the device keeps waiting for
+  the witness and then works off `owed` and the ceremony's probes
+  (review 40 B2; K1a-service test "Tor-Review 40 B2").
+- X21's forced branch (bench rule 6m) declines acts until M names an A2
+  key; each decline consumes a stock key, so after several declines M can
+  find nothing nameable. The bench then waits for the refill (up to six
+  times two rounds) instead of failing on M's random choice (flaky once in
+  the review-40 verification run).
 - X21's restore repair takes 11 rounds instead of 7 (more batches: set
   proofs, pools, revisions per writer).
 - **Journal frame size (review 38 S8), a limit, not chunked.** A journal
@@ -939,17 +985,14 @@ devices, the set revision and its fan-out are steps 2 and 3.
   (nonce, n) and the anchor differs anyway. The model still reports a
   second nonce on a relationship (8435, "zweiter Vorrat"): that finding
   now marks the normal case (X17: 2) and is a spec follow-up.
-- **Interim rule until step 5: `mediatorSplit` on (default).** M splits
-  the keys a mediator device may name among its devices; since review 37
-  by the anchor (`nameSlot`, hash of the anchor mod M's device count),
-  no longer by K1a's `n mod devices` (section "Responsibility bound to
-  the anchor").
-  Nothing in step 1 replaces it: per-device keys remove writer tags and
-  number classes, but not the case that two M devices name the same key
-  of A's stock. The allocation per M device that A enforces (4.5 (b)) is
-  step 5 and replaces the interim rule there. Counter-run
-  `mediatorSplit: false` (`k2-device-keys-no-split`): M names any key,
-  X1, X13 and X14 fail (measured, "Results").
+- **Several M devices: removed in 2a.** Step 1 ran with an interim split
+  of naming rights among M's devices (first by `n mod devices`, then by
+  the anchor); 2a removed it with its tests (section "Removed in 2a")
+  and runs M as a single-writer fixture (`bench.singleDevice: ['M']`).
+  Per-device keys remove writer tags and number classes, but not the
+  case that two M devices name the same key of A's stock; the allocation
+  per M device that A enforces is step 2b. Counter-run with two M devices
+  (`singleDevice: []`): X1, X13 and X14 fail (test 2b).
 
 ### Incarnation: kept
 
@@ -978,15 +1021,15 @@ simplification); `device-set@1` and its fan-out are step 2.
 | writer tags (step 4, HMAC under a seed key, `writer` field in revision, probe, mapping) | removed; writer = signing device key, no field | with keys per device the signer is already a pseudonym per relationship |
 | number classes ⌊n/devices⌋ mod devices (review 21 B1) | removed (`allocationSplit` off) | own nonce per device: two devices never produce the same (nonce, n) anchor |
 | shared n under one nonce | removed | as above |
-| `n mod devices` split for M (`mayName`) | **kept as interim rule** (`mediatorSplit`, default on; off = counter-run); since review 37 bound to the anchor (`nameSlot`), not to n | nothing in step 1 replaces it; the allocation per M device that A enforces (4.5 (b)) is step 5 |
+| `n mod devices` split for M (`mayName`) | removed in 2a (step 1 kept an interim split; M is a single-writer fixture in 2a) | the allocation per M device that A enforces is step 2b |
 | shared self anchor as signer of journal frames, one self address | removed | journal signed per device, one self address per device |
 | `conflict:key-value` | stays in the model, never fires | an anchor belongs to one device |
 
 Unchanged and running for K2 (shared holder/model code, verified by the
 X results and `tests/mehrgeraet-k2.test.ts`): fold rules 1–3, probe
-re-evaluation and the retention rule, catch-up with request binding, the
-gate after restore and its end by revocation, the acceptance quota per
-device, prototype-free tables, the shape table and the form checks.
+re-evaluation and the retention rule, catch-up with request binding (no
+gate after restore since 2a, MV-6 new; only enrolment from the log keeps
+its live ceremony), the acceptance quota per device, prototype-free tables, the shape table and the form checks.
 
 ## Results (18 October, two devices, X1–X18, X7b, X21)
 
@@ -1013,10 +1056,11 @@ device, prototype-free tables, the shape table and the form checks.
 | X18 two cards of one act | ≈ | ✗ | the two devices' cards differ (card keys per device), B marks K (8910.8) on both B devices; still one consent, one connect, no double effect. Decision 6o.5 no. 7 (step 2) |
 | X21 journal robustness | ✓ | ✓ | repair 7/1/1/1/1 rounds as K1a; self addresses 781 frames / 2.54 MB (K1a 813 / 2.16 MB), journal frames 395 / 2.07 MB (K1a 395 / 1.66 MB), journal 27.6 kB (K1a 22.5 kB), receipts 323 (K1a 355) |
 
-Counts: **K2 step 1 (interim rule `mediatorSplit` on): 17 kept (X3 and
+Counts (step 1 as measured on 18 October, with the interim split that 2a
+removed): **K2 step 1 (interim split on): 17 kept (X3 and
 X9 under a changed promise), 2 not kept (X7 strict, X18), 1 n/a (X10)**:
 the K1a count, red X7 and X18 instead of X7 and X9. Counter-run without
-the interim rule (`mediatorSplit: false`): 14 / 5 / 1, red X1, X7, X13,
+the interim split: 14 / 5 / 1, red X1, X7, X13,
 X14, X18. X18 stays red in step 1 by design: decision 6o.5 no. 7 (two
 cards of one act from the current set are a repetition) is step 2. Serial control
 (`k2({ devices: 1 })`): every cell with a control run passes, as K1a.

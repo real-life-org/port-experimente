@@ -378,12 +378,17 @@ export interface DeviceState {
   expected: Array<[string, string]>
   /** Geräte der Person, die dieses Gerät widerrufen hat (Review 19, Frage 3): sie antworten auf kein Nachholen mehr. */
   revoked?: string[]
-  /** Beziehungen, deren Revision während des Nachholens fällig wurde (Schritt 4): sie geht erst danach mit der dann nächsten Nummer hinaus. */
+  /** Beziehungen, deren Revision während der Enrollment-Zeremonie aus der Ablage fällig wurde (Schritt 4): sie geht erst danach mit der dann nächsten Nummer hinaus. */
   owed?: string[]
   /** Schritt 6 (Variante): bis zu welcher Position das Gerät die Ablage an der Self-Adresse gelesen und gefaltet hat. */
   logCursor?: number
   /** Schritt 6 (Variante): behaltene Proben aus der Enrollment-Zeremonie, übernommen, wenn das Falten der Ablage fertig ist. */
   deferredProbes?: Array<[string, string[]]>
+  /**
+   * Tor-Review 40 B2: das Enrollment aus der Ablage läuft noch (Live-Zeremonie, `startFromLog`). Ein Neuladen mitten in der
+   * Zeremonie setzt sie fort (Warten auf das Zeugnis, danach `owed` und `deferredProbes`); nach einem Restore sonst nie.
+   */
+  ceremony?: boolean
 }
 
 export interface Measures {
@@ -464,21 +469,23 @@ export class HolderDevice {
   /** Widerrufene Geräte der Person (Teil des Abbilds): zählen nicht als Schwester, die nachholen hilft (Review 19 Frage 3). */
   private revoked = new Set<string>()
   /**
-   * Schritt 4: Revisionen, die während des Nachholens nach einem Neuaufbau fällig wurden. Mit Schreiberkennung nummeriert
-   * das Gerät erst, wenn es die Revisionen seiner früheren Inkarnationen aus dem Journal kennt (sonst verwendete es eine
-   * Nummer wieder, 8500/6270); die Revision geht nach dem Nachholen mit der dann nächsten Nummer hinaus. Teil des Abbilds.
+   * Schritt 4: Revisionen, die während der Enrollment-Zeremonie aus der Ablage fällig wurden (nach Restore gibt es seit
+   * MV-6 neu kein Vormerken mehr; die Nummer kann sich wiederholen, 6270-Befund, benannter Preis). Mit Schreiberkennung
+   * nummeriert das Gerät erst, wenn es die Revisionen aus dem Journal kennt (sonst verwendete es eine Nummer wieder,
+   * 8500/6270); die Revision geht nach der Zeremonie mit der dann nächsten Nummer hinaus. Teil des Abbilds.
    */
   private owed = new Set<string>()
   /**
    * E15 Schritt 6 (Variante „Journal beim Dienst“, Anton 18.10.: Option untersuchen, nicht festlegen; nach Tor-Review 25
    * Anton 18.10.: „das Log beim Dienst ist Beschleunigung, nie Freigabegrund“). Mit `selfLog` ist die Self-Adresse der
    * Person beim Träger eine Ablage (zustellung.ts `retain`). Zwei Spuren: die Daten holt das Gerät schnell aus der Ablage
-   * ab der eigenen Position (`logCursor`, Spur `logSync`, an die Anfragekennung gebunden, MV-5); die Freigabe nach Restore
-   * (MV-6) bleibt wie im Default: sie endet nur mit der Antwort eines Schwestergeräts, deren Köpfe der eigene Stand deckt
-   * (`journal-sync`, Spur `sync`), oder mit dem Widerruf aller Schwestern (`deviceRevoked`). Die Antwort der Ablage allein
-   * beendet die Sperre nie (Replication D1: Zurückhalten durch den Träger darf nie eine Freigabe bewirken; der Dienst kann
-   * eine leere, verkürzte oder umgeordnete Antwort liefern, das Gerät kann deren Vollständigkeit nicht prüfen). „Log
-   * beschleunigt das Nachholen; die Freigabe bezeugt die Schwester oder der Widerruf.“ Ohne Journal (K0) wirkungslos.
+   * ab der eigenen Position (`logCursor`, Spur `logSync`, an die Anfragekennung gebunden, MV-5). Nach Restore gibt es keine
+   * Freigabe-Sperre (MV-6 neu, MV-34): beide Spuren bringen nur Daten. Eine Freigabe gibt es nur noch am Ende des
+   * Enrollments aus der Ablage (`startFromLog`): mit der Antwort eines Schwestergeräts, deren Köpfe der eigene Stand deckt
+   * (`journal-sync`, Spur `sync`), oder mit dem Widerruf aller Schwestern (`deviceRevoked`); die Antwort der Ablage allein
+   * beendet sie nie (Replication D1: Zurückhalten durch den Träger darf nie eine Freigabe bewirken; der Dienst kann eine
+   * leere, verkürzte oder umgeordnete Antwort liefern, das Gerät kann deren Vollständigkeit nicht prüfen). Ohne Journal
+   * (K0) wirkungslos.
    */
   selfLog = false
   private logCursor = 0
@@ -543,7 +550,8 @@ export class HolderDevice {
    *
    * Übrig bleibt nur das Enrollment aus der Ablage (Schritt 6, Variante `k1a-journal-service`, `startFromLog`): das neue
    * Gerät beginnt leer und gibt bis zum Zeugnis des einschreibenden Geräts nichts an Gegenseiten frei. Das ist eine
-   * Live-Zeremonie mit dem alten Gerät (MV-34 erlaubt sie), kein Restore; offen für Anton, ob sie bleibt.
+   * Live-Zeremonie mit dem alten Gerät (MV-34 erlaubt sie, Anton 20.10.: sie bleibt), kein Restore; sie übersteht ein
+   * Neuladen des neuen Geräts (Abbildfeld `ceremony`, Tor-Review 40 B2).
    */
   private catchUp = false
   /** Während des Nachholens freigegeben, aber zurückgehalten (B1a); nach dem Nachholen geprüft und eingeliefert. */
@@ -565,7 +573,7 @@ export class HolderDevice {
     this.state = M.fromJson(state) // Review 28: Tabellen ohne Prototyp, auch aus einem Enrollment
     this.carrierRef = carrier
     this.zusteller = new Zusteller(name, () => this.carrierRef, () => this.online && !this.down)
-    this.zusteller.gate = (x) => this.catchUp && !this.ownTraffic(x.address) // B1a: Wiederholungen warten aufs Nachholen
+    this.zusteller.gate = (x) => this.catchUp && !this.ownTraffic(x.address) // B1a: Wiederholungen warten bis zum Ende der Enrollment-Zeremonie
   }
   get carrier() {
     return this.carrierRef
@@ -581,7 +589,7 @@ export class HolderDevice {
   private async refreshSiblings(): Promise<void> {
     if (this.cand.selfPeers) this.siblingSelves = new Set((await this.cand.selfPeers()).map((k) => k.rkid))
   }
-  /** Verkehr zwischen eigenen Geräten (die Sperre nach Restore hält ihn nicht zurück, B1a): K0/K1a die gemeinsame Self-Adresse, K2 zusätzlich die der Schwestern. */
+  /** Verkehr zwischen eigenen Geräten (die Enrollment-Zeremonie hält ihn nicht zurück, B1a): K0/K1a die gemeinsame Self-Adresse, K2 zusätzlich die der Schwestern. */
   private ownTraffic(address: string | undefined): boolean {
     return address === this.ownRkid || (address !== undefined && this.siblingSelves.has(address))
   }
@@ -823,6 +831,7 @@ export class HolderDevice {
       ...(this.owed.size ? { owed: [...this.owed] } : {}),
       ...(this.logMode ? { logCursor: this.logCursor } : {}),
       ...(this.deferredProbes ? { deferredProbes: this.deferredProbes.map(([id, e]): [string, string[]] => [id, [...e]]) } : {}),
+      ...(this.catchUp ? { ceremony: true } : {}),
     }
   }
   commit() {
@@ -854,7 +863,9 @@ export class HolderDevice {
     this.parked = []
     await this.relisten()
     // MV-6 neu / MV-34: keine Sperre; nachgeholt wird als Beschleunigung (Schwester oder Ablage, MV-35), gehandelt sofort.
-    this.catchUp = false
+    // Ausnahme (Tor-Review 40 B2): lief beim Commit das Enrollment aus der Ablage, setzt das Gerät diese eigene Zeremonie
+    // fort (kein Warten auf einen anderen, Anton 20.10.); `owed` und `deferredProbes` werden an ihrem Ende abgearbeitet.
+    this.catchUp = !!s?.ceremony
     this.requestSync()
   }
   /**
@@ -888,7 +899,7 @@ export class HolderDevice {
   }
   /**
    * Enrollment aus der Ablage (Schritt 6): das neue Gerät beginnt leer und faltet die Ablage ab Position 0 (kein
-   * Schnappschuss, keine Kompaktierung); bis dahin gibt es nichts an Gegenseiten frei (wie nach einem Restore) und teilt
+   * Schnappschuss, keine Kompaktierung); bis zum Zeugnis gibt es nichts an Gegenseiten frei (Live-Zeremonie) und teilt
    * nichts zu. Die behaltenen Proben (Gerätezustand, nicht Journal, MV-18) kommen aus der Zeremonie und werden übernommen,
    * wenn das Falten fertig ist (vorher kennt das Gerät ihre Tupel nicht).
    */
@@ -1088,8 +1099,8 @@ export class HolderDevice {
   /**
    * Die eigene Menge jeder eigenen Wurzel veröffentlichen (fällige Arbeit, B6): ein Gerät sendet eine Revision (kumulativ:
    * alle Nachweise der Wurzel; 6270 je Signierer nur Wiederholung und Equivokation), wenn es Nachweise signiert hat, die
-   * seine letzte Revision nicht trug, oder wenn es die Wurzel ist und noch keine sandte. Nur Mitglieder; während des
-   * Nachholens nach einem Neuaufbau nicht (Nummern wie MV-7).
+   * seine letzte Revision nicht trug, oder wenn es die Wurzel ist und noch keine sandte. Nur Mitglieder; während der
+   * Enrollment-Zeremonie aus der Ablage nicht (Nummern wie MV-7).
    */
   private async publishSets(only?: string): Promise<void> {
     if (!this.sets || this.catchUp) return
@@ -1182,7 +1193,7 @@ export class HolderDevice {
    * 8725/8727 unter E2 (iv): das Gerät, das den benannten Vorrats-Schlüssel zugeteilt hat, erzeugt die eine Karte des
    * Akts (frischer Kartenkontext, Schwestern über ihren Vorrat in die Menge der neuen Wurzel aufgenommen, Revision mit
    * der Karte an den Voucher), sobald eine Zustimmung der Person vorliegt (eigene oder aus dem Journal). Ein anderes Gerät
-   * zeichnet nur die Zustimmung auf. Nicht nach dem Ablauf des Akts, nicht während des Nachholens nach einem Neuaufbau
+   * zeichnet nur die Zustimmung auf. Nicht nach dem Ablauf des Akts, nicht während der Enrollment-Zeremonie aus der Ablage
    * (sonst erzeugte eine frühere Inkarnation vielleicht schon eine Karte: zwei Karten desselben Geräts). `force` nur im
    * Gegenlauf ohne Produzentenregel.
    */
@@ -1289,7 +1300,7 @@ export class HolderDevice {
 
   /** 8485: unter drei aktiven auf fünf nachfüllen, Revision senden; nur bei Klasse an und Budget nicht erschöpft (8512). */
   private async refill(relId: string): Promise<void> {
-    // Schritt 4: mit Schreiberkennung teilt ein Gerät während des Nachholens nach einem Neuaufbau nichts zu und nummeriert
+    // Schritt 4: mit Schreiberkennung teilt ein Gerät während der Enrollment-Zeremonie aus der Ablage nichts zu und nummeriert
     // nichts (Schlüsselnummern 8445 und Revisionsnummern 8500 seiner früheren Inkarnationen kennt es erst danach); das
     // Nachfüllen ist fällige Arbeit aus dem Zustand (B6) und läuft in der ersten Runde nach dem Nachholen.
     if (this.perWriter && this.catchUp) return
@@ -1345,7 +1356,7 @@ export class HolderDevice {
   /**
    * 8495/8500: Revision des aktuellen Zustands auf dem Kopf an den Mediator. Mit Schreiberkennung (Schritt 4): die Nummer
    * ist eins über der höchsten Revision dieses Schreibers im Zustand (8500 je Schreiber), die Kennung reist im Dokument;
-   * während des Nachholens nach einem Neuaufbau wird nicht nummeriert, sondern vorgemerkt (`owed`).
+   * während der Enrollment-Zeremonie aus der Ablage wird nicht nummeriert, sondern vorgemerkt (`owed`).
    */
   private async sendRevision(relId: string): Promise<void> {
     const r = M.rel(this.state, relId)
@@ -1664,6 +1675,10 @@ export class HolderDevice {
         if (this.catchUp && !this.sync.pending && (await this.guarded(() => this.withdrawLosingCards()))) {
           this.catchUp = false
           for (const d of this.parked.splice(0)) if (this.zusteller.submissions.has(d) && !this.held.includes(d)) this.held.push(d)
+        }
+        // Tor-Review 40 B2: die Nacharbeit hängt am Ende der Zeremonie, nicht am Übergang in dieser Runde; was ein Neuladen
+        // aus dem Abbild mitbringt, wird in der ersten Runde ohne Zeremonie abgearbeitet.
+        if (!this.catchUp && (this.owed.size || this.deferredProbes)) {
           // Schritt 4: jetzt kennt das Gerät die Revisionen seiner früheren Inkarnationen; die vorgemerkten gehen mit der nächsten Nummer hinaus.
           for (const id of [...this.owed]) {
             this.owed.delete(id)
@@ -2256,6 +2271,15 @@ export class HolderDevice {
   /** Fachliche Auswertung je Typ; true = Wirkung (quittieren), false = abgewiesen (keine Quittung). Jeder Zweig bindet das Dokument an den erwarteten Signierer (#55). */
   private async dispatch(doc: Doc, address: string, digest: string): Promise<boolean> {
     const now = this.clock.now()
+    // Tor-Review 40 B1 (MV-24): Form vor jedem Feldzugriff; ein unvollständiges Dokument ist ein Formfehler, keine Ausnahme.
+    const shape = doc.type === TYPES.revision ? M.DOC_SHAPES.revision : doc.type === TYPES.card ? M.DOC_SHAPES.card : undefined
+    const kind = doc.type === TYPES.revision ? 'revision' : 'card'
+    const bad = shape ? M.shapeProblem(doc.payload, shape, kind) : null
+    if (bad) {
+      const text = `${kind} von ${doc.issuer.slice(-8)}: Form ${bad} (MV-24): Formfehler, abgewiesen`
+      if (!this.state.findings.includes(text)) this.emit({ kind: 'finding', text })
+      return false
+    }
     switch (doc.type) {
       case TYPES.revision: {
         // M: 8550/8557/6270, vereinfacht.

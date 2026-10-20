@@ -1087,6 +1087,12 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
           await s.A.decline(act)
           await s.w.rounds(2)
           act = await issue()
+          // Jede Ablehnung verbraucht einen Vorrats-Schlüssel; findet M nach mehreren Ablehnungen keinen benennbaren mehr,
+          // wartet der Prüfstand das Nachfüllen ab (sonst hinge der erzwungene Zweig an Ms Zufallswahl, flaky).
+          for (let wait = 0; typeof act !== 'string' && act.detail.startsWith('Vorstellung verweigert') && wait < 6; wait++) {
+            await s.w.rounds(2)
+            act = await issue()
+          }
           if (typeof act !== 'string') return act
         }
         const r = { act }

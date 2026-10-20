@@ -564,6 +564,16 @@ export const SHAPES = {
     object: { id, a: { object: { rel: id, key: id, keyAgreement: id } }, b: { object: { rel: id, key: id, keyAgreement: id } }, issuedAt: 'time', expiresAt: 'time' },
   },
 } satisfies Record<string, Shape>
+/**
+ * Formtabelle der empfangenen Dokumente (MV-24, Tor-Review 40 B1): die Nutzlast eines Kontakts wird vor jedem Feldzugriff
+ * gegen ihre Form geprüft; ein unvollständiges oder überzähliges Dokument ist ein Formfehler (Befund, keine Quittung, keine
+ * Wirkung), nie eine Ausnahme in der Runde. Felder wie beim Versand (`sendRevision`, `handOverCard`); `clears` und `writer`
+ * bleiben in der Form, ihre Bedeutung prüft der Empfangszweig (K2: Formfehler mit eigenem Befund).
+ */
+export const DOC_SHAPES = {
+  revision: { object: { revision: 'nat', keys: { array: SHAPES.listedKey }, writer: { optional: 'tag' }, clears: { optional: { record: 'nat', key: 'tag' } }, tombstones: { optional: { array: id } } } },
+  card: { object: { act: id, expiresAt: 'time', from: id, fromKeyAgreement: { optional: id }, to: id, card: SHAPES.card, set: { optional: str } } },
+} satisfies Record<string, Shape>
 /** Je Art die Felder neben `id`, `at`, `kind` (Review 26 B2: bekannte Art; Review 27 B2a: jedes Feld bis in die Elemente; Review 28: Kennungen). */
 const OP_FIELDS: { [K in Op['kind']]: { [field: string]: Shape } } = {
   'open-tuple': { rel: { nullable: id }, tuple: SHAPES.tuple, provenance: { enum: ['encounter', 'introduction'] }, vouchedBy: { nullable: id }, act: { nullable: id } },
@@ -1041,6 +1051,13 @@ function applyBody(s: HolderState, op: Op): void {
         // jedes Gerät öffnet es), ist das eine Annahme; die Wirkung trägt die kleinste Operation.
         if (s.effects.some((e) => e.id === `accept:${a.id}`)) effectMin(s, op, `accept:${a.id}`)
         return
+      }
+      // Tor-Review 40 B3: zwei angenommene Akte auf einem Vorrats-Schlüssel (A und M je aus einem alten Abbild, ein zweiter
+      // Akt erreicht A vor dem Nachholen) sind sichtbar, nicht stumm: ein Befund je Schlüssel, in jeder Faltungsreihenfolge
+      // derselbe. Benannter Preis in 2a (Restore-Artefakt); 2b schließt ihn mit D1 (b) (Restore verbrennt den alten Vorrat).
+      if (s.acts.some((x) => x.own === a.own)) {
+        const text = `consumption:double-accept:${a.own}: zwei angenommene Akte auf einem Vorrats-Schlüssel (Restore-Artefakt, benannter Preis 2a)`
+        if (!s.findings.includes(text)) s.findings.push(text)
       }
       s.acts.push({ ...a, mediator: resolveId(s, a.mediator) })
       const r = rel(s, a.mediator)

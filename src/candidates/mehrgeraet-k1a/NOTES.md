@@ -71,8 +71,10 @@ numbers its revisions under a pseudonymous writer tag per relationship.
   per digest, and the round goes on (the sender's deliverer repeats it,
   the finding stays one). Later frames fold as before: the mailbox has no
   order, `deps` keep causality (a batch that names the corrupt one stays
-  deferred). The gate after restore is untouched: a corrupt batch never
-  joins the heads, so a sibling answer that names it is not covered.
+  deferred). A corrupt batch never joins the heads, so a sibling answer
+  that names it does not cover them (catch-up goes on; since MV-6 new
+  this holds back nothing after restore, only the release at the end of
+  an enrolment from the log).
   With the log (step 6) an answer is one unit (gate review 27 B2b): every
   entry is opened and checked for form before any is folded, and the
   answer folds nothing from the first malformed position on; if a later
@@ -861,11 +863,13 @@ table below is from 18 October; its gate rows are superseded (section
   device covers, HSC-440, MV-6); its first request goes out one round
   after the log request, with the heads folded from the log, so the
   sibling sends only what the log did not bring and witnesses the rest.
-- **Gate after restore (MV-6), as in K1a.** It applies when the device
-  has a sibling and ends only on (i) a sibling's answer covering the
-  device's heads or (ii) the revocation of every sibling
-  (`deviceRevoked`). The log answer never ends it. Reading is not
-  delivery: no receipt, no `completed`.
+- **No gate after restore (MV-6 new, MV-34).** A rebuilt device acts at
+  once; both tracks only bring data (section "No gate after restore").
+  The only hold left is the live ceremony of an enrolment from the log
+  (below): it ends only on (i) a sibling's answer covering the device's
+  heads or (ii) the revocation of every sibling (`deviceRevoked`); the
+  log answer never ends it. Reading is not delivery: no receipt, no
+  `completed`.
 - **Corrupt entries (review 25 B2).** `replay` returns `folded`, `skip`
   (verified and without effect: own or known frame, receipt or other
   valid traffic at the self address) or `corrupt` (undecodable, cannot be
@@ -873,7 +877,7 @@ table below is from 18 October; its gate rows are superseded (section
   corrupt entry never counts as folded: the cursor stops before it, a
   finding `finding(journal:corrupt-entry@<pos>)` is recorded once per
   position, the next read starts at it, with backoff (1, 2, 4, up to 16
-  rounds). The gate is untouched by it. After gate review 26 (B2 rest) the
+  rounds). The release is untouched by it. After gate review 26 (B2 rest) the
   body is checked for shape before folding, as in the mailbox path
   (payload object with a string body, `batchProblem`, `opProblem`,
   `transactionProblem`), and any exception from the fold other than
@@ -897,9 +901,12 @@ table below is from 18 October; its gate rows are superseded (section
 - **Enrolment from the log.** The new device starts with empty state and
   an empty journal and folds the log from position 0 (no snapshot, no
   compaction). The ceremony gives only slot, sibling knowledge and the
-  kept probes (device state, not journal, MV-18), adopted when the gate
-  ends; the release is the enrolling device's witness. `selfLog: false`
-  keeps the state copy.
+  kept probes (device state, not journal, MV-18), adopted when the
+  ceremony ends; the release is the enrolling device's witness. The
+  ceremony survives a reload of the new device (gate review 40 B2): the
+  image carries `ceremony`, the device keeps waiting for the witness and
+  then works off `owed` and the ceremony's probes in its first round
+  without the ceremony. `selfLog: false` keeps the state copy.
 
 ### Results, both variants side by side
 
@@ -1039,7 +1046,8 @@ depends on how current the image is. Question 4.1 is moot.
   B1a), but it only brings data. Released, refills and revision numbering
   happen at once from the image (`parked`, `owed` and the gate checks in
   `refill`, `sendRevision`, `produce`, `publishSets` stay only for
-  enrolment from the log, below).
+  enrolment from the log, below; that ceremony survives a reload, gate
+  review 40 B2).
 - **P kept after a decline (MV-31).** A counter card that arrives at an act
   the person declined is refused as before (8910.6, `card-refused`, V
   recorded), and its checked payload is kept as hidden P (`card-pending`;
