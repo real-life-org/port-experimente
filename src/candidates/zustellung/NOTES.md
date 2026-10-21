@@ -548,9 +548,12 @@ R-ce. What it shows:
    on R-c and R-es and RT1-K on R-ce under 20 seeds (1700 cells) and
    checks the Z1r sessions, outer sender and document sizes per seed, and
    min/max over the seeds: inner 1491–1494 B, outer 1875–1878 B (Z1r).
-   Every frame any intermediary forwarded in any cell of either form
-   (documents, receipts, duplicates, tampered and misrouted frames; 8360
-   over the 20 seeds) is outer = inner + 384 B.
+   The size invariant outer = inner + 384 B holds for all 8360 recorded
+   openings at any intermediary in any cell of either form over the 20
+   seeds (documents, receipts, misrouted frames). The count is opened
+   records, not forward events: duplicate forwards carry the same bytes
+   and tampering preserves the length, but neither is counted as an
+   opening of its own.
 
 ### Not answered by step 3
 
