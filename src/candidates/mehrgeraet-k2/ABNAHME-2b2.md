@@ -136,7 +136,7 @@ carrier before the crash).
 | issuance commits | 1 [D] | 1 [D] | `flush`: commit before `before-send`/`between-sends`; reload commits nothing, no second `introduce` | ledger commits |
 | distinct ticket digests | 2 [D] | 2 [D] | two intents in the batch; repeats and redeposits are the same digest | ledger intents |
 | deposits `tA` / `tB` | 1 / 1 [D] | 1 / 1 [D] | the image is the commit snapshot (`MemoryStore.commit` clones), so after reload both submissions have `report = null` → `unreleased`. K1a: A1 (before M1 in the order) accepts the pre-crash copy of `tA` in round 1 and its receipt reaches M1 in the same round before M1's release, so M1 knows `accepted` and omits the resubmission (decision 13); `tB` is released. K1b: both released in M1's round 1. Receipts reach M1 within 2 rounds < 3 → no repeat | `ticketDeposits` |
-| omitted:accepted | 1 [D] | 0 [D] | decision 13 | `pProduktion` counts |
+| omitted:accepted | 1 [D] | 0 [D] | decision 13; the holder's measure `ticketOmissions` (P-Produktion counts K1a's `tA` as kept: the pre-crash deposit) | `HolderDevice.ticketOmissions` |
 | deposits by M2 | 0 [D] | 0 [D] | M2 folds M1's batch (journal out in M1's round 1); intents with `device = M1` are not its own (MV-8) | P-Eigen |
 | acceptances A / B | 1 / 1 [D] | 1 / 1 [D] | K1a: A1 accepts the pre-crash copy in round 1, the redeposit is `duplicate-known` (8640.4, same receipt bytes again); B1 in round 2. K1b: both in round 2 | P-Einmal counts, ledger |
 | load A / B (budgetUsed; belegt A1, B1) | 1 / 1 [D] | 1 / 1 [D] | one acceptance each, no 8515 | ledger image |
@@ -160,8 +160,9 @@ unchanged (8640.4) [D].
 ### K2 Ticket reaches A before the matching revision reaches M
 
 Sequence (draft 4 §6 K2, review 4 E5). W2. Withhold at M1 every A1
-`stock-revision` frame (`carrier.faults.withhold('M1', frame of kind
-stock-revision from A1)`). `M1.introduce` at `tI` (no crash: both tickets at the
+`stock-revision` frame and every frame from M2 (correction found in the build:
+M2 folds r2 and journals it, so without this r2 reaches M1 through the journal
+in round 1). `M1.introduce` at `tI` (no crash: both tickets at the
 carrier inside the action). 3 rounds: A1 accepts `tA` (round 1), refills and
 sends r2 (lists 4 keys, not `xA`), receipt to M1 (round 1); B1 the same for `tB`.
 Reset the withhold; 2 rounds (M1 folds r2); Z.
@@ -440,6 +441,18 @@ resumption, B13 and budget tables (one marker per value or per row of values;
 relational values such as `m*` and `k + 1` included). Measured only `[M]`: 2
 (K4 follow-up issuance, R4 burn). Pending a decision `[O]`: 0 (the three were
 resolved by the decisions below: K3 and T2 transport `handed`, K5b `down`).
+
+## 7a. Corrections found while building (phase 2)
+
+- K2: the journal from M2 to M1 is withheld too (above).
+- K1a: `omitted:accepted` is the holder's measure; P-Produktion counts the issuance kept.
+- The restore marker of the store holds until the device's next commit (not until the next rebuild): X21 restores A2 from
+  an image and crashes it before its first commit; a restart then started from the loaded image, kept that image's
+  incarnation and rewrote batches #2–#6 of it (5 MV-3 conflicts at A1). With the marker held until a commit, that rebuild is
+  fresh again and X21 is back to 0 conflicts.
+- N3/N4: the image is taken at k batches, one more batch follows, then the image is loaded; the mutation clears the
+  store's marker (test-only).
+- R4 (measured): the burn makes `xA` `withdrawn` at M1, `tA` is not resubmitted, 0 acceptances.
 
 ## 8. Current code against the design (for the build)
 

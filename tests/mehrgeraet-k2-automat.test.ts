@@ -7,6 +7,9 @@
 // W5 (8-day stock keys).
 
 import { describe, expect, it } from 'vitest'
+import { diSign, jcs, receive, seal } from '@real-life/trust-protocol'
+import type { Json } from '@real-life/trust-protocol'
+import { MemoryStore } from '../src/lab/zustellung'
 import { k2 } from '../src/candidates/mehrgeraet-k2'
 import { deadTickets, judge, ledgerWorld, oneSided, pairCounter, type Buch, type Check } from '../src/lab/mehrgeraet/buch'
 import { frameHash, TYPES, type HolderDevice } from '../src/lab/mehrgeraet/holder'
@@ -523,5 +526,353 @@ describe('K2 step 2b.2: core counter-runs K1–K10', () => {
     expect(allOk(cs)).toEqual([])
     const pp = prop(cs, 'P-Produktion').counts
     expect([pp.obliged, pp.kept, pp['omitted:rueckzug']]).toEqual([1, 0, 1])
+  }, 240_000)
+})
+
+const BOUNDS = [-SEC, 0, SEC] as const
+const at = (s: World, ms: number) => {
+  s.w.clock.set(new Date(ms).toISOString())
+  s.buch.note('advance', undefined, {})
+}
+/** W2, one issuance at tI, both tickets accepted (2 rounds). */
+async function issuedWorld(o: { automaton?: boolean } = {}) {
+  const s = await world(o)
+  const { act } = await introduce(s, s.M1)
+  const x = issued(s.M1, act)
+  return { s, act, ...x, E: Date.parse(x.a.expiresAt) }
+}
+const cardsOf = (s: World, device: string) => s.w.carrier.carried.filter((f) => kind(s, f) === 'introduction-card' && s.w.frameOrigin(f.bytes)?.device === device).length
+
+describe('K2 step 2b.2: the six act-end tests (5.2), each at boundary −1 s / 0 / +1 s', () => {
+  for (const d of BOUNDS) {
+    it(`T1 (${d / SEC} s). End before carrier acceptance (card, act-ended at AE): deposited iff now ≤ AE`, async () => {
+      const { s, act, E } = await issuedWorld()
+      await s.round(2)
+      await s.B1.consent(act)
+      await s.round(1)
+      s.A1.online = false
+      await s.A1.consent(act)
+      expect(cardsOf(s, 'A1')).toBe(0)
+      at(s, E + HOUR + d)
+      s.A1.online = true
+      await s.round(2)
+      expect(cardsOf(s, 'A1')).toBe(d <= 0 ? 1 : 0)
+      expect([sideState(s.A1, act), sideState(s.B1, act)]).toEqual(d <= 0 ? ['connected', 'connected'] : ['expired', 'expired'])
+    }, 240_000)
+
+    it(`T2 (${d / SEC} s). End after carrier acceptance without receipt: the repetition ends after AE, the report stays handed`, async () => {
+      const { s, act, E } = await issuedWorld()
+      await s.round(2)
+      s.w.carrier.faults.withhold('B1', (f) => kind(s, f) === 'introduction-card' && s.w.frameOrigin(f.bytes)?.device === 'A1')
+      await s.A1.consent(act)
+      await s.B1.consent(act)
+      await s.round(2)
+      at(s, E + HOUR + d)
+      await s.round(1)
+      expect(cardsOf(s, 'A1')).toBe(d <= 0 ? 2 : 1)
+      const cA = M.act(s.A1.state, act).ownCardDigest!
+      expect(s.A1.zusteller.report(cA)?.state).toBe('accepted')
+      expect(s.A1.zusteller.submissions.get(cA)?.stopped).toBe(d <= 0 ? undefined : 'act-ended')
+    }, 240_000)
+
+    it(`T3 (${d / SEC} s). End with a late receipt: the receipt counts also after the expire (delivered)`, async () => {
+      const { s, act, E } = await issuedWorld()
+      await s.round(2)
+      s.w.carrier.faults.withhold('A1', (f) => kind(s, f) === 'delivery-ack' && s.w.frameOrigin(f.bytes)?.device === 'B1')
+      await s.A1.consent(act)
+      await s.B1.consent(act)
+      await s.round(2)
+      expect([sideState(s.A1, act), sideState(s.B1, act)]).toEqual(['connected', 'connected'])
+      at(s, E + HOUR + d)
+      await s.round(1)
+      s.w.carrier.faults.reset()
+      await s.round(1)
+      const cA = M.act(s.A1.state, act).ownCardDigest!
+      expect(s.A1.zusteller.report(cA)).toEqual({ state: 'delivered', late: false })
+      expect(M.own(M.act(s.A1.state, act).cards, cA) ?? M.act(s.A1.state, act).o).toBe('delivered')
+    }, 240_000)
+
+    for (const automaton of [true, false]) {
+      it(`T4${automaton ? '' : ' control'} (${d / SEC} s). Ticket between expiresAt and AE: ${automaton ? 'accepted iff now ≤ AE (8110.5), receipt → accepted' : 'old 8640.3 refuses after expiresAt'}`, async () => {
+        const { s, act, a, tA, E } = await issuedWorld({ automaton })
+        s.w.carrier.faults.withhold('A1', (f) => kind(s, f) === 'introduction-ticket')
+        at(s, E + HOUR + d)
+        s.w.carrier.faults.reset()
+        await s.round(2)
+        const ok = automaton && d <= 0
+        expect(acceptances(s, act, a.a.key)).toBe(ok ? 1 : 0)
+        expect(load(s.A1, s.am.x, s.w.clock.now())).toBe(ok ? 1 : 0)
+        expect(sideState(s.A1, act)).toBe(ok ? 'expired' : 'none')
+        if (automaton) {
+          expect(knowledge(s.M1, act)[0]).toBe(ok ? 'accepted' : 'unknown')
+          expect(deposits(s, tA)).toBe(1)
+          const dead = deadTickets(s.buch, s.w)
+          expect([dead.causes['spaetes-ticket'], dead.causes['spaet-zugestellt']]).toEqual(ok ? [1, 0] : [0, 1])
+        }
+      }, 240_000)
+    }
+
+    for (const automaton of [true, false]) {
+      it(`T5${automaton ? '' : ' control'} (${d / SEC} s). Counter card after expiresAt, before AE, own card submitted: ${automaton ? 'connected iff now ≤ AE' : 'old A8 expired the act at expiresAt'}`, async () => {
+        const { s, act, E } = await issuedWorld({ automaton })
+        await s.round(2)
+        s.w.carrier.faults.withhold('A1', (f) => kind(s, f) === 'introduction-card' && s.w.frameOrigin(f.bytes)?.device === 'B1')
+        await s.A1.consent(act)
+        await s.B1.consent(act)
+        await s.round(2)
+        expect(sideState(s.B1, act)).toBe('connected')
+        at(s, E + SEC)
+        await s.round(1)
+        expect(sideState(s.A1, act)).toBe(automaton ? 'consented' : 'expired')
+        at(s, E + HOUR + d)
+        s.w.carrier.faults.reset()
+        await s.round(1)
+        const ok = automaton && d <= 0
+        expect(sideState(s.A1, act)).toBe(ok ? 'connected' : 'expired')
+        if (automaton) {
+          const cs = await checks(s)
+          expect(prop(cs, 'P-Paar').counts.bothSides).toBe(ok ? 1 : 0)
+          expect(oneSided(s.buch)['late-card']).toBe(ok ? 0 : 1)
+        }
+      }, 240_000)
+    }
+
+    it(`T6a (${d / SEC} s). consent-reserve boundary before carrier acceptance: submitted iff now ≤ TB`, async () => {
+      const s = await world()
+      s.M1.online = false
+      const { act } = await introduce(s, s.M1)
+      const { a, tA, tB } = issued(s.M1, act)
+      expect(s.M1.zusteller.report(tA.digest)?.state).toBe('awaiting-transport')
+      at(s, Date.parse(a.expiresAt) - DAY + d)
+      s.M1.online = true
+      await s.round(2)
+      expect([deposits(s, tA), deposits(s, tB)]).toEqual(d <= 0 ? [1, 1] : [0, 0])
+      expect([acceptances(s, act, a.a.key), acceptances(s, act, a.b.key)]).toEqual(d <= 0 ? [1, 1] : [0, 0])
+      if (d > 0) expect(s.M1.zusteller.report(tA.digest)).toEqual({ state: 'failed', reason: 'consent-reserve' })
+      else {
+        await s.A1.consent(act)
+        expect(sideState(s.A1, act)).toBe('consented')
+      }
+    }, 240_000)
+
+    it(`T6b (${d / SEC} s). consent-reserve boundary after carrier acceptance without receipt: repeated iff now ≤ TB`, async () => {
+      const { s, tA, E } = await issuedWorld()
+      s.w.carrier.faults.withhold('A1', (f) => kind(s, f) === 'introduction-ticket')
+      await s.round(2)
+      at(s, E - DAY + d)
+      await s.round(1)
+      expect(deposits(s, tA)).toBe(d <= 0 ? 2 : 1)
+      expect(s.M1.zusteller.report(tA.digest)?.state).toBe('accepted')
+    }, 240_000)
+
+    it(`T6c (${d / SEC} s). Side consent at the boundary (8155): consent iff now ≤ TB, else the next tick expires the act`, async () => {
+      const { s, act, E } = await issuedWorld()
+      await s.round(2)
+      at(s, E - DAY + d)
+      await s.A1.consent(act)
+      expect(sideState(s.A1, act)).toBe(d <= 0 ? 'consented' : 'offered')
+      await s.round(1)
+      if (d > 0) expect(sideState(s.A1, act)).toBe('expired')
+    }, 240_000)
+  }
+})
+
+const enc = new TextEncoder()
+type Raw = { sendDoc(type: string, ctx: string, peer: string, peerKa: string, rkid: string, payload: Record<string, unknown>): Promise<{ digest: string } | null> }
+const ownBatches = (d: HolderDevice, writer: string) => (d.cand.heads?.() ?? {})[writer] ?? 0
+const conflicts = (d: HolderDevice) => d.state.findings.filter((f) => f.startsWith('Journal-Konflikt')).length
+
+describe('K2 step 2b.2: restart from the last commit (5.3)', () => {
+  it('N1. Restart after k batches: batch k + 1 under the unchanged writer `M1@inc`, folded by M2, no MV-3 conflict', async () => {
+    const s = await world()
+    const writer = s.M1.cand.writer
+    s.M1.crashAt = 'after-commit'
+    await s.round(1)
+    expect(s.M1.isDown).toBe(true)
+    const k = ownBatches(s.M1, writer)
+    expect(k).toBeGreaterThanOrEqual(2)
+    await reload(s, s.M1)
+    expect(s.M1.cand.writer).toBe(writer)
+    await introduce(s, s.M1) // one more own batch
+    await s.round(2)
+    expect(ownBatches(s.M1, writer)).toBeGreaterThanOrEqual(k + 1)
+    expect(ownBatches(s.M2!, writer)).toBe(ownBatches(s.M1, writer)) // M2 folded it
+    expect([conflicts(s.M1), conflicts(s.M2!)]).toEqual([0, 0])
+  }, 240_000)
+
+  it('N2. Restart after the acceptance, before the receipt: one acceptance, consumption in the store, receipt after the rebuild, writer unchanged', async () => {
+    const s = await world()
+    const { act } = await introduce(s, s.M1)
+    const { a } = issued(s.M1, act)
+    const writer = s.A1.cand.writer
+    s.A1.crashAt = 'after-commit'
+    await s.round(1)
+    expect(s.A1.isDown).toBe(true)
+    expect(knowledge(s.M1, act)[0]).toBe('unknown')
+    await reload(s, s.A1)
+    await s.round(3)
+    expect(s.A1.cand.writer).toBe(writer)
+    expect(acceptances(s, act, a.a.key)).toBe(1)
+    expect(M.rel(s.A1.state, s.am.x).stock.find((k) => k.anchor === a.a.key)?.state).toBe('consumed')
+    expect(knowledge(s.M1, act)[0]).toBe('accepted')
+    expect(conflicts(s.A1)).toBe(0)
+  }, 240_000)
+
+  for (const keepInc of [false, true]) {
+    it(`N${keepInc ? '4 (mutation)' : '3'}. Restore from an image${keepInc ? ' keeping `inc`: the reused batch key collides at M2 (MV-3), so the counter-probe fails' : ': a fresh journal incarnation, no reuse of `writer@inc#n`, no MV-3 conflict'}`, async () => {
+      const s = await world()
+      const writer = s.M1.cand.writer
+      const store = s.w.stores.get('M1')!
+      const image = store.snapshot()
+      const k = ownBatches(s.M1, writer)
+      await introduce(s, s.M1) // batch k + 1 after the image
+      await s.round(2)
+      expect(ownBatches(s.M2!, writer)).toBeGreaterThan(k)
+      store.restore(image)
+      if (keepInc) (store as unknown as { restored: boolean }).restored = false // test-only mutation: the image path loses its marker
+      await reload(s, s.M1)
+      expect(s.M1.cand.writer === writer).toBe(keepInc)
+      await introduce(s, s.M1)
+      await s.round(2)
+      expect(conflicts(s.M2!)).toBe(keepInc ? 1 : 0)
+      if (!keepInc) expect(ownBatches(s.M2!, s.M1.cand.writer)).toBeGreaterThanOrEqual(1)
+    }, 240_000)
+  }
+
+  it('N5. Path marker: a stolen copy (`welt.steal`, an image) gets a new incarnation; the crash restart of the victim keeps its own', async () => {
+    const s = await world()
+    const writer = s.A1.cand.writer
+    const thief = await s.w.steal(s.A1, 'T1')
+    expect(thief.cand.writer).not.toBe(writer)
+    s.A1.crashAt = 'after-commit'
+    await s.round(1)
+    await reload(s, s.A1)
+    expect(s.A1.cand.writer).toBe(writer)
+    expect(new MemoryStore().takeRestored()).toBe(false)
+  }, 240_000)
+})
+
+describe('K2 step 2b.2: resumption as due work (5.1)', () => {
+  it('R1. `unlisted` → resubmitted: the named keys aged (8475) and are no longer listed, A accepts on `aging` (8640.6); W5', async () => {
+    const s = await world({ stockLifetimeMs: 8 * DAY })
+    const t0 = Date.parse(s.w.clock.now())
+    const { act } = await introduce(s, s.M1, 'before-send')
+    const { a, tA, tB } = issued(s.M1, act)
+    at(s, t0 + 23 * HOUR + SEC)
+    await s.round(1)
+    expect(M.rel(s.A1.state, s.am.x).stock.find((k) => k.anchor === a.a.key)?.state).toBe('aging')
+    await reload(s, s.M1)
+    await s.round(1)
+    expect([evidence(s.M1, a.a), evidence(s.M1, a.b)]).toEqual(['unlisted', 'unlisted'])
+    expect([deposits(s, tA), deposits(s, tB)]).toEqual([1, 1])
+    await s.round(2)
+    expect([acceptances(s, act, a.a.key), acceptances(s, act, a.b.key)]).toEqual([1, 1])
+    const cs = await checks(s)
+    expect(allOk(cs)).toEqual([])
+    expect(prop(cs, 'P-Bilanz').counts.max).toBe(5)
+  }, 240_000)
+
+  it('R4. `burn` (fixture, measured until 2c): a crafted revision burns the incarnation of xA while tA is held after a crash', async () => {
+    const s = await world()
+    const { act } = await introduce(s, s.M1, 'before-send')
+    const { a, tA } = issued(s.M1, act)
+    const r = M.rel(s.A1.state, s.am.x)
+    const h = M.head(r)
+    const k = await s.A1.cand.keys.pair(h.ownKey)
+    const inc = r.stock.find((x) => x.anchor === a.a.key)!.inc!
+    const payload = { writer: M.signerId(k.anchor), inc: 'fixtureincfixtur', rev: 1, keys: [], withdraw: [], bury: [], burn: [inc] }
+    await (s.A1 as unknown as Raw).sendDoc(TYPES.stockRevision, h.ownKey, h.peer, h.peerKeyAgreement, k.rkid, payload)
+    await s.round(1)
+    await reload(s, s.M1)
+    await s.round(3)
+    // Measured, no Soll (core draft 4 §5.1: `burned` only as a form consequence in the core; decision 10: burned = withdrawn).
+    const measured = { evidence: evidence(s.M1, a.a), deposits: deposits(s, tA), acceptances: acceptances(s, act, a.a.key) }
+    expect(['unknown', 'listed', 'unlisted', 'withdrawn']).toContain(measured.evidence)
+    ;(globalThis as { r4?: unknown }).r4 = measured
+    if (process.env.MEASURE_OUT) (await import('node:fs')).writeFileSync(process.env.MEASURE_OUT, JSON.stringify(measured))
+  }, 240_000)
+})
+
+describe('K2 step 2b.2: B13 (i) and (ii)', () => {
+  it('B13 (i). A receipt signed by another A device: `ack-from-unexpected-signer`, knowledge unchanged; the allocator\'s receipt then makes it accepted', async () => {
+    const s = await world({ a2: true })
+    const { act } = await introduce(s, s.M1)
+    const { a, tA } = issued(s.M1, act)
+    const by = M.rel(s.A1.state, s.am.x).stock.find((k) => k.anchor === a.a.key)!.by
+    const Ax = by === 'A1' ? s.A1 : s.A2!
+    const Ay = by === 'A1' ? s.A2! : s.A1
+    s.w.carrier.faults.withhold('M1', (f) => kind(s, f) === 'delivery-ack' && s.w.frameOrigin(f.bytes)?.device === Ax.name)
+    await s.round(2)
+    expect(acceptances(s, act, a.a.key)).toBe(1)
+    const own = M.rel(Ay.state, s.am.x).stock.find((k) => k.by === Ay.name)!
+    const ky = await Ay.cand.keys.pair(own.key)
+    const now = s.w.clock.now()
+    const doc = await diSign({ anchor: ky.anchor, ed: { priv: ky.ed.priv } }, { id: crypto.randomUUID(), type: TYPES.ack, issuer: ky.anchor, recipient: tA.expected, replyTo: '', issuedAt: now, payload: { ref: tA.digest, meaning: 'received' } }, now)
+    s.w.carrier.deposit(tA.replyTo, enc.encode(jcs(await seal(doc as unknown as Json, tA.replyTo))))
+    await s.round(1)
+    expect(s.M1.dispositions.filter((x) => x === 'failed(ack-from-unexpected-signer)').length).toBe(1)
+    expect(knowledge(s.M1, act)[0]).toBe('unknown')
+    s.w.carrier.faults.reset()
+    await s.round(1)
+    expect(knowledge(s.M1, act)[0]).toBe('accepted')
+  }, 300_000)
+
+  for (const variant of ['misrouted', 're-sealed'] as const) {
+    it(`B13 (ii-${variant === 'misrouted' ? 'b' : 'a'}). The receipt reaches another M device (${variant}): ${variant === 'misrouted' ? '`failed(malformed)`' : '`ack-unbound`'} at M2, no \`accepted\` from it, no hang; W4`, async () => {
+      const s = await world({ m3: true, devices: 3 })
+      const { act } = await introduce(s, s.M1)
+      const { a, tA } = issued(s.M1, act)
+      s.w.carrier.faults.withhold('M1', (f) => kind(s, f) === 'delivery-ack' && s.w.frameOrigin(f.bytes)?.device === 'A1')
+      await s.round(2)
+      expect(acceptances(s, act, a.a.key)).toBe(1)
+      const ack = s.w.carrier.carried.find((f) => kind(s, f) === 'delivery-ack' && s.w.frameOrigin(f.bytes)?.device === 'A1' && f.address === tA.replyTo)!
+      const ctx = M.rel(s.M1.state, s.am.y).tuples[0]!.ownKey
+      const m2Address = (await s.M2!.cand.keys.pair(ctx)).rkid
+      let bytes = ack.bytes
+      if (variant === 're-sealed') {
+        const keys = new Map(s.M1.receiverKeys())
+        const v = await receive(JSON.parse(new TextDecoder().decode(ack.bytes)), (rkid) => keys.get(rkid))
+        bytes = enc.encode(jcs(await seal(v.document as unknown as Json, m2Address)))
+      }
+      const before = s.M2!.dispositions.length
+      s.w.carrier.deposit(m2Address, bytes)
+      await s.round(1)
+      const got = s.M2!.dispositions.slice(before)
+      if (variant === 'misrouted') expect(got.some((x) => x.startsWith('failed(malformed)'))).toBe(true)
+      else {
+        expect(got.filter((x) => x === 'failed(ack-unbound)').length).toBe(1)
+        expect(s.M2!.measures.unboundAcks).toBeGreaterThanOrEqual(1)
+      }
+      expect(knowledge(s.M2!, act)[0]).toBe('unknown') // not from that receipt
+      s.w.carrier.faults.reset()
+      await s.round(2)
+      expect(knowledge(s.M1, act)[0]).toBe('accepted') // from its own receipt
+      expect(knowledge(s.M2!, act)[0]).toBe('accepted') // from M1's journal
+      await drain(s, issued(s.M1, act).a)
+      expect(sideState(s.A1, act)).toBe('expired')
+    }, 300_000)
+  }
+})
+
+describe('K2 step 2b.2: budget-cause fixture (core draft 4 §1)', () => {
+  it('F1. `share` artificially lowered to 0 at A1: the key is consumed, no act, no receipt, `belegt` unchanged; dead `budget` (fixture)', async () => {
+    const s = await world()
+    Object.defineProperty(s.A1.cand, 'acceptanceShare', { get: () => 0 })
+    const allocBefore = s.buch.commits.filter((c) => c.device === 'A1' && c.ops.some((op) => op.kind === 'allocate')).length
+    const { act } = await introduce(s, s.M1)
+    const { a } = issued(s.M1, act)
+    await s.round(3)
+    expect(M.rel(s.A1.state, s.am.x).stock.find((k) => k.anchor === a.a.key)?.state).toBe('consumed')
+    expect(sideState(s.A1, act)).toBe('none')
+    expect(acceptances(s, act, a.a.key)).toBe(0)
+    expect(load(s.A1, s.am.x, s.w.clock.now())).toBe(0)
+    expect(knowledge(s.M1, act)).toEqual(['unknown', 'accepted'])
+    expect(s.buch.commits.filter((c) => c.device === 'A1' && c.ops.some((op) => op.kind === 'allocate')).length).toBe(allocBefore)
+    expect(acceptances(s, act, a.b.key)).toBe(1)
+    await drain(s, a)
+    const dead = deadTickets(s.buch, s.w)
+    expect([dead.causes.budget, dead.deadAccepted]).toEqual([1, 1])
+    const cs = await judge(s.buch, { share: 5 })
+    expect(prop(cs, 'P-Bilanz').ok).toBe(true)
   }, 240_000)
 })

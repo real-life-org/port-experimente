@@ -1,4 +1,4 @@
-# K2: device keys (step 1), device sets and one card per act (step 2a), outcome ledger (step 2b.0), allocation by A (step 2b.1)
+# K2: device keys (step 1), device sets and one card per act (step 2a), outcome ledger (step 2b.0), allocation by A (step 2b.1), issuance automaton (step 2b.2)
 
 Plan E15, sections 6o.4, 6r, 6s and 6t (`rltp/design/port-experimente-e15-mehrgeraet-plan-2026-10-17.md`).
 Candidate `k2-device-keys` (K2-strict, M as single-writer fixture) in
@@ -6,11 +6,112 @@ Candidate `k2-device-keys` (K2-strict, M as single-writer fixture) in
 split); tests `tests/mehrgeraet-k2.test.ts`; measurements
 `src/lab/mehrgeraet/geraetemengen.ts`. K2 reuses K1a's journal, holder and
 model (`src/lab/mehrgeraet/{holder,model,welt}.ts`,
-`src/candidates/mehrgeraet-k1a`). Step 2b.1 (allocation per M device
-by A) comes first, then step 2b.0 (the measuring instrument for 2b),
+`src/candidates/mehrgeraet-k1a`). Step 2b.2 (issuance automaton) comes first, then step 2b.1 (allocation per M device
+by A), then step 2b.0 (the measuring instrument for 2b),
 then step 2a; the step-2
 sections follow where they still hold (with the parts 2a removed marked),
 then step 1.
+
+## Step 2b.2 (21 October 2026): issuance automaton, act-end stop, restart from the last commit
+
+Design: `rltp/design/port-experimente-e15-k2-schritt-2b-kern-entwurf-4-2026-10-21.md` (core draft 4, Fassung 4) §1
+(incl. 1.3, 1.4), §5, §6 "2b.2"; draft 3 §1.1, §1.2, §7.3; draft 2 §2.1–2.6. Acceptance sheet with every expected value,
+derived before the build, and the decisions taken before it: `ABNAHME-2b2.md` (this directory). Tests:
+`tests/mehrgeraet-k2-automat.test.ts` (57 tests: K1–K10 with K5c, the six act-end tests × three boundaries with
+controls, N1–N5, R1, R4, B13 (i)/(ii), F1).
+
+**K2 capability.** `CandidateDevice.issuanceAutomaton` (candidate option; `k2({ automaton })`, default on for K2,
+`false` = the 2b.1 path; K0 and K1a never set it and run the old path in every function touched below). Every new rule
+below is behind it except three that are neutral for K0/K1a and measured so: the restore marker of the store, the
+ticket log (a measurement like `cardLog`) and the code-unit order of the key choice (decision 16; K0/K1a cells, details
+and measures stay byte-identical, below).
+
+**Two facts per side (draft 3 §1.1).** Acceptance knowledge: a receipt for an own ticket is journaled as
+`ticket-ack@1 { act, side, receiptDigest }` (op `ticket-ack`, MV-24 shape in `OP_FIELDS`), written only by the issuer in
+`onAck`, folded by its siblings into `MediatorAct.known`; a late receipt still counts. Evidence: `M.evidence` as in 2b.1.
+Ticket intents carry `act` and `side` (`Intent`, `INTENT_FIELDS`).
+
+**One batch (draft 2 §2.3).** `introduce` aborts the whole step if a ticket is not produced (`sendDoc` returns null:
+`InvalidInput`, no issuance); the parser of K2 (`issuanceProblem` in `receiveOwnFrame`) refuses a batch with an
+`introduce` that does not hold exactly two ticket intents of that act, one per side, and a ticket intent without
+`introduce`. The ticket payload has an MV-24 form (`DOC_SHAPES.ticket`).
+
+**Release gate and resumption as due work (5.1, 1.4; decisions 9, 10, 13, 15).** One model function,
+`M.ticketGate(state, act, side, now, otherSubmitted)`, used by the holder's release, its tick and the ledger:
+`accepted` (receipt known: omitted, decision 13, derived), `deadline` (`now > expiresAt − consent-reserve`, equality
+admissible), `departed` (8232.1: the addressee relationship departed, or the other one while the other ticket was not
+submitted), `withdrawn` (withdrawn, buried, burnt, revoked writer; decision 10). The gate runs in `release` itself (the
+release in `round()` precedes the tick, decision 9): `deadline` → `zusteller.expire(·, 'consent-reserve')`, `departed` →
+cancelled (`demarcate`), `withdrawn` → held as due work (`due`, re-released at every flush, rebuilt from the unreleased
+submissions after a restart). An own ticket intent brought by the journal without a submission is resumed (MV-8; never a
+sibling's). Omissions are measured per intent (`HolderDevice.ticketOmissions`).
+
+**Act-end stop (5.2; decision 3).** `Zusteller.expire(digest, reason)`: before the first carrier acceptance `failed`
+with the reason (given up), after it the report stays `accepted` (handed) and only the repetition stops (`stopped`); a
+late receipt makes it `delivered`. The holder's tick (`actEndStop`) calls it for own tickets past `TB` and for tickets at
+the carrier whose key is known `withdrawn` (decision 15), for own cards past 8110.5 (`act-ended`). The side's ticket
+branch accepts until `expiresAt + act-skew` (`TicketReceiver.skew`), 8325.A8 expires `consented` only after 8110.5. A
+released ticket still `awaiting-transport` is not deposited while its gate is closed (`Zusteller.gate`).
+
+**8850.5 sharpened (decision 8; derived from core §1, Anton may veto).** A card to a stock key the side holds neither
+`active` nor `aging` and without an act is refused without ack (`8850.5-not-held`), no buffer branch.
+
+**Restart from the last commit (5.3).** `K1aDevice.restore(data, { fresh })`: with `keepOnRestart` (K2 under the
+capability) a rebuild that is not fresh keeps `inc` and continues `n` from the highest own batch in the committed
+journal. Fresh = the store was given an image (`MemoryStore.restore` sets a marker that holds until the device's next
+commit, `takeRestored`) or `reload({ fresh: true })`. Every image path of the bench (scenario restores, `welt.steal`)
+goes through `MemoryStore.restore`, so it stays fresh with no call site changed. Finding while building: a marker
+cleared at the first rebuild made X21 fail with 5 MV-3 conflicts (A2 restored, crashed before its first commit, the
+restart took the image's own incarnation and rewrote batches #2–#6); held until a commit, X21 is back to 0.
+
+**Crash points (decision 12).** The code names hold: `before-send` (§6 "after-commit" of an issuance), `between-sends`
+(§6 "between-tickets"), the round's `after-commit` (§6 "after acceptance before the receipt").
+
+**Ledger (rule of 2b.1: a mirror, no second projection).** `GateRow` per commit of the issuing device from
+`M.ticketGate` on the committed image; P-Produktion counts per ticket the k-round window over the up rounds in which
+submission was admissible, restarting when a round is not (decision 6, general rule: k = 3 rounds from the first round in
+which submission is admissible; a return to `listed` starts the window again); an issuance with no admissible round
+counts as `down` (decision 2); omissions by the last reason before the deadline (`omitted:rueckzug`, `omitted:abgang`,
+`omitted:accepted`). P-Paar adds the reconstructed-state row: a `declined` image that holds its own card submitted or the
+act opened (MV-15 rule 2) is a violation (`DeclinedRow`); `oneSided` counts one-sided connections (`late-card` from the
+delivery protocol, `other`); `deadTickets` counts dead acts per cause of the failed side, `deadAccepted` apart (decision
+4), from the holders' ticket log and the gate rows.
+
+**Results** (`tests/mehrgeraet-k2-automat.test.ts`, Soll from `ABNAHME-2b2.md`): K1a/K1b, K2, K3, K4, K5a/K5b/K5c,
+K6, K7a/K7b, K8a/K8b/K8c, K9, K10 green with the sheet's values; T1–T6 green at −1 s, 0, +1 s with the controls on the
+old path (T4: 8640.3 at `expiresAt`, T5: 8325.A8 at `expiresAt`) showing why the bounds moved; N1–N5, R1, B13 (i),
+(ii-a) re-sealed → `ack-unbound`, (ii-b) misrouted → `failed(malformed)`, F1 green. Measured only: R4 (`burn`: `xA`
+`withdrawn` at M1, `tA` not resubmitted, 0 acceptances) and the K4 follow-up issuance. Corrections the build found in the
+sheet are listed in its section 7a (K2 also withholds M2's journal at M1; the restore marker holds until a commit).
+`singleDevice` is not used by K1–K10 (two and three M devices).
+
+Mutation U1 of 2b.0 (`suppressTickets`) now lies to the issuance (it reports a ticket it never built): since 2b.2 a
+missing ticket aborts the issuance, so the class "commit without intents" can only be produced by a lying `sendDoc`; the
+counts are unchanged (P-Commit 1, P-Produktion 1).
+
+**Cells.** K0, K1a, K1a at the service: every cell, detail and measure identical to `main` 0a4061c (seeded `runX15`
+dump, compared cell by cell). K2 (`k2-device-keys`, `k2-device-keys-distributed-m`): no cell changed (17/2/1); details
+and measures changed, each explained: X16 (the ticket on the key of the revoked class is no longer accepted: the M devices
+come back online, fold the class-off revision and the release gate holds the ticket as `withdrawn`, so it never reaches the
+carrier; decision 4a's acceptance is information in X16, the cell holds), X21 (the restart keeps the incarnation: fewer
+journal frames and batches, other repair rounds; `forcedBranchDeclines` 2 → 0 by the code-unit key order), X12, X18
+(another allocator is named first, decision 16), X3, X17 (rounds to converge ±1, the act-end and gate timing), X8, X11
+(state copy −1 B, journal +5 B; sizes only, not traced further: other keys named, other ids). `public/matrix.html` not re-generated (no cell changed).
+
+**Spec follow-ups (2b.2).** `ticket-ack@1` as the mediator's acceptance knowledge (MV-24 shape; journaled by the issuer
+only); 8640.3 at 8110.5 (ticket branch), 8325.A8 after 8110.5; `TB` (`expiresAt − consent-reserve`) as the end of ticket
+submission and resumption, equality admissible; 8232.1 for tickets as a gate on unsubmitted parts; resumption omitted on
+known `accepted` (derived, decision 13) and on `withdrawn`/`burned` (draft 3 §1.2); the deliverer stops repeating a
+submitted ticket to a key known `withdrawn` (decision 15); 8850.5 sharpened: a card at a key not held `active`/`aging`
+without an act is refused without ack (derived, core §1, Anton may veto); P-Produktion over admissible rounds (decisions
+2, 6); the restart/image distinction in the bench (marker until the next commit); the bench keeps `consentReserveMs` P1D
+against 8155's P7D (inventory), to be aligned with the profile parameter.
+
+**Verify 2b.2.** `pnpm typecheck` green. Full suite (`vitest run`, 43 files): 673 passed + 1 expected fail (D1) + 2
+skipped in ≈ 19.5 min (22:05–22:24) under load; the one failure of that run, `keyhive-ark` "Basislinie", was the missing
+Subduction server in this worktree (environment), green after copying `.cache/subduction-0.18.0` (≈ 9.5 min alone). The
+four K2 files (`mehrgeraet-k2`, `-k2-zuteilung`, `-buch`, `-k2-automat`) ≈ 17 min. Seed sweep `SEEDS=all` (`mehrgeraet-seeds`): 40/40 in ≈ 34 min (K2-strict with the 17/2/1 table,
+K1a).
 
 ## Step 2b.1 (21 October 2026): allocation per M device by A
 
