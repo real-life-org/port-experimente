@@ -27,7 +27,7 @@
 // wird aus dem Zustand abgeleitet und in jedem Zeitübergang erneut
 // geprüft, nicht nur beim Ereignis, das sie fällig machte (B6).
 
-import { seal, receive, edFromSeed, xFromSeed, anchorOfEd, mkOfX, diSign, diVerify, jcs, digestBytes } from '@real-life/trust-protocol'
+import { seal, receive, edFromSeed, xFromSeed, anchorOfEd, mkOfX, diSign, diVerify, jcs, digestBytes, b64uOf, fromB64u } from '@real-life/trust-protocol'
 import type { Json, KeyPair } from '@real-life/trust-protocol'
 import { createHash, createHmac } from 'node:crypto'
 import { Carrier, Zusteller, realClock, type Clock, type Store, type Submission, Crashed, type CrashPoint, WireUnreachable, type LogAnswer } from '../zustellung'
@@ -247,10 +247,18 @@ export interface CandidateDevice {
   readonly deviceSets?: boolean
   /** K2 Schritt 2: hält dieses Gerät den privaten Teil des Vorrats-Schlüssels (strict: nur das zuteilende Gerät)? */
   holdsStock?(k: M.StockKey): boolean
-  /** K2 Schritt 2: Nachfüllgrenzen für den eigenen Anteil am Vorrat (jedes Gerät hält seinen Anteil, 8485 je Gerät geteilt). */
-  stockShare?(): { below: number; to: number }
-  /** K2 Schritt 2: wie viele Annahmen dieses Gerät in der Mediatorbeziehung noch hat (MV-9); so viele Schlüssel listet es höchstens. */
-  quotaLeft?(rel: string, state: M.HolderState, now: string): number
+  /**
+   * K2 step 2b.1 (core draft 4 §2, §3): A assigns every stock key to one M device (`for`) and lists it in `stock-revision@2`
+   * with a proof of possession; supply only from the device's free rights; acceptance checked per device (8640.13). The
+   * three members below come with it.
+   */
+  readonly allocationByA?: boolean
+  /** K2 step 2b.1: the static share of the acceptance budget of this device per mediator relationship (MV-9, 8510). */
+  readonly acceptanceShare?: number
+  /** K2 step 2b.1: `belegt` (§2.1): this device's acceptances in the 8510 window of `now` without the 8515-confirmed ones. Rein. */
+  occupied?(rel: string, state: M.HolderState, now: string): number
+  /** K2 step 2b.1: the writer incarnation tag in a relationship (`inc` of `stock-revision@2`): HMAC of the incarnation over the relationship. Rein. */
+  incTag?(relationship: string): string
   /** K2 Schritt 2: Lebensdauer neuer Vorrats-Schlüssel (X23); ohne: 8465. */
   readonly stockLifetimeMs?: number
   /** K2 Schritt 2: der öffentliche Schlüssel Nummer `i` aus dem eigenen Vorrat für Schwestergeräte (Kontext `pool/<i>`). */
@@ -321,6 +329,8 @@ export const TYPES = {
   journal: 'https://real-life.org/rltp/e15/journal/0.1',
   journalSync: 'https://real-life.org/rltp/e15/journal-sync/0.1',
   deviceSet: 'https://real-life.org/rltp/e15/device-set/0.1',
+  /** K2 step 2b.1: `stock-revision@2` (core draft 4 §3.1). */
+  stockRevision: 'https://real-life.org/rltp/e15/stock-revision/2',
   ack: 'https://real-life.org/trust-tasks/delivery-ack/0.1',
 } as const
 
@@ -464,14 +474,15 @@ export interface TicketStateSteps {
 export type TicketVerdict =
   | { ok: true; repeated: true }
   | { ok: true; repeated: false; rel: M.Relationship; own: M.StockKey; p: TicketPayload }
-  | { ok: false; step: '8640.2' | '8640.3' | '8640.5' | '8640.7' | '8640.8' | 'state'; reason: string; p?: TicketPayload }
+  | { ok: false; step: '8640.2' | '8640.3' | '8640.5' | 'fremde-zuteilung' | '8640.7' | '8640.8' | 'state'; reason: string; p?: TicketPayload; own?: M.StockKey }
 
 /**
  * E15 2b.0 (Tor-Review 43): the side's ticket acceptance predicate (8640, up to the voucher check 8640.8), pure over the
  * receiver's context; the holder calls it on receipt, the outcome ledger as the reference of P-Commit, so the ledger never
  * re-implements a ticket rule. Steps in order: 8640.2 channel (an own relationship behind the address) and signer (a
  * counterpart on that relationship; K2: a member of its device set), 8640.3 times; [8640.4 repetition: state]; 8640.5 the
- * named key on this relationship (K2: the address is its key agreement); [8640.12, 8640.6: state]; 8640.7 the key outlives
+ * named key on this relationship (K2: the address is its key agreement); K2 2b.1: the signer is the key's `for`
+ * (`fremde-zuteilung`); [8640.12, 8640.6: state]; 8640.7 the key outlives
  * the act; 8640.8 the voucher is no own stock key. It stops before 8640.9 (voucher assignment), 8640.13 (budget) and the
  * acceptance 8640.14: state, not binding. Tickets have no MV-24 form in 2a (`DOC_SHAPES`; 2b.2 adds it).
  */
@@ -486,6 +497,8 @@ export function ticketAcceptance(doc: { issuer: string; payload: unknown }, addr
   if (steps?.repeated(p)) return { ok: true, repeated: true }
   const own = r.stock.find((k) => k.anchor === p.own && (!rx.sets || k.keyAgreement === address))
   if (!own) return { ok: false, step: '8640.5', reason: `own ${p.own.slice(-8)} not on this relationship at address ${address.slice(-8)}`, p }
+  // K2 step 2b.1 (draft 2 §3.3): the signer is the M device the key is assigned to, by A's own record (never M's statement).
+  if (own.for !== undefined && own.for !== doc.issuer) return { ok: false, step: 'fremde-zuteilung', reason: `signer ${doc.issuer.slice(-8)} is not the M device ${own.for.slice(-8)} the key ${own.anchor.slice(-8)} is assigned to`, p, own }
   if (steps && !steps.usable(own, p)) return { ok: false, step: 'state', reason: `own ${own.anchor.slice(-8)} in state ${own.state}`, p }
   if (Date.parse(own.expiresAt) < Date.parse(p.expiresAt) + M.PARAM.actSkewMs) return { ok: false, step: '8640.7', reason: `own ${own.anchor.slice(-8)} expires before the act`, p }
   if (r.stock.some((k) => k.anchor === p.voucher.anchor)) return { ok: false, step: '8640.8', reason: `voucher ${p.voucher.anchor.slice(-8)} is an own stock key`, p }
@@ -650,6 +663,8 @@ export class HolderDevice {
   private parked: string[] = []
   private readonly ctxOfRkid = new Map<string, string>()
   private readonly ctxOfAnchor = new Map<string, string>()
+  /** K2 step 2b.1: this device's anchor per own context (the `for` of keys assigned to it), filled by `listen`. */
+  private readonly anchorOfCtx = new Map<string, string>()
   private privOf = new Map<string, CryptoKey>()
   private ownRkid: string | null = null
   private carrierRef: Carrier
@@ -762,6 +777,7 @@ export class HolderDevice {
   /** Jeder eigene Empfangsschlüssel ist eine Adresse am Träger; beide Geräte einer Person registrieren dieselben (K0/K1). */
   async listen(ctx: string): Promise<Keys> {
     const k = await this.keysFor(ctx)
+    this.anchorOfCtx.set(ctx, k.anchor)
     if (!this.ctxOfRkid.has(k.rkid)) {
       this.ctxOfRkid.set(k.rkid, ctx)
       this.ctxOfAnchor.set(k.anchor, ctx)
@@ -1423,27 +1439,70 @@ export class HolderDevice {
     // Nachfüllen ist fällige Arbeit aus dem Zustand (B6) und läuft in der ersten Runde nach dem Nachholen.
     if (this.perWriter && this.catchUp) return
     const r = M.rel(this.state, relId)
+    if (this.cand.allocationByA) return this.supply(r)
     if (!r.classOn || r.departed || M.budgetExhausted(r, this.clock.now())) return
-    // K2 Schritt 2: jedes Gerät hält seinen eigenen Anteil am Vorrat bei M (Schlüssel je Gerät, 6o.2 (a)); K0/K1a: die Person.
-    const share = this.cand.stockShare?.()
-    const active = r.stock.filter((k) => k.state === 'active' && (!share || k.by === this.me))
-    if (active.length >= (share?.below ?? M.PARAM.refillBelow)) return
+    const active = r.stock.filter((k) => k.state === 'active')
+    if (active.length >= M.PARAM.refillBelow) return
     const nonce = this.cand.stockNonce?.(r.id) ?? r.nonce ?? Buffer.from(derive(enc.encode(`${this.person}/${r.id}/${this.cand.writer}/${this.counter}`), 'nonce')).toString('base64')
     const keys: M.StockKey[] = []
     // Das Ziel zählt die aktiven Schlüssel der Person (alle Geräte, über das Journal), nicht je Restklasse: ein Gerät allein
     // hält M aus seinen eigenen Nummern versorgt (Review 21 B1).
-    // K2 Schritt 2: ein Gerät listet nur so viele eigene Schlüssel, wie es noch annehmen kann (strict: nur der Halter öffnet
-    // das Ticket; ein Schlüssel eines Geräts ohne Kontingent wäre bei M ein toter Schlüssel, MV-9).
-    const cap = Math.min(share?.to ?? M.PARAM.refillTo, this.cand.quotaLeft?.(r.id, this.state, this.clock.now()) ?? Infinity)
-    for (let n = r.nextN; keys.length < cap - active.length; n++) {
+    for (let n = r.nextN; keys.length < M.PARAM.refillTo - active.length; n++) {
       if (this.cand.mayAllocate && !this.cand.mayAllocate(n, r.id, this.state)) continue
-      const ctx = `introduction/${nonce}/${n}`
-      const k = await this.listen(ctx)
-      keys.push({ n, nonce, anchor: k.anchor, keyAgreement: k.rkid, key: ctx, expiresAt: new Date(Date.parse(this.clock.now()) + (this.cand.stockLifetimeMs ?? M.PARAM.prekeyLifetimeMs)).toISOString(), state: 'active', ...(share ? { by: this.me } : {}) })
+      keys.push(await this.stockKey(r, n, nonce))
     }
     if (!keys.length) return
     this.emit({ kind: 'allocate', rel: r.id, nonce, keys })
     await this.sendRevision(r.id)
+  }
+  /** Ein neuer eigener Vorrats-Schlüssel Nummer n (8445): Kontext `introduction/<nonce>/<n>`, Adresse registriert. */
+  private async stockKey(r: M.Relationship, n: number, nonce: string, extra: Partial<M.StockKey> = {}): Promise<M.StockKey> {
+    const ctx = `introduction/${nonce}/${n}`
+    const k = await this.listen(ctx)
+    return { n, nonce, anchor: k.anchor, keyAgreement: k.rkid, key: ctx, expiresAt: new Date(Date.parse(this.clock.now()) + (this.cand.stockLifetimeMs ?? M.PARAM.prekeyLifetimeMs)).toISOString(), state: 'active', ...extra }
+  }
+  /**
+   * K2 step 2b.1, the allocator's side (core draft 4 §2.1, §2.3; draft 2 §3.4, §3.6, §3.7), one step, fällige Arbeit (B6):
+   *
+   *   M's device set as known here (from `device-set@1`): unknown = the root alone; known = its members; known empty = none.
+   *   Revocation of an M device: every live own key assigned to it is withdrawn, the successor listing goes in this batch.
+   *   Balance per device a and mediator relationship: reserviert = own keys `active`/`aging` with now ≤ expiresAt; belegt =
+   *   acceptances in the 8510 window minus 8515-confirmed; frei_zuteilbar = max(0, share − belegt − reserviert).
+   *   Supply: whole free rights, first to M devices with no usable key of a (by anchor), then to those under
+   *   to_am = max(1, ⌊(share − belegt) / |M|⌋) (by anchor; bench bound below); nothing is withdrawn for a re-supply
+   *   (decision 9.1 (a)).
+   *   A revision goes out when something changed, or when the class is on again and the own last revision was off.
+   */
+  private async supply(r: M.Relationship): Promise<void> {
+    if (!r.classOn || r.departed) return
+    const now = this.clock.now()
+    const me = this.me
+    const h = M.head(r)
+    const set = this.setOf(h.peer)
+    const view = set ? M.setView(set) : null
+    const members = (view ? view.members.map((m) => m.anchor) : [h.peer]).sort()
+    const drop = r.stock.filter((k) => k.by === me && (k.state === 'active' || k.state === 'aging') && k.for !== undefined && view?.revoked.has(k.for)).map((k) => k.anchor)
+    if (drop.length) this.emit({ kind: 'withdraw', rel: r.id, anchors: drop })
+    const share = this.cand.acceptanceShare ?? 0
+    const occupied = this.cand.occupied?.(r.id, this.state, now) ?? 0
+    const reserved = r.stock.filter((k) => k.by === me && (k.state === 'active' || k.state === 'aging') && Date.parse(now) <= Date.parse(k.expiresAt)).length
+    let free = M.budgetExhausted(r, now) ? 0 : Math.max(0, share - occupied - reserved)
+    // [Prüfstand] to_am is bounded by the 8485 refill target and by the form bound of one listing (`keys` ≤ 64, §3.1); with
+    // the default share (5 per device) the bound never bites. Without it a large budget would list hundreds of keys.
+    const target = Math.max(1, Math.min(Math.floor((share - occupied) / Math.max(1, members.length)), M.PARAM.refillTo, Math.floor(M.REVISION_LIMITS.keys / Math.max(1, members.length))))
+    const count = new Map(members.map((m) => [m, r.stock.filter((k) => k.by === me && k.for === m && k.state === 'active' && M.usable(k.expiresAt, now)).length]))
+    const plan: string[] = []
+    for (const m of members) if (free > 0 && count.get(m) === 0) plan.push(m), count.set(m, 1), free--
+    for (const m of members) while (free > 0 && count.get(m)! < target) plan.push(m), count.set(m, count.get(m)! + 1), free--
+    const keys: M.StockKey[] = []
+    if (plan.length) {
+      const nonce = this.cand.stockNonce!(r.id)
+      const inc = this.cand.incTag!(r.id)
+      for (let i = 0; i < plan.length; i++) keys.push(await this.stockKey(r, r.nextN + i, nonce, { by: me, for: plan[i]!, inc }))
+      this.emit({ kind: 'allocate', rel: r.id, nonce, keys })
+    }
+    const last = M.own(r.writers, `${await this.writerOf(r.id)}.${this.cand.incTag!(r.id)}`)
+    if (drop.length || keys.length || last?.empty) await this.sendRevision(r.id)
   }
   private async refillAll(): Promise<void> {
     for (const r of this.state.relationships) if (r.classOn && !r.departed) await this.guarded(() => this.refill(r.id))
@@ -1455,18 +1514,21 @@ export class HolderDevice {
    * anderen Geräts nicht nannte), und sendet unter der eigenen Kennung eine leere Revision, wenn seine eigene jüngste
    * Revision Schlüssel listet: M hebt mit jeder leeren Revision die Schlüssel aller Schreiber auf, die es hält, aber eine
    * Revision dieses Schreibers, die M erst danach erreicht, gälte wieder. Fällige Arbeit aus dem Zustand (B6). Nur mit
-   * Schreiberkennung; ohne (K0) bleibt alles wie vorher.
+   * Schreiberkennung; ohne (K0) bleibt alles wie vorher. K2 2b.1 (MV-12, core draft 4 §4): the own off revision
+   * (`classOff`, with `withdraw` of the own and `bury` of every known anchor of the person) unless the own last one was off.
    */
   private async withdrawAfterClassOff(): Promise<void> {
     if (!this.perWriter) return
     for (const r of this.state.relationships) {
       if (r.classOn || r.departed) continue
-      const live = r.stock.filter((k) => k.state === 'active' || k.state === 'aging' || k.state === 'allocated' || k.state === 'registered').map((k) => k.anchor)
-      const own = M.own(r.writers, (await this.writerOf(r.id))!)
-      if (!live.length && !(own && !own.empty)) continue
+      const live = r.stock.filter((k) => (k.state === 'active' || k.state === 'aging' || k.state === 'allocated' || k.state === 'registered') && (!this.cand.allocationByA || k.by === this.me)).map((k) => k.anchor)
+      const tag = await this.writerOf(r.id)
+      const own = this.cand.allocationByA ? M.own(r.writers, `${tag}.${this.cand.incTag!(r.id)}`) : M.own(r.writers, tag!)
+      const owed = this.cand.allocationByA ? !!live.length || (!!own && !own.empty) : !!own && !own.empty
+      if (!live.length && !owed) continue
       await this.guarded(async () => {
         if (live.length) this.emit({ kind: 'withdraw', rel: r.id, anchors: live })
-        if (own && !own.empty) await this.sendRevision(r.id)
+        if (owed) await this.sendRevision(r.id)
       })
     }
   }
@@ -1479,27 +1541,55 @@ export class HolderDevice {
   private async sendRevision(relId: string): Promise<void> {
     const r = M.rel(this.state, relId)
     if (r.departed) return
-    // K2 Schritt 2: jeder Schreiber listet nur seinen Anteil; eine leere Liste hiebe bei M die Schlüssel aller Schreiber auf
-    // (8535, MV-12). Sie geht nur bei Klasse aus; sonst keine Revision.
-    if (this.cand.stockShare && r.classOn && !r.stock.some((k) => k.state === 'active' && k.by === this.me)) return
     const tag = await this.writerOf(r.id)
     if (tag && this.catchUp) {
       this.owed.add(r.id)
       return
     }
+    if (this.cand.allocationByA) return this.sendStockRevision(r, tag!)
     const h = M.head(r)
     const revision = tag ? (M.own(r.writers, tag)?.revision ?? 0) + 1 : r.revision + 1
-    // K2 Schritt 2: jeder Schreiber listet seinen eigenen Anteil (der Signierer bürgt für die Schlüssel, die er hält); M vereinigt.
-    const share = !!this.cand.stockShare
-    const keys = r.stock.filter((k) => k.state === 'active' && (!share || k.by === this.me)).map((k) => ({ n: k.n, anchor: k.anchor, keyAgreement: k.keyAgreement, expiresAt: k.expiresAt }))
-    // K2, Review 34 B5 / Review 35 B6: eine leere Revision nennt die konkreten Anker, die sie zurückzieht (Grabstein je Anker,
-    // keine Nummernmarken). Klasse aus ist Sache der Person (Entscheidung 1b, Vertrag 4.10): dann nennt sie in beiden
-    // jeden Anker der Person, den der Aussteller kennt (eigene und die der Schwestern aus dem Journal). Eine leere Revision
-    // bei eingeschalteter Klasse nennt nur die eigenen. Verbrauchte nicht (8570.2 markiert sie bei M schon).
-    const personWide = !r.classOn
-    const tombstones = this.cand.signerWriters && tag && !keys.length ? r.stock.filter((k) => k.state !== 'consumed' && (personWide || k.by === this.me)).map((k) => k.anchor).sort() : undefined
+    const keys = r.stock.filter((k) => k.state === 'active').map((k) => ({ n: k.n, anchor: k.anchor, keyAgreement: k.keyAgreement, expiresAt: k.expiresAt }))
     this.emit({ kind: 'revision', rel: r.id, revision, keys, ...(tag ? { writer: tag } : {}) })
-    await this.sendDoc(TYPES.revision, h.ownKey, h.peer, h.peerKeyAgreement, (await this.keysFor(h.ownKey)).rkid, { revision, keys, ...(tag && this.cand.writerTag ? { writer: tag } : {}), ...(tombstones ? { tombstones } : {}) }) // K2: der Schreiber ist der Signierer, kein Feld
+    await this.sendDoc(TYPES.revision, h.ownKey, h.peer, h.peerKeyAgreement, (await this.keysFor(h.ownKey)).rkid, { revision, keys, ...(tag && this.cand.writerTag ? { writer: tag } : {}) })
+  }
+  /**
+   * K2 step 2b.1: `stock-revision@2` (core draft 4 §3.1, §3.2) of this writer incarnation on the head: `rev` one above its
+   * own last (8500 per (writer, inc)); `keys` = the complete listing of the own `active` keys of this incarnation, each with
+   * its signing part and `proof` (the stock key signs its immutable assignment); `withdraw` = the own withdrawn anchors still
+   * before `expiresAt` (a set over every revision; cumulative so a lost revision loses nothing); with the class off
+   * `classOff` and `bury` = every not consumed anchor of the person this device knows (own and the siblings' from the
+   * journal, B6, as `personWide` in 2a); `burn` empty (format only in the core). Lists sorted, optional fields left out.
+   */
+  private async sendStockRevision(r: M.Relationship, writer: string): Promise<void> {
+    const h = M.head(r)
+    const inc = this.cand.incTag!(r.id)
+    const rev = (M.own(r.writers, `${writer}.${inc}`)?.revision ?? 0) + 1
+    const now = this.clock.now()
+    const own = r.stock.filter((k) => k.by === this.me)
+    const listed = r.classOn ? own.filter((k) => k.state === 'active' && k.inc === inc).sort((a, b) => M.byCode(a.anchor, b.anchor)) : []
+    const keys: M.RevKey[] = []
+    for (const k of listed) {
+      const ks = await this.keysFor(k.key)
+      const body = { n: k.n, nonce: k.nonce, anchor: k.anchor, keyAgreement: k.keyAgreement, expiresAt: k.expiresAt, for: k.for! }
+      const proof = new Uint8Array(await crypto.subtle.sign('Ed25519', ks.ed.priv, M.proofContent(writer, inc, body) as BufferSource))
+      keys.push({ ...body, signing: b64uOf(ks.ed.pubRaw), proof: b64uOf(proof) })
+    }
+    const withdraw = [...new Set(own.filter((k) => k.state === 'withdrawn' && Date.parse(now) <= Date.parse(k.expiresAt)).map((k) => k.anchor))].sort().slice(0, M.REVISION_LIMITS.withdraw)
+    const bury = r.classOn ? [] : [...new Set(r.stock.filter((k) => k.state !== 'consumed').map((k) => k.anchor))].sort().slice(0, M.REVISION_LIMITS.bury)
+    const payload: M.StockRevision = { writer, inc, rev, keys, withdraw, bury, burn: [], ...(r.classOn ? {} : { classOff: true as const }) }
+    this.emit({ kind: 'revision', rel: r.id, revision: rev, keys: listed.map((k) => ({ n: k.n, anchor: k.anchor, keyAgreement: k.keyAgreement, expiresAt: k.expiresAt })), writer, inc, classOff: !r.classOn })
+    await this.sendDoc(TYPES.stockRevision, h.ownKey, h.peer, h.peerKeyAgreement, (await this.keysFor(h.ownKey)).rkid, payload as unknown as Record<string, Json>)
+  }
+  /** K2 step 2b.1, user action (core draft 4 §2.3): the allocating device withdraws own keys; the revision carries `withdraw`. */
+  async withdrawStock(relId: string, anchors: string[]): Promise<ActionResult> {
+    return this.action(async () => {
+      const r = M.rel(this.state, relId)
+      const mine = r.stock.filter((k) => anchors.includes(k.anchor) && k.by === this.me && (k.state === 'active' || k.state === 'aging')).map((k) => k.anchor)
+      if (!mine.length) return
+      this.emit({ kind: 'withdraw', rel: r.id, anchors: mine })
+      await this.sendRevision(r.id)
+    })
   }
   /** Die Schreiberkennung dieses Geräts für die Beziehung eines Tupels (Schritt 4), als Nutzlastfeld; ohne Kennung leer. */
   private tagField(tupleId: string): { writer?: string } {
@@ -1512,9 +1602,11 @@ export class HolderDevice {
    * Ms benennbare Schlüssel für eine Seite: aus der einen Rechnung (`M.usableView`, Review 36 B7), davon diesem Gerät
    * zugeteilt (`mayName` auf dem kanonischen Wert, K1a; K2 Schritt 2a: M ist ein Gerät, alle).
    */
-  private nameable(relId: string): { view: M.UsableView; nameable: M.ListedKey[] } {
-    M.rel(this.state, relId) // unbekannte Beziehung: Missing wie bisher, nie eine stille leere Sicht
-    const view = M.usableView(this.state, relId, this.clock.now())
+  private nameable(relId: string): { view: M.UsableView; nameable: M.ViewKey[] } {
+    const r = M.rel(this.state, relId) // unbekannte Beziehung: Missing wie bisher, nie eine stille leere Sicht
+    // K2 step 2b.1 (MV-32): only keys A assigned to this device (`for` = one of its anchors in this relationship).
+    const mine = this.cand.allocationByA ? new Set(r.tuples.map((t) => this.anchorOfCtx.get(t.ownKey)).filter((a): a is string => !!a)) : undefined
+    const view = M.usableView(this.state, relId, this.clock.now(), mine)
     return { view, nameable: view.unconsumed.filter((k) => this.cand.mayName?.(k) ?? true) }
   }
   /**
@@ -1541,15 +1633,17 @@ export class HolderDevice {
     // Abbild benennt M aus dem erreichbaren Stand; einen doppelt benannten Schlüssel weist A ab (8640.12 als Regel, MV-6).
     const r = await this.action(async () => {
       this.emit({ kind: 'introduce', act })
-      const send = async (relId: string, own: { key: string; keyAgreement: string }, voucher: { key: string; keyAgreement: string }, name: string) => {
-        const h = M.head(M.rel(this.state, relId))
+      const send = async (relId: string, own: { key: string; keyAgreement: string; for?: string }, voucher: { key: string; keyAgreement: string }, name: string) => {
+        const rel = M.rel(this.state, relId)
+        // K2 step 2b.1: the ticket is signed under the context whose anchor the key is assigned to (A checks signer = `for`).
+        const h = rel.tuples.find((t) => own.for !== undefined && this.anchorOfCtx.get(t.ownKey) === own.for) ?? M.head(rel)
         // K2 Schritt 2 (6o.2): das Ticket öffnet nur, wer den privaten Teil des benannten Vorrats-Schlüssels hält; es ist an
         // diesen versiegelt (das zuteilende Gerät) und von ihm quittiert.
         const fan = this.sets ? [{ anchor: own.key, rkid: own.keyAgreement }] : undefined
         await this.sendDoc(TYPES.ticket, h.ownKey, fan ? own.key : h.peer, fan ? own.keyAgreement : h.peerKeyAgreement, (await this.keysFor(h.ownKey)).rkid, { act: act.id, issuedAt: act.issuedAt, expiresAt: act.expiresAt, own: own.key, voucher: { anchor: voucher.key, keyAgreement: voucher.keyAgreement, name } }, fan)
       }
-      await send(relA, act.a, act.b, nameB)
-      await send(relB, act.b, act.a, nameA)
+      await send(relA, { ...act.a, ...(ka.for ? { for: ka.for } : {}) }, act.b, nameB)
+      await send(relB, { ...act.b, ...(kb.for ? { for: kb.for } : {}) }, act.a, nameA)
     })
     return r === 'ok' ? { act: act.id } : { refused: r }
   }
@@ -2169,6 +2263,9 @@ export class HolderDevice {
     for (const r of this.state.relationships.slice()) {
       const aging = r.stock.filter((k) => k.state === 'active' && !M.usable(k.expiresAt, now)).map((k) => k.anchor)
       if (aging.length) await this.guarded(async () => void this.emit({ kind: 'age', rel: r.id, anchors: aging })) // 8475.S5
+      // K2 step 2b.1: 8475.S8 in the bench, the own key ends as tombstone at `expiresAt + key-retention` (core draft 4 §2.1).
+      const old = this.cand.allocationByA ? r.stock.filter((k) => k.by === this.me && (k.state === 'active' || k.state === 'aging') && Date.parse(now) > Date.parse(k.expiresAt) + M.PARAM.keyRetentionMs).map((k) => k.anchor) : []
+      if (old.length) await this.guarded(async () => void this.emit({ kind: 'retire', rel: r.id, anchors: old }))
     }
     // B6: fällige Arbeit folgt aus dem Zustand, nicht aus dem Ereignis; `refill` ist leer, wenn nichts fehlt.
     await this.refillAll()
@@ -2258,7 +2355,10 @@ export class HolderDevice {
     const signed = this.cand.signerWriters && (doc.type === TYPES.revision || doc.type === TYPES.probe || doc.type === TYPES.mapping)
     const via = signed ? this.tupleOfAddress(address) : undefined
     const viaRel = via ? M.relOfTuple(this.state, via.id) : undefined
-    this.log.push({ type: doc.type.split('/').slice(-2)[0] ?? doc.type, from: doc.issuer, at: this.clock.now(), ...(signed ? { writer: signerId(doc.issuer) } : typeof writer === 'string' ? { writer } : {}), ...(viaRel ? { rel: M.resolveId(this.state, viaRel.id) } : {}) })
+    const listed = doc.type === TYPES.stockRevision // K2 2b.1: the writer is the signer (the parser checks the field against it)
+    const viaListing = listed ? this.tupleOfAddress(address) : undefined
+    const logRel = viaRel ?? (viaListing ? M.relOfTuple(this.state, viaListing.id) : undefined)
+    this.log.push({ type: doc.type.split('/').slice(-2)[0] ?? doc.type, from: doc.issuer, at: this.clock.now(), ...(signed || listed ? { writer: signerId(doc.issuer) } : typeof writer === 'string' ? { writer } : {}), ...(logRel ? { rel: M.resolveId(this.state, logRel.id) } : {}) })
     // Review 26 B2: ohne Objekt als Payload ist kein Dokument lesbar (Journalrahmen: Befund im Journalzweig).
     if (!payload && doc.type !== TYPES.journal) {
       this.dispositions.push('failed(malformed-payload)')
@@ -2404,26 +2504,42 @@ export class HolderDevice {
       if (!this.state.findings.includes(text)) this.emit({ kind: 'finding', text })
       return false
     }
-    if (doc.type !== TYPES.revision) this.admitted(doc, address, digest) // a revision after its own form rules (below)
+    if (doc.type !== TYPES.revision && doc.type !== TYPES.stockRevision) this.admitted(doc, address, digest) // a revision after its own form rules (below)
     switch (doc.type) {
+      case TYPES.stockRevision: {
+        // K2 step 2b.1 (core draft 4 §3.1–§3.3): channel and signer as for every revision (a member of the counterpart's set
+        // on the tuple behind the address; a known revoked writer is refused before the fold, S1); then the form without
+        // history and the proof of every listed key (MV-24: a form error is a finding, nothing folded, no receipt); only an
+        // older head is refused (8557). The fold keeps every revision of the scope; a repeat of the same bytes is nothing new.
+        if (!this.cand.allocationByA) return false
+        const t = this.tupleOfAddress(address)
+        if (!t || !(await this.isPeer(doc.issuer, t.peer))) return false
+        const r = M.relOfTuple(this.state, t.id)!
+        const problem = M.revisionFormProblem(doc.payload, signerId(doc.issuer)) ?? (await this.proofProblem(doc.payload as unknown as M.StockRevision))
+        if (problem) {
+          const text = `stock-revision von ${doc.issuer.slice(-8)}: Form ${problem} (MV-24): Formfehler, abgewiesen`
+          if (!this.state.findings.includes(text)) this.emit({ kind: 'finding', text })
+          return false
+        }
+        if (r.view && r.view.scope !== t.id && t.record < M.tuple(this.state, r.view.scope).record) return false // älterer Kopf
+        this.admitted(doc, address, digest)
+        const p = doc.payload as unknown as M.StockRevision
+        if (r.view?.scope === t.id && r.view.revs?.some((x) => M.canonical(x) === M.canonical(p))) return true // Wiederholung
+        this.emit({ kind: 'stock-revision', rel: r.id, scope: t.id, revision: p })
+        return true
+      }
       case TYPES.revision: {
         // M: 8550/8557/6270, vereinfacht.
         const t = this.tupleOfAddress(address)
         if (!t || !(await this.isPeer(doc.issuer, t.peer))) return false
-        const r = M.relOfTuple(this.state, t.id)!
-        const p = doc.payload as unknown as { revision: number; keys: Array<{ n: number; anchor: string; keyAgreement: string; expiresAt: string }>; writer?: string; clears?: Record<string, number>; tombstones?: string[] }
-        if (this.cand.signerWriters) {
-          // K2: 6270 je Signierer; nur der Signierer (Review 31 B1). Review 34 B5: eine Rückzugsrevision nennt konkrete Anker
-          // (`tombstones`, nur bei leerer Liste); Nummernmarken (`clears`) gibt es unter Geräteschlüsseln nicht: Formfehler.
-          if (Object.hasOwn(p, 'clears')) {
-            const text = `revision ${String(p.revision)} von ${doc.issuer.slice(-8)}: clears unter Geräteschlüsseln (Aufhebung nur als Grabstein je Anker, Review 34): Formfehler`
-            if (!this.state.findings.includes(text)) this.emit({ kind: 'finding', text })
-            return false
-          }
-          if (p.tombstones !== undefined && (p.keys.length !== 0 || M.shapeProblem(p.tombstones, { array: 'ident' }, 'tombstones'))) return false
-          this.admitted(doc, address, digest)
-          return this.foldSignerRevision(r, t, { revision: p.revision, keys: p.keys, writer: signerId(doc.issuer), tombstones: p.tombstones })
+        const p = doc.payload as unknown as { revision: number; keys: Array<{ n: number; anchor: string; keyAgreement: string; expiresAt: string }>; writer?: string; clears?: Record<string, number> }
+        if (this.cand.allocationByA) {
+          // K2 step 2b.1: a stock listing is `stock-revision@2` only; version 1 under device keys is a form error (MV-24).
+          const text = `revision ${String(p.revision)} von ${doc.issuer.slice(-8)}: Version 1 unter stock-revision@2 (K2 2b.1): Formfehler`
+          if (!this.state.findings.includes(text)) this.emit({ kind: 'finding', text })
+          return false
         }
+        const r = M.relOfTuple(this.state, t.id)!
         if (p.writer !== undefined && M.shapeProblem(p.writer, 'tag', 'writer')) return false // Review 28: Schreiberkennung nach ihrer Grammatik, sonst abgewiesen
         this.admitted(doc, address, digest)
         if (typeof p.writer === 'string') return this.acceptWriterRevision(r, t, doc.issuer, p as typeof p & { writer: string })
@@ -2460,6 +2576,11 @@ export class HolderDevice {
         })
         if (!v.ok) {
           if (v.step === '8640.5') this.emit({ kind: 'finding', text: `ticket ${v.p!.act.slice(0, 8)}: own ${v.p!.own.slice(-8)} nicht auf dieser Beziehung (8640.5)` })
+          if (v.step === 'fremde-zuteilung') {
+            // Silently refused: no act, no receipt, no budget load (core draft 4 §1); one finding, also against repeats.
+            const text = `ticket ${v.p!.act.slice(0, 8)}: Signierer ${doc.issuer.slice(-8)} ist nicht das zugeteilte M-Gerät ${v.own!.for!.slice(-8)} von ${v.p!.own.slice(-8)}: fremde-zuteilung`
+            if (!this.state.findings.includes(text)) this.emit({ kind: 'finding', text })
+          }
           return false
         }
         if (v.repeated) return true
@@ -2472,6 +2593,13 @@ export class HolderDevice {
         if (M.budgetExhausted(r, now)) {
           this.emit({ kind: 'ticket-refuse-budget', rel: r.id, own: own.anchor }) // 8640.13
           this.emit({ kind: 'finding', text: `ticket ${p.act.slice(0, 8)}: Budget erschöpft (8640.10)` })
+          return false
+        }
+        if (this.cand.acceptanceShare !== undefined && (this.cand.occupied?.(r.id, this.state, now) ?? 0) >= this.cand.acceptanceShare) {
+          // K2 step 2b.1 (core draft 4 §2.1): acceptance per device only while belegt < share; otherwise 8640.13: the key is
+          // consumed, no act, no receipt, no budget load. Under P-Bilanz an honest run never gets here (§1, Q3).
+          this.emit({ kind: 'ticket-refuse-budget', rel: r.id, own: own.anchor })
+          this.emit({ kind: 'finding', text: `ticket ${p.act.slice(0, 8)}: Anteil von ${this.me} erschöpft (8640.13 je Gerät)` })
           return false
         }
         const a: M.Act = { id: p.act, mediator: r.id, own: own.anchor, voucher: p.voucher, issuedAt: p.issuedAt, expiresAt: p.expiresAt, state: 'offered', pending: null, v: null, k: false, ownCard: null, ownCardKey: null, o: 'none', ownCardDigest: null, opened: null }
@@ -2652,25 +2780,19 @@ export class HolderDevice {
     return true
   }
 
-  /**
-   * K2, Review 33 B4 / Review 34 B5: M faltet jede Revision eines Signierers (Vertrag wie die Mengen: der Empfang filtert
-   * nicht, die Faltung entscheidet). Je Schreiber zählt die höchste Revision, gleiche Nummer mit anderen Schlüsseln ist eine
-   * Equivokation (kanonisch kleinere, Befund), eine niedrigere ändert die Schlüssel nicht. Eine Rückzugsrevision (8535)
-   * nennt die Anker, die sie zurückzieht; die Faltung hält je Anker einen Grabstein (wächst nur, reihenfolgefrei), der
-   * jede Listung des Ankers dominiert. Klasse aus ist Sache der Person (Review 35 B6, Entscheidung 1b, Vertrag 4.10): der
-   * Grabstein jedes Mitglieds zählt für jeden Anker der Person, in beiden Varianten; ein widerrufener Signierer nur für Anker,
-   * für die kein verbliebenes Gerät bürgt (`M.buried`). Nur ein älterer Kopf wird abgewiesen (8557: neuer Scope).
-   */
-  private foldSignerRevision(r: M.Relationship, t: M.Tuple, p: { revision: number; keys: M.ListedKey[]; writer: string; tombstones?: string[] }): boolean {
-    if (r.view && r.view.scope !== t.id && t.record < M.tuple(this.state, r.view.scope).record) return false // älterer Kopf
-    const same = r.view && r.view.scope === t.id ? r.view : null
-    const held = M.own(same?.writers, p.writer)
-    const whole = (ks: M.ListedKey[]) => M.canonical([...ks].sort((a, b) => a.anchor.localeCompare(b.anchor)))
-    const tombs = [...new Set(p.tombstones ?? [])].sort()
-    const newTombs = tombs.some((a) => !(M.own(same?.tombstones, a) ?? []).includes(p.writer))
-    if (held && p.revision === held.revision && whole(p.keys) === whole(held.keys) && !newTombs) return true // Wiederholung
-    this.emit({ kind: 'view', rel: r.id, scope: t.id, revision: p.revision, keys: p.keys, writer: p.writer, standing: 'person', tombstones: tombs })
-    return true
+  /** K2 step 2b.1 (core draft 4 §3.2): every listed key's `proof` verifies under its `signing` part; null or the path that does not. */
+  private async proofProblem(p: M.StockRevision): Promise<string | null> {
+    for (let i = 0; i < p.keys.length; i++) {
+      const k = p.keys[i]!
+      try {
+        const pub = await crypto.subtle.importKey('raw', fromB64u(k.signing) as BufferSource, { name: 'Ed25519' }, false, ['verify'])
+        if (await crypto.subtle.verify('Ed25519', pub, fromB64u(k.proof) as BufferSource, M.proofContent(p.writer, p.inc, k) as BufferSource)) continue
+      } catch {
+        // an unreadable key is a wrong proof
+      }
+      return `stock-revision.keys[${i}].proof`
+    }
+    return null
   }
 
   // ── Sicht ──

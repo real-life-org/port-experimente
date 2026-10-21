@@ -291,7 +291,7 @@ export async function thiefWindow(candidate: MultiDeviceCandidate) {
 /**
  * Rotationsverkehr beim Widerruf (Plan 6r): A mit zwei Geräten, Beziehungen zu M, B und C; A1 widerruft A2. Gezählt bis zur
  * Ruhe: Rahmen und Bytes, die As Geräte an Gegenseiten einliefern (nicht an eigene Geräte), getrennt nach
- * Mengenrevisionen (`device-set`) und Vorratsrevisionen an M (`introduction-prekeys`), und wie viele Gegenseiten sie erreichen.
+ * Mengenrevisionen (`device-set`) und Vorratsrevisionen an M (`introduction-prekeys`, K2 2b.1 `stock-revision`), und wie viele Gegenseiten sie erreichen.
  */
 export async function revocationTraffic(candidate: MultiDeviceCandidate) {
   const s = await base(candidate, ['B', 'C'])
@@ -310,7 +310,7 @@ export async function revocationTraffic(candidate: MultiDeviceCandidate) {
     out.frames++
     out.bytes += f.bytes.length
     if (o.kind === 'device-set') out.setRevisions++
-    if (o.kind === 'introduction-prekeys') out.stockRevisions++
+    if (o.kind === 'introduction-prekeys' || o.kind === 'stock-revision') out.stockRevisions++ // K2 2b.1: `stock-revision@2`
     for (const d of s.w.devices) if (s.w.carrier.registeredAt(f.address).includes(d.name)) reached.add(d.person)
   }
   out.counterparts = reached.size

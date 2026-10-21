@@ -8,16 +8,18 @@
 // allocating device; only that device opens the ticket (sealed to the stock key), receives the counter card and produces
 // the card. The shared variant of step 2 (#74) is removed; its measurements stay in the NOTES as a closed comparison.
 //
-// Step 2a (plan 6t): the mediator is a single-writer fixture (one device, `bench.singleDevice`); which M device may name
-// which stock key is step 2b (A assigns stock keys per M device, MV-32). Until then M names every usable key (`mayName`
-// is not split), and distributed M operation is not accepted.
+// Step 2a (plan 6t): the mediator is a single-writer fixture in the matrix (one device, `bench.singleDevice`). Step 2b.1
+// (core draft 4, §2–§4): A assigns every stock key to one M device (`for`) and lists it in `stock-revision@2` with a proof
+// of possession; M names only keys assigned to it (the `for` filter of `usableView`); A supplies only from its free rights
+// (balance per device) and checks acceptance per device (8640.13). M's issuance automaton is step 2b.2; until then the
+// matrix keeps the fixture and the counter-run with two M devices (`singleDevice: []`) shows the split.
 //
 // What step 2 adds to the candidate: keys a sibling assigned from this device's pool (`pool/<i>`, `pool-use` ops in the
 // journal) are this device's keys for that relationship's context; the enrolment ceremony carries the new device's keys
 // for every existing context and its pool (QR stand-in, measured) and the old device admits it in every set where it is
 // a member.
 
-import { createPrivateKey, createPublicKey, randomBytes, sign, verify, type KeyObject } from 'node:crypto'
+import { createHmac, createPrivateKey, createPublicKey, randomBytes, sign, verify, type KeyObject } from 'node:crypto'
 import { edFromSeed, xFromSeed, anchorOfEd, mkOfX } from '@real-life/trust-protocol'
 import { derive, EnrolmentRefused, UnknownWriter, type CandidateDevice, type EnrolOptions, type HolderDevice, type KeyScheme, type Keys, type MultiDeviceCandidate } from '../../lab/mehrgeraet/holder'
 import * as M from '../../lab/mehrgeraet/model'
@@ -38,8 +40,8 @@ export interface K2Options {
   counterpartRevocation?: boolean
   /**
    * Step 2a (plan 6t): persons that run as a single-writer fixture (one device; the bench does not enrol a second one).
-   * Default `['M']`: distributed mediator operation is step 2b. `[]` = counter-run with two M devices and no split of the
-   * stock keys among them (X1, X13, X14 fail: two acts on one key).
+   * Default `['M']`: M's issuance automaton is step 2b.2. `[]` = counter-run with two M devices; since step 2b.1 A assigns
+   * each stock key to one of them (X1, X13, X14 hold; in 2a without the split they failed: two acts on one key).
    */
   singleDevice?: string[]
   /** Counter-run of E2 (iv): `false` = every consenting device produces a card (step 1 behaviour). Default on. */
@@ -143,6 +145,8 @@ export class K2Device extends K1aDevice {
   /** Step 2: contexts of relationships a sibling opened, mapped to the key of this device's pool it assigned (`pool-use`). */
   private assigned = new Map<string, number>()
   private cache = new Map<string, Promise<Keys>>()
+  /** K2 step 2b.1: the anchor of this device per context once derived (synchronous for `authorize`, the `for` filter). */
+  private anchors = new Map<string, string>()
   /** The device whose image this candidate carries (`name` for a device of the set; a thief keeps the stolen device's name). */
   owner: string
   constructor(
@@ -178,19 +182,32 @@ export class K2Device extends K1aDevice {
       p = keysOf(derive(this.secret, `ed/${src}`), derive(this.secret, `x/${src}`))
       this.cache.set(src, p)
     }
-    return p
+    return p.then((k) => (this.anchors.set(ctx, k.anchor), k))
   }
   /** Assignments from a batch (verified first): monotone facts, safe to learn before the fold. */
   private learn(b: SignedBatch): void {
     for (const op of b.ops) if (op.kind === 'pool-use' && op.device === this.owner) this.assigned.set(op.ctx, op.i)
   }
   /**
-   * Step 2a (plan 6t): no split of the stock keys among M's devices. M is a single-writer fixture; the right to name a
-   * stock key per M device is step 2b (A assigns it, MV-32), not a computation at M. The interim rules of #74 (`nameSlot`,
-   * anchor cycle) are removed. K1a keeps `n mod devices` (its cells stay as on main).
+   * Step 2b.1 (MV-32): the right to name a stock key per M device comes from A (`for`, filtered in M's view), not from a
+   * computation at M; every key of the filtered view may be named. K1a keeps `n mod devices` (its cells stay as on main).
    */
   override mayName(): boolean {
     return true
+  }
+  /** Step 2b.1: A assigns every stock key to one M device and lists it in `stock-revision@2` (core draft 4 §2, §3). */
+  readonly allocationByA = true
+  /** Step 2b.1: the static share of the acceptance budget (MV-9). */
+  get acceptanceShare(): number {
+    return this.share
+  }
+  /** Step 2b.1: `belegt` (core draft 4 §2.1). */
+  occupied(rel: string, state: M.HolderState, now: string): number {
+    return this.ownAccepted(rel, state, now)
+  }
+  /** Step 2b.1: `inc` of `stock-revision@2`, HMAC of the journal incarnation over the relationship (draft 2 §3.1), 16 characters. */
+  incTag(relationship: string): string {
+    return createHmac('sha256', derive(this.secret, 'inc-tag')).update(`${relationship}|${this.inc}`).digest().subarray(0, 12).toString('base64url')
   }
   async selfPeers() {
     return (await this.dir.selfKeys(this.person)).filter((k) => k.device !== this.name).map(({ anchor, rkid }) => ({ anchor, rkid }))
@@ -211,9 +228,9 @@ export class K2Device extends K1aDevice {
   }
   /**
    * MV-9 under device keys (step 2): the static quota per device travels with the keys the device lists. An acceptance
-   * counts for the device that allocated the named stock key (only it opens the ticket); a device lists at most as many own
-   * keys as it has acceptances left (`quotaLeft`), so every key M can name can be accepted and no ticket waits for a quota.
-   * The person's hard limit stays at the side (8510, `budgetExhausted` in 8640.10).
+   * counts for the device that allocated the named stock key (only it opens the ticket). Step 2b.1: this is `belegt` of the
+   * balance (core draft 4 §2.1): the device lists only from `frei_zuteilbar = share − belegt − reserviert` and accepts only
+   * while `belegt < share` (8640.13 per device). The person's hard limit stays at the side (8510, 8640.10).
    */
   protected override ownAccepted(rel: string, state: M.HolderState, now: string): number {
     const r = M.findRel(state, rel)
@@ -225,18 +242,20 @@ export class K2Device extends K1aDevice {
     }
     return r.accepted.filter((e) => mine(e.act) && !r.confirmed.includes(e.act) && Date.parse(e.at) > since).length
   }
-  /** Step 2: acceptance is not blocked per device: the key's allocator reserved it when it listed the key (`quotaLeft`). */
+  /**
+   * Step 2b.1: the acceptance check per device is the holder's 8640.13 branch before the op (key consumed, no act, no
+   * receipt, no budget load; core draft 4 §2.1), never a `Blocked` here. An introduction names only keys A assigned to this
+   * device (`for` = its anchor in that relationship) from the one computation of M's view (MV-32, `usableView`).
+   */
   override authorize(op: M.Op, state: M.HolderState): boolean {
     if (op.kind === 'ticket-accept') return true
+    if (op.kind === 'introduce') return [op.act.a, op.act.b].every((x) => M.usableView(state, x.rel, op.at, this.mineIn(state, x.rel)).listed.some((k) => k.anchor === x.key))
     return super.authorize(op, state)
   }
-  /** Step 2: how many acceptances this device has left in the relationship (MV-9); it lists at most that many own keys. */
-  quotaLeft(rel: string, state: M.HolderState, now: string): number {
-    return Math.max(0, this.share - this.ownAccepted(rel, state, now))
-  }
-  /** Step 2: each device keeps its own share of the stock at M (8485 split across the fixed device count). */
-  stockShare() {
-    return { below: Math.ceil(M.PARAM.refillBelow / this.slots), to: Math.ceil(M.PARAM.refillTo / this.slots) }
+  /** Step 2b.1: this device's anchors in a relationship (one per tuple context it derived). */
+  private mineIn(state: M.HolderState, rel: string): Set<string> {
+    const r = M.findRel(state, rel)
+    return new Set((r?.tuples ?? []).map((t) => this.anchors.get(t.ownKey)).filter((a): a is string => !!a))
   }
   poolKey(i: number): Promise<Keys> {
     return this.pairFor(`pool/${i}`)
@@ -282,6 +301,7 @@ export class K2Device extends K1aDevice {
     this.owner = d.owner ?? this.name
     this.member = this.dir.member(this.name, this.secret)
     this.cache = new Map()
+    this.anchors = new Map()
     this.assigned = new Map()
     for (const b of this.batches) this.learn(b as SignedBatch)
   }
@@ -307,7 +327,7 @@ export function k2(opts: K2Options = {}): K2Candidate {
   const size = (x: unknown) => Buffer.byteLength(JSON.stringify(x), 'utf8')
   return {
     id,
-    title: 'K2-strict: device keys, device-set@1, stock keys per device; M as single-writer fixture (step 2a)',
+    title: 'K2-strict: device keys, device-set@1, stock keys per device assigned per M device (step 2b.1); M as single-writer fixture in the matrix',
     capabilities: new Set(['journal', 'rights', 'device-keys', 'device-sets'] as const),
     // Step 2a (plan 6t): the bench gives these persons one device (single-writer fixture); distributed M is step 2b.
     bench: { singleDevice: single },

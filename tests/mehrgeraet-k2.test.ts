@@ -22,6 +22,25 @@ import * as M from '../src/lab/mehrgeraet/model'
 //   6. Fan-out: journal per sibling and counterpart documents per device, against K1a's single frame.
 
 const enc = new TextEncoder()
+/**
+ * K2 step 2b.1: a `stock-revision@2` of device `d` in relationship `rel`, built and signed as the device would (writer = its
+ * signer id in the head context, its `inc`, `rev` one above its own last, each key with its signing part and `proof`), for
+ * tests that send revisions the device itself would not send (`o` overrides fields).
+ */
+async function craft(d: HolderDevice, rel: string, o: { rev?: number; keys?: M.StockKey[]; withdraw?: string[]; bury?: string[]; classOff?: true; writer?: string } = {}): Promise<M.StockRevision> {
+  const r = M.rel(d.state, rel)
+  const writer = o.writer ?? signerId((await d.cand.keys.pair(M.head(r).ownKey)).anchor)
+  const inc = d.cand.incTag!(rel)
+  const keys: M.RevKey[] = []
+  for (const k of [...(o.keys ?? [])].sort((a, b) => M.byCode(a.anchor, b.anchor))) {
+    const ks = await d.cand.keys.pair(k.key)
+    const body = { n: k.n, nonce: k.nonce, anchor: k.anchor, keyAgreement: k.keyAgreement, expiresAt: k.expiresAt, for: k.for! }
+    keys.push({ ...body, signing: Buffer.from(ks.ed.pubRaw).toString('base64url'), proof: Buffer.from(await crypto.subtle.sign('Ed25519', ks.ed.priv, M.proofContent(writer, inc, body) as BufferSource)).toString('base64url') })
+  }
+  return { writer, inc, rev: o.rev ?? (M.own(r.writers, `${writer}.${inc}`)?.revision ?? 0) + 1, keys, withdraw: [...(o.withdraw ?? [])].sort(M.byCode), bury: [...(o.bury ?? [])].sort(M.byCode), burn: [], ...(o.classOff ? { classOff: true as const } : {}) }
+}
+/** The revisions of M's current view, per writer (signer id): the highest `rev` (K2 2b.1: M keeps every folded revision). */
+const heldRev = (v: M.StockView | null | undefined, writer: string) => Math.max(0, ...(v?.revs ?? []).filter((x) => x.writer === writer).map((x) => x.rev))
 const byId = (rs: Awaited<ReturnType<typeof runX15>>) => Object.fromEntries(rs.map((r) => [r.scenario, r]))
 const envRkid = (bytes: Uint8Array) => (JSON.parse(new TextDecoder().decode(bytes)) as { rkid: string }).rkid
 
@@ -133,22 +152,20 @@ describe('K2 Schritt 1: Geräteschlüssel', () => {
   }, 60_000)
 })
 
-describe('K2 Schritt 2a: Matrix (strict, M als Ein-Schreiber-Fixture)', () => {
-  it('2. X1–X18, X7b, X21 mit zwei Geräten bei A und B, M ein Gerät (Plan 6t): 16/3/1; rot X7 strikt, X14 (A ist dort verteilter Mediator: nicht abgenommen, Schritt 2b) und X21 (sichtbares Restore-Artefakt nach MV-6 neu/MV-34, konsistent); X18 aus der Struktur (E2 (iv)) mit Ankerpaar-Orakel; X13 strukturell (MV-9 unter Geräteschlüsseln, ≈); X9 über Mengenrevisionen (≈)', async () => {
+describe('K2 Schritt 2b.1: Matrix (strict, M als Ein-Schreiber-Fixture, Zuteilung je M-Gerät durch A)', () => {
+  it('2. X1–X18, X7b, X21 mit zwei Geräten bei A und B, M ein Gerät (Plan 6t): 17/2/1; rot X7 strikt und X21 (sichtbares Restore-Artefakt nach MV-6 neu/MV-34, konsistent); X14 grün seit 2b.1 (A ist dort Mediator auf zwei Geräten: B und C teilen ihre Schlüssel je A-Gerät zu); X18 aus der Struktur (E2 (iv)) mit Ankerpaar-Orakel; X13 strukturell (MV-9 unter Geräteschlüsseln, ≈); X9 über Mengenrevisionen (≈)', async () => {
     const c = k2()
     expect(c.id).toBe('k2-device-keys')
     expect(c.bench).toEqual({ singleDevice: ['M'] })
     const r = byId(await runX15(c))
-    const passed = ['X1', 'X2', 'X3', 'X4', 'X5', 'X6', 'X7b', 'X8', 'X9', 'X11', 'X12', 'X13', 'X15', 'X16', 'X17', 'X18']
+    const passed = ['X1', 'X2', 'X3', 'X4', 'X5', 'X6', 'X7b', 'X8', 'X9', 'X11', 'X12', 'X13', 'X14', 'X15', 'X16', 'X17', 'X18']
     for (const x of passed) expect(r[x]!.outcome, `${x}: ${r[x]!.detail}`).toBe('bestanden')
     expect(r.X7!.outcome).toBe('nicht bestanden')
     expect(r.X10!.outcome).toBe('nicht abbildbar')
     expect(Object.values(r).some((x) => x.crashed)).toBe(false)
-    // X14: A is the mediator on two devices there (distributed mediator issuance, not accepted in 2a): without a split both
-    // devices name the same key; B and C refuse the second act (8640.12). The split per mediator device is step 2b (MV-32).
-    expect(r.X14!.outcome, r.X14!.detail).toBe('nicht bestanden')
-    expect(r.X14!.measures.doubleFinalEffects).toBeGreaterThan(0)
-    expect(r.X14!.measures.mediatorConformanceFailures).toBeGreaterThan(0)
+    // X14 (step 2b.1): A is the mediator on two devices there; B and C assign each stock key to one A device (`for`), so
+    // A1 and A2 never name the same key: no double consumption, no 8640.12 finding (2a: 12 findings, red).
+    expect(r.X14!.measures.doubleFinalEffects).toBe(0)
     // X21: no gate after restore (MV-6 new, MV-34); the restored A2 acts from its old image, its re-production of a card is a
     // visible restore artefact (same card key, same V; the person's hand-over digest moves), consistent: nothing missing at
     // the end, no double effect, no conflict. The oracle (state as before) stays as it is. Bench rule 6m: the branch "A2
@@ -173,11 +190,12 @@ describe('K2 Schritt 2a: Matrix (strict, M als Ein-Schreiber-Fixture)', () => {
     expect(r.X9!.detail).toContain('Widerrufseintrag')
   }, 400_000)
 
-  it('2b. Gegenlauf ohne Fixture (`singleDevice: []`, zwei M-Geräte, keine Teilung der Schlüssel): X1, X13 und X14 fallen; deshalb ist M in 2a ein Gerät, die Zuteilung je M-Gerät kommt in 2b', async () => {
+  it('2b. Gegenlauf ohne Fixture (`singleDevice: []`, zwei M-Geräte): seit 2b.1 halten X1, X13 und X14 (A teilt jeden Schlüssel genau einem M-Gerät zu); in 2a fielen sie', async () => {
     const c = k2({ singleDevice: [] })
     expect(c.id).toBe('k2-device-keys-distributed-m')
     const r = byId(await runX15(c, false, ['X1', 'X13', 'X14']))
-    for (const x of ['X1', 'X13', 'X14']) expect(r[x]!.outcome, `${x}: ${r[x]!.detail}`).toBe('nicht bestanden')
+    for (const x of ['X1', 'X13', 'X14']) expect(r[x]!.outcome, `${x}: ${r[x]!.detail}`).toBe('bestanden')
+    for (const x of ['X1', 'X13', 'X14']) expect(r[x]!.measures.doubleFinalEffects, x).toBe(0)
   }, 300_000)
 
   it('2c. Kontrolllauf seriell (ein Gerät): jede Zelle mit Kontrolllauf besteht', async () => {
@@ -200,7 +218,7 @@ describe('K2 Schritt 1: Dieb, Restore, Fan-out', () => {
       expect(w.carrier.registeredAt(a1)).toEqual(['A1']) // the thief never collects at A1's addresses
       await B.setClass(ab.y.id, true) // B → A: revision, sealed to A1 and A2
       await w.rounds(3)
-      const readBefore = thief.log.filter((e) => e.type === 'introduction-prekeys').length
+      const readBefore = thief.log.filter((e) => e.type === 'stock-revision').length // K2 2b.1: `stock-revision@2`
       expect(readBefore).toBeGreaterThanOrEqual(1) // A2's copy opens with A2's keys
       expect(thief.dispositions.some((d) => d.includes('decryption-failed'))).toBe(false)
       await w.revoke(A, A2)
@@ -271,7 +289,7 @@ describe('K2 Schritt 1: Dieb, Restore, Fan-out', () => {
       await w.rounds(1)
       const toA = new Set<string>()
       for (const d of w.of('A')) toA.add((await d.cand.keys.pair(ab.x.ownKey)).rkid)
-      const docs = w.carrier.carried.slice(mark).filter((f) => w.frameOrigin(f.bytes)?.kind === 'introduction-prekeys' && toA.has(f.address))
+      const docs = w.carrier.carried.slice(mark).filter((f) => w.frameOrigin(f.bytes)?.kind === (id === 'k2' ? 'stock-revision' : 'introduction-prekeys') && toA.has(f.address))
       out[id] = { journal: journal.length, journalBytes: journal.reduce((n, f) => n + f.bytes.length, 0), doc: docs.length }
     }
     expect(out.k1a!.journal).toBe(1)
@@ -310,25 +328,30 @@ describe('K2 Schritt 1: Dieb, Restore, Fan-out', () => {
     const a1 = signerId((await A.cand.keys.pair(M.head(M.rel(A.state, am.x.id)).ownKey)).anchor)
     const a2 = signerId((await A2.cand.keys.pair(h.ownKey)).anchor)
     const mRel = () => M.relOfTuple(Mm.state, am.y.id)!
-    const writersBefore = JSON.stringify(mRel().view?.writers ?? {})
-    const held1 = M.own(mRel().view?.writers, a1)?.revision ?? 0
+    const revsBefore = M.canonical(mRel().view?.revs ?? [])
+    const held1 = heldRev(mRel().view, a1)
     expect(held1).toBeGreaterThan(0)
+    expect(a2).not.toBe(a1)
     const findingsBefore = Mm.state.findings.length
-    // Astra's probe: A2 signs a revision naming A1 as writer, and the same naming itself; a probe and a mapping with the field.
+    // Astra's probe under `stock-revision@2` (K2 2b.1): the writer is a field, the parser checks it against the signer. A2
+    // signs a revision naming A1 as writer (form error `stock-revision.writer`); a version-1 revision with the field (form
+    // error: version 1 under device keys); a probe and a mapping with the field (writer-Feld, as before).
     const forged = [
-      await raw(A2).sendDoc(TYPES.revision, h.ownKey, h.peer, h.peerKeyAgreement, rkid, { revision: 1000, keys: [], writer: a1 }),
+      await raw(A2).sendDoc(TYPES.stockRevision, h.ownKey, h.peer, h.peerKeyAgreement, rkid, (await craft(A2, am.x.id, { writer: a1, rev: 1000 })) as unknown as Record<string, unknown>),
       await raw(A2).sendDoc(TYPES.revision, h.ownKey, h.peer, h.peerKeyAgreement, rkid, { revision: 1001, keys: [], writer: a2 }),
       await raw(A2).sendDoc(TYPES.probe, h.ownKey, h.peer, h.peerKeyAgreement, rkid, { entries: [], writer: a1 }),
       await raw(A2).sendDoc(TYPES.mapping, h.ownKey, h.peer, h.peerKeyAgreement, rkid, { entry: 'x', writer: a1 }),
     ]
     await w.rounds(3)
     for (const f of forged) expect(raw(Mm).completed.has(f.digest)).toBe(false) // no receipt
-    expect(JSON.stringify(mRel().view?.writers ?? {})).toBe(writersBefore)
-    expect(Mm.state.findings.slice(findingsBefore).filter((f) => f.includes('writer-Feld'))).toHaveLength(4)
+    expect(M.canonical(mRel().view?.revs ?? [])).toBe(revsBefore)
+    const found = Mm.state.findings.slice(findingsBefore)
+    expect(found.filter((f) => f.includes('stock-revision.writer'))).toHaveLength(1)
+    expect(found.filter((f) => f.includes('writer-Feld'))).toHaveLength(3) // the version-1 revision, the probe, the mapping
     // A1's next real revision is accepted at M.
     await raw(A).sendRevision(am.x.id)
     await w.rounds(3)
-    expect(M.own(mRel().view?.writers, a1)?.revision).toBe(held1 + 1)
+    expect(heldRev(mRel().view, a1)).toBe(held1 + 1)
   }, 60_000)
 
   it('8b. K1a (Schreiberkennung im Feld) unverändert: das Feld `writer` bleibt der Schreiber', async () => {
@@ -443,7 +466,7 @@ describe('K2 Schritt 2: Gerätemengen aus Nachweisen', () => {
     const toA = async () => {
       const keys = new Map<string, string>()
       for (const d of w.of('A')) keys.set((await d.cand.keys.pair(ab.x.ownKey)).rkid, d.name)
-      return w.carrier.carried.slice(mark).filter((f) => w.frameOrigin(f.bytes)?.kind === 'introduction-prekeys' && keys.has(f.address)).map((f) => keys.get(f.address))
+      return w.carrier.carried.slice(mark).filter((f) => w.frameOrigin(f.bytes)?.kind === 'stock-revision' && keys.has(f.address)).map((f) => keys.get(f.address))
     }
     expect(await toA()).toEqual(['A1'])
     // The proof arrives (A1 repeats it until B acknowledges): now B seals to every member, A2's key from A1's pool.
@@ -476,15 +499,18 @@ describe('K2 Schritt 2: Gerätemengen aus Nachweisen', () => {
     const p2 = await probe(A2)
     await w.rounds(2)
     expect(raw(B).completed.has(p2!.digest)).toBe(false)
-    // B's next revision to A: no frame at all, the failure is explicit.
+    // K2 2b.1: B's class on assigns no stock key to a known-empty set (draft 2 §3.4: the refusal is the named state), so no
+    // revision and no frame; B's next document to A has no frame at all, the failure is explicit.
     const before = B.emptySetFailures
     const mark = w.carrier.carried.length
     await B.setClass(ab.y.id, true)
     await w.rounds(1)
+    expect(M.rel(B.state, ab.y.id).stock).toHaveLength(0)
+    const toA = new Set([ab.x.peerKeyAgreement, ab.y.peerKeyAgreement])
+    expect(w.carrier.carried.slice(mark).filter((f) => w.frameOrigin(f.bytes)?.kind === 'stock-revision' && toA.has(f.address))).toHaveLength(0)
+    await raw(B).sendDoc(TYPES.probe, ab.y.ownKey, ab.y.peer, ab.y.peerKeyAgreement, (await B.cand.keys.pair(ab.y.ownKey)).rkid, { entries: [] })
     expect(B.emptySetFailures).toBeGreaterThan(before)
     expect(B.dispositions.some((d) => d.startsWith('failed(empty-device-set)'))).toBe(true)
-    const toA = new Set([ab.x.peerKeyAgreement, ab.y.peerKeyAgreement])
-    expect(w.carrier.carried.slice(mark).filter((f) => w.frameOrigin(f.bytes)?.kind === 'introduction-prekeys' && toA.has(f.address))).toHaveLength(0)
   }, 60_000)
 
   it('S3b. Eine Mengenrevision an eine bekannt leere Menge geht nicht hinaus und gilt nicht als veröffentlicht (CodeRabbit #74): kein `covered`, keine Nummer verbraucht', async () => {
@@ -935,7 +961,7 @@ const unrevoked = (m: HolderDevice, relId: string) => M.usableView(m.state, relI
 describe('K2 Schritt 2: Review 34, Grabstein je Anker statt Nummern (B5)', () => {
   {
     const stock = 'strict'
-    it(`T1. ${stock}: Astras Probe: A2 signiert vor dem Widerruf Revision 0 mit \`clears: {A1: 1000000}\` (alte Form: abgewiesen, Befund) und mit Grabsteinen für A1s Anker und einen nie gelisteten Anker; vor dem Widerruf begräbt A2 als Mitglied A1s Schlüssel (Entscheidung 1b, benannter Preis), nach Widerruf und Nachfüllung sind A1s Schlüssel für M wieder benennbar`, async () => {
+    it(`T1. ${stock}: Astras Probe: A2 signiert vor dem Widerruf eine Revision mit \`clears: {A1: 1000000}\` (alte Form, K2 2b.1 Version 1: abgewiesen, Befund) und eine \`stock-revision@2\` mit Klasse aus und \`bury\` für A1s Anker und einen nie gelisteten Anker; vor dem Widerruf begräbt A2 als Mitglied A1s Schlüssel (Entscheidung 1b, benannter Preis), nach dem Widerruf sind A1s Schlüssel für M wieder benennbar (Widerrufsausnahme: A1 listet sie aktuell)`, async () => {
       const { w, A, A2, Mm, am, bm } = await world(k2())
       const mRel = () => M.relOfTuple(Mm.state, am.y.id)!.id
       const h = M.head(M.rel(A2.state, am.x.id))
@@ -947,11 +973,11 @@ describe('K2 Schritt 2: Review 34, Grabstein je Anker statt Nummern (B5)', () =>
       const fake = (await A2.cand.keys.pair('pool/777')).anchor
       const before = Mm.state.findings.length
       const old = await raw(A2).sendDoc(TYPES.revision, h.ownKey, h.peer, h.peerKeyAgreement, rkid, { revision: 0, keys: [], clears: { [a1]: 1000000 } })
-      await raw(A2).sendDoc(TYPES.revision, h.ownKey, h.peer, h.peerKeyAgreement, rkid, { revision: 0, keys: [], tombstones: [...a1Anchors, fake] })
+      await raw(A2).sendDoc(TYPES.stockRevision, h.ownKey, h.peer, h.peerKeyAgreement, rkid, (await craft(A2, am.x.id, { classOff: true, bury: [...a1Anchors, fake] })) as unknown as Record<string, unknown>)
       await w.rounds(3)
       expect(raw(Mm).completed.has(old!.digest)).toBe(false)
       const found = Mm.state.findings.slice(before)
-      expect(found.filter((f) => f.includes('clears')), found.join('\n')).toHaveLength(1)
+      expect(found.filter((f) => f.includes('Version 1')), found.join('\n')).toHaveLength(1)
       // Review 35 B6 (1b): any member may bury any anchor of the person; before the revocation A1's keys are gone (thief window).
       expect(a1Anchors.filter((a) => unrevoked(Mm, mRel()).includes(a)), stock).toEqual([])
       await w.revoke(A, A2)
@@ -1298,23 +1324,24 @@ function w15Origin(s: { w: Welt15 }, bytes: Uint8Array): string | undefined {
 describe('K2 Schritt 2a: Tor-Review 40 B1, unvollständige Empfangsdokumente sind Formfehler (MV-24)', () => {
   const form = (d: HolderDevice, kind: string, field: string) => d.state.findings.filter((f) => f.includes('Formfehler') && f.includes(kind) && f.includes(field))
 
-  it('B1a. Signierte Revision mit `tombstones`, ohne `keys`: Befund, keine Quittung, keine Ausnahme; die Runde und jede Folgerunde laufen weiter, die nächste echte Revision gilt', async () => {
+  it('B1a. Signierte `stock-revision@2` ohne `keys` (mit `bury`): Befund, keine Quittung, keine Ausnahme; die Runde und jede Folgerunde laufen weiter, die nächste echte Revision gilt', async () => {
     const { w, A, A2, Mm, am } = await world(k2())
     const h = M.head(M.rel(A2.state, am.x.id))
     const rkid = (await A2.cand.keys.pair(h.ownKey)).rkid
-    const bad = await raw(A2).sendDoc(TYPES.revision, h.ownKey, h.peer, h.peerKeyAgreement, rkid, { revision: 90, tombstones: [] })
+    const { keys: _, ...incomplete } = await craft(A2, am.x.id, { rev: 90, classOff: true })
+    const bad = await raw(A2).sendDoc(TYPES.stockRevision, h.ownKey, h.peer, h.peerKeyAgreement, rkid, incomplete as unknown as Record<string, unknown>)
     await w.rounds(3)
     expect(raw(Mm).completed.has(bad!.digest)).toBe(false)
-    expect(form(Mm, 'revision', 'keys'), Mm.state.findings.join('\n')).toHaveLength(1)
+    expect(form(Mm, 'stock-revision', 'keys'), Mm.state.findings.join('\n')).toHaveLength(1)
     // Folgerunden: dieselbe Wiederholung des Senders wirft nicht, ein Befund je Form.
     await w.rounds(3)
-    expect(form(Mm, 'revision', 'keys')).toHaveLength(1)
+    expect(form(Mm, 'stock-revision', 'keys')).toHaveLength(1)
     const a1 = signerId((await A.cand.keys.pair(M.head(M.rel(A.state, am.x.id)).ownKey)).anchor)
     const mRel = () => M.relOfTuple(Mm.state, am.y.id)!
-    const held = M.own(mRel().view?.writers, a1)?.revision ?? 0
+    const held = heldRev(mRel().view, a1)
     await (A as unknown as { sendRevision(rel: string): Promise<void> }).sendRevision(am.x.id)
     await w.rounds(3)
-    expect(M.own(mRel().view?.writers, a1)?.revision).toBe(held + 1)
+    expect(heldRev(mRel().view, a1)).toBe(held + 1)
   }, 120_000)
 
   it('B1b. Signierte, passend adressierte Karte ohne `card`: Befund bei B, keine Quittung, keine Ausnahme, auch in Folgerunden; die echte Karte verbindet danach', async () => {
