@@ -13,18 +13,19 @@
 // Besides, per device the union duties of its last committed image (the counter follows the committed state, so a duty
 // ended by `depart` as `moot` is not open; Tor-Review 42 B2), and every exception an observer hook threw (the seam catches
 // it, the device and the carrier go on unchanged; Tor-Review 42 (a)).
-// Per issuance and ticket address, the receiver context of P-Commit: the committed image of the device that allocated the
+// Per issuance and frame address, the receiver context of P-Commit: the committed image of the device that allocated the
 // stock key at that address, at the issuance commit (Tor-Review 43; P-Commit applies the holder's own ticket predicate
-// there), with the ledger's own copy of that device's private key agreement for the address (Tor-Review 44: the ledger
-// opens every committed ticket frame with the key its address names, as that receiver would).
+// there). The keyring: the ledger's copy of every device's resolver, as the holder hands it to `receive`, so the ledger
+// opens every frame exactly as the holder does (Tor-Review 44, 47). Bench material: the dump carries it, nothing hands
+// it back to a device.
 //
 // The dump is the complete ledger (Tor-Review 42 S1): `Buch.load(dump)` rebuilds a ledger every checker judges exactly as
 // the live one, the production mapping included.
 //
 // Frames are identified by hash; their content comes from the producer's own plaintext (`HolderObserver.produced`) or
-// from the receiving parser's admitted values (`HolderObserver.admitted`). One exception, on purpose (Tor-Review 44): the
-// committed bytes of every ticket intent are kept and opened by P-Commit with the receiver key their address names, so a
-// ticket's content is what the addressed receiver reads, not what its producer reports.
+// from the receiving parser's admitted values (`HolderObserver.admitted`). On purpose, for tickets (Tor-Review 44, 47): the
+// bytes of every deposit and of every frame of an issuance batch are kept and opened by P-Commit as the devices at their
+// address would, so a ticket is what a receiver reads, not what its producer reports or its intent is called.
 //
 // Checkers over the ledger: P-Einmal, P-Commit, P-Produktion, P-Paar per act, and a counter (not an assertion) of tuples
 // per person pair and open union duties (draft 3 §7.1, §12 D1).
@@ -49,15 +50,13 @@ export interface CommitIntent {
   frames: string[]
   /** The address of each copy (`frames[1..]`; the primary frame goes to `address`). */
   copies: string[]
-  /** Ticket intents only (Tor-Review 44): the committed bytes of `frames`, base64, which P-Commit opens. */
+  /** Intents of issuance batches (any kind): the committed bytes of `frames`, base64, which P-Commit opens one by one. */
   sealed?: string[]
 }
 /**
- * The committed image of the device that allocated the stock key at a ticket address (`by`), as the ledger saw it last
- * before the issuance commit: the receiver context of the ticket predicate (Tor-Review 43). `xPriv`: the ledger's own copy
- * of that device's private key agreement for the address (PKCS#8, base64; Tor-Review 44), taken at the issuance commit
- * and kept only if its public part is the address; P-Commit opens the committed frames with it. Bench material: the dump
- * carries it, nothing hands it back to a device.
+ * The committed image of the device that allocated the stock key at a frame address of an issuance batch (`by`), as the
+ * ledger saw it last before the issuance commit: the receiver context of the ticket predicate (Tor-Review 43). The keys
+ * the ledger opens with are not here but in `Buch.keyring` (every device's whole resolver, Tor-Review 47).
  */
 export interface ReceiverImage {
   seq: number
@@ -70,7 +69,6 @@ export interface ReceiverImage {
   person: string
   sets: boolean
   state: M.HolderState
-  xPriv?: string
 }
 /** One journal batch this device wrote, at the store commit that made it durable. */
 export interface CommitEntry {
@@ -115,18 +113,25 @@ export interface CarrierTicket {
   named: string
 }
 /**
- * A carrier frame no producer reported as a ticket, deposited at the key agreement of a stock key an observed device
- * holds (addendum to Tor-Review 44): its bytes and the ledger's copy of that device's private key agreement for the
- * address, taken at the deposit. P-Commit opens it; if it is a ticket, it needs a commit like every reported one.
+ * Every frame the carrier took (Tor-Review 47): its bytes, as the receivers get them. P-Commit opens each with the full
+ * resolver of every observed device that holds the key at its address (`keyring`), as that device would.
  */
-export interface CarrierProbe {
+export interface CarrierDeposit {
   seq: number
   at: string
   frame: string
   address: string
   bytes: string
+}
+/**
+ * The ledger's copy of one entry of a device's resolver (key id → private key agreement, PKCS#8 base64), taken at the
+ * first commit or deposit after the device held it (Tor-Review 47: the same resolver the holder hands `receive`).
+ */
+export interface KeyCopy {
+  seq: number
   device: string
-  xPriv?: string
+  rkid: string
+  xPriv: string
 }
 export interface CarrierRevision {
   seq: number
@@ -221,7 +226,7 @@ const TERMINAL: ReadonlySet<M.PairDuty['state']> = new Set(['united', 'moot'])
 export class Buch implements HolderObserver {
   readonly commits: CommitEntry[] = []
   readonly marks: CommitMark[] = []
-  readonly carrier = { revisions: [] as CarrierRevision[], tickets: [] as CarrierTicket[], receipts: [] as CarrierReceipt[], other: 0, unknown: 0, probes: [] as CarrierProbe[] }
+  readonly carrier = { revisions: [] as CarrierRevision[], tickets: [] as CarrierTicket[], receipts: [] as CarrierReceipt[], other: 0, unknown: 0, deposits: [] as CarrierDeposit[] }
   readonly deliveries: Delivery[] = []
   readonly events: BenchEvent[] = []
   /** Every document an observed device produced, in order. */
@@ -233,8 +238,10 @@ export class Buch implements HolderObserver {
   readonly receivers: ReceiverImage[] = []
   /** Per device its last committed holder state and whether it runs device sets (live only: feeds `receivers`). */
   private readonly lastImage = new Map<string, { person: string; sets: boolean; state: M.HolderState }>()
-  /** Deposits at addresses no committed image knows as a stock key address yet (live only; Tor-Review 45 S1). */
-  private readonly pending = new Map<string, Array<{ t: { seq: number; at: string }; frame: string; f: Frame }>>()
+  /** The ledger's copy of every device resolver (Tor-Review 47), in the dump. */
+  readonly keyring: KeyCopy[] = []
+  private readonly copied = new Set<string>()
+  private world: Welt15 | null = null
   /** Every device that committed (live only: the receiver material at an issuance commit is read from it). */
   private readonly devices = new Map<string, HolderDevice>()
   /** Productions by frame hash (a frame names its document) and by document digest (the first production of each). */
@@ -246,6 +253,7 @@ export class Buch implements HolderObserver {
 
   /** Carrier and clock of the world (the devices reach the ledger through `Welt15Options.observer`). */
   attach(w: Welt15): void {
+    this.world = w
     this.now = () => w.clock.now()
     w.carrier.observe = (f) => this.deposited(f)
     w.carrier.observeFailed = (_f, e) => this.failed(null, 'carrier', e)
@@ -261,6 +269,7 @@ export class Buch implements HolderObserver {
   committed(d: HolderDevice, image: DeviceState): void {
     const t = this.next()
     this.devices.set(d.name, d)
+    this.copyKeys(t.seq)
     this.marks.push({ ...t, device: d.name })
     this.duties.set(d.name, { seq: t.seq, device: d.name, person: d.person, duties: image.holder.duties.map((x) => ({ pair: [x.pair[0], x.pair[1]], state: x.state })) })
     const batches = (image.candidate as { batches?: Array<{ writer: string; n: number; ops: M.Op[]; intents: Array<{ digest: string; kind: string; expected: string; address: string; replyTo: string; bytes: string; copies?: Array<{ address: string; bytes: string }> }> }> } | null)?.batches ?? []
@@ -285,23 +294,26 @@ export class Buch implements HolderObserver {
           replyTo: i.replyTo,
           frames: [b64hash(i.bytes), ...(i.copies ?? []).map((c) => b64hash(c.bytes))],
           copies: (i.copies ?? []).map((c) => c.address),
-          // Tor-Review 45: kind decides nothing; every intent with a frame at a stock key address keeps its bytes.
-          ...([i.address, ...(i.copies ?? []).map((c) => c.address)].some((a) => this.allocatorAt(a)) ? { sealed: [i.bytes, ...(i.copies ?? []).map((c) => c.bytes)] } : {}),
+          // Tor-Review 45/47: kind decides nothing; in an issuance batch every intent keeps the bytes of every frame.
+          ...(intro.length ? { sealed: [i.bytes, ...(i.copies ?? []).map((c) => c.bytes)] } : {}),
         })),
         // The mediator context of an issuance: per act side, the committing device's own anchors on that relationship.
         ...(intro.length ? { mediator: intro.flatMap((op) => [op.act.a, op.act.b]).map((side) => ({ rel: side.rel, own: ownAnchors(image.holder, side.rel) })) } : {}),
       })
-      for (const i of b.intents) for (const a of [i.address, ...(i.copies ?? []).map((c) => c.address)]) this.receiverAt(t.seq, intro[0]?.act.id ?? '', a)
+      if (intro.length) for (const i of b.intents) for (const a of [i.address, ...(i.copies ?? []).map((c) => c.address)]) this.receiverAt(t.seq, intro[0]!.act.id, a)
     }
     this.lastImage.set(d.name, { person: d.person, sets: !!d.cand.deviceSets, state: image.holder })
-    // Review 45 S1: deposits at an address no committed image knew yet are drawn in once a commit makes it a stock key
-    // address (with the deposit's own seq and time).
-    for (const r of image.holder.relationships)
-      for (const k of r.stock) {
-        const held = this.pending.get(k.keyAgreement)
-        if (!held) continue
-        this.pending.delete(k.keyAgreement)
-        for (const x of held) this.probe(x.t, x.frame, x.f)
+  }
+  /** Copy every resolver entry of every device not copied yet (the world's devices; live only). */
+  private copyKeys(seq: number): void {
+    const devices = this.world ? this.world.devices : [...this.devices.values()]
+    for (const d of devices)
+      for (const [rkid, key] of d.receiverKeys()) {
+        const id = `${d.name}|${rkid}`
+        if (this.copied.has(id)) continue
+        this.copied.add(id)
+        const xPriv = material(key, rkid)
+        if (xPriv) this.keyring.push({ seq, device: d.name, rkid, xPriv })
       }
   }
   /** The device that allocated the stock key whose key agreement is `address`, in the last committed images. */
@@ -314,9 +326,8 @@ export class Buch implements HolderObserver {
     return undefined
   }
   /**
-   * The receiver of a ticket frame at `address`: the last committed image of the device that allocated the stock key whose
-   * key agreement the address is (K2 `by`; without it the image holding the key), and the ledger's copy of that device's
-   * private key agreement for the address (Tor-Review 44).
+   * The receiver context of a frame at `address` in an issuance batch: the last committed image of the device that
+   * allocated the stock key whose key agreement the address is (K2 `by`; without it the image holding the key).
    */
   private receiverAt(seq: number, act: string, address: string): void {
     if (this.receivers.some((x) => x.seq === seq && x.address === address)) return
@@ -324,8 +335,7 @@ export class Buch implements HolderObserver {
     const img = device ? this.lastImage.get(device) : undefined
     const k = img?.state.relationships.flatMap((r) => r.stock).find((x) => x.keyAgreement === address)
     if (!device || !img || !k) return
-    const xPriv = material(this.devices.get(device)?.receiverKey(address), address)
-    this.receivers.push({ seq, act, address, key: k.anchor, keyAgreement: k.keyAgreement, device, person: img.person, sets: img.sets, state: M.cloneState(img.state), ...(xPriv ? { xPriv } : {}) })
+    this.receivers.push({ seq, act, address, key: k.anchor, keyAgreement: k.keyAgreement, device, person: img.person, sets: img.sets, state: M.cloneState(img.state) })
   }
   produced(d: HolderDevice, p: Parameters<HolderObserver['produced']>[1]): void {
     const rec: Production = { ...this.next(), device: d.name, person: d.person, digest: p.digest, type: p.type, issuer: p.issuer, recipient: p.recipient, payload: structuredClone(p.payload) as Record<string, unknown>, frames: p.frames.map(frameHash) }
@@ -340,8 +350,9 @@ export class Buch implements HolderObserver {
     const t = this.next()
     const h = frameHash(f.bytes)
     const p = this.byFrame.get(h)
-    // Tor-Review 45: every deposit at a stock key address is a probe, reported or not; its content decides.
-    this.probe(t, h, f)
+    // Tor-Review 47: every deposit is kept with its bytes, and every resolver as it stands now; the content decides.
+    this.copyKeys(t.seq)
+    this.carrier.deposits.push({ ...t, frame: h, address: f.address, bytes: Buffer.from(f.bytes).toString('base64') })
     if (!p) {
       this.carrier.unknown++ // not produced by an observed device
       return
@@ -357,22 +368,6 @@ export class Buch implements HolderObserver {
     else this.carrier.other++
   }
 
-  /**
-   * A deposit at a stock key address of an observed device (the allocator in the last committed images): kept with the
-   * ledger's copy of that device's key for the address, for P-Commit to open. A deposit at an address no committed image
-   * knows yet waits (`pending`, live only) until a commit makes the address known (Tor-Review 45 S1).
-   */
-  private probe(t: { seq: number; at: string }, frame: string, f: Frame): void {
-    const device = this.allocatorAt(f.address)
-    if (!device) {
-      const held = this.pending.get(f.address) ?? []
-      held.push({ t, frame, f })
-      this.pending.set(f.address, held)
-      return
-    }
-    const xPriv = material(this.devices.get(device)?.receiverKey(f.address), f.address)
-    this.carrier.probes.push({ ...t, frame, address: f.address, bytes: Buffer.from(f.bytes).toString('base64'), device, ...(xPriv ? { xPriv } : {}) })
-  }
   /** A bench event (generator or fixed sequence). */
   note(kind: BenchEvent['kind'], device?: string, detail?: Record<string, unknown>): BenchEvent {
     const e: BenchEvent = { ...this.next(), kind, ...(device ? { device } : {}), ...(detail ? { detail } : {}) }
@@ -401,6 +396,7 @@ export class Buch implements HolderObserver {
       duties: [...this.duties.values()],
       errors: this.errors,
       receivers: this.receivers,
+      keyring: this.keyring,
     })
   }
   /** A ledger from a dump (not attached to a world): for re-checking a run later. */
@@ -418,6 +414,7 @@ export class Buch implements HolderObserver {
       duties: DutyImage[]
       errors: ObserverError[]
       receivers: ReceiverImage[]
+      keyring: KeyCopy[]
     }
     const b = new Buch()
     b.seq = o.seq
@@ -433,6 +430,8 @@ export class Buch implements HolderObserver {
     for (const x of o.duties) b.duties.set(x.device, x)
     b.errors.push(...o.errors)
     b.receivers.push(...o.receivers.map((x) => ({ ...x, state: M.fromJson(x.state) })))
+    b.keyring.push(...o.keyring)
+    for (const k of o.keyring) b.copied.add(`${k.device}|${k.rkid}`)
     return b
   }
   /** Every act id accepted on a stock key (8640.14 at a successful receiver commit), over the whole history. */
@@ -479,18 +478,10 @@ export function pEinmal(b: Buch): Check {
 /** The address frame `j` of an intent goes to (the primary frame to `address`, a copy to its own). */
 const frameAddress = (i: CommitIntent, j: number) => (j === 0 ? i.address : i.copies[j - 1]!)
 
-/**
- * The commit a carrier ticket is the committed submission of: an earlier successful store commit of the same device whose
- * batch holds this frame for this address (primary frame at the intent's address, a copy at the copy's address) and, in
- * that batch, the `introduce` of the ticket's act consuming the named key (MV-30). Undefined: not the committed submission.
- */
-export function committedSubmission(b: Buch, t: CarrierTicket): CommitEntry | undefined {
-  return b.commits.find((c) => c.device === t.device && c.seq < t.seq && c.intents.some((i) => i.frames.some((h, j) => h === t.frame && frameAddress(i, j) === t.address)) && c.ops.some((op) => op.kind === 'introduce' && op.act.id === t.act && (op.act.a.key === t.named || op.act.b.key === t.named)))
-}
 
-// ── Opening committed tickets as the addressed receiver (Tor-Review 44) ──
+// ── Opening every frame as the holder does (Tor-Review 44, 47) ──
 
-/** A ticket document as the addressed receiver reads it after opening and the proof check. */
+/** A ticket document as the receiver reads it after opening and the proof check. */
 export interface OpenedTicket {
   type: string
   issuer: string
@@ -499,92 +490,121 @@ export interface OpenedTicket {
   payload: TicketPayload
   [field: string]: unknown
 }
-/** One committed ticket frame opened with the key its address names: the plaintext, or why that key does not open it. */
-export type Opening = { ok: true; address: string; rkid: string; digest: string; doc: OpenedTicket } | { ok: false; address: string; reason: string }
+/**
+ * One frame opened at its routing address as the devices there would: the plaintext with the key id its envelope names
+ * (`rkid`, the sealing target) and the device that read it, or why none of them can.
+ */
+export type Opening = { ok: true; address: string; rkid: string; reader: string; digest: string; doc: OpenedTicket } | { ok: false; address: string; reason: string }
 
-/** The receiver image of an issuance commit for a ticket address. */
+/** The receiver image of an issuance commit for a frame address. */
 const receiverOf = (b: Buch, seq: number, address: string) => b.receivers.find((x) => x.seq === seq && x.address === address)
 
 /**
- * Open committed bytes as the receiver at `address` would, but with only the key the address names: the delivery stages
- * (`receive`, envelope, key id, decryption) with a resolver that knows just that one key, then the issuer's proof. Every
- * failure to open with that key is `sealed-to-other-key`: the honest receiver at this address cannot read the ticket.
+ * The opener of one check (Tor-Review 47: the ledger is an exact mirror of the holder). A frame at `address` reaches the
+ * devices that hold the key of that address (they listen there); each opens it as `HolderDevice.handle` does: `receive`
+ * with its whole resolver (the ledger's copy, `Buch.keyring`), then the issuer's proof. Copies whose public part is not
+ * their key id are dropped (never used).
  */
-async function openAt(rx: Pick<ReceiverImage, 'device' | 'xPriv'> | undefined, b64: string | undefined, address: string): Promise<Opening> {
-  const a = address.slice(-8)
-  if (!rx) return { ok: false, address, reason: `no observed device holds a stock key at address ${a}` }
-  if (!rx.xPriv) return { ok: false, address, reason: `the ledger holds no private key of ${rx.device} for address ${a}` }
-  if (!materialAt(rx.xPriv, address)) return { ok: false, address, reason: `the ledger's key of ${rx.device} for address ${a} is not the key at that address` }
-  if (b64 === undefined) return { ok: false, address, reason: `no committed bytes for address ${a}` }
-  let env: unknown
-  try {
-    env = JSON.parse(Buffer.from(b64, 'base64').toString('utf8'))
-  } catch {
-    return { ok: false, address, reason: `sealed-to-other-key: the committed bytes for address ${a} are no envelope` }
+class Opener {
+  private readonly resolvers = new Map<string, Promise<Map<string, CryptoKey>>>()
+  constructor(private readonly b: Buch) {}
+  private resolver(device: string): Promise<Map<string, CryptoKey>> {
+    let r = this.resolvers.get(device)
+    if (!r) {
+      r = (async () => {
+        const out = new Map<string, CryptoKey>()
+        for (const k of this.b.keyring) if (k.device === device && !out.has(k.rkid) && materialAt(k.xPriv, k.rkid)) out.set(k.rkid, await globalThis.crypto.subtle.importKey('pkcs8', Buffer.from(k.xPriv, 'base64'), { name: 'X25519' }, false, ['deriveBits']))
+        return out
+      })()
+      this.resolvers.set(device, r)
+    }
+    return r
   }
-  const named = String((env as { rkid?: unknown } | null)?.rkid ?? '?').slice(-8)
-  let v: Awaited<ReturnType<typeof receive>>
-  try {
-    const key = await globalThis.crypto.subtle.importKey('pkcs8', Buffer.from(rx.xPriv, 'base64'), { name: 'X25519' }, false, ['deriveBits'])
-    v = await receive(env, (rkid) => (rkid === address ? key : undefined))
-  } catch (e) {
-    return { ok: false, address, reason: `sealed-to-other-key: the key at address ${a} does not open it (${e instanceof Error ? e.message : String(e)})` }
+  async open(b64: string | undefined, address: string): Promise<Opening> {
+    const a = address.slice(-8)
+    if (b64 === undefined) return { ok: false, address, reason: `no committed bytes for address ${a}` }
+    const readers = [...new Set(this.b.keyring.filter((k) => k.rkid === address).map((k) => k.device))].sort()
+    if (!readers.length) return { ok: false, address, reason: `no observed device holds the key at address ${a}` }
+    let env: unknown
+    try {
+      env = JSON.parse(Buffer.from(b64, 'base64').toString('utf8'))
+    } catch {
+      return { ok: false, address, reason: `sealed-to-other-key: the bytes at address ${a} are no envelope` }
+    }
+    const named = String((env as { rkid?: unknown } | null)?.rkid ?? '?')
+    let last = 'failed(malformed)'
+    for (const reader of readers) {
+      const keys = await this.resolver(reader)
+      let v: Awaited<ReturnType<typeof receive>>
+      try {
+        v = await receive(env, (rkid) => keys.get(rkid))
+      } catch (e) {
+        last = e instanceof Error ? e.message : String(e)
+        continue
+      }
+      if (v.disposition !== 'unique') {
+        last = v.disposition
+        continue
+      }
+      const doc = v.document as unknown as OpenedTicket
+      if (doc?.type === TYPES.ticket) {
+        let proof = false
+        try {
+          proof = await diVerify(doc, doc.issuer)
+        } catch {
+          proof = false
+        }
+        if (!proof) return { ok: false, address, reason: `proof-invalid: the ticket opened at address ${a} carries no valid proof of its issuer` }
+      }
+      return { ok: true, address, rkid: named, reader, digest: v.digest!, doc }
+    }
+    return { ok: false, address, reason: `sealed-to-other-key: no device at address ${a} opens it (${last}, the envelope names ${named.slice(-8)})` }
   }
-  if (v.disposition !== 'unique') return { ok: false, address, reason: `sealed-to-other-key: the key at address ${a} does not open it (${v.disposition}, the envelope names ${named})` }
-  const doc = v.document as unknown as OpenedTicket
-  let proof = false
-  try {
-    proof = await diVerify(doc, doc.issuer)
-  } catch {
-    proof = false
-  }
-  if (!proof) return { ok: false, address, reason: `proof-invalid: the ticket opened at address ${a} carries no valid proof of its issuer` }
-  return { ok: true, address, rkid: address, digest: v.digest!, doc }
 }
 
 /**
- * Every committed frame at a stock key address (any intent, any commit: its `kind` decides nothing, Tor-Review 45), opened
- * with the key its address names (`openAt`), keyed `${commit seq}|${intent digest}|${frame index}` (0 = the primary frame).
- * Frames without kept bytes or without a receiver image at their address are not opened.
+ * Every frame of every intent of every issuance batch (any kind, primary and every copy, each on its own), opened at its
+ * address (`Opener`), keyed `${commit seq}|${intent digest}|${frame index}` (0 = the primary frame).
  */
-export async function openTickets(b: Buch): Promise<Map<string, Opening>> {
+export async function openTickets(b: Buch, opener = new Opener(b)): Promise<Map<string, Opening>> {
   const out = new Map<string, Opening>()
   for (const c of b.commits)
     for (const i of c.intents) {
       if (!i.sealed) continue
-      for (let j = 0; j < i.frames.length; j++) {
-        const rx = receiverOf(b, c.seq, frameAddress(i, j))
-        if (rx) out.set(`${c.seq}|${i.digest}|${j}`, await openAt(rx, i.sealed[j], frameAddress(i, j)))
-      }
+      for (let j = 0; j < i.frames.length; j++) out.set(`${c.seq}|${i.digest}|${j}`, await opener.open(i.sealed[j], frameAddress(i, j)))
     }
   return out
 }
 const isTicket = (o: Opening | undefined): o is Extract<Opening, { ok: true }> => !!o?.ok && o.doc.type === TYPES.ticket
 
-/** A deposit at a stock key address that opens with that key to a ticket: the one kind of ticket deposit P-Commit knows. */
+/** A deposit that opens at its address to a ticket: the one kind of ticket at the carrier P-Commit knows. */
 export interface TicketDeposit {
-  probe: CarrierProbe
+  deposit: CarrierDeposit
   opened: Extract<Opening, { ok: true }>
-  /** The issuance commit it is the committed submission of, or why there is none. */
+  /** The issuance commit it is the committed submission of (none: see `reasons`). */
   commit: CommitEntry | undefined
-  reason?: 'ticket-without-commit' | 'ticket-without-introduce'
+  reasons: Array<'ticket-without-commit' | 'ticket-without-introduce' | 'sealed-to-other-address'>
 }
 /**
- * The single path for every ticket at the carrier (Tor-Review 45 B1), reported by a producer or not, whatever its intent
- * was called: open the deposit with the key its address names; if the content is a ticket, it needs an earlier commit that
- * holds these bytes for this address (`ticket-without-commit`) and whose batch holds the `introduce` of this ticket's act
- * consuming the key it names (`ticket-without-introduce`). That commit's issuance check (P-Commit) then applies the
- * receiver predicate and the binding table to the same committed bytes.
+ * The single path for every ticket at the carrier (Tor-Review 45, 47): every deposit, reported by a producer or not, is
+ * opened at its address as the devices there would; if the content is a ticket, it needs an earlier commit that holds these
+ * bytes for this address (`ticket-without-commit`) whose batch holds the `introduce` of this ticket's act consuming the key
+ * it names (`ticket-without-introduce`), and its envelope must name the address it was routed to
+ * (`sealed-to-other-address`, also where the holder accepts). That commit's issuance check judges the same bytes by the
+ * receiver predicate and the binding table.
  */
-export async function ticketDeposits(b: Buch): Promise<TicketDeposit[]> {
+export async function ticketDeposits(b: Buch, opener = new Opener(b)): Promise<TicketDeposit[]> {
   const out: TicketDeposit[] = []
-  for (const pr of b.carrier.probes) {
-    const o = await openAt(pr, pr.bytes, pr.address)
+  for (const d of b.carrier.deposits) {
+    const o = await opener.open(d.bytes, d.address)
     if (!isTicket(o)) continue
     const p = o.doc.payload
-    const holders = b.commits.filter((c) => c.seq < pr.seq && c.intents.some((i) => i.frames.some((h, j) => h === pr.frame && frameAddress(i, j) === pr.address)))
+    const holders = b.commits.filter((c) => c.seq < d.seq && c.intents.some((i) => i.frames.some((h, j) => h === d.frame && frameAddress(i, j) === d.address)))
     const commit = holders.find((c) => c.ops.some((op) => op.kind === 'introduce' && op.act.id === p?.act && (op.act.a.key === p.own || op.act.b.key === p.own)))
-    out.push({ probe: pr, opened: o, commit, ...(commit ? {} : { reason: holders.length ? 'ticket-without-introduce' : 'ticket-without-commit' }) })
+    const reasons: TicketDeposit['reasons'] = []
+    if (!commit) reasons.push(holders.length ? 'ticket-without-introduce' : 'ticket-without-commit')
+    if (o.rkid !== d.address) reasons.push('sealed-to-other-address')
+    out.push({ deposit: d, opened: o, commit, reasons })
   }
   return out
 }
@@ -597,8 +617,11 @@ export interface BindingInput {
   intent: CommitIntent
   rx: ReceiverImage
   opened: Extract<Opening, { ok: true }>
-  /** The openings of the intent's copies, in order (undefined: no receiver image at the copy's address). */
-  copies: Array<Opening | undefined>
+  /** Which frame of the intent this is (0 = primary) and the address it is routed to. */
+  index: number
+  address: string
+  /** The openings of every frame of the intent, primary first. */
+  frames: Array<Opening | undefined>
   /** The committing device's own anchors on `side.rel` at the issuance commit. */
   mediator: string[]
   /**
@@ -626,7 +649,9 @@ const pl = (x: BindingInput) => x.opened.doc.payload
  * with the key its address names and next to the receiver predicate. `bindingGaps` checks it covers every field.
  */
 export const TICKET_BINDINGS: readonly TicketBinding[] = [
-  { field: 'address', derived: ['envelope.rkid'], committed: ['intent.address'], got: (x) => x.opened.rkid, want: (x) => x.intent.address },
+  // Tor-Review 47: the sealing target (the key id the envelope names) is the address the frame is routed to, even where
+  // the holder, which resolves over all its keys, would read it anyway.
+  { field: 'sealed-to-other-address', derived: ['envelope.rkid'], committed: ['intent.address', 'intent.copies'], got: (x) => x.opened.rkid, want: (x) => x.address },
   { field: 'own', derived: ['doc.payload.own'], committed: ['side.key'], got: (x) => pl(x).own, want: (x) => x.side.key },
   { field: 'own.anchor', derived: ['receiver.key'], committed: ['side.key'], got: (x) => x.rx.key, want: (x) => x.side.key },
   { field: 'own.keyAgreement', derived: ['receiver.keyAgreement'], committed: ['side.keyAgreement'], got: (x) => x.rx.keyAgreement, want: (x) => x.side.keyAgreement },
@@ -650,7 +675,8 @@ export const TICKET_BINDINGS: readonly TicketBinding[] = [
   // the producer sealed for this document.
   { field: 'frames', derived: ['opened.bytes'], committed: ['intent.frames', 'intent.sealed'], got: (x) => (x.intent.sealed ?? []).map(b64hash), want: (x) => x.intent.frames },
   { field: 'production', derived: ['production.frames'], committed: ['intent.frames'], got: (x) => (x.production ? [...x.production.frames].sort() : null), want: (x) => [...x.intent.frames].sort() },
-  { field: 'copies', derived: ['copies.opened'], committed: ['intent.copies'], got: (x) => x.copies.filter((o): o is Extract<Opening, { ok: true }> => !!o?.ok && o.digest === x.opened.digest).map((o) => o.address), want: (x) => x.intent.copies },
+  // Every frame of the intent (primary and copies) carries this same document, each at its own address.
+  { field: 'copies', derived: ['frames.opened'], committed: ['intent.copies'], got: (x) => x.frames.filter((o): o is Extract<Opening, { ok: true }> => !!o?.ok && o.digest === x.opened.digest).map((o) => o.address), want: (x) => [x.intent.address, ...x.intent.copies] },
 ]
 /** Fields deliberately not bound by a row, with the reason (`bindingGaps` accepts them and everything under them). */
 export const UNBOUND: Readonly<Record<string, string>> = {
@@ -684,110 +710,93 @@ const shown = (x: unknown) => {
 }
 
 /**
- * P-Commit (draft 2 §5.2 no. 5, D6; Tor-Review 43: the receiver predicate; Tor-Review 44: the ledger opens the frames):
- * (1) every ticket at the carrier is a committed submission (`committedSubmission`: frame and address as committed, after
- *     the commit that consumes both keys);
- * (2) every committed ticket frame of an issuance batch opens with the key its address names (the ledger's copy of the
- *     allocating device's private key agreement, `openTickets`); otherwise `sealed-to-other-key`;
- * (3) of the opened tickets of the act, exactly one names each side's key (existence: two complete tickets);
- * (4) each of them is a ticket the honest receiver accepts: the holder's own predicate (`ticketAcceptance`, 8640.2–8640.8,
- *     without the state steps) applied to the opened plaintext at its address, in the receiver context of the stock key's
- *     allocator at the issuance commit (`ReceiverImage`);
- * (5) each of them is bound to the committed act side, act and intent by every row of `TICKET_BINDINGS`.
- * (1) with the opening in (2) closes sealing → observation → submission: the carrier bytes are the committed bytes (hash),
- * and the committed bytes at the committed address are what the key at that address opens.
- * K2 specialization: the receiver context of a candidate without device sets has no stock address, so its tickets fail (2).
+ * P-Commit (draft 2 §5.2 no. 5, D6; Tor-Review 43: the receiver predicate; 44: the ledger opens the frames; 45, 47: one
+ * path, the ledger an exact mirror of the holder):
+ * (1) every deposit that opens at its address (as the devices there would) to a ticket is the committed submission of an
+ *     issuance of its own act, sealed to the address it was routed to (`ticketDeposits`);
+ * (2) every frame of every intent of an issuance batch, primary and each copy on its own, is opened at its address and
+ *     judged by its content (never by the intent's kind): a ticket of an act the batch does not introduce is
+ *     `ticket-without-introduce`; a frame no device at its address opens is `sealed-to-other-key`;
+ * (3) of the ticket frames of the act, exactly one names each side's key (existence: two complete tickets);
+ * (4) every ticket frame of the act passes the holder's own predicate (`ticketAcceptance`, 8640.2–8640.8, without the
+ *     state steps) at its address, in the receiver context of the stock key's allocator at the issuance commit;
+ * (5) every ticket frame of the act is bound by every row of `TICKET_BINDINGS` to the committed act side, act and intent.
+ * K2 specialization: the receiver context of a candidate without device sets has no stock address, so its tickets fail (4).
  */
 export async function pCommit(b: Buch): Promise<Check> {
   const v: string[] = []
-  // (1) Every ticket at the carrier, one path (`ticketDeposits`).
-  const deposits = await ticketDeposits(b)
-  const judged = new Set(deposits.map((d) => d.probe.seq))
+  const opener = new Opener(b)
+  // (1) Every ticket at the carrier, one path.
+  const deposits = await ticketDeposits(b, opener)
   for (const d of deposits) {
-    if (!d.reason) continue
+    if (!d.reasons.length) continue
     const p = d.opened.doc.payload
-    const why = d.reason === 'ticket-without-commit' ? 'at the carrier without an earlier commit holding these bytes for this address' : 'its bytes are committed, but no batch holding them introduces its act on the key it names'
-    v.push(`ticket ${String(p?.act).slice(0, 8)} → ${String(p?.own).slice(-8)} at the carrier (seq ${d.probe.seq}) at address ${d.probe.address.slice(-8)}: ${d.reason} (${why})`)
+    const why = d.reasons.map((r) => (r === 'ticket-without-commit' ? `${r} (at the carrier without an earlier commit holding these bytes for this address)` : r === 'ticket-without-introduce' ? `${r} (its bytes are committed, but no batch holding them introduces its act on the key it names)` : `${r} (sealed to ${d.opened.rkid.slice(-8)}, routed to ${d.deposit.address.slice(-8)})`))
+    v.push(`ticket ${String(p?.act).slice(0, 8)} → ${String(p?.own).slice(-8)} at the carrier (seq ${d.deposit.seq}) at address ${d.deposit.address.slice(-8)}: ${why.join('; ')}`)
   }
-  // A ticket a producer reported that the key at its deposit address does not open (or not at a stock key address): its
-  // receiver cannot read it; it still must be the committed submission (frame and address as committed).
-  for (const t of b.carrier.tickets) {
-    if (judged.has(t.seq) || committedSubmission(b, t)) continue
-    const held = b.commits.find((c) => c.device === t.device && c.seq < t.seq && c.intents.some((i) => i.frames.includes(t.frame)))
-    const i = held?.intents.find((x) => x.frames.includes(t.frame))
-    const at = i ? frameAddress(i, i.frames.indexOf(t.frame)) : undefined
-    if (held && at !== undefined && at !== t.address) v.push(`ticket ${t.act.slice(0, 8)} → ${t.named.slice(-8)} at the carrier (seq ${t.seq}) at address ${t.address.slice(-8)}: not the committed submission (${held.writer}#${held.n} holds these bytes for address ${at.slice(-8)})`)
-    else v.push(`ticket ${t.act.slice(0, 8)} → ${t.named.slice(-8)} at the carrier (seq ${t.seq}) without an earlier commit of ${t.device} holding its bytes and both consumptions`)
-  }
-  const opened = await openTickets(b)
+  const opened = await openTickets(b, opener)
   let issuances = 0
   for (const c of b.commits) {
     const intro = c.ops.filter((op): op is M.Op & { kind: 'introduce' } => op.kind === 'introduce')
-    const primary = (i: CommitIntent) => opened.get(`${c.seq}|${i.digest}|0`)
-    // Tickets by content (the opened primary frame), never by the intent's `kind`.
-    const tickets = c.intents.filter((i) => isTicket(primary(i)))
+    if (!intro.length) continue
+    // (2) Every frame on its own, by content.
+    const frames = c.intents.flatMap((i) => i.frames.map((_, j) => ({ i, j, address: frameAddress(i, j), o: opened.get(`${c.seq}|${i.digest}|${j}`) })))
+    const tickets = frames.filter((f) => isTicket(f.o)) as Array<{ i: CommitIntent; j: number; address: string; o: Extract<Opening, { ok: true }> }>
     const acts = new Set(intro.map((op) => op.act.id))
-    // Tickets of an act this batch does not introduce, with the receiver's verdict on them.
     const stray: string[] = []
-    for (const i of tickets) {
-      const o = primary(i) as Extract<Opening, { ok: true }>
-      if (acts.has(String(o.doc.payload?.act))) continue
-      const rx = receiverOf(b, c.seq, i.address)!
-      const verdict = acceptsTicket(rx, o.doc, i.address, c.at)
-      stray.push(`ticket ${String(o.doc.payload?.act).slice(0, 8)} → ${String(o.doc.payload?.own).slice(-8)} at address ${i.address.slice(-8)}: ticket-without-introduce${verdict.ok ? '' : ` (receiver ${rx.device} refuses: ${verdict.step}: ${verdict.reason})`}`)
-    }
-    if (!intro.length) {
-      if (stray.length) v.push(`commit ${c.writer}#${c.n}: ${stray.join('; ')}`)
-      continue
+    for (const f of tickets) {
+      if (acts.has(String(f.o.doc.payload?.act))) continue
+      const rx = receiverOf(b, c.seq, f.address)
+      const verdict = rx ? acceptsTicket(rx, f.o.doc, f.address, c.at) : undefined
+      stray.push(`ticket ${String(f.o.doc.payload?.act).slice(0, 8)} → ${String(f.o.doc.payload?.own).slice(-8)} at address ${f.address.slice(-8)}: ticket-without-introduce${verdict && !verdict.ok ? ` (receiver ${rx!.device} refuses: ${verdict.step}: ${verdict.reason})` : ''}`)
     }
     for (const [n, op] of intro.entries()) {
       issuances++
       const what = `issuance ${op.act.id.slice(0, 8)} (${c.writer}#${c.n})`
       const wrong: string[] = n === 0 ? [...stray] : []
-      // A committed frame the key at its address does not open belongs to no act the ledger can read: with one issuance in
-      // the batch it is that issuance's.
-      if (intro.length === 1)
-        for (const i of c.intents)
-          for (let j = 0; j < i.frames.length; j++) {
-            const o = opened.get(`${c.seq}|${i.digest}|${j}`)
-            if (o && !o.ok) wrong.push(`ticket intent ${i.digest.slice(0, 8)}${j ? ` copy ${j}` : ''} at address ${frameAddress(i, j).slice(-8)}: ${o.reason}`)
-          }
-      const mine = tickets.filter((i) => (primary(i) as Extract<Opening, { ok: true }>).doc.payload?.act === op.act.id)
+      if (intro.length === 1) for (const f of frames) if (f.o && !f.o.ok) wrong.push(`ticket intent ${f.i.digest.slice(0, 8)}${f.j ? ` copy ${f.j}` : ''} at address ${f.address.slice(-8)}: ${f.o.reason}`)
+      const mine = tickets.filter((f) => f.o.doc.payload?.act === op.act.id)
+      for (const f of mine) if (f.o.doc.payload.own !== op.act.a.key && f.o.doc.payload.own !== op.act.b.key) wrong.push(`ticket at address ${f.address.slice(-8)} names ${String(f.o.doc.payload.own).slice(-8)}, no side of the act`)
       for (const [side, other] of [[op.act.a, op.act.b], [op.act.b, op.act.a]] as const) {
         const to = `ticket → ${side.key.slice(-8)}`
-        const xs = mine.filter((i) => (primary(i) as Extract<Opening, { ok: true }>).doc.payload.own === side.key)
-        if (xs.length !== 1) {
-          wrong.push(`${to}: ${xs.length} opened tickets of the act name it (want 1)`)
-          continue
-        }
-        const i = xs[0]!
-        const o = primary(i) as Extract<Opening, { ok: true }>
-        const rx = receiverOf(b, c.seq, i.address)!
-        const verdict = acceptsTicket(rx, o.doc, i.address, c.at)
-        if (!verdict.ok) wrong.push(`${to}: receiver ${rx.device} refuses at address ${i.address.slice(-8)} (${verdict.step}: ${verdict.reason})`)
-        const x: BindingInput = {
-          act: op.act,
-          side,
-          other,
-          intent: i,
-          rx,
-          opened: o,
-          copies: i.copies.map((_, j) => opened.get(`${c.seq}|${i.digest}|${j + 1}`)),
-          mediator: c.mediator?.find((m) => m.rel === side.rel)?.own ?? [],
-          counterpart: counterpartAgreements(rx, i.address),
-          production: b.production(i.digest),
-        }
-        for (const row of TICKET_BINDINGS) {
-          const got = row.got(x)
-          const want = row.want(x)
-          if (M.canonical(got ?? null) !== M.canonical(want ?? null)) wrong.push(`${to}: ${row.field} ${shown(got)} (committed ${shown(want)})`)
+        const xs = mine.filter((f) => f.o.doc.payload.own === side.key)
+        if (xs.length !== 1) wrong.push(`${to}: ${xs.length} opened tickets of the act name it (want 1)`)
+        // (4), (5) for every ticket frame naming this side, not only the first.
+        for (const f of xs) {
+          const at = xs.length > 1 ? `${to} (${f.j ? `copy ${f.j} of ` : ''}intent ${f.i.digest.slice(0, 8)})` : to
+          const rx = receiverOf(b, c.seq, f.address)
+          if (!rx) {
+            wrong.push(`${at}: no receiver image at address ${f.address.slice(-8)}`)
+            continue
+          }
+          const verdict = acceptsTicket(rx, f.o.doc, f.address, c.at)
+          if (!verdict.ok) wrong.push(`${at}: receiver ${rx.device} refuses at address ${f.address.slice(-8)} (${verdict.step}: ${verdict.reason})`)
+          const x: BindingInput = {
+            act: op.act,
+            side,
+            other,
+            intent: f.i,
+            rx,
+            opened: f.o,
+            index: f.j,
+            address: f.address,
+            frames: f.i.frames.map((_, j) => opened.get(`${c.seq}|${f.i.digest}|${j}`)),
+            mediator: c.mediator?.find((m) => m.rel === side.rel)?.own ?? [],
+            counterpart: counterpartAgreements(rx, f.address),
+            production: b.production(f.i.digest),
+          }
+          for (const row of TICKET_BINDINGS) {
+            const got = row.got(x)
+            const want = row.want(x)
+            if (M.canonical(got ?? null) !== M.canonical(want ?? null)) wrong.push(`${at}: ${row.field} ${shown(got)} (committed ${shown(want)})`)
+          }
         }
       }
       if (wrong.length) v.push(`${what}: ${wrong.join('; ')}`)
     }
   }
   // Tickets at the carrier: every deposit whose content is a ticket, and every deposit a producer reported as one.
-  return check('P-Commit', v, { tickets: new Set([...judged, ...b.carrier.tickets.map((t) => t.seq)]).size, issuances })
+  return check('P-Commit', v, { tickets: new Set([...deposits.map((d) => d.deposit.seq), ...b.carrier.tickets.map((t) => t.seq)]).size, issuances })
 }
 
 /** The key agreements a receiver image holds for its counterpart on the live relationship whose stock key is `address`. */
@@ -900,7 +909,7 @@ export async function pProduktion(b: Buch, opts: { rounds?: number; reserveMs?: 
     // Tor-Review 45: the same single path as P-Commit (`ticketDeposits`): a deposit counts if its content is a ticket of
     // this act, it opens with the key its address names, and it is the committed submission of this device's issuance.
     const named = new Set<string>()
-    for (const d of deposits) if (!d.reason && d.probe.seq < deadline && d.commit!.device === e.device && d.opened.doc.payload?.act === act) named.add(String(d.opened.doc.payload.own))
+    for (const d of deposits) if (!d.reasons.length && d.deposit.seq < deadline && d.commit!.device === e.device && d.opened.doc.payload?.act === act) named.add(String(d.opened.doc.payload.own))
     if (named.size === 2) counts.kept++
     else v.push(`issuance ${act.slice(0, 8)} on ${e.device}: ${named.size} of 2 tickets at the carrier within ${k} rounds`)
   }
