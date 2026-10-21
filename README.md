@@ -79,7 +79,13 @@ S9 is almost all waiting.
 - **T9, T10, Z1 to Z5** (`src/lab/zustellung.ts`): pair delivery over the
   wires plain envelope, TSP Rev 3 and DIDComm v2 (authcrypt, anoncrypt):
   lost receipt, device offline, what the carrier learns, carrier switch,
-  multiple devices, foreign sender, wrong recipient key.
+  multiple devices, foreign sender, wrong recipient key. E11b step 2 adds
+  the direct send forms (b) `tsp-direct-connection` and (a)
+  `tsp-direct-egress-session`, with sessions per relationship under a
+  carrier that forwards only senders holding a session. E11b step 3 adds
+  the routed form (c) `tsp-routed` (and `tsp-routed-egress-session`) with
+  an intermediary that opens the routing layer and forwards the inner
+  frame, under foreign senders, duplicates, tampering and rebinding.
 - **S9, S9b** (`src/lab/load.ts`): load, 30 members.
 - **X1 to X12** (`src/lab/mehrgeraet/scenarios.ts`): several devices of
   one person against the target model of Trust 0.32 §8 and §6a: double
@@ -122,6 +128,34 @@ pnpm test:rust                  # native tests of the Rust wrappers
 REPORT=1 pnpm vitest run report # result table of all candidates and matrix.md
 pnpm dev                        # browser run, local
 ```
+
+### Live probe against the VTI mediator (E11b)
+
+`tests/zustellung-live.test.ts` measures Rev 3 routed TSP against a live
+mediator. It needs the network, is skipped by default and never enters
+the report. Results: `src/candidates/zustellung/NOTES.md`, section
+"E11b live".
+
+```sh
+RLTP_LIVE_MEDIATOR=1 pnpm vitest run tests/zustellung-live.test.ts
+```
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `RLTP_LIVE_MEDIATOR` | `1` runs the probe | off |
+| `MEDIATOR_DID` | another mediator instance | instance of 27 September 2026 |
+| `MEDIATOR_ALLOW_INSECURE` | `1` sets net policy `allowInsecure` and `allowPrivate` (local mediator) | off |
+| `RLTP_WIRE_DEBUG` | `1` prints row outcomes and error classes on stderr | off |
+| `E11B_FORMS` | comma list of forms (`D-c,D-es,D-e,R-cc,R-c,R-c',R-es,R-ce`) | all |
+| `E11B_RUNS` | runs per form pass (integer ≥ 1) | 3 |
+| `E11B_TIMEOUT_MS` | delivery window and ack deadline | 20000 |
+| `E11B_PROTOCOL_OUT` | path of the protocol JSON | `.cache/e11b-live/<UTC-ISO>.json` |
+
+The post-observation per form pass is the constant `OBSERVE_MS` (30 s),
+not a variable.
+
+The protocol holds no keys, seeds, tokens, payloads or error texts: only
+shortened DIDs, digest prefixes, counts, hosts and values from fixed lists.
 
 The browser page is published via GitHub Pages on every push to `main`.
 There, all runs can be started on a real device (S9, for example on
