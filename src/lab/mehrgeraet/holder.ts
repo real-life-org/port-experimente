@@ -404,6 +404,20 @@ export interface Measures {
 
 export type ActionResult = 'ok' | 'blocked' | 'crashed'
 
+/**
+ * E15 K2 step 2b.0: the bench's observation seam for the outcome ledger (`buch.ts`). Pure observation: every call hands
+ * out the device's own values (its committed image, the plaintext of a document it built, a document its parser admitted)
+ * and nothing it returns is read; no decision of the device depends on it. Unset (`null`) everywhere but in ledger runs.
+ */
+export interface HolderObserver {
+  /** A successful store commit of this device; `image` is what the store now holds (the observer copies what it keeps). */
+  committed(d: HolderDevice, image: DeviceState): void
+  /** A document this device signed and sealed (its own plaintext), with every frame it sealed for it. */
+  produced(d: HolderDevice, p: { digest: string; type: string; issuer: string; recipient: string; payload: Record<string, Json>; frames: Uint8Array[] }): void
+  /** A document delivered to this device that passed its parser's form checks (MV-24), before the fold decides on it. */
+  admitted(d: HolderDevice, a: { digest: string; type: string; issuer: string; address: string; payload: Record<string, unknown> }): void
+}
+
 export class HolderDevice {
   state: M.HolderState
   readonly zusteller: Zusteller
@@ -417,6 +431,8 @@ export class HolderDevice {
   online = true
   crashAt: CrashPoint | null = null
   readonly crashes: CrashPoint[] = []
+  /** E15 2b.0: observation seam for the outcome ledger (bench only, never read back). */
+  observer: HolderObserver | null = null
   measures: Measures = { framesOut: 0, bytesOut: 0, ownFramesOut: 0, ownBytesOut: 0, blocked: 0, unboundAcks: 0 }
   private down = false
   private counter = 0
@@ -835,7 +851,10 @@ export class HolderDevice {
     }
   }
   commit() {
-    this.store?.commit(this.snapshotState())
+    if (!this.store) return
+    const image = this.snapshotState()
+    this.store.commit(image)
+    this.observer?.committed(this, image)
   }
   /** Neuaufbau aus dem Store (#57): alles Flüchtige wird aus dem Abbild ersetzt, nichts bleibt aus dem alten Lauf. */
   async reload(): Promise<void> {
@@ -891,10 +910,16 @@ export class HolderDevice {
   }
   /** Freigeben (nach dem Commit): beim Enrollment aus der Ablage bis zum Zeugnis nur Verkehr an die eigene Adresse. */
   private release(ds: string[]): void {
+    let out = 0
     for (const d of ds) {
       if (this.catchUp && !this.ownTraffic(this.zusteller.submissions.get(d)?.address)) {
         if (!this.parked.includes(d)) this.parked.push(d)
-      } else this.zusteller.deposit(d)
+      } else {
+        // E15 K2 2b.0: crash point between two releases (both tickets of an issuance): the first is at the carrier, the
+        // rest is committed and goes out after the rebuild (`unreleased`).
+        if (out++ > 0) this.crash('between-sends')
+        this.zusteller.deposit(d)
+      }
     }
   }
   /**
@@ -977,6 +1002,7 @@ export class HolderDevice {
     const digest = await digestBytes(enc.encode(jcs(doc)))
     const kind = type === TYPES.journalSync ? (payload.reply ? 'journal-sync-reply' : 'journal-sync') : (type.split('/').slice(-2)[0] ?? type)
     for (const f of frames) this.produced.set(frameHash(f.frame), kind)
+    this.observer?.produced(this, { digest, type, issuer: k.anchor, recipient, payload, frames: frames.map((f) => f.frame) })
     this.zusteller.record(digest, bytes, address, extra.length ? extra : undefined)
     this.held.push(digest)
     this.expected.set(digest, recipient)
@@ -2232,6 +2258,7 @@ export class HolderDevice {
     const ackBytes = enc.encode(jcs(ackEnv))
     const ackDigest = await digestBytes(enc.encode(jcs(ackDoc)))
     this.produced.set(frameHash(ackBytes), 'delivery-ack')
+    this.observer?.produced(this, { digest: ackDigest, type: TYPES.ack, issuer: k.anchor, recipient: doc.issuer, payload: { ref: v.digest!, meaning: 'received' }, frames: [ackBytes] })
     this.acks.set(v.digest!, { frame: ackBytes, digest: ackDigest, address: doc.replyTo })
     this.zusteller.record(ackDigest, ackBytes, doc.replyTo)
     this.held.push(ackDigest)
@@ -2268,6 +2295,11 @@ export class HolderDevice {
     return undefined
   }
 
+  /** E15 2b.0: a document that passed its form checks, for the outcome ledger (observation only). */
+  private admitted(doc: Doc, address: string, digest: string): void {
+    this.observer?.admitted(this, { digest, type: doc.type, issuer: doc.issuer, address, payload: doc.payload as Record<string, unknown> })
+  }
+
   /** Fachliche Auswertung je Typ; true = Wirkung (quittieren), false = abgewiesen (keine Quittung). Jeder Zweig bindet das Dokument an den erwarteten Signierer (#55). */
   private async dispatch(doc: Doc, address: string, digest: string): Promise<boolean> {
     const now = this.clock.now()
@@ -2280,6 +2312,7 @@ export class HolderDevice {
       if (!this.state.findings.includes(text)) this.emit({ kind: 'finding', text })
       return false
     }
+    if (doc.type !== TYPES.revision) this.admitted(doc, address, digest) // a revision after its own form rules (below)
     switch (doc.type) {
       case TYPES.revision: {
         // M: 8550/8557/6270, vereinfacht.
@@ -2296,9 +2329,11 @@ export class HolderDevice {
             return false
           }
           if (p.tombstones !== undefined && (p.keys.length !== 0 || M.shapeProblem(p.tombstones, { array: 'ident' }, 'tombstones'))) return false
+          this.admitted(doc, address, digest)
           return this.foldSignerRevision(r, t, { revision: p.revision, keys: p.keys, writer: signerId(doc.issuer), tombstones: p.tombstones })
         }
         if (p.writer !== undefined && M.shapeProblem(p.writer, 'tag', 'writer')) return false // Review 28: Schreiberkennung nach ihrer Grammatik, sonst abgewiesen
+        this.admitted(doc, address, digest)
         if (typeof p.writer === 'string') return this.acceptWriterRevision(r, t, doc.issuer, p as typeof p & { writer: string })
         if (r.view && r.view.scope === t.id && p.revision <= r.view.revision) {
           const same = p.revision === r.view.revision

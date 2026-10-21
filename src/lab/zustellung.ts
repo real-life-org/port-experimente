@@ -196,6 +196,8 @@ export class Carrier {
   readonly dropDeliveryTo = new Set<string>()
   /** Nächste Einlieferung geht still verloren (einmal). */
   dropNextDeposit = false
+  /** E15 K2 2b.0: observation seam for the outcome ledger: every frame the carrier took (before any drop rule). Never read back. */
+  observe: ((f: Frame) => void) | null = null
   /** Rahmen, die eine drop-Regel verschluckt hat. */
   readonly swallowed: Frame[] = []
   private dropRules: Array<(f: Frame) => boolean> = []
@@ -268,6 +270,7 @@ export class Carrier {
     if (this.unreachable) throw new WireUnreachable('Träger unerreichbar')
     const f: Frame = { id: ++this.seq, address, bytes }
     this.carried.push(f)
+    this.observe?.(f)
     if (this.dropNextDeposit) {
       this.dropNextDeposit = false
       return
@@ -550,7 +553,8 @@ export interface DeviceOptions {
 }
 
 /** Absturzstellen (E15, Befund 8): vor dem Commit, nach dem Commit (vor der Bestätigung am Träger), vor dem Versand. */
-export type CrashPoint = 'before-commit' | 'after-commit' | 'before-send'
+/** `between-sends` (E15 K2 2b.0, holder only): after the first of several released submissions reached the carrier. */
+export type CrashPoint = 'before-commit' | 'after-commit' | 'before-send' | 'between-sends'
 
 export class Crashed extends Error {}
 

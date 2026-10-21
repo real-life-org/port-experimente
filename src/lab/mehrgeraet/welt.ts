@@ -2,7 +2,7 @@
 // virtuelle Uhr, Store je Gerät, Begegnungen als Begegnungskanal.
 
 import { Carrier, MemoryStore, VirtualClock } from '../zustellung'
-import { frameHash, HolderDevice, type DeviceState, type MultiDeviceCandidate } from './holder'
+import { frameHash, HolderDevice, type DeviceState, type HolderObserver, type MultiDeviceCandidate } from './holder'
 import * as M from './model'
 import { rand } from '@real-life/trust-protocol'
 
@@ -18,6 +18,8 @@ export interface Welt15Options {
    * Kandidat als Prüfstandsoption wählt (`bench.selfLog`), sonst aus.
    */
   selfLog?: boolean
+  /** E15 K2 2b.0: observer of every device of this world from its first commit on (the outcome ledger, `buch.ts`). */
+  observer?: HolderObserver
 }
 
 export class Welt15 {
@@ -28,6 +30,7 @@ export class Welt15 {
   private readonly seeds = new Map<string, Uint8Array>()
   private readonly withStores: boolean
   readonly selfLog: boolean
+  readonly observer: HolderObserver | null
   constructor(
     readonly candidate: MultiDeviceCandidate,
     opts: Welt15Options = {},
@@ -35,6 +38,7 @@ export class Welt15 {
     this.clock = opts.clock ?? new VirtualClock('2026-10-17T08:00:00.000Z')
     this.withStores = opts.stores ?? true
     this.selfLog = opts.selfLog ?? candidate.bench?.selfLog ?? false
+    this.observer = opts.observer ?? null
     this.carrier.now = () => this.clock.now()
   }
 
@@ -52,6 +56,7 @@ export class Welt15 {
     const cand = await this.candidate.first(person, device, seed)
     const d = new HolderDevice(device, person, cand, this.carrier, this.clock, this.store(device))
     d.selfLog = this.selfLog
+    d.observer = this.observer
     await d.relisten()
     d.commit()
     this.devices.push(d)
@@ -67,6 +72,7 @@ export class Welt15 {
     const { cand, state, intents, probes } = await this.candidate.enrol(from, device, fromLog ? { fromLog } : undefined)
     const d = new HolderDevice(device, from.person, cand, this.carrier, this.clock, this.store(device), fromLog ? M.emptyState(from.person) : state)
     d.selfLog = this.selfLog
+    d.observer = this.observer
     if (!fromLog) {
       for (const i of intents ?? []) d.intents.set(i.digest, i)
       if (probes) d.adoptProbes(probes) // behaltene Proben aus dem Abbild (Tor-Review 16 S2)
@@ -134,6 +140,7 @@ export class Welt15 {
     const cand = await (this.candidate.instance ?? this.candidate.first).call(this.candidate, victim.person, name, seed)
     const d = new HolderDevice(name, victim.person, cand, this.carrier, this.clock, store)
     d.selfLog = this.selfLog
+    d.observer = this.observer
     await d.reload()
     return d
   }
