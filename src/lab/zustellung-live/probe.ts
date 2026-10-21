@@ -520,7 +520,8 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
   }
 
   function rowView(r: RowResult, rec: SendRecord) {
-    const first = events.filter((e) => e.recordId === rec.id && !e.fresh).sort((a, b) => a.t - b.t)[0]
+    // Counted receipts only: a receipt after close is listed in `receipts`, never as the received size.
+    const first = events.filter((e) => e.recordId === rec.id && !e.fresh && !e.afterClose).sort((a, b) => a.t - b.t)[0]
     return {
       ...r,
       digests: { payload: short8(rec.payloadDigest), inner: short8(rec.innerDigest), outer: rec.outerDigest ? short8(rec.outerDigest) : null },

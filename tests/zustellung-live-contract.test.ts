@@ -454,6 +454,37 @@ describe('E11b end of observation (review 1 C1)', () => {
     }, 60_000)
   }
 
+  it('a row whose only receipt came after close exports no received size (CodeRabbit): received no, the receipt listed as not counted', async () => {
+    const { info, counters, base } = await setup()
+    let first: string | null = null
+    // the first frame of the pass (the first probe) is held until the pass settles
+    const inst = instrumentedPort(base, (_label, text) => {
+      if (first !== null) return null
+      first = text
+      return 'first'
+    })
+    const cfg = parseEnv({ E11B_RUNS: '1', E11B_TIMEOUT_MS: '100', E11B_FORMS: 'D-c' })
+    const r = await runProbe(cfg, {
+      info,
+      port: inst.port,
+      counters,
+      versions: VERSIONS,
+      rand: seededRand(42),
+      observeMs: 50,
+      hooks: {
+        settling: (phase) => {
+          if (phase === 'pass') void inst.release('first')
+        },
+      },
+    })
+    expect(r.failures).toEqual([])
+    const p = JSON.parse(protocolJson(r.protocol))
+    const late = (p.rows as Array<Exported & { received: string; bytes: { received: number | null } }>).filter((x) => x.receipts.length > 0 && x.receipts.every((y) => !y.counted))
+    expect(late.length).toBe(1)
+    expect(late[0]!.received).toBe('no')
+    expect(late[0]!.bytes.received).toBe(null)
+  }, 60_000)
+
   it('a settle timeout keeps the rows of its pass (review 3 C2): run invalid, one row per probe and document send, every ack reference resolves, no further pass', async () => {
     const { info, counters, base } = await setup()
     const inst = instrumentedPort(base)
