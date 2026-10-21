@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import * as M from '../src/lab/mehrgeraet/model'
 import { signerId, TYPES, type HolderDevice } from '../src/lab/mehrgeraet/holder'
-import { ledgerWorld, pBilanz } from '../src/lab/mehrgeraet/buch'
+import { ledgerWorld, pAufhebung, pBilanz, pVersorgung } from '../src/lab/mehrgeraet/buch'
 import { k2 } from '../src/candidates/mehrgeraet-k2'
 
 // E15 K2 step 2b.1 "allocation by A" (rltp/design/port-experimente-e15-k2-schritt-2b-kern-entwurf-4-2026-10-21.md, Fassung 4,
@@ -669,5 +669,66 @@ describe('K2 step 2b.1, part 2: class state and tombstones in a world (§4)', ()
     await s.w.rounds(4)
     // Soll: 1 acceptance on y (A2 never saw the off phase).
     expect(s.buch.acceptedOn().get(y)?.size ?? 0).toBe(1)
+  }, 120_000)
+})
+
+describe('K2 step 2b.1, part 2: the allocation checkers against counter-runs (Tor-Review 46 B2, B3)', () => {
+  it('P1. P-Versorgung sees a missing first supply: class on, share 5, A1 supplies nothing (test hook) → 1 violation (Tor-Review 46 B2)', async () => {
+    const { w, buch } = ledgerWorld(k2())
+    const A = await w.person('A', 'A1')
+    const Mm = await w.person('M', 'M1')
+    const am = await w.encounter(A, Mm)
+    await w.rounds(2)
+    ;(A as unknown as { supply: () => Promise<void> }).supply = async () => {}
+    await A.setClass(am.x.id, true)
+    await w.rounds(3)
+    expect(M.rel(A.state, am.x.id).stock).toHaveLength(0)
+    // Soll: one row (A1, class on, no own key), frei 5, member m1 without a key → 1 violation.
+    const c = pVersorgung(buch, 5)
+    expect(c.violations, JSON.stringify(c.counts)).toHaveLength(1)
+  }, 60_000)
+
+  it('P2. P-Aufhebung keeps the revocation exception: A2 buries A1\'s keys (A1 never folds it), A1 revokes A2, M names A1\'s key again, A1 accepts → 0 violations (Tor-Review 46 B3)', async () => {
+    const s = await zw({ a2: true })
+    const self = s.w.selfAddresses('A')
+    s.w.carrier.faults.withhold('A1', (f) => self.has(f.address))
+    await s.A2!.setClass(s.am.x.id, false)
+    await s.w.rounds(3)
+    await s.w.revoke(s.A, s.A2!)
+    await s.w.rounds(4)
+    const r = await s.Mm.introduce(s.am.y.id, s.bm.y.id)
+    expect('act' in r).toBe(true)
+    await s.w.rounds(3)
+    expect(s.A.state.acts).toHaveLength(1)
+    // Soll: the burial came from A2, revoked before the issuance, and A1 currently lists the key → no lifted key named.
+    const c = pAufhebung(s.buch)
+    expect(c.violations).toEqual([])
+    expect(c.counts.issuances).toBe(1)
+  }, 120_000)
+
+  it('P3. P-Aufhebung still fails where the burial counts: the same burial, A2 not revoked, M fixture names a buried key → 1 violation', async () => {
+    const s = await zw({ a2: true })
+    const self = s.w.selfAddresses('A')
+    s.w.carrier.faults.withhold('A1', (f) => self.has(f.address))
+    const x = s.own(s.A, undefined, 'active')[0]!.anchor
+    await s.A2!.setClass(s.am.x.id, false)
+    await s.w.rounds(3)
+    await s.A2!.setClass(s.am.x.id, true)
+    await s.w.rounds(3)
+    // Hook: M's own view ignores tombstones and names x (A2 is not revoked: its tombstone on x is final).
+    const rel = M.relOfTuple(s.Mm.state, s.am.y.id)!.id
+    const listed = M.usableView(s.Mm.state, rel, s.w.clock.now()).listed
+    expect(listed.some((k) => k.anchor === x)).toBe(false)
+    ;(s.Mm as unknown as { nameable: (rel: string) => { view: M.UsableView; nameable: M.ViewKey[] } }).nameable = function (this: HolderDevice, relId: string) {
+      const v = M.usableView(this.state, relId, this.clock.now())
+      const k = M.rel(this.state, relId).id === rel ? [{ n: 0, anchor: x, keyAgreement: s.own(s.A).find((y) => y.anchor === x)!.keyAgreement, expiresAt: s.own(s.A).find((y) => y.anchor === x)!.expiresAt, for: s.own(s.A).find((y) => y.anchor === x)!.for }] : v.unconsumed
+      return { view: v, nameable: k }
+    }
+    ;(s.Mm.cand as { authorize?: unknown }).authorize = () => true
+    const r = await s.Mm.introduce(s.am.y.id, s.bm.y.id)
+    expect('act' in r).toBe(true)
+    await s.w.rounds(3)
+    // Soll: 1 violation (x named after a burial by a non-revoked issuer that M had folded).
+    expect(pAufhebung(s.buch).violations).toHaveLength(1)
   }, 120_000)
 })

@@ -1124,7 +1124,7 @@ export function allocation(revs: readonly StockRevision[], ctx: AllocContext) {
     }
     return out.sort((x, y) => x.anchor.localeCompare(y.anchor))
   }
-  return { fold, classOff, evidence, usable }
+  return { fold, classOff, evidence, usable, buried }
 }
 
 /** Ms nutzbare Sicht auf den Vorrat einer Seite in einem Moment (`usableView`): jede Stufe eine Teilmenge der vorigen. */
