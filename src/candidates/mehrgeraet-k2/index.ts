@@ -21,7 +21,7 @@
 
 import { createHmac, createPrivateKey, createPublicKey, randomBytes, sign, verify, type KeyObject } from 'node:crypto'
 import { edFromSeed, xFromSeed, anchorOfEd, mkOfX } from '@real-life/trust-protocol'
-import { derive, EnrolmentRefused, UnknownWriter, type CandidateDevice, type EnrolOptions, type HolderDevice, type KeyScheme, type Keys, type MultiDeviceCandidate } from '../../lab/mehrgeraet/holder'
+import { derive, EnrolmentRefused, TYPES, UnknownWriter, type CandidateDevice, type EnrolOptions, type HolderDevice, type KeyScheme, type Keys, type MultiDeviceCandidate } from '../../lab/mehrgeraet/holder'
 import * as M from '../../lab/mehrgeraet/model'
 import { batchProblem, K1aDevice, MalformedBatch, type Batch } from '../mehrgeraet-k1a'
 
@@ -48,6 +48,12 @@ export interface K2Options {
   producerRule?: boolean
   /** X23: lifetime of new stock keys (default 8465, 180 days). */
   stockLifetimeMs?: number
+  /**
+   * Step 2b.2 (core draft 4 §5, E4): the K2 capability of the issuance automaton: two facts per side with `ticket-ack@1`,
+   * resumption as due work, the act-end stop at 8110.5 in three places, `TB` in release and resumption, 8232.1 for
+   * tickets, the restart from the last commit. Default on for K2; `false` = the 2b.1 path (counter-run). K0/K1a never.
+   */
+  automaton?: boolean
 }
 
 /** Keys of one device for every context, derived from the device secret (step 1); the self key and the journal key come from here. */
@@ -136,6 +142,22 @@ export class DeviceDirectory {
   }
 }
 
+/**
+ * Step 2b.2 (draft 2 §2.3, MV-24, MV-30): the composition of an issuance batch, checked by the parser before the fold. A
+ * batch with an `introduce` holds exactly one, and exactly two ticket intents of that act, one per side; a ticket intent
+ * outside an issuance batch, or of another act, is a form error. `null` = fine.
+ */
+export function issuanceProblem(b: { ops: M.Op[]; intents: Array<{ kind: string; act?: string; side?: string }> }): string | null {
+  const intro = b.ops.filter((op) => op.kind === 'introduce')
+  const tickets = b.intents.filter((i) => i.kind === TYPES.ticket)
+  if (!intro.length) return tickets.length ? 'batch.intents(ticket without introduce)' : null
+  if (intro.length > 1) return 'batch.ops(more than one introduce)'
+  const act = (intro[0] as M.Op & { kind: 'introduce' }).act.id
+  if (tickets.length !== 2) return `batch.intents(${tickets.length} tickets, MV-30 wants 2)`
+  if (tickets.some((t) => t.act !== act)) return 'batch.intents(ticket of another act)'
+  if (new Set(tickets.map((t) => t.side)).size !== 2 || tickets.some((t) => t.side !== 'a' && t.side !== 'b')) return 'batch.intents(ticket sides)'
+  return null
+}
 export class K2Device extends K1aDevice {
   /** The device secret: the root of every key of this device; part of the image (`persist`), never shared. */
   private secret: Uint8Array
@@ -160,8 +182,10 @@ export class K2Device extends K1aDevice {
     readonly producerRule = true,
     readonly revocationToCounterparts = true,
     readonly stockLifetimeMs?: number,
+    readonly issuanceAutomaton = true,
   ) {
     super(person, name, new Uint8Array(32), index, slots, budget, false, false) // no writer tags, no number classes
+    this.keepOnRestart = issuanceAutomaton
     this.owner = name
     this.secret = secret
     this.member = dir.member(name, secret)
@@ -283,6 +307,10 @@ export class K2Device extends K1aDevice {
     const pub = this.dir.journalPub(this.person, device)
     if (!pub) throw new UnknownWriter(`writer ${rest.writer} is not in the device set of ${this.person}`)
     if (!verify(null, signedBytes(rest), pub, Buffer.from(sig, 'base64'))) throw new UnknownWriter(`batch ${rest.writer}#${rest.n} not signed by ${device}`)
+    if (this.issuanceAutomaton) {
+      const bad = issuanceProblem(rest)
+      if (bad) throw new MalformedBatch(bad)
+    }
     this.learn({ ...rest, sig })
     return super.receiveOwnFrame(enc.encode(JSON.stringify(rest)))
   }
@@ -293,8 +321,8 @@ export class K2Device extends K1aDevice {
   override persist() {
     return { ...super.persist(), secret: Buffer.from(this.secret).toString('base64'), owner: this.owner }
   }
-  override restore(data: unknown): void {
-    super.restore(data)
+  override restore(data: unknown, opts?: { fresh?: boolean }): void {
+    super.restore(data, opts)
     const d = data as { secret?: string; owner?: string } | null
     if (!d?.secret) return
     this.secret = new Uint8Array(Buffer.from(d.secret, 'base64'))
@@ -322,7 +350,8 @@ export function k2(opts: K2Options = {}): K2Candidate {
   const devices = new Map<string, K2Device[]>()
   const ceremonies: K2Candidate['ceremonies'] = []
   const secret = () => new Uint8Array(randomBytes(32))
-  const make = (person: string, name: string, index: number) => new K2Device(person, name, secret(), index, slots, budget, dir, producer, counterparts, opts.stockLifetimeMs)
+  const automaton = opts.automaton ?? true
+  const make = (person: string, name: string, index: number) => new K2Device(person, name, secret(), index, slots, budget, dir, producer, counterparts, opts.stockLifetimeMs, automaton)
   const id = single.includes('M') ? 'k2-device-keys' : 'k2-device-keys-distributed-m'
   const size = (x: unknown) => Buffer.byteLength(JSON.stringify(x), 'utf8')
   return {

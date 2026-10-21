@@ -171,6 +171,32 @@ export interface IssuerImage {
   act: string
   keys: Array<{ rel: string; key: string; evidence: M.Evidence; classOff: boolean }>
 }
+/**
+ * K2 step 2b.2 (core draft 4 §1.4; decisions 2, 6): at a store commit of the issuing M device, the release gate of each of
+ * its own ticket intents by the model's one computation (`M.ticketGate` on the committed image): `null` = submission
+ * admissible. Recorded when it changes, so "the gate at round r" is the last row at or before r.
+ */
+export interface GateRow {
+  seq: number
+  at: string
+  device: string
+  act: string
+  side: 'a' | 'b'
+  digest: string
+  gate: M.TicketGate | null
+}
+/**
+ * K2 step 2b.2 (core draft 4 §1.3, review 5 D1): a side device's committed image projects an act `declined` although the
+ * same image knows the decisive consent with a submitted card or the connection (MV-15 rule 2): a P-Paar violation.
+ */
+export interface DeclinedRow {
+  seq: number
+  device: string
+  person: string
+  act: string
+  o: string
+  opened: boolean
+}
 export interface BalanceRow {
   seq: number
   at: string
@@ -269,6 +295,10 @@ export class Buch implements HolderObserver {
   readonly balances: BalanceRow[] = []
   /** K2 step 2b.1: the issuer's knowledge of the named keys at each issuance commit (`IssuerImage`). */
   readonly issuers: IssuerImage[] = []
+  /** K2 step 2b.2: the release gate of each own ticket intent per commit of the issuing device (`GateRow`, on change). */
+  readonly gates: GateRow[] = []
+  /** K2 step 2b.2: `declined` projections that know the decisive consent (`DeclinedRow`, P-Paar). */
+  readonly declined: DeclinedRow[] = []
   /** The ledger's copy of every device resolver (Tor-Review 47), in the dump. */
   readonly keyring: KeyCopy[] = []
   private readonly copied = new Set<string>()
@@ -347,7 +377,21 @@ export class Buch implements HolderObserver {
       for (const op of b.ops) if (op.kind === 'introduce') this.issuers.push({ ...t, device: d.name, person: d.person, act: op.act.id, keys: [op.act.a, op.act.b].map((x) => ({ rel: x.rel, key: x.key, evidence: M.evidence(image.holder, x.rel, x.key), classOff: M.classOff(image.holder, x.rel) })) })
       if (intro.length) for (const i of b.intents) for (const a of [i.address, ...(i.copies ?? []).map((c) => c.address)]) this.receiverAt(t.seq, intro[0]!.act.id, a)
     }
+    this.gatesAt(t, d, image)
+    for (const a of image.holder.acts)
+      if (a.state === 'declined' && (M.SUBMITTED.has(a.o) || a.opened !== null) && !this.declined.some((x) => x.device === d.name && x.act === a.id)) this.declined.push({ seq: t.seq, device: d.name, person: d.person, act: a.id, o: a.o, opened: a.opened !== null })
     this.lastImage.set(d.name, { person: d.person, sets: !!d.cand.deviceSets, state: image.holder })
+  }
+  /** `GateRow`s of one commit: every own ticket intent of the image (act and side known), gate by `M.ticketGate`. */
+  private gatesAt(t: { seq: number; at: string }, d: HolderDevice, image: DeviceState): void {
+    const tickets = image.intents.map(([, i]) => i).filter((i) => i.kind === TYPES.ticket && i.act && i.side && i.device === d.name)
+    for (const i of tickets) {
+      const other = tickets.find((x) => x.act === i.act && x.side !== i.side)
+      const os = other ? image.submissions.find((x) => x.digest === other.digest) : undefined
+      const gate = M.ticketGate(image.holder, i.act!, i.side!, t.at, !!os && os.deposits > 0)
+      const last = [...this.gates].reverse().find((x) => x.device === d.name && x.digest === i.digest)
+      if (!last || last.gate !== gate) this.gates.push({ ...t, device: d.name, act: i.act!, side: i.side!, digest: i.digest, gate })
+    }
   }
   /** Copy every resolver entry of every device not copied yet (the world's devices; live only). */
   private copyKeys(seq: number): void {
@@ -476,6 +520,8 @@ export class Buch implements HolderObserver {
       balances: this.balances,
       issuers: this.issuers,
       keyring: this.keyring,
+      gates: this.gates,
+      declined: this.declined,
     })
   }
   /** A ledger from a dump (not attached to a world): for re-checking a run later. */
@@ -496,6 +542,8 @@ export class Buch implements HolderObserver {
       balances?: BalanceRow[]
       issuers?: IssuerImage[]
       keyring: KeyCopy[]
+      gates?: GateRow[]
+      declined?: DeclinedRow[]
     }
     const b = new Buch()
     b.seq = o.seq
@@ -516,6 +564,8 @@ export class Buch implements HolderObserver {
     b.issuers.push(...(o.issuers ?? []))
     b.keyring.push(...o.keyring)
     for (const k of o.keyring) b.copied.add(`${k.device}|${k.rkid}`)
+    b.gates.push(...(o.gates ?? []))
+    b.declined.push(...(o.declined ?? []))
     return b
   }
   /** Every act id accepted on a stock key (8640.14 at a successful receiver commit), over the whole history. */
@@ -972,52 +1022,76 @@ export async function pProduktion(b: Buch, opts: { rounds?: number; reserveMs?: 
   const k = opts.rounds ?? PRODUCTION.rounds
   const reserve = opts.reserveMs ?? PRODUCTION.reserveMs
   const v: string[] = []
-  const counts = { introductions: 0, obliged: 0, kept: 0, noKeys: 0, crashedBeforeCommit: 0, down: 0, open: 0 }
+  const counts: Record<string, number> = { introductions: 0, obliged: 0, kept: 0, noKeys: 0, crashedBeforeCommit: 0, down: 0, open: 0, 'omitted:rueckzug': 0, 'omitted:abgang': 0, 'omitted:accepted': 0 }
   for (const e of b.events) {
     if (e.kind !== 'introduce' || !e.device) continue
-    counts.introductions++
+    counts.introductions!++
     const d = e.detail as { allowedA?: string[]; allowedB?: string[]; result: { act?: string; refused?: string }; armed: string | null; up: boolean }
     if (!d.up) {
-      counts.down++
+      counts.down!++
       continue
     }
     if (d.result.refused === 'crashed' && d.armed === 'before-commit') {
-      counts.crashedBeforeCommit++
+      counts.crashedBeforeCommit!++
       continue
     }
     const ka = d.allowedA ?? []
     const kb = d.allowedB ?? []
     if (!ka.length || !kb.length) {
-      counts.noKeys++
+      counts.noKeys!++
       continue
     }
-    counts.obliged++
     const next = b.events.find((x) => x.seq > e.seq)?.seq ?? Infinity
     const act = d.result.act ?? b.commits.find((c) => c.device === e.device && c.seq > e.seq && c.seq < next && c.ops.some((op) => op.kind === 'introduce'))?.ops.find((op): op is M.Op & { kind: 'introduce' } => op.kind === 'introduce')?.act.id
     if (!act) {
+      counts.obliged!++
       v.push(`introduce at seq ${e.seq} on ${e.device}: refused (${d.result.refused ?? '?'}) although the reference admits ${ka.length} and ${kb.length} keys`)
       continue
     }
     const issued = b.commits.flatMap((c) => c.ops).find((op): op is M.Op & { kind: 'introduce' } => op.kind === 'introduce' && op.act.id === act)
-    if (issued && Date.parse(issued.act.expiresAt) - Date.parse(e.at) <= reserve) {
-      counts.obliged--
-      continue
-    }
+    if (issued && Date.parse(issued.act.expiresAt) - Date.parse(e.at) <= reserve) continue
+    // K2 2b.2 (core draft 4 §1.4; decisions 2, 6): per ticket, the k-round window runs over the up rounds of the device in
+    // which submission was admissible by the device's own committed knowledge (`GateRow`, `M.ticketGate`); a round where
+    // it was not (withdrawn, departed, accepted, past `TB`) restarts the window. Without gate rows (no automaton) every up
+    // round is admissible (the 2b.0 duty). A ticket never submitted without a violation is an omission by the last reason.
     const upRounds = b.events.filter((x) => x.kind === 'round' && x.seq > e.seq && ((x.detail?.up as string[] | undefined) ?? []).includes(e.device!))
-    const deadline = upRounds[k - 1]?.seq
-    if (deadline === undefined) {
-      counts.open++
+    const results: Array<'kept' | 'violation' | 'down' | 'open' | 'omitted:rueckzug' | 'omitted:abgang' | 'omitted:accepted'> = []
+    for (const side of ['a', 'b'] as const) {
+      const named = issued?.act[side].key
+      const deps = deposits.filter((x) => !x.reasons.length && x.commit!.device === e.device && x.opened.doc.payload?.act === act && String(x.opened.doc.payload.own) === named).map((x) => x.deposit.seq)
+      const rows = b.gates.filter((g) => g.device === e.device && g.act === act && g.side === side)
+      const gateAt = (seq: number) => [...rows].reverse().find((g) => g.seq <= seq)?.gate ?? null
+      const first = Math.min(Infinity, ...deps)
+      let run = 0
+      let result: (typeof results)[number] | null = null
+      for (const r of upRounds) {
+        if (first < r.seq) {
+          result = 'kept'
+          break
+        }
+        run = gateAt(r.seq) === null ? run + 1 : 0
+        if (run >= k) {
+          result = 'violation'
+          break
+        }
+      }
+      if (!result) {
+        // The reason that held it back before the deadline; `deadline` alone means it never had an admissible round.
+        const reasons = rows.map((g) => g.gate).filter((g): g is M.TicketGate => g !== null && g !== 'deadline')
+        const last = reasons[reasons.length - 1] ?? (rows.some((g) => g.gate === 'deadline') ? 'deadline' : undefined)
+        result = first < Infinity ? 'kept' : last === 'withdrawn' ? 'omitted:rueckzug' : last === 'departed' ? 'omitted:abgang' : last === 'accepted' ? 'omitted:accepted' : last === 'deadline' ? 'down' : 'open'
+      }
+      results.push(result)
+    }
+    if (results.every((x) => x === 'down')) {
+      counts.down!++ // decision 2: no round in which submission was admissible
       continue
     }
-    // Tor-Review 43 B2: only committed submissions count (a ticket deposited at another address does not keep the duty);
-    // Tor-Review 44 B1: and only if its committed frame opens with the key its address names (the side named is the one
-    // the opened ticket names).
-    // Tor-Review 45: the same single path as P-Commit (`ticketDeposits`): a deposit counts if its content is a ticket of
-    // this act, it opens with the key its address names, and it is the committed submission of this device's issuance.
-    const named = new Set<string>()
-    for (const d of deposits) if (!d.reasons.length && d.deposit.seq < deadline && d.commit!.device === e.device && d.opened.doc.payload?.act === act) named.add(String(d.opened.doc.payload.own))
-    if (named.size === 2) counts.kept++
-    else v.push(`issuance ${act.slice(0, 8)} on ${e.device}: ${named.size} of 2 tickets at the carrier within ${k} rounds`)
+    counts.obliged!++
+    if (results.includes('violation')) v.push(`issuance ${act.slice(0, 8)} on ${e.device}: ${results.filter((x) => x === 'kept').length} of 2 tickets at the carrier within ${k} admissible rounds (${results.join(', ')})`)
+    else if (results.every((x) => x === 'kept')) counts.kept!++
+    else if (results.includes('open')) counts.open!++
+    for (const x of results) if (x.startsWith('omitted:')) counts[x]!++
   }
   return check(b, 'P-Produktion', v, counts)
 }
@@ -1060,7 +1134,77 @@ export function pPaar(b: Buch): Check {
         if (!same) v.push(`act ${act.slice(0, 8)}: ${p} and ${q} connected with different pair contexts`)
       }
   }
+  // K2 2b.2 (core draft 4 §1.3, review 5 D1): a reconstructed `declined` is a violation only where the same image knows
+  // the decisive consent with a submitted card or the connection (MV-15 rule 2); before the journal reconciliation a
+  // sibling's `declined` is a valid intermediate state.
+  for (const x of b.declined) v.push(`act ${x.act.slice(0, 8)}: ${x.device} projects declined although its image holds the own card ${x.opened ? 'connected' : x.o}`)
   return check(b, 'P-Paar', v, { connectedActs: ctx.size, bothSides: both })
+}
+
+/**
+ * K2 2b.2 (core draft 4 §1.3): one-sided connections, counted per cause, never a violation (8400). An act connected by one
+ * person only is `late-card` when a card of the act reached a device of the other person after its acceptance end
+ * (8110.5, from the delivery protocol), otherwise `other` (departure, restore, no card).
+ */
+export function oneSided(b: Buch): Record<string, number> {
+  const out: Record<string, number> = { 'late-card': 0, other: 0 }
+  const acts = new Map<string, M.MediatorAct>()
+  for (const c of b.commits) for (const op of c.ops) if (op.kind === 'introduce') acts.set(op.act.id, op.act)
+  const persons = new Map<string, Set<string>>()
+  for (const c of b.commits) for (const op of c.ops) if (op.kind === 'connect') (persons.get(op.act) ?? persons.set(op.act, new Set()).get(op.act)!).add(c.person)
+  for (const [act, ps] of persons) {
+    if (ps.size !== 1) continue
+    const a = acts.get(act)
+    const end = a ? Date.parse(a.expiresAt) + M.PARAM.actSkewMs : Infinity
+    const late = b.deliveries.some((x) => x.type === TYPES.card && x.payload.act === act && !ps.has(x.person) && Date.parse(x.at) > end)
+    out[late ? 'late-card' : 'other']!++
+  }
+  return out
+}
+
+/**
+ * K2 2b.2 (core draft 4 §1; decision 4): dead acts per cause, a counter, never a property. Per issued act: both sides
+ * accepted, one of them after `TB` → `spaetes-ticket`; otherwise the first side without acceptance names the cause, from
+ * its allocator's ticket log (8640 step: withdrawn/buried → `zurueckgezogen`, `fremde-zuteilung`, 8640.3 →
+ * `spaet-zugestellt`, 8640.10/8640.13 → `budget`, consumed → `doppelbenennung`) or, if the ticket never arrived, from the
+ * issuer's release gate (`withdrawn` → `zurueckgezogen`, `departed` → `abgang`). `deadAccepted` = acceptances in dead acts.
+ * Reads the holders' ticket log (`HolderDevice.ticketLog`, a measurement), so it needs the live world.
+ */
+export function deadTickets(b: Buch, w: Welt15): { causes: Record<string, number>; deadAccepted: number } {
+  const causes: Record<string, number> = { zurueckgezogen: 0, 'fremde-zuteilung': 0, 'spaetes-ticket': 0, 'spaet-zugestellt': 0, abgang: 0, budget: 0, doppelbenennung: 0, unknown: 0 }
+  let deadAccepted = 0
+  const accepts = b.commits.flatMap((c) => c.ops.filter((op): op is M.Op & { kind: 'ticket-accept' } => op.kind === 'ticket-accept'))
+  for (const c of b.commits)
+    for (const op of c.ops) {
+      if (op.kind !== 'introduce') continue
+      const act = op.act
+      const acc = (side: 'a' | 'b') => accepts.filter((x) => x.act.id === act.id && x.act.own === act[side].key)
+      const tb = Date.parse(act.expiresAt) - M.PARAM.consentReserveMs
+      const n = acc('a').length + acc('b').length
+      let cause: string | null = null
+      if (acc('a').length && acc('b').length) {
+        if ([...acc('a'), ...acc('b')].some((x) => Date.parse(x.at) > tb)) cause = 'spaetes-ticket'
+      } else {
+        const side = acc('a').length ? 'b' : 'a'
+        const key = act[side].key
+        const holder = w.devices.find((d) => d.state.relationships.some((r) => r.stock.some((k) => k.anchor === key && (k.by ?? d.name) === d.name)))
+        const log = (holder?.ticketLog ?? []).filter((x) => x.act === act.id).map((x) => x.outcome)
+        const refused = b.commits.some((x) => x.ops.some((o) => o.kind === 'ticket-refuse-budget' && o.own === key))
+        const gate = [...b.gates].reverse().find((g) => g.act === act.id && g.side === side && g.gate !== null && g.gate !== 'deadline')?.gate
+        if (refused || log.some((o) => o === '8640.13' || o === '8640.10')) cause = 'budget'
+        else if (log.includes('fremde-zuteilung')) cause = 'fremde-zuteilung'
+        else if (log.some((o) => o === 'state:withdrawn' || o === 'state:tombstoned')) cause = 'zurueckgezogen'
+        else if (log.includes('state:consumed')) cause = 'doppelbenennung'
+        else if (log.includes('8640.3')) cause = 'spaet-zugestellt'
+        else if (!log.length && gate === 'withdrawn') cause = 'zurueckgezogen'
+        else if (!log.length && gate === 'departed') cause = 'abgang'
+        else if (log.length || n) cause = 'unknown'
+      }
+      if (!cause) continue
+      causes[cause]!++
+      deadAccepted += n
+    }
+  return { causes, deadAccepted }
 }
 
 /**

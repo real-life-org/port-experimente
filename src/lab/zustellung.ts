@@ -50,6 +50,8 @@ export class VirtualClock implements Clock {
 export interface Store<S> {
   commit(state: S): void
   load(): S | undefined
+  /** E15 K2 2b.2: was an image loaded and not committed over since (bench marker, `MemoryStore.takeRestored`)? */
+  takeRestored?(): boolean
 }
 
 export class MemoryStore<S> implements Store<S> {
@@ -59,6 +61,7 @@ export class MemoryStore<S> implements Store<S> {
   commit(state: S) {
     this.state = structuredClone(state)
     this.commits++
+    this.restored = false
   }
   load(): S | undefined {
     return this.state === undefined ? undefined : structuredClone(this.state)
@@ -70,6 +73,17 @@ export class MemoryStore<S> implements Store<S> {
   /** Ein alter Stand zurückgespielt (X6, X19). */
   restore(state: S | undefined) {
     this.state = state === undefined ? undefined : structuredClone(state)
+    this.restored = true
+  }
+  /**
+   * E15 K2 step 2b.2 (core draft 4 §5.3, Q1, Q9): the bench marker "an image was loaded into this store" (restore from an
+   * old image, a stolen copy), as against a restart on the device's own last commit. It holds until the device commits
+   * again: a rebuild before that commit (a crash right after the restore) still starts from the loaded image, not from an
+   * own commit, so it is fresh again.
+   */
+  private restored = false
+  takeRestored(): boolean {
+    return this.restored
   }
 }
 
@@ -388,7 +402,14 @@ export type Report =
   | { state: 'awaiting-transport'; reason: 'offline' | 'transport-unreachable' }
   | { state: 'accepted' }
   | { state: 'delivered'; late: boolean }
-  | { state: 'failed'; reason: 'expired-by-adapter-policy' }
+  | { state: 'failed'; reason: 'expired-by-adapter-policy' | ExpireReason }
+
+/**
+ * E15 K2 step 2b.2 (core draft 4 §5.1, §5.2): why the holder's tick stops a submission. The deliverer has no clock; the
+ * holder calls `expire` at the act-end boundaries (`consent-reserve` for tickets, `act-ended` = 8110.5 for cards) and when
+ * the named key is known `withdrawn` (decision 15). Only the K2 automaton calls it; K0/K1a never.
+ */
+export type ExpireReason = 'consent-reserve' | 'act-ended' | 'withdrawn'
 
 /** Horizonte in Runden: Bericht spätestens nach einer Runde; erneut senden nach ACK_WAIT; aufgeben nach GIVE_UP. */
 export const HORIZON = { status: 1, ackWait: 3, giveUp: 12 } as const
@@ -411,6 +432,8 @@ export interface Submission {
    * Geräte schließt die Submission (wie bei einer gemeinsamen Adresse unter einem Seed). Ohne Feld: ein Rahmen.
    */
   extra?: Array<{ address: string; frame: Uint8Array }>
+  /** E15 K2 2b.2: stopped by `expire` after the carrier accepted it: no repetition any more, a late receipt still counts. */
+  stopped?: ExpireReason
 }
 
 export class Zusteller {
@@ -494,6 +517,7 @@ export class Zusteller {
       s.sinceDeposit++
       if (s.sinceAccepted !== null) s.sinceAccepted++
       if (s.report?.state === 'delivered' || s.report?.state === 'failed') continue
+      if (s.stopped) continue // E15 K2 2b.2: expired after carrier acceptance: what is out stays out, no repetition
       if (s.sinceAccepted !== null && s.sinceAccepted >= HORIZON.giveUp) {
         s.report = { state: 'failed', reason: 'expired-by-adapter-policy' }
         this.notes.push(`${s.digest.slice(0, 8)} aufgegeben ${s.sinceAccepted} Runden nach der Annahme (zuletzt ${s.transport})`)
@@ -527,6 +551,23 @@ export class Zusteller {
     if (s.report !== null && s.report.state !== 'awaiting-transport') return false
     this.submissions.delete(digest)
     return true
+  }
+  /**
+   * E15 K2 step 2b.2 (core draft 4 §5.2; decision 3): the act-end stop, driven by the holder's tick. Before the first carrier
+   * acceptance the submission is given up (`failed` with the reason; never deposited); after it nothing is withdrawn (what
+   * is out stays out), the report stays `accepted` (handed) and the deliverer stops repeating; a late receipt still makes it
+   * `delivered`. Returns the effect: `given-up`, `stopped` or `none` (unknown, already delivered, failed or stopped).
+   */
+  expire(digest: string, reason: ExpireReason): 'given-up' | 'stopped' | 'none' {
+    const s = this.submissions.get(digest)
+    if (!s || s.report?.state === 'delivered' || s.report?.state === 'failed' || s.stopped) return 'none'
+    if (s.deposits === 0) {
+      s.report = { state: 'failed', reason }
+      this.notes.push(`${s.digest.slice(0, 8)} aufgegeben vor der Trägerannahme (${reason})`)
+      return 'given-up'
+    }
+    s.stopped = reason
+    return 'stopped'
   }
   transport(digest: string) {
     return this.submissions.get(digest)?.transport

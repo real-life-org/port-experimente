@@ -106,6 +106,9 @@ export interface Intent {
    * ein Wiederanlauf liefert sie mit dem Hauptrahmen ein. Ohne Feld: ein Rahmen (K0, K1a).
    */
   copies?: Array<{ address: string; bytes: string }>
+  /** E15 K2 2b.2 (draft 2 §2.2 no. 2): a ticket intent names its act and side (the issuance batch's binding, MV-30). */
+  act?: string
+  side?: 'a' | 'b'
 }
 
 /** Ein gelungener Schritt des Geräts als Einheit: die Operationen und die Absichten, die er erzeugt hat (Review 6: Batch statt einzelner `record`). */
@@ -162,7 +165,7 @@ const isRecord = (x: unknown): x is Record<string, unknown> => typeof x === 'obj
  * Form einer Absicht ohne ihre Bytes (Review 27 B2a), für beide Journalpfade: der Batch trägt die Bytes als strenges base64
  * (`batchProblem` im Kandidaten), die Transaktion als Uint8Array (`transactionProblem`).
  */
-export const INTENT_FIELDS = { digest: 'digest', kind: 'string', address: 'string', expected: 'string', replyTo: 'string', device: 'ident', writer: 'writer', copies: { optional: { array: { object: { address: 'string', bytes: 'base64' } } } } } as const satisfies Record<Exclude<keyof Intent, 'bytes'>, M.Shape>
+export const INTENT_FIELDS = { digest: 'digest', kind: 'string', address: 'string', expected: 'string', replyTo: 'string', device: 'ident', writer: 'writer', copies: { optional: { array: { object: { address: 'string', bytes: 'base64' } } } }, act: { optional: 'ident' }, side: { optional: { enum: ['a', 'b'] } } } as const satisfies Record<Exclude<keyof Intent, 'bytes'>, M.Shape>
 /** Köpfe eines `journal-sync` (Review 28): Schreiberinkarnation → letzter Zähler. */
 const HEADS_SHAPE: M.Shape = { record: 'nat', key: 'writer' }
 const INTENT_SHAPE: M.Shape = { object: { ...INTENT_FIELDS, bytes: 'string' } } // `bytes` hier nur Platzhalter, geprüft unten
@@ -253,6 +256,13 @@ export interface CandidateDevice {
    * three members below come with it.
    */
   readonly allocationByA?: boolean
+  /**
+   * K2 step 2b.2 (core draft 4 §5, E4): the K2 capability of the issuance automaton (candidate option, absent = off; K0/K1a
+   * run the old path): acceptance knowledge from ticket receipts (`ticket-ack@1`), the release gate (`M.ticketGate`) with
+   * resumption as due work, the act-end stop at 8110.5 in the ticket branch, the side tick and the deliverer, `TB` in
+   * release and resumption, 8232.1 for tickets, 8850.5 for cards at keys not held, the restart from the last commit.
+   */
+  readonly issuanceAutomaton?: boolean
   /** K2 step 2b.1: the static share of the acceptance budget of this device per mediator relationship (MV-9, 8510). */
   readonly acceptanceShare?: number
   /** K2 step 2b.1: `belegt` (§2.1): this device's acceptances in the 8510 window of `now` without the 8515-confirmed ones. Rein. */
@@ -281,8 +291,11 @@ export interface CandidateDevice {
   stockNonce?(relationship: string): string
   /** Was der Kandidat dauerhaft hält (Journal); Teil des Store-Abbilds. */
   persist(): unknown
-  /** Neuaufbau aus dem Store; ein Kandidat mit Inkarnationen wechselt hier die Inkarnation. */
-  restore(data: unknown): void
+  /**
+   * Neuaufbau aus dem Store; ein Kandidat mit Inkarnationen wechselt hier die Inkarnation. E15 K2 2b.2 (§5.3): `fresh` =
+   * an image was loaded (restore, stolen copy); without it a candidate that supports restarts keeps its incarnation.
+   */
+  restore(data: unknown, opts?: { fresh?: boolean }): void
 }
 
 export interface MultiDeviceCandidate {
@@ -460,6 +473,8 @@ export interface TicketReceiver {
   now: string
   /** 8640.2 channel: the own tuple behind the address (K2: the head of the relationship whose stock key the address is). */
   tupleAt(address: string): M.Tuple | undefined
+  /** K2 2b.2 (core draft 4 §5.2): 8640.3 at the acceptance end 8110.5 (`expiresAt + act-skew`), not at `expiresAt`. */
+  skew?: boolean
 }
 /**
  * The receiver's state steps between the binding steps of 8640 (the holder on receipt passes them; the outcome ledger's
@@ -493,13 +508,13 @@ export function ticketAcceptance(doc: { issuer: string; payload: unknown }, addr
   const peer = rx.sets ? r.tuples.some((x) => peerIn(rx.state, true, doc.issuer, x.peer)) : peerIn(rx.state, false, doc.issuer, t.peer)
   if (!peer) return { ok: false, step: '8640.2', reason: `signer ${doc.issuer.slice(-8)} is no counterpart on this relationship` }
   const p = doc.payload as TicketPayload
-  if (Date.parse(rx.now) > Date.parse(p.expiresAt) || Date.parse(p.issuedAt) > Date.parse(rx.now) + M.PARAM.actSkewMs) return { ok: false, step: '8640.3', reason: 'outside the act times', p } // 8110
+  if (Date.parse(rx.now) > Date.parse(p.expiresAt) + (rx.skew ? M.PARAM.actSkewMs : 0) || Date.parse(p.issuedAt) > Date.parse(rx.now) + M.PARAM.actSkewMs) return { ok: false, step: '8640.3', reason: 'outside the act times', p } // 8110 (K2 2b.2: 8110.5)
   if (steps?.repeated(p)) return { ok: true, repeated: true }
   const own = r.stock.find((k) => k.anchor === p.own && (!rx.sets || k.keyAgreement === address))
   if (!own) return { ok: false, step: '8640.5', reason: `own ${p.own.slice(-8)} not on this relationship at address ${address.slice(-8)}`, p }
   // K2 step 2b.1 (draft 2 §3.3): the signer is the M device the key is assigned to, by A's own record (never M's statement).
   if (own.for !== undefined && own.for !== doc.issuer) return { ok: false, step: 'fremde-zuteilung', reason: `signer ${doc.issuer.slice(-8)} is not the M device ${own.for.slice(-8)} the key ${own.anchor.slice(-8)} is assigned to`, p, own }
-  if (steps && !steps.usable(own, p)) return { ok: false, step: 'state', reason: `own ${own.anchor.slice(-8)} in state ${own.state}`, p }
+  if (steps && !steps.usable(own, p)) return { ok: false, step: 'state', reason: `own ${own.anchor.slice(-8)} in state ${own.state}`, p, own }
   if (Date.parse(own.expiresAt) < Date.parse(p.expiresAt) + M.PARAM.actSkewMs) return { ok: false, step: '8640.7', reason: `own ${own.anchor.slice(-8)} expires before the act`, p }
   if (r.stock.some((k) => k.anchor === p.voucher.anchor)) return { ok: false, step: '8640.8', reason: `voucher ${p.voucher.anchor.slice(-8)} is an own stock key`, p }
   return { ok: true, repeated: false, rel: r, own, p }
@@ -515,6 +530,8 @@ export class HolderDevice {
   readonly log: Array<{ type: string; from: string; at: string; writer?: string; rel?: string }> = []
   /** Messung (X23, Review 34 S4): jede Ankunft einer Karte an diesem Gerät mit Akt, Zeit und Ausgang (Grund). Nur lesend genutzt. */
   readonly cardLog: Array<{ act: string; at: string; outcome: string }> = []
+  /** Measurement (K2 2b.2, dead tickets per cause): every ticket arrival at this device with act, time and outcome (8640 step). Read only. */
+  readonly ticketLog: Array<{ act: string; at: string; outcome: string }> = []
   online = true
   crashAt: CrashPoint | null = null
   readonly crashes: CrashPoint[] = []
@@ -680,10 +697,14 @@ export class HolderDevice {
     this.state = M.fromJson(state) // Review 28: Tabellen ohne Prototyp, auch aus einem Enrollment
     this.carrierRef = carrier
     this.zusteller = new Zusteller(name, () => this.carrierRef, () => this.online && !this.down)
-    this.zusteller.gate = (x) => this.catchUp && !this.ownTraffic(x.address) // B1a: Wiederholungen warten bis zum Ende der Enrollment-Zeremonie
+    this.zusteller.gate = (x) => (this.catchUp && !this.ownTraffic(x.address)) || this.heldTicket(x) // B1a: Wiederholungen warten bis zum Ende der Enrollment-Zeremonie
   }
   get carrier() {
     return this.carrierRef
+  }
+  /** Bench read (2b.2 tests): is the device down after a crash, until its rebuild? */
+  get isDown(): boolean {
+    return this.down
   }
   rebind(carrier: Carrier) {
     this.carrierRef = carrier
@@ -711,6 +732,10 @@ export class HolderDevice {
   /** K2 Schritt 2: Gerätemengen je Beziehung aus Nachweisen (`device-set@1`), eigene Schlüssel je Gerät. */
   private get sets(): boolean {
     return !!this.cand.deviceSets
+  }
+  /** K2 step 2b.2: the issuance automaton's capability (`CandidateDevice.issuanceAutomaton`). */
+  private get automaton(): boolean {
+    return !!this.cand.issuanceAutomaton
   }
   /** Was dieses Gerät über die Gerätemenge der Wurzel `root` weiß (eigene oder fremde), aus Nachweisen. */
   setOf(root: string): M.DeviceSet | undefined {
@@ -840,6 +865,15 @@ export class HolderDevice {
     for (const op of tx.ops) M.apply(this.state, op)
     this.dropDeparted() // ein gefalteter Abgang beendet die Aufbewahrung wie ein lokaler (Tor-Review 16 B1)
     for (const i of tx.intents) if (!this.intents.has(i.digest)) this.intents.set(i.digest, i)
+    // K2 2b.2 (draft 2 §2.2 no. 6, MV-8): an own ticket intent (this device, also an earlier incarnation) without a
+    // submission, brought by the journal, goes out with the same bytes through the release gate; never a sibling's.
+    if (this.automaton)
+      for (const i of tx.intents)
+        if (i.kind === TYPES.ticket && i.act && i.device === this.name && !this.zusteller.submissions.has(i.digest)) {
+          this.zusteller.record(i.digest, i.bytes, i.address, i.copies?.map((c) => ({ address: c.address, frame: new Uint8Array(Buffer.from(c.bytes, 'base64')) })))
+          this.expected.set(i.digest, i.expected)
+          this.held.push(i.digest)
+        }
     await this.withdrawLosingCards()
     await this.relisten()
     await this.produceOwed() // K2 Schritt 2, E2 (iv): eine Zustimmung aus dem Journal; das zuteilende Gerät erzeugt die Karte
@@ -969,7 +1003,10 @@ export class HolderDevice {
     }
   }
   /** Neuaufbau aus dem Store (#57): alles Flüchtige wird aus dem Abbild ersetzt, nichts bleibt aus dem alten Lauf. */
-  async reload(): Promise<void> {
+  async reload(opts: { fresh?: boolean } = {}): Promise<void> {
+    // K2 2b.2 (core draft 4 §5.3): an image path (the store was given an image, or the caller says so) is a fresh journal
+    // incarnation as in 2a; a rebuild on the device's own last commit is a restart (the candidate keeps inc and `n`).
+    const fresh = (this.store?.takeRestored?.() ?? false) || !!opts.fresh
     const s = this.store?.load()
     this.state = s?.holder ? M.fromJson(s.holder) : M.emptyState(this.person) // Review 28: Tabellen ohne Prototyp
     this.zusteller.restore(s?.submissions ?? [])
@@ -989,7 +1026,8 @@ export class HolderDevice {
     this.dropDeparted()
     // Was im Store steht, ist committet: vorgemerkte, nie freigegebene Submissions gehen nach dem nächsten Commit hinaus.
     this.held = this.zusteller.unreleased()
-    this.cand.restore(s?.candidate ?? null)
+    this.cand.restore(s?.candidate ?? null, { fresh })
+    this.due = []
     this.down = false
     this.parked = []
     await this.relisten()
@@ -1020,10 +1058,45 @@ export class HolderDevice {
     if (this.catchUp && !this.hasSibling()) this.sync = { pending: false, wait: 0, backoff: 1, id: null }
     this.commit()
   }
+  /**
+   * K2 step 2b.2 (core draft 4 §5.1): own ticket intents whose submission the release gate holds back for now (the named
+   * key `withdrawn`): fällige Arbeit, never deleted, re-checked at every release until the gate opens or the deadline
+   * passes. Derived again after a rebuild (unreleased submissions), so not part of the image.
+   */
+  private due: string[] = []
+  /**
+   * K2 step 2b.2: the release gate of an own ticket intent (`M.ticketGate`, the one computation the ledger shares): null =
+   * submit; otherwise why not. Not a ticket of this device (or no automaton): null, the old path.
+   */
+  private ticketGateOf(d: string): M.TicketGate | null {
+    if (!this.automaton) return null
+    const i = this.intents.get(d)
+    if (!i || i.kind !== TYPES.ticket || !i.act || !i.side) return null
+    const other = [...this.intents.values()].find((x) => x.kind === TYPES.ticket && x.act === i.act && x.side !== i.side)
+    const os = other ? this.zusteller.submissions.get(other.digest) : undefined
+    return M.ticketGate(this.state, i.act, i.side, this.clock.now(), !!os && os.deposits > 0)
+  }
+  /** K2 2b.2: a released ticket still `awaiting-transport` whose gate is closed for now (withdrawn) is not deposited. */
+  private heldTicket(x: Submission): boolean {
+    return this.automaton && x.report?.state === 'awaiting-transport' && this.ticketGateOf(x.digest) !== null
+  }
+  /** Measurement (2b.2): per own ticket intent the releases the gate withheld, by reason (never read by the device). */
+  readonly ticketOmissions: Array<{ digest: string; act: string; side: string; at: string; reason: M.TicketGate }> = []
   /** Freigeben (nach dem Commit): beim Enrollment aus der Ablage bis zum Zeugnis nur Verkehr an die eigene Adresse. */
   private release(ds: string[]): void {
     let out = 0
     for (const d of ds) {
+      // K2 2b.2 (§5.1, §1.4, decisions 9, 13): `TB`, 8232.1, evidence and acceptance knowledge decide in the release itself.
+      const gate = this.ticketGateOf(d)
+      if (gate) {
+        const i = this.intents.get(d)!
+        const last = [...this.ticketOmissions].reverse().find((x) => x.digest === d)
+        if (!last || last.reason !== gate) this.ticketOmissions.push({ digest: d, act: i.act!, side: i.side!, at: this.clock.now(), reason: gate })
+        if (gate === 'deadline') this.zusteller.expire(d, 'consent-reserve')
+        else if (gate === 'departed') this.zusteller.demarcate(d)
+        else if (gate === 'withdrawn' && !this.due.includes(d)) this.due.push(d)
+        continue // `accepted`: the receipt is in (decision 13); `unknown-act` cannot be an own intent
+      }
       if (this.catchUp && !this.ownTraffic(this.zusteller.submissions.get(d)?.address)) {
         if (!this.parked.includes(d)) this.parked.push(d)
       } else {
@@ -1072,7 +1145,7 @@ export class HolderDevice {
     this.crash('before-commit')
     this.commit()
     this.crash('before-send')
-    this.release(this.held.splice(0))
+    this.release([...this.due.splice(0), ...this.held.splice(0)])
   }
   /** Eine Nutzeraktion: blockiert (ganz zurückgenommen) oder abgestürzt heißt nicht fehlerhaft. */
   private async action(f: () => Promise<void>): Promise<ActionResult> {
@@ -1096,7 +1169,7 @@ export class HolderDevice {
    * K1a): ein Rahmen an `toRkid`. Ist die Menge bekannt leer (Schritt 2), entsteht kein Rahmen: null, ausdrücklicher
    * Zustellfehler (`failed(empty-device-set)`), nie ein Rahmen an den aufgezeichneten Schlüssel (Tor-Review 31 S1).
    */
-  private async sendDoc(type: string, issuerCtx: string, recipient: string, toRkid: string, replyTo: string, payload: Record<string, Json>, fan?: Array<{ anchor: string; rkid: string }>): Promise<{ digest: string; bytes: Uint8Array; address: string; frames: number; total: number } | null> {
+  private async sendDoc(type: string, issuerCtx: string, recipient: string, toRkid: string, replyTo: string, payload: Record<string, Json>, fan?: Array<{ anchor: string; rkid: string }>, meta?: { act: string; side: 'a' | 'b' }): Promise<{ digest: string; bytes: Uint8Array; address: string; frames: number; total: number } | null> {
     const set = fan ?? (this.sets ? this.recipientsOf(recipient) : null)
     if (set && !set.length) {
       this.emptySetFailures++
@@ -1119,7 +1192,7 @@ export class HolderDevice {
     this.held.push(digest)
     this.expected.set(digest, recipient)
     if (type !== TYPES.journal && type !== TYPES.journalSync) {
-      const intent: Intent = { digest, kind: type, bytes, address, expected: recipient, replyTo, device: this.name, writer: this.cand.writer, ...(extra.length ? { copies: extra.map((x) => ({ address: x.address, bytes: Buffer.from(x.frame).toString('base64') })) } : {}) }
+      const intent: Intent = { digest, kind: type, bytes, address, expected: recipient, replyTo, device: this.name, writer: this.cand.writer, ...(extra.length ? { copies: extra.map((x) => ({ address: x.address, bytes: Buffer.from(x.frame).toString('base64') })) } : {}), ...(meta ? { act: meta.act, side: meta.side } : {}) }
       this.intents.set(digest, intent)
       this.pending?.intents.push(intent)
     }
@@ -1384,7 +1457,7 @@ export class HolderDevice {
   }
   /** The context of the ticket predicate on this device (8640.2 channel: K2 by stock address, K0/K1a by tuple address). */
   private ticketReceiver(now: string): TicketReceiver {
-    return { state: this.state, sets: this.sets, now, tupleAt: (a) => (this.sets ? this.tupleOfStock(a) : this.tupleOfAddress(a)) }
+    return { state: this.state, sets: this.sets, now, tupleAt: (a) => (this.sets ? this.tupleOfStock(a) : this.tupleOfAddress(a)), ...(this.automaton ? { skew: true } : {}) }
   }
   /**
    * Arrival of a card under device sets (E1 (a), E3 (a)): the card names the revision of `device-set@1` that carries its
@@ -1636,7 +1709,7 @@ export class HolderDevice {
   async introduce(relA: string, relB: string, nameA = 'A', nameB = 'B'): Promise<{ act: string } | { refused: string }> {
     const now = this.clock.now()
     // 8570.4; kanonische Wahl (kleinster Anker), damit die Ankunftsreihenfolge nicht entscheidet (Review 4 B2).
-    const pick = (relId: string) => [...this.nameable(relId).nameable].sort((a, b) => a.anchor.localeCompare(b.anchor))[0] ?? null
+    const pick = (relId: string) => [...this.nameable(relId).nameable].sort((a, b) => M.byCode(a.anchor, b.anchor))[0] ?? null // K2 2b.2 decision 16: code units
     const ka = pick(relA)
     const kb = pick(relB)
     if (!ka || !kb) return { refused: `kein benennbarer Schlüssel (${ka ? '' : relA} ${kb ? '' : relB})`.trim() }
@@ -1647,17 +1720,20 @@ export class HolderDevice {
     // Abbild benennt M aus dem erreichbaren Stand; einen doppelt benannten Schlüssel weist A ab (8640.12 als Regel, MV-6).
     const r = await this.action(async () => {
       this.emit({ kind: 'introduce', act })
-      const send = async (relId: string, own: { key: string; keyAgreement: string; for?: string }, voucher: { key: string; keyAgreement: string }, name: string) => {
+      const send = async (relId: string, own: { key: string; keyAgreement: string; for?: string }, voucher: { key: string; keyAgreement: string }, name: string, side: 'a' | 'b') => {
         const rel = M.rel(this.state, relId)
         // K2 step 2b.1: the ticket is signed under the context whose anchor the key is assigned to (A checks signer = `for`).
         const h = rel.tuples.find((t) => own.for !== undefined && this.anchorOfCtx.get(t.ownKey) === own.for) ?? M.head(rel)
         // K2 Schritt 2 (6o.2): das Ticket öffnet nur, wer den privaten Teil des benannten Vorrats-Schlüssels hält; es ist an
         // diesen versiegelt (das zuteilende Gerät) und von ihm quittiert.
         const fan = this.sets ? [{ anchor: own.key, rkid: own.keyAgreement }] : undefined
-        await this.sendDoc(TYPES.ticket, h.ownKey, fan ? own.key : h.peer, fan ? own.keyAgreement : h.peerKeyAgreement, (await this.keysFor(h.ownKey)).rkid, { act: act.id, issuedAt: act.issuedAt, expiresAt: act.expiresAt, own: own.key, voucher: { anchor: voucher.key, keyAgreement: voucher.keyAgreement, name } }, fan)
+        const sent = await this.sendDoc(TYPES.ticket, h.ownKey, fan ? own.key : h.peer, fan ? own.keyAgreement : h.peerKeyAgreement, (await this.keysFor(h.ownKey)).rkid, { act: act.id, issuedAt: act.issuedAt, expiresAt: act.expiresAt, own: own.key, voucher: { anchor: voucher.key, keyAgreement: voucher.keyAgreement, name } }, fan, this.automaton ? { act: act.id, side } : undefined)
+        // K2 2b.2 (draft 2 §2.2 no. 2, 3): both complete ticket intents or no issuance at all (MV-30): a ticket that was not
+        // produced takes the whole step back.
+        if (!sent && this.automaton) throw new InvalidInput(`introduce: ticket for side ${side} not produced`)
       }
-      await send(relA, { ...act.a, ...(ka.for ? { for: ka.for } : {}) }, act.b, nameB)
-      await send(relB, { ...act.b, ...(kb.for ? { for: kb.for } : {}) }, act.a, nameA)
+      await send(relA, { ...act.a, ...(ka.for ? { for: ka.for } : {}) }, act.b, nameB, 'a')
+      await send(relB, { ...act.b, ...(kb.for ? { for: kb.for } : {}) }, act.a, nameA, 'b')
     })
     return r === 'ok' ? { act: act.id } : { refused: r }
   }
@@ -1924,7 +2000,7 @@ export class HolderDevice {
         this.commit()
         this.crash('after-commit')
         // Quittungen und Folgedokumente verlassen das Gerät erst nach dem Commit der Wirkung (#54, #56).
-        this.release(this.held.splice(0))
+        this.release([...this.due.splice(0), ...this.held.splice(0)])
         if (frames.length) this.carrier.conclude(this.name, frames.map((f) => f.id))
       }
       await this.tick()
@@ -2272,8 +2348,9 @@ export class HolderDevice {
     const now = this.clock.now()
     for (const a of this.state.acts.slice()) {
       if (a.state === 'offered' && Date.parse(now) > Date.parse(a.expiresAt) - M.PARAM.consentReserveMs) await this.guarded(async () => void this.emit({ kind: 'expire', act: a.id })) // 8325.A7
-      else if (a.state === 'consented' && Date.parse(now) > Date.parse(a.expiresAt)) await this.guarded(async () => void this.emit({ kind: 'expire', act: a.id })) // 8325.A8
+      else if (a.state === 'consented' && Date.parse(now) > Date.parse(a.expiresAt) + (this.automaton ? M.PARAM.actSkewMs : 0)) await this.guarded(async () => void this.emit({ kind: 'expire', act: a.id })) // 8325.A8 (K2 2b.2: after 8110.5)
     }
+    if (this.automaton) this.actEndStop(now)
     for (const r of this.state.relationships.slice()) {
       const aging = r.stock.filter((k) => k.state === 'active' && !M.usable(k.expiresAt, now)).map((k) => k.anchor)
       if (aging.length) await this.guarded(async () => void this.emit({ kind: 'age', rel: r.id, anchors: aging })) // 8475.S5
@@ -2293,6 +2370,29 @@ export class HolderDevice {
     }
   }
 
+  /**
+   * K2 step 2b.2 (core draft 4 §5.1, §5.2; decisions 3, 9, 15): the deliverer is clockless, the tick drives its stop. Own
+   * ticket submissions already released: past `TB` → `expire(·, 'consent-reserve')`; named key known `withdrawn` and the
+   * ticket at the carrier → `expire(·, 'withdrawn')`; addressee relationship departed and nothing at the carrier → cancelled
+   * (8232.1). Own card submissions past 8110.5 → `expire(·, 'act-ended')`. Before the first carrier acceptance an expired
+   * submission is given up, after it the report stays `accepted` (handed) and only the repetition ends.
+   */
+  private actEndStop(now: string): void {
+    for (const i of this.intents.values()) {
+      if (i.kind !== TYPES.ticket || !i.act || i.device !== this.name) continue
+      const sub = this.zusteller.submissions.get(i.digest)
+      if (!sub || sub.report === null || sub.report.state === 'delivered' || sub.report.state === 'failed' || sub.stopped) continue
+      const g = this.ticketGateOf(i.digest)
+      if (g === 'deadline') this.zusteller.expire(i.digest, 'consent-reserve')
+      else if (g === 'withdrawn' && sub.deposits > 0) this.zusteller.expire(i.digest, 'withdrawn')
+      else if (g === 'departed') this.zusteller.demarcate(i.digest)
+    }
+    for (const [d, x] of this.sent) {
+      if (x.kind !== 'card' || !x.act) continue
+      const a = this.state.acts.find((y) => y.id === x.act)
+      if (a && Date.parse(now) > Date.parse(a.expiresAt) + M.PARAM.actSkewMs) this.zusteller.expire(d, 'act-ended')
+    }
+  }
   /** Zustellerberichte in Fachwirkung: Karte taken/given-up (8326), Mapping sent, Wiederholung nach `failed` (6845.4). */
   private async reports(): Promise<void> {
     for (const [d, x] of [...this.sent]) await this.guarded(() => this.reportOne(d, x))
@@ -2401,7 +2501,7 @@ export class HolderDevice {
       }
       this.completed.add(v.digest!)
       this.zusteller.acknowledged(p.ref)
-      await this.onAck(p.ref)
+      await this.onAck(p.ref, v.digest!)
       return
     }
     let effect: boolean
@@ -2471,7 +2571,15 @@ export class HolderDevice {
   }
 
   /** Quittung auf ein eigenes Dokument: Karte delivered (8326.10), Mapping united (6845.3) mit Nachlieferung (6987.14 light). */
-  private async onAck(ref: string): Promise<void> {
+  private async onAck(ref: string, receipt?: string): Promise<void> {
+    // K2 2b.2 (draft 3 §1.1 (3a), decision 11): a receipt for an own ticket is acceptance knowledge for that side, journaled
+    // as `ticket-ack@1` (only the issuer writes it; its siblings learn it from the journal). A late receipt still counts.
+    const i = this.automaton ? this.intents.get(ref) : undefined
+    if (i && i.kind === TYPES.ticket && i.act && i.side && i.device === this.name) {
+      const a = this.state.mediatorActs.find((x) => x.id === i.act)
+      if (a && !a.known?.[i.side] && receipt) this.emit({ kind: 'ticket-ack', act: i.act, side: i.side, receiptDigest: receipt })
+      return
+    }
     const x = this.sent.get(ref)
     if (!x) return
     if (x.kind === 'card' && x.act) {
@@ -2510,8 +2618,9 @@ export class HolderDevice {
   private async dispatch(doc: Doc, address: string, digest: string): Promise<boolean> {
     const now = this.clock.now()
     // Tor-Review 40 B1 (MV-24): Form vor jedem Feldzugriff; ein unvollständiges Dokument ist ein Formfehler, keine Ausnahme.
-    const shape = doc.type === TYPES.revision ? M.DOC_SHAPES.revision : doc.type === TYPES.card ? M.DOC_SHAPES.card : undefined
-    const kind = doc.type === TYPES.revision ? 'revision' : 'card'
+    // K2 2b.2 (MV-24): under the automaton the ticket has its form too (`DOC_SHAPES.ticket`).
+    const shape = doc.type === TYPES.revision ? M.DOC_SHAPES.revision : doc.type === TYPES.card ? M.DOC_SHAPES.card : this.automaton && doc.type === TYPES.ticket ? M.DOC_SHAPES.ticket : undefined
+    const kind = doc.type === TYPES.revision ? 'revision' : doc.type === TYPES.ticket ? 'ticket' : 'card'
     const bad = shape ? M.shapeProblem(doc.payload, shape, kind) : null
     if (bad) {
       const text = `${kind} von ${doc.issuer.slice(-8)}: Form ${bad} (MV-24): Formfehler, abgewiesen`
@@ -2588,7 +2697,9 @@ export class HolderDevice {
             return own.state === 'active' || own.state === 'aging' // 8640.6
           },
         })
+        const tnote = (outcome: string) => void this.ticketLog.push({ act: String((doc.payload as { act?: unknown }).act), at: now, outcome })
         if (!v.ok) {
+          tnote(v.step === 'state' ? `state:${v.own?.state}` : v.step)
           if (v.step === '8640.5') this.emit({ kind: 'finding', text: `ticket ${v.p!.act.slice(0, 8)}: own ${v.p!.own.slice(-8)} nicht auf dieser Beziehung (8640.5)` })
           if (v.step === 'fremde-zuteilung') {
             // Silently refused: no act, no receipt, no budget load (core draft 4 §1); one finding, also against repeats.
@@ -2597,16 +2708,18 @@ export class HolderDevice {
           }
           return false
         }
-        if (v.repeated) return true
+        if (v.repeated) return (tnote('repeat'), true)
         const { rel: r, own, p } = v
         const assigned = this.state.voucherAssigned.find((x) => x.anchor === p.voucher.anchor)
         if (assigned && assigned.act !== p.act) {
           this.emit({ kind: 'finding', text: `ticket ${p.act.slice(0, 8)}: voucher schon einem anderen Akt zugeordnet (8640.9, 8640.12)` })
+          tnote('8640.9')
           return false
         }
         if (M.budgetExhausted(r, now)) {
           this.emit({ kind: 'ticket-refuse-budget', rel: r.id, own: own.anchor }) // 8640.13
           this.emit({ kind: 'finding', text: `ticket ${p.act.slice(0, 8)}: Budget erschöpft (8640.10)` })
+          tnote('8640.10')
           return false
         }
         if (this.cand.acceptanceShare !== undefined && (this.cand.occupied?.(r.id, this.state, now) ?? 0) >= this.cand.acceptanceShare) {
@@ -2614,10 +2727,12 @@ export class HolderDevice {
           // consumed, no act, no receipt, no budget load. Under P-Bilanz an honest run never gets here (§1, Q3).
           this.emit({ kind: 'ticket-refuse-budget', rel: r.id, own: own.anchor })
           this.emit({ kind: 'finding', text: `ticket ${p.act.slice(0, 8)}: Anteil von ${this.me} erschöpft (8640.13 je Gerät)` })
+          tnote('8640.13')
           return false
         }
         const a: M.Act = { id: p.act, mediator: r.id, own: own.anchor, voucher: p.voucher, issuedAt: p.issuedAt, expiresAt: p.expiresAt, state: 'offered', pending: null, v: null, k: false, ownCard: null, ownCardKey: null, o: 'none', ownCardDigest: null, opened: null }
         this.emit({ kind: 'ticket-accept', act: a }) // 8640.14; K1a ohne Annahmerecht: Blocked, der Rahmen wird ganz zurückgenommen und nicht quittiert
+        tnote('accepted')
         // 8640.15 mit demselben Prüfsatz wie bei direkter Ankunft (8850.6, B7): Akt, Absender, Ablauf müssen passen.
         const bkey = `${own.anchor}|${p.voucher.anchor}|${p.act}`
         const buffered = this.buffer.get(bkey)
@@ -2656,6 +2771,12 @@ export class HolderDevice {
         } else if (p.to !== to || !(await this.isPeer(doc.issuer, p.from))) return note('binding-8850.2', false) // 8850.2 (b)
         const v = await digestBytes(enc.encode(jcs({ act: p.act, card: p.card })))
         const a = this.state.acts.find((x) => x.own === to)
+        if (!a && this.automaton) {
+          // K2 2b.2 (core draft 4 §1, 8850.5 sharpened; derived, Anton may veto): a card to a stock key this side no longer
+          // holds as `active`/`aging` (withdrawn, buried, consumed) has no buffer branch: refused without ack.
+          const k = this.state.relationships.flatMap((r) => r.stock).find((x) => x.anchor === to)
+          if (k && k.state !== 'active' && k.state !== 'aging') return note('8850.5-not-held', false)
+        }
         if (!a) {
           // Pufferzweig (8910.1–.3): die ganze Nutzlast, geprüft wird bei der Zuordnung (B7).
           const key = `${to}|${p.from}|${p.act}`

@@ -343,6 +343,11 @@ export interface MediatorAct {
   b: { rel: string; key: Anchor; keyAgreement: string }
   issuedAt: string
   expiresAt: string
+  /**
+   * K2 step 2b.2 (core draft 4 §5.1, draft 3 §1.1 (3a), decision 11): acceptance knowledge per side, the digest of the
+   * side's receipt for its ticket; set only by `ticket-ack@1` (written by the issuer, folded by its siblings). Absent = unknown.
+   */
+  known?: { a?: string; b?: string }
 }
 
 /** 6845: eigene Mapping-Pflicht je Tupelpaar. */
@@ -435,6 +440,7 @@ export type Op = { id: OpId; at: string } & (
   | { kind: 'view'; rel: string; scope: string; revision: number; keys: ListedKey[]; writer?: string; clears?: Record<string, number> } // M: 8557/6270, je Schreiber (Schritt 4)
   | { kind: 'stock-revision'; rel: string; scope: string; revision: StockRevision } // M, K2 2b.1: a form-checked `stock-revision@2` (core draft 4 §3)
   | { kind: 'introduce'; act: MediatorAct } // M: 8605, 8570.2
+  | { kind: 'ticket-ack'; act: string; side: 'a' | 'b'; receiptDigest: string } // M, K2 2b.2: `ticket-ack@1`, the side's receipt for its ticket (acceptance knowledge)
   | { kind: 'ticket-accept'; act: Act } // 8640.14
   | { kind: 'ticket-refuse-budget'; rel: string; own: Anchor } // 8640.13
   | { kind: 'finding'; text: string }
@@ -616,7 +622,7 @@ export const SHAPES = {
     },
   },
   mediatorAct: {
-    object: { id, a: { object: { rel: id, key: id, keyAgreement: id } }, b: { object: { rel: id, key: id, keyAgreement: id } }, issuedAt: 'time', expiresAt: 'time' },
+    object: { id, a: { object: { rel: id, key: id, keyAgreement: id } }, b: { object: { rel: id, key: id, keyAgreement: id } }, issuedAt: 'time', expiresAt: 'time', known: { optional: { object: { a: { optional: 'digest' }, b: { optional: 'digest' } } } } },
   },
 } satisfies Record<string, Shape>
 /**
@@ -629,6 +635,8 @@ export const DOC_SHAPES = {
   revision: { object: { revision: 'nat', keys: { array: SHAPES.listedKey }, writer: { optional: 'tag' }, clears: { optional: { record: 'nat', key: 'tag' } } } },
   stockRevision: SHAPES.stockRevision,
   card: { object: { act: id, expiresAt: 'time', from: id, fromKeyAgreement: { optional: id }, to: id, card: SHAPES.card, set: { optional: str } } },
+  /** K2 step 2b.2 (MV-24): the ticket as `introduce` sends it (`TicketPayload` in the holder). */
+  ticket: { object: { act: id, issuedAt: 'time', expiresAt: 'time', own: id, voucher: { object: { anchor: id, keyAgreement: id, name: str } } } },
 } satisfies Record<string, Shape>
 /** Je Art die Felder neben `id`, `at`, `kind` (Review 26 B2: bekannte Art; Review 27 B2a: jedes Feld bis in die Elemente; Review 28: Kennungen). */
 const OP_FIELDS: { [K in Op['kind']]: { [field: string]: Shape } } = {
@@ -643,6 +651,7 @@ const OP_FIELDS: { [K in Op['kind']]: { [field: string]: Shape } } = {
   view: { rel: id, scope: id, revision: 'nat', keys: { array: SHAPES.listedKey }, writer: { optional: 'tag' }, clears: { optional: { record: 'nat', key: 'tag' } } },
   'stock-revision': { rel: id, scope: id, revision: SHAPES.stockRevision },
   introduce: { act: SHAPES.mediatorAct },
+  'ticket-ack': { act: id, side: { enum: ['a', 'b'] }, receiptDigest: 'digest' },
   'ticket-accept': { act: SHAPES.act },
   'ticket-refuse-budget': { rel: id, own: id },
   finding: { text: str },
@@ -1122,7 +1131,7 @@ export function allocation(revs: readonly StockRevision[], ctx: AllocContext) {
       if (!ctx.members.has(key.for) || (mine && !mine.has(key.for))) continue
       out.push({ n: key.n, anchor: a, keyAgreement: key.keyAgreement, expiresAt: key.expiresAt, for: key.for })
     }
-    return out.sort((x, y) => x.anchor.localeCompare(y.anchor))
+    return out.sort((x, y) => byCode(x.anchor, y.anchor)) // K2 2b.2 decision 16: one order, code units
   }
   return { fold, classOff, evidence, usable, buried }
 }
@@ -1183,6 +1192,30 @@ export function usableView(s: HolderState, relId: string, now: string, mine?: Re
   }
   const fresh = listed.filter((k) => usable(k.expiresAt, now))
   return { listed, usable: fresh, unconsumed: fresh.filter((k) => !s.consumed.includes(k.anchor)) }
+}
+
+/**
+ * K2 step 2b.2 (core draft 4 §5.1, §1.4; decisions 2, 9, 10, 13): may the issuing M device submit (or resubmit) its ticket
+ * intent for side `side` of act `actId` now? The one computation the holder's release, its resumption and the outcome
+ * ledger's P-Produktion share (no second projection). In this order:
+ *   `accepted`  the side's receipt is known (decision 13: omitted, saves transport, 8640.4);
+ *   `deadline`  `now > expiresAt − consent-reserve` (8155, equality still admissible; decision 9);
+ *   `departed`  the addressee relationship departed, or the other one departed while the other ticket was not submitted
+ *               (8232.1: before either is submitted both are cancelled; after the other one, the one on the departed);
+ *   `withdrawn` the named key's evidence is `withdrawn` (withdrawn, buried, burnt, revoked writer: §3.3; decision 10).
+ * `null` = admissible. `otherSubmitted`: the device knows the other ticket of the act at the carrier.
+ */
+export type TicketGate = 'accepted' | 'deadline' | 'departed' | 'withdrawn' | 'unknown-act'
+export function ticketGate(s: HolderState, actId: string, side: 'a' | 'b', now: string, otherSubmitted: boolean): TicketGate | null {
+  const a = s.mediatorActs.find((x) => x.id === actId)
+  if (!a) return 'unknown-act'
+  if (a.known?.[side]) return 'accepted'
+  if (Date.parse(now) > Date.parse(a.expiresAt) - PARAM.consentReserveMs) return 'deadline'
+  const other = side === 'a' ? 'b' : 'a'
+  const gone = (x: MediatorAct['a']) => findRel(s, x.rel)?.departed !== false
+  if (gone(a[side]) || (gone(a[other]) && !otherSubmitted)) return 'departed'
+  if (evidence(s, a[side].rel, a[side].key).state === 'withdrawn') return 'withdrawn'
+  return null
 }
 
 /** Review 21 B1: gleicher Anker, anderer Schlüsselwert; einmal je Anker als Befund festgehalten (reihenfolgeunabhängig). */
@@ -1323,6 +1356,14 @@ function applyBody(s: HolderState, op: Op): void {
         }
       }
       r.view = { scope: op.scope, revision: op.revision, keys }
+      return
+    }
+    case 'ticket-ack': {
+      // K2 2b.2: acceptance knowledge, `unknown → accepted` the only transition (draft 3 §1.1); the first receipt stays.
+      const a = s.mediatorActs.find((x) => x.id === op.act)
+      if (!a) throw new Missing('act', op.act, s.person)
+      a.known ??= {}
+      a.known[op.side] ??= op.receiptDigest
       return
     }
     case 'introduce': {

@@ -135,6 +135,8 @@ export class K1aDevice implements CandidateDevice {
   protected batches: Batch[] = []
   protected out: Batch[] = []
   protected n = 0
+  /** E15 K2 step 2b.2: a restart (not an image restore) keeps incarnation and counter (§5.3). K1a: never (its cells stay). */
+  protected keepOnRestart = false
   /** Other enrolled devices of the person this device knows from enrollment (source and new device both record it; review 18 B1a). */
   protected known = new Set<string>()
   /** Step 2: devices learn their siblings' tuples through the journal, so the holder keeps received probes and evaluates them again when the own tuple set grows. */
@@ -246,7 +248,7 @@ export class K1aDevice implements CandidateDevice {
   persist(): Persisted {
     return { index: this.index, slots: this.slots, inc: this.inc, batches: this.batches, out: this.out, siblings: [...this.known] }
   }
-  restore(data: unknown): void {
+  restore(data: unknown, opts?: { fresh?: boolean }): void {
     const d = data as Persisted | null
     if (!d) return
     this.index = d.index
@@ -254,6 +256,13 @@ export class K1aDevice implements CandidateDevice {
     this.batches = d.batches
     this.out = d.out
     this.known = new Set(d.siblings ?? [])
+    if (this.keepOnRestart && !opts?.fresh) {
+      // E15 K2 step 2b.2 (core draft 4 §5.3): a restart on the own last commit keeps the incarnation and the batch counter;
+      // `n` is the highest own number in the committed journal (every own batch is in `batches` at its commit).
+      this.inc = d.inc
+      this.n = Math.max(0, ...this.batches.filter((b) => b.writer === `${this.name}@${d.inc}`).map((b) => b.n))
+      return
+    }
     this.inc = fresh() // neue Inkarnation (Befund 5), unabhängig vom Backup (B2)
     this.n = 0
   }
