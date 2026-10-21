@@ -35,6 +35,7 @@
 // ── Parameter (Profil, vereinfacht) ──────────────────────────────────────────
 
 import { createHash } from 'node:crypto'
+import { anchorOfEd, edRawOfAnchor, fromB64u, xRawOfMk } from '@real-life/trust-protocol'
 
 export const PARAM = {
   /** 8510: zehn Annahmen je Mediatorbeziehung im Fenster. */
@@ -123,9 +124,49 @@ export interface StockKey {
   state: StockState
   /** K2 Schritt 2: das Gerät, das den Schlüssel zugeteilt hat (nur es erzeugt die Karte, E2 (iv); Anteil je Gerät). Ohne Feld (K0, K1a): die Person. */
   by?: string
+  /** K2 step 2b.1: the M device (its anchor in this relationship) the key is assigned to, immutable (draft 2 §3.2, MV-32). */
+  for?: Anchor
+  /** K2 step 2b.1: the allocator's incarnation tag in this relationship (`stock-revision@2` lists a key only under it). */
+  inc?: string
 }
 
 export type ListedKey = { n: number; anchor: Anchor; keyAgreement: string; expiresAt: string }
+/** A key of M's usable view: with `stock-revision@2` (K2 step 2b.1) it carries the M device it is assigned to. */
+export type ViewKey = ListedKey & { for?: Anchor }
+
+/**
+ * K2 step 2b.1 (core draft 4 §3.1, [Vertrag]): one listed stock key of `stock-revision@2`, with the public signing part and
+ * the proof of possession (`proof`, §3.2) over its immutable assignment.
+ */
+export interface RevKey {
+  n: number
+  nonce: string
+  anchor: Anchor
+  /** Public Ed25519 part of the stock key, base64url (32 bytes); `anchor = anchorOfEd(signing)`. */
+  signing: string
+  keyAgreement: string
+  expiresAt: string
+  /** The M device (its anchor in this relationship) the key is assigned to. */
+  for: Anchor
+  /** Ed25519 signature of the stock key over `proofContent` (64 bytes, base64url). */
+  proof: string
+}
+/**
+ * K2 step 2b.1: `stock-revision@2` (core draft 4 §3.1): the complete listing of one writer incarnation, the withdrawals of its
+ * own anchors, the tombstones (`bury`, only with `classOff`, any anchor of the person, B6) and burnt incarnations (format
+ * only in the core). Canonical: lists sorted (`keys` by anchor, `withdraw`/`bury` by anchor, `burn` by inc), optional fields
+ * left out; two revisions are the same iff their JCS bytes are (`canonical`).
+ */
+export interface StockRevision {
+  writer: string
+  inc: string
+  rev: number
+  keys: RevKey[]
+  withdraw: Anchor[]
+  bury: Anchor[]
+  burn: string[]
+  classOff?: true
+}
 
 export interface StockView {
   scope: string
@@ -147,14 +188,11 @@ export interface StockView {
    */
   clears?: Record<string, number>
   /**
-   * K2, Review 34 B5: Grabsteine je Anker. Eine Rückzugsrevision nennt die konkreten Anker, die sie zurückzieht; je Anker die
-   * Signierer, die ihn genannt haben (wächst nur, Vereinigung: in jeder Reihenfolge und mit Duplikaten dasselbe). Ein
-   * Grabstein dominiert jede Listung dieses Ankers (Review 35 B6, Entscheidung 1b: Klasse aus ist Sache der Person, jedes
-   * Mitglied darf jeden Anker der Person begraben; ein widerrufener Signierer nur, wofür kein verbliebenes Gerät bürgt).
+   * K2 step 2b.1: every folded `stock-revision@2` of this scope (MV-31: each folded revision is kept), canonical and without
+   * duplicates. Bindings, conflict marks, withdrawals, tombstones, equivocation, the current listing and the class state are
+   * functions of this set (`allocation`), never of the arrival order. Without the field (K0, K1a): the fields above.
    */
-  tombstones?: Record<string, string[]>
-  /** K2: Grabsteine je Anker gelten personenweit (`person`, beide Varianten); ohne das Feld (K0, K1a) keine Grabsteine. */
-  standing?: 'person'
+  revs?: StockRevision[]
 }
 
 /** Beziehung je Holder (eine je Gegenüber, 6975.5: Zusammenhangskomponente der Herkunftskanten). */
@@ -366,7 +404,6 @@ export function fromJson(s: HolderState): HolderState {
     if (r.writers) r.writers = tableOf(r.writers)
     if (r.view?.writers) r.view.writers = tableOf(r.view.writers)
     if (r.view?.clears) r.view.clears = tableOf(r.view.clears)
-    if (r.view?.tombstones) r.view.tombstones = tableOf(r.view.tombstones)
   }
   for (const a of s.acts) if (a.cards) a.cards = tableOf(a.cards)
   if (s.sets) {
@@ -391,10 +428,12 @@ export type Op = { id: OpId; at: string } & (
   | { kind: 'class'; rel: string; on: boolean }
   | { kind: 'depart'; rel: string }
   | { kind: 'allocate'; rel: string; nonce: string; keys: StockKey[] } // 8445, 8475.S1–S3 in einem Schritt (Registrierung im Prüfstand sofort)
-  | { kind: 'revision'; rel: string; revision: number; keys: ListedKey[]; writer?: string } // 8500, je Schreiber (Schritt 4)
+  | { kind: 'revision'; rel: string; revision: number; keys: ListedKey[]; writer?: string; inc?: string; classOff?: boolean } // 8500, je Schreiber (Schritt 4); K2 2b.1: je (Schreiber, Inkarnation), mit Klassenwert
+  | { kind: 'retire'; rel: string; anchors: Anchor[] } // K2 2b.1: 8475.S8, eigener Schlüssel nach expiresAt + key-retention
   | { kind: 'withdraw'; rel: string; anchors: Anchor[] } // 8475.S6
   | { kind: 'age'; rel: string; anchors: Anchor[] } // 8475.S5
-  | { kind: 'view'; rel: string; scope: string; revision: number; keys: ListedKey[]; writer?: string; clears?: Record<string, number>; tombstones?: string[]; standing?: 'person' } // M: 8557/6270, je Schreiber (Schritt 4); K2: Grabsteine je Anker (Review 34)
+  | { kind: 'view'; rel: string; scope: string; revision: number; keys: ListedKey[]; writer?: string; clears?: Record<string, number> } // M: 8557/6270, je Schreiber (Schritt 4)
+  | { kind: 'stock-revision'; rel: string; scope: string; revision: StockRevision } // M, K2 2b.1: a form-checked `stock-revision@2` (core draft 4 §3)
   | { kind: 'introduce'; act: MediatorAct } // M: 8605, 8570.2
   | { kind: 'ticket-accept'; act: Act } // 8640.14
   | { kind: 'ticket-refuse-budget'; rel: string; own: Anchor } // 8640.13
@@ -446,6 +485,8 @@ export type Shape =
   | 'opWriter'
   | 'dep'
   | { enum: readonly string[] }
+  /** K2 2b.1: base64url (no padding) of exactly this many bytes, round trip equal. */
+  | { b64u: number }
   | { array: Shape }
   | { tuple: readonly Shape[] }
   | { object: { readonly [field: string]: Shape } }
@@ -480,6 +521,7 @@ export function shapeProblem(x: unknown, s: Shape, path: string): string | null 
     return isName(x, GRAMMAR[s]) ? null : path
   }
   if ('enum' in s) return typeof x === 'string' && s.enum.includes(x) ? null : path
+  if ('b64u' in s) return typeof x === 'string' && /^[A-Za-z0-9_-]*$/.test(x) && Buffer.from(x, 'base64url').length === s.b64u && Buffer.from(x, 'base64url').toString('base64url') === x ? null : path
   if ('nullable' in s) return x === null ? null : shapeProblem(x, s.nullable, path)
   if ('optional' in s) return x === undefined ? null : shapeProblem(x, s.optional, path)
   if ('array' in s) {
@@ -523,9 +565,22 @@ const handOver: Shape = { enum: ['none', 'intent', 'handed', 'taken', 'delivered
 export const SHAPES = {
   tuple: { object: { id, own: id, ownKey: id, peer: id, peerKeyAgreement: id, record: id, openedAt: 'time', candidates: { array: id }, deactivated: 'boolean' } },
   stockKey: {
-    object: { n: 'nat', nonce: 'base64', anchor: id, keyAgreement: id, key: id, expiresAt: 'time', state: { enum: ['allocated', 'registered', 'active', 'aging', 'consumed', 'withdrawn', 'tombstoned'] satisfies StockState[] }, by: { optional: id } },
+    object: { n: 'nat', nonce: 'base64', anchor: id, keyAgreement: id, key: id, expiresAt: 'time', state: { enum: ['allocated', 'registered', 'active', 'aging', 'consumed', 'withdrawn', 'tombstoned'] satisfies StockState[] }, by: { optional: id }, for: { optional: id }, inc: { optional: 'tag' } },
   },
   listedKey: { object: { n: 'nat', anchor: id, keyAgreement: id, expiresAt: 'time' } },
+  revKey: { object: { n: 'nat', nonce: 'base64', anchor: id, signing: { b64u: 32 }, keyAgreement: id, expiresAt: 'time', for: id, proof: { b64u: 64 } } },
+  stockRevision: {
+    object: {
+      writer: 'tag',
+      inc: 'tag',
+      rev: 'nat',
+      keys: { array: { object: { n: 'nat', nonce: 'base64', anchor: id, signing: { b64u: 32 }, keyAgreement: id, expiresAt: 'time', for: id, proof: { b64u: 64 } } } },
+      withdraw: { array: id },
+      bury: { array: id },
+      burn: { array: 'tag' },
+      classOff: { optional: 'boolean' }, // only `true` is canonical (`revisionFormProblem`)
+    },
+  },
   card: { object: { anchor: id, keyAgreement: id } },
   cert: {
     object: {
@@ -571,7 +626,8 @@ export const SHAPES = {
  * bleiben in der Form, ihre Bedeutung prüft der Empfangszweig (K2: Formfehler mit eigenem Befund).
  */
 export const DOC_SHAPES = {
-  revision: { object: { revision: 'nat', keys: { array: SHAPES.listedKey }, writer: { optional: 'tag' }, clears: { optional: { record: 'nat', key: 'tag' } }, tombstones: { optional: { array: id } } } },
+  revision: { object: { revision: 'nat', keys: { array: SHAPES.listedKey }, writer: { optional: 'tag' }, clears: { optional: { record: 'nat', key: 'tag' } } } },
+  stockRevision: SHAPES.stockRevision,
   card: { object: { act: id, expiresAt: 'time', from: id, fromKeyAgreement: { optional: id }, to: id, card: SHAPES.card, set: { optional: str } } },
 } satisfies Record<string, Shape>
 /** Je Art die Felder neben `id`, `at`, `kind` (Review 26 B2: bekannte Art; Review 27 B2a: jedes Feld bis in die Elemente; Review 28: Kennungen). */
@@ -580,10 +636,12 @@ const OP_FIELDS: { [K in Op['kind']]: { [field: string]: Shape } } = {
   class: { rel: id, on: 'boolean' },
   depart: { rel: id },
   allocate: { rel: id, nonce: 'base64', keys: { array: SHAPES.stockKey } },
-  revision: { rel: id, revision: 'nat', keys: { array: SHAPES.listedKey }, writer: { optional: 'tag' } },
+  revision: { rel: id, revision: 'nat', keys: { array: SHAPES.listedKey }, writer: { optional: 'tag' }, inc: { optional: 'tag' }, classOff: { optional: 'boolean' } },
+  retire: { rel: id, anchors: { array: id } },
   withdraw: { rel: id, anchors: { array: id } },
   age: { rel: id, anchors: { array: id } },
-  view: { rel: id, scope: id, revision: 'nat', keys: { array: SHAPES.listedKey }, writer: { optional: 'tag' }, clears: { optional: { record: 'nat', key: 'tag' } }, tombstones: { optional: { array: id } }, standing: { optional: { enum: ['person'] } } },
+  view: { rel: id, scope: id, revision: 'nat', keys: { array: SHAPES.listedKey }, writer: { optional: 'tag' }, clears: { optional: { record: 'nat', key: 'tag' } } },
+  'stock-revision': { rel: id, scope: id, revision: SHAPES.stockRevision },
   introduce: { act: SHAPES.mediatorAct },
   'ticket-accept': { act: SHAPES.act },
   'ticket-refuse-budget': { rel: id, own: id },
@@ -798,10 +856,6 @@ function aggregateO(a: Act): void {
  * die Vereinigung der Schlüssel aller Schreiber, deren jüngste Revision über ihrer Aufhebungsmarke liegt (`clears`). Eine
  * leere Revision eines Schreibers hebt die Schlüssel aller Schreiber auf, die das empfangende Gerät bis dahin hielt (die
  * Operation trägt diese Marken); die Marken falten als Maximum. Neuer Scope (8557): die Sicht beginnt neu.
- *
- * K2 (Review 34 B5, Operation mit `standing`): statt Nummernmarken Grabsteine je Anker. Jede gefaltete Revision, auch eine
- * niedrigere, vergrößert die Grabsteine um die Anker, die sie nennt (wächst nur); die Sicht ist eine Funktion der
- * gefalteten Menge (`viewKeys`), also reihenfolgefrei und idempotent.
  */
 function applyWriterView(s: HolderState, r: Relationship, op: Op & { kind: 'view' }, keys: ListedKey[]): void {
   const w = op.writer!
@@ -810,10 +864,6 @@ function applyWriterView(s: HolderState, r: Relationship, op: Op & { kind: 'view
   const writers = tableOf(v.writers)
   const clears = tableOf(v.clears)
   for (const [x, n] of Object.entries(op.clears ?? {})) put(clears, x, Math.max(own(clears, x) ?? 0, n))
-  const anchorBound = op.standing !== undefined ? { standing: op.standing, tombstones: tableOf(v.tombstones) } : null
-  if (anchorBound) {
-    for (const a of op.tombstones ?? []) put(anchorBound.tombstones, a, [...new Set([...(own(anchorBound.tombstones, a) ?? []), w])].sort())
-  }
   const held = own(writers, w)
   let take = !held || op.revision > held.revision
   if (held && op.revision === held.revision && canonical(keys) !== canonical(held.keys)) {
@@ -822,28 +872,11 @@ function applyWriterView(s: HolderState, r: Relationship, op: Op & { kind: 'view
     take = canonical(keys) < canonical(held.keys) // in jeder Reihenfolge dasselbe
   }
   if (take) put(writers, w, { revision: op.revision, keys })
-  const next: StockView = { scope: op.scope, revision: Math.max(0, ...Object.values(writers).map((x) => x.revision)), keys: [], writers, clears, ...(anchorBound ?? {}) }
-  const v2 = viewKeys(writers, clears, next)
+  const next: StockView = { scope: op.scope, revision: Math.max(0, ...Object.values(writers).map((x) => x.revision)), keys: [], writers, clears }
+  const v2 = viewKeys(writers, clears)
   for (const anchor of v2.conflicts) keyValueConflict(s, anchor)
   next.keys = v2.keys
   r.view = next
-}
-
-/**
- * K2, Review 34 B5 / Review 35 B6: die wirksamen Grabsteine. Klasse aus ist Sache der Person (Entscheidung 1b, Vertrag 4.10):
- * der Grabstein jedes Mitglieds zählt für jeden Anker der Person. Ist der Signierer widerrufen (`revoked`, Ms Wissen über
- * die Menge der Gegenseite), zählt sein Grabstein nur, wenn kein nicht widerrufener Schreiber den Anker in seiner jüngsten
- * Revision listet: ein widerrufenes Gerät nimmt nie einen Schlüssel weg, für den ein verbliebenes Gerät noch bürgt. Bis zum
- * Widerruf kann ein gestohlenes Gerät alle Anker der Person begraben (benannter Preis; die Nachfüllung stellt her). Reine
- * Funktion der gefalteten Menge.
- */
-export function buried(v: Pick<StockView, 'tombstones' | 'standing' | 'writers'>, revoked?: Set<string>): Set<string> {
-  const out = new Set<string>()
-  for (const [a, signers] of Object.entries(v.tombstones ?? {})) {
-    const vouched = () => Object.entries(v.writers ?? {}).some(([w, x]) => !revoked?.has(w) && x.keys.some((k) => k.anchor === a))
-    if (signers.some((w) => !revoked?.has(w) || !vouched())) out.add(a)
-  }
-  return out
 }
 
 /**
@@ -852,16 +885,13 @@ export function buried(v: Pick<StockView, 'tombstones' | 'standing' | 'writers'>
  * kleinste Wert (in jeder Reihenfolge derselbe) und der Anker steht in `conflicts` (Befund, nie still). Mit der Aufteilung
  * der Nummern je Restklasse (K1a) kommt das nicht vor.
  */
-export function viewKeys(writers: Record<string, { revision: number; keys: ListedKey[] }>, clears: Record<string, number>, anchored?: Pick<StockView, 'tombstones' | 'standing' | 'writers'>, revoked?: Set<string>): { keys: ListedKey[]; conflicts: string[] } {
+export function viewKeys(writers: Record<string, { revision: number; keys: ListedKey[] }>, clears: Record<string, number>): { keys: ListedKey[]; conflicts: string[] } {
   const m = new Map<string, ListedKey>()
   const conflicts = new Set<string>()
-  // K2 (Review 34 B5): begrabene Anker fehlen in der Sicht, gleich welcher Schreiber sie listet (der Grabstein dominiert).
-  const gone = anchored?.standing !== undefined ? buried({ ...anchored, writers: anchored.writers ?? writers }, revoked) : new Set<string>()
   for (const w of Object.keys(writers).sort()) {
     const x = own(writers, w)!
     if (x.revision <= (own(clears, w) ?? 0)) continue
     for (const k of x.keys) {
-      if (gone.has(k.anchor)) continue
       const held = m.get(k.anchor)
       if (!held) m.set(k.anchor, k)
       else if (canonical(held) !== canonical(k)) {
@@ -875,42 +905,276 @@ export function viewKeys(writers: Record<string, { revision: number; keys: Liste
 
 /**
  * K2: der Schreiber einer Revision ist der signierende Geräteschlüssel der Beziehung (8500/6270 je Signierer). Als
- * Tabellenschlüssel (Form `tag`, 16 Zeichen base64url) dient ein Hash des Ankers; er reist nicht im Dokument, die Gegenseite
- * bildet ihn aus dem Signierer.
+ * Tabellenschlüssel (Form `tag`, 16 Zeichen base64url) dient ein Hash des Ankers; die Gegenseite bildet ihn aus dem
+ * Signierer (K2 2b.1: `stock-revision@2` trägt ihn als `writer`, der Parser prüft ihn gegen den Signierer).
  */
 export const signerId = (anchor: string) => createHash('sha256').update(`signer|${anchor}`).digest().subarray(0, 12).toString('base64url')
 
+// ── K2 step 2b.1: allocation per M device by A (`stock-revision@2`; core draft 4 §3, §4) ─────────────────────────────
+
+/** §3.2: the purpose inside the signed object of `proof`. */
+export const PROOF_PURPOSE = 'rltp/stock-revision@2/proof'
+/** §3.1 [Prüfstand]: list bounds and integer ranges of the form check. */
+export const REVISION_LIMITS = { keys: 64, withdraw: 256, bury: 512, burn: 16, n: 2 ** 32 - 1, rev: 2 ** 32 - 1 } as const
+
+/**
+ * §3.2: what `proof` signs, as bytes: the JCS-canonical object (as every signature of the bench, `canonical`) with the
+ * purpose, the writer and its incarnation and the immutable assignment of the key (`n` as a number). Not a concatenation,
+ * which would be ambiguous for fields of variable length (Q7).
+ */
+export const proofContent = (writer: string, inc: string, k: Pick<RevKey, 'for' | 'n' | 'nonce' | 'anchor' | 'keyAgreement' | 'expiresAt'>): Uint8Array =>
+  new TextEncoder().encode(canonical({ purpose: PROOF_PURPOSE, writer, inc, for: k.for, n: k.n, nonce: k.nonce, anchor: k.anchor, keyAgreement: k.keyAgreement, expiresAt: k.expiresAt }))
+
+/** The canonical order of `stock-revision@2` lists: by UTF-16 code units (as JCS sorts), never by locale. */
+export const byCode = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
+/** Strictly increasing = sorted and without duplicates (the canonical form of every list of `stock-revision@2`). */
+const increasing = (xs: readonly string[]) => xs.every((x, i) => i === 0 || xs[i - 1]! < x)
+const sigAnchor = (signing: string): string | null => {
+  try {
+    return anchorOfEd(fromB64u(signing))
+  } catch {
+    return null
+  }
+}
+
+/**
+ * §3.1 (MV-24): the form of one `stock-revision@2`, checked without history: the shape; `writer` = the authenticated signer
+ * (`signer`, its `signerId`); `rev` and every `n` integers in range; the bounds; every list sorted and unique (canonical
+ * bytes) and `n` unique; `classOff` only `true` when present; `bury` only with `classOff`; `burn` never the running `inc`;
+ * per key the same `nonce` across this revision, `anchor = anchorOfEd(signing)`, `keyAgreement` a valid X25519 key, `for` a
+ * syntactically valid anchor (membership is set knowledge of the M device, not form, Q4). The signature of `proof` is the
+ * receiver's (`holder.ts`, asynchronous); everything that needs history (nonce across revisions, binding, equivocation) is
+ * a set rule (`allocFold`), not form (D5). Returns null or the path that is wrong.
+ */
+export function revisionFormProblem(p: unknown, signer: string): string | null {
+  const bad = shapeProblem(p, SHAPES.stockRevision, 'stock-revision')
+  if (bad) return bad
+  const r = p as StockRevision
+  const L = REVISION_LIMITS
+  if (r.writer !== signer) return 'stock-revision.writer'
+  if (r.rev < 1 || r.rev > L.rev) return 'stock-revision.rev'
+  if (r.keys.length > L.keys) return 'stock-revision.keys'
+  if (r.withdraw.length > L.withdraw) return 'stock-revision.withdraw'
+  if (r.bury.length > L.bury) return 'stock-revision.bury'
+  if (r.burn.length > L.burn) return 'stock-revision.burn'
+  if (!increasing(r.keys.map((k) => k.anchor)) || new Set(r.keys.map((k) => k.n)).size !== r.keys.length) return 'stock-revision.keys(order)'
+  if (!increasing(r.withdraw)) return 'stock-revision.withdraw(order)'
+  if (!increasing(r.bury)) return 'stock-revision.bury(order)'
+  if (!increasing(r.burn)) return 'stock-revision.burn(order)'
+  if (r.classOff !== undefined && r.classOff !== true) return 'stock-revision.classOff'
+  if (r.bury.length && !r.classOff) return 'stock-revision.bury(classOff)'
+  if (r.burn.includes(r.inc)) return 'stock-revision.burn(inc)'
+  for (let i = 0; i < r.keys.length; i++) {
+    const k = r.keys[i]!
+    const at = `stock-revision.keys[${i}]`
+    if (k.n > L.n) return `${at}.n`
+    if (k.nonce !== r.keys[0]!.nonce) return `${at}.nonce`
+    if (sigAnchor(k.signing) !== k.anchor) return `${at}.anchor`
+    if (!xRawOfMk(k.keyAgreement)) return `${at}.keyAgreement`
+    if (!edRawOfAnchor(k.for)) return `${at}.for`
+  }
+  return null
+}
+
+const wi = (writer: string, inc: string) => `${writer}|${inc}`
+/** The immutable assignment of a listed key (§3.3 row 2, `inc` included, E3). */
+const assignment = (writer: string, inc: string, k: RevKey) => canonical({ writer, inc, n: k.n, nonce: k.nonce, keyAgreement: k.keyAgreement, expiresAt: k.expiresAt, for: k.for })
+
+/** The history part of the fold (§3.3): a pure function of the folded set of revisions, independent of revocation. */
+export interface AllocFold {
+  /** Per anchor: the writers and (writer, inc)s that listed it with a proof, and its distinct assignments. */
+  bound: Map<Anchor, { writers: Set<string>; incs: Set<string>; values: Set<string> }>
+  /** `conflict:assignment:<anchor>`: differing immutable field or two writers; for ever, beats every higher listing. */
+  conflicts: Set<Anchor>
+  /** `doppelte-bindung`: two writers bound the anchor (only with a shared private part, faulty A). */
+  doubles: Set<Anchor>
+  /** `conflict:nonce:<writer>:<inc>`: two nonces within one (writer, inc); no listing of it usable. */
+  nonceConflicts: Set<string>
+  /** Per (writer, inc) the equivocated `rev`s (same rev, other bytes). */
+  equivocated: Map<string, number[]>
+  /** Per (writer, inc) the current listing: the highest non-equivocated rev; absent when every rev is equivocated. */
+  current: Map<string, StockRevision>
+  /** Withdrawals by the bound writer (effective, also when they arrived before the binding). */
+  withdrawn: Set<Anchor>
+  /** Withdrawals of an anchor bound to another writer: `[writer, anchor]`, ineffective, kept. */
+  foreign: Array<[string, Anchor]>
+  /** Tombstones per anchor with their issuers: `bury[]` of an off revision and the own anchors of its lower revs. */
+  tombs: Map<Anchor, Set<string>>
+  /** Burnt (writer, inc)s. */
+  burned: Set<string>
+}
+
+export function allocFold(revs: readonly StockRevision[]): AllocFold {
+  const byInc = new Map<string, StockRevision[]>()
+  for (const r of revs) {
+    const k = wi(r.writer, r.inc)
+    if (!byInc.has(k)) byInc.set(k, [])
+    byInc.get(k)!.push(r)
+  }
+  const equivocated = new Map<string, number[]>()
+  const current = new Map<string, StockRevision>()
+  const nonceConflicts = new Set<string>()
+  for (const [k, list] of byInc) {
+    const versions = new Map<number, Set<string>>()
+    for (const r of list) {
+      if (!versions.has(r.rev)) versions.set(r.rev, new Set())
+      versions.get(r.rev)!.add(canonical(r))
+    }
+    const eq = [...versions].filter(([, v]) => v.size > 1).map(([rev]) => rev).sort((a, b) => a - b)
+    if (eq.length) equivocated.set(k, eq)
+    const best = list.filter((r) => !eq.includes(r.rev)).sort((a, b) => b.rev - a.rev)[0]
+    if (best) current.set(k, best)
+    if (new Set(list.flatMap((r) => r.keys.map((x) => x.nonce))).size > 1) nonceConflicts.add(k)
+  }
+  const bound = new Map<Anchor, { writers: Set<string>; incs: Set<string>; values: Set<string> }>()
+  for (const r of revs)
+    for (const key of r.keys) {
+      if (!bound.has(key.anchor)) bound.set(key.anchor, { writers: new Set(), incs: new Set(), values: new Set() })
+      const b = bound.get(key.anchor)!
+      b.writers.add(r.writer)
+      b.incs.add(wi(r.writer, r.inc))
+      b.values.add(assignment(r.writer, r.inc, key))
+    }
+  const conflicts = new Set([...bound].filter(([, b]) => b.values.size > 1).map(([a]) => a))
+  const doubles = new Set([...bound].filter(([, b]) => b.writers.size > 1).map(([a]) => a))
+  const withdrawn = new Set<Anchor>()
+  const foreign = new Map<string, [string, Anchor]>()
+  const tombs = new Map<Anchor, Set<string>>()
+  const burned = new Set<string>()
+  const tomb = (a: Anchor, w: string) => {
+    if (!tombs.has(a)) tombs.set(a, new Set())
+    tombs.get(a)!.add(w)
+  }
+  for (const r of revs) {
+    for (const a of r.withdraw) {
+      const b = bound.get(a)
+      if (b?.writers.has(r.writer)) withdrawn.add(a)
+      else if (b) foreign.set(`${r.writer}|${a}`, [r.writer, a])
+    }
+    if (r.classOff) {
+      for (const a of r.bury) tomb(a, r.writer)
+      for (const lower of byInc.get(wi(r.writer, r.inc)) ?? []) if (lower.rev < r.rev) for (const k of lower.keys) tomb(k.anchor, r.writer)
+    }
+    for (const inc of r.burn) burned.add(wi(r.writer, inc))
+  }
+  // Withdrawn wins over foreign once the anchor is bound to the withdrawing writer too (it is then a conflict anyway).
+  for (const [k, [w, a]] of foreign) if (bound.get(a)?.writers.has(w)) foreign.delete(k)
+  return { bound, conflicts, doubles, nonceConflicts, equivocated, current, withdrawn, foreign: [...foreign.values()], tombs, burned }
+}
+
+/** The findings of the fold, one per mark (monotone in the set, so every order reaches the same list). */
+export function allocFindings(f: AllocFold): string[] {
+  const out: string[] = []
+  for (const a of f.conflicts) out.push(`conflict:assignment:${a}`)
+  for (const a of f.doubles) out.push(`doppelte-bindung:${a}`)
+  for (const k of f.nonceConflicts) out.push(`conflict:nonce:${k.replace('|', ':')}`)
+  for (const [k, revs] of f.equivocated) for (const rev of revs) out.push(`equivocation:${k.replace('|', ':')}:${rev}`)
+  for (const [w, a] of f.foreign) out.push(`fremder-anker:${w}:${a}`)
+  return out.sort()
+}
+
+/** The evidence state of an anchor at one M device (core draft 4 §3.3, §5.1): a function of the folded set, not a latch. */
+export interface Evidence {
+  state: 'unknown' | 'listed' | 'unlisted' | 'withdrawn'
+  /** A conflict mark on the anchor or a nonce conflict of its (writer, inc): unusable whatever the state. */
+  conflict: boolean
+}
+/** What M knows besides the revisions: revoked writers of the counterpart's set, members of its own set (`for`). */
+export interface AllocContext {
+  revoked: ReadonlySet<string>
+  members: ReadonlySet<Anchor>
+}
+
+/**
+ * The present of the allocation at one M device (§3.3, §4): "currently lists" = the anchor is in the current listing of a
+ * non-revoked writer, independent of conflict marks; a tombstone of a non-revoked issuer is final, one of a revoked issuer
+ * counts only while no non-revoked writer currently lists the anchor (revocation exception, B6, D4); the class is off while
+ * the current listing of some non-revoked (writer, inc) carries `classOff` ("aus gewinnt", 4.10; all equivocated: no
+ * value). Usable for an M device: currently listed, no conflict, not withdrawn, not buried, not burnt, `for` a member known
+ * here and one of the device's own anchors, class on.
+ */
+export function allocation(revs: readonly StockRevision[], ctx: AllocContext) {
+  const fold = allocFold(revs)
+  const live = [...fold.current].filter(([k]) => !ctx.revoked.has(k.split('|')[0]!))
+  const listedBy = new Map<Anchor, { key: RevKey; inc: string }>()
+  for (const [k, r] of live) for (const key of r.keys) if (!listedBy.has(key.anchor)) listedBy.set(key.anchor, { key, inc: k })
+  const buried = (a: Anchor) => [...(fold.tombs.get(a) ?? [])].some((w) => !ctx.revoked.has(w) || !listedBy.has(a))
+  const classOff = live.some(([, r]) => r.classOff === true)
+  const evidence = (a: Anchor): Evidence => {
+    const b = fold.bound.get(a)
+    if (!b) return { state: 'unknown', conflict: false }
+    const conflict = fold.conflicts.has(a) || [...b.incs].some((k) => fold.nonceConflicts.has(k))
+    const gone = fold.withdrawn.has(a) || buried(a) || [...b.incs].some((k) => fold.burned.has(k)) || [...b.writers].every((w) => ctx.revoked.has(w))
+    return { state: gone ? 'withdrawn' : listedBy.has(a) ? 'listed' : 'unlisted', conflict }
+  }
+  const usable = (mine?: ReadonlySet<Anchor>): ViewKey[] => {
+    if (classOff) return []
+    const out: ViewKey[] = []
+    for (const [a, { key, inc }] of listedBy) {
+      if (fold.burned.has(inc) || fold.nonceConflicts.has(inc)) continue
+      const e = evidence(a)
+      if (e.state !== 'listed' || e.conflict) continue
+      if (!ctx.members.has(key.for) || (mine && !mine.has(key.for))) continue
+      out.push({ n: key.n, anchor: a, keyAgreement: key.keyAgreement, expiresAt: key.expiresAt, for: key.for })
+    }
+    return out.sort((x, y) => x.anchor.localeCompare(y.anchor))
+  }
+  return { fold, classOff, evidence, usable }
+}
+
 /** Ms nutzbare Sicht auf den Vorrat einer Seite in einem Moment (`usableView`): jede Stufe eine Teilmenge der vorigen. */
 export interface UsableView {
-  /** Geltende Schlüssel: je Anker der kanonische Wert über die nicht widerrufenen Schreiber, ohne begrabene Anker. */
-  listed: ListedKey[]
+  /** Geltende Schlüssel: je Anker der kanonische Wert über die nicht widerrufenen Schreiber (K2 2b.1: nach den Mengenregeln, je `for`). */
+  listed: ViewKey[]
   /** Davon noch lang genug gültig (8470). */
-  usable: ListedKey[]
+  usable: ViewKey[]
   /** Davon nicht verbraucht (8570.2). */
-  unconsumed: ListedKey[]
+  unconsumed: ViewKey[]
+}
+
+/** K2: the revoked writers (signer ids) of a relationship: every anchor revoked in the set of one of its peer roots. */
+function revokedWriters(s: HolderState, r: Relationship): Set<string> {
+  const revoked = new Set<string>()
+  for (const t of r.tuples) for (const a of setView(own(s.sets, t.peer)).revoked) revoked.add(signerId(a))
+  return revoked
+}
+/** K2 2b.1: the members of the holder's own sets of this relationship (one per own tuple root): the known `for` values. */
+function ownMembers(s: HolderState, r: Relationship): Set<Anchor> {
+  return new Set(r.tuples.flatMap((t) => setView(own(s.sets, t.own)).members.map((m) => m.anchor)))
+}
+function allocOf(s: HolderState, relId: string) {
+  const r = findRel(s, relId)
+  return r?.view?.revs ? allocation(r.view.revs, { revoked: revokedWriters(s, r), members: ownMembers(s, r) }) : null
+}
+/** K2 2b.1: the evidence state of an anchor at this holder (§3.3); `unknown` without a `stock-revision@2` view. */
+export function evidence(s: HolderState, relId: string, anchor: Anchor): Evidence {
+  return allocOf(s, relId)?.evidence(anchor) ?? { state: 'unknown', conflict: false }
+}
+/** K2 2b.1: is the class of the counterpart off for this holder (§4: last value per (writer, inc), "aus gewinnt")? */
+export function classOff(s: HolderState, relId: string): boolean {
+  return allocOf(s, relId)?.classOff ?? false
 }
 
 /**
  * Review 36 B7 (Vertrag statt Patch-Kaskade): die eine Rechnung für Ms Sicht auf den Vorrat einer Seite. Jeder Verbraucher
- * liest aus ihr: die Wahl des Schlüssels in einer Vorstellung, die Teilung unter Ms Geräten (`mayName` bekommt den Wert von
- * hier, nie aus einer Listung), die Rechteprüfung der Vorstellung (`authorize`), die Zählung des Vorrats (`stockAt`, X23)
- * und die Messungen der Szenarien. Rein, eine Funktion des gefalteten Zustands (Listungen je Schreiber, Grabsteine,
- * Mengennachweise, Verbrauchsmarken) und der Zeit; damit in jeder Empfangsreihenfolge dieselbe.
+ * liest aus ihr: die Wahl des Schlüssels in einer Vorstellung, die Rechteprüfung der Vorstellung (`authorize`), die Zählung
+ * des Vorrats (`stockAt`, X23) und die Messungen der Szenarien. Rein, eine Funktion des gefalteten Zustands und der Zeit;
+ * damit in jeder Empfangsreihenfolge dieselbe.
  *
- * Schritte: Schreiber, deren Signierer die Seite in einer ihrer Mengen widerrufen hat, fallen weg (K2); Grabsteine wirken nach
- * `buried` (ein widerrufener Signierer nur, wofür kein verbliebener Schreiber bürgt); je Anker gilt der kanonisch kleinste
- * Wert (Review 21 B1, `viewKeys`); dann Ablauf (8470) und Verbrauch (8570.2). Ohne Schreiber (K0) die gefaltete Liste.
+ * K2 step 2b.1: with `stock-revision@2` (`view.revs`) the listing follows the set rules (`allocation`); `mine` = the own
+ * anchors of the M device in this relationship (`for` filter, MV-32): without it, the keys of every known member (a
+ * measurement of M's view, never a choice). Without revisions of version 2 (K0, K1a): je Anker der kanonisch kleinste
+ * Wert über die nicht widerrufenen Schreiber (Review 21 B1, `viewKeys`). Dann Ablauf (8470) und Verbrauch (8570.2).
  */
-export function usableView(s: HolderState, relId: string, now: string): UsableView {
+export function usableView(s: HolderState, relId: string, now: string, mine?: ReadonlySet<Anchor>): UsableView {
   const r = findRel(s, relId)
   const v = r?.view
   if (!r || !v) return { listed: [], usable: [], unconsumed: [] }
-  let listed = v.keys
-  if (v.writers) {
-    const revoked = new Set<string>()
-    for (const t of r.tuples) for (const a of setView(own(s.sets, t.peer)).revoked) revoked.add(signerId(a))
-    const writers = table(Object.entries(v.writers).filter(([w]) => !revoked.has(w)))
-    listed = viewKeys(writers, tableOf(v.clears), v, revoked).keys
+  let listed: ViewKey[] = v.keys
+  if (v.revs) listed = allocOf(s, relId)!.usable(mine)
+  else if (v.writers) {
+    const revoked = revokedWriters(s, r)
+    listed = viewKeys(table(Object.entries(v.writers).filter(([w]) => !revoked.has(w))), tableOf(v.clears)).keys
   }
   const fresh = listed.filter((k) => usable(k.expiresAt, now))
   return { listed, usable: fresh, unconsumed: fresh.filter((k) => !s.consumed.includes(k.anchor)) }
@@ -994,13 +1258,15 @@ function applyBody(s: HolderState, op: Op): void {
       r.revision = Math.max(r.revision, op.revision) // 8500: Nummern bleiben verbraucht
       if (op.writer) {
         // Schritt 4: 8500 je Schreiber; die höchste Revision des Schreibers zählt, gleich in welcher Reihenfolge gefaltet.
-        const w = own(r.writers, op.writer)
+        // K2 2b.1 (`stock-revision@2`): je (Schreiber, Inkarnation); `empty` hält dort den Klassenwert der Revision (`classOff`).
+        const key = op.inc ? `${op.writer}.${op.inc}` : op.writer
+        const w = own(r.writers, key)
         if (!w || op.revision > w.revision) {
           const ws = tableOf(r.writers)
-          put(ws, op.writer, { revision: op.revision, empty: op.keys.length === 0 })
+          put(ws, key, { revision: op.revision, empty: op.inc ? op.classOff === true : op.keys.length === 0 })
           r.writers = ws
         }
-        effect(s, op, `revision:${r.id}:${op.writer}:${op.revision}`)
+        effect(s, op, `revision:${r.id}:${key}:${op.revision}`)
       } else effect(s, op, `revision:${r.id}:${op.revision}`)
       return
     }
@@ -1012,6 +1278,24 @@ function applyBody(s: HolderState, op: Op): void {
     case 'age': {
       const r = rel(s, op.rel)
       for (const k of r.stock) if (op.anchors.includes(k.anchor) && k.state === 'active') k.state = 'aging'
+      return
+    }
+    case 'retire': {
+      // K2 2b.1, 8475.S8: a key past `expiresAt + key-retention` ends as tombstone at its allocator (no longer a reservation,
+      // which already ended at `expiresAt`, core draft 4 §2.1).
+      const r = rel(s, op.rel)
+      for (const k of r.stock) if (op.anchors.includes(k.anchor) && (k.state === 'active' || k.state === 'aging')) k.state = 'tombstoned'
+      return
+    }
+    case 'stock-revision': {
+      // K2 2b.1 (core draft 4 §3.3, MV-31): every form-checked revision of the scope is kept, canonical, once; all rules are
+      // functions of this set (`allocation`). A new scope (8557, newer head) starts the view anew, as for version 1.
+      const r = rel(s, op.rel)
+      const v = r.view && r.view.scope === op.scope && r.view.revs ? r.view : { scope: op.scope, revision: 0, keys: [], revs: [] as StockRevision[] }
+      const c = canonical(op.revision)
+      const revs = v.revs!.some((x) => canonical(x) === c) ? v.revs! : [...v.revs!, op.revision].sort((a, b) => (canonical(a) < canonical(b) ? -1 : 1))
+      r.view = { scope: op.scope, revision: Math.max(0, ...revs.map((x) => x.rev)), keys: [], revs }
+      for (const f of allocFindings(allocFold(revs))) if (!s.findings.includes(f)) s.findings.push(f)
       return
     }
     case 'view': {
@@ -1356,7 +1640,7 @@ export function project(s: HolderState, now: string): Projection {
       head: head(r).id,
       classOn: r.classOn,
       departed: r.departed,
-      view: r.view ? { scope: r.view.scope, revision: r.view.revision, keys: sortKeys(r.view.keys), ...(r.view.writers ? { writers: { ...r.view.writers }, clears: { ...(r.view.clears ?? {}) } } : {}), ...(r.view.standing ? { standing: r.view.standing, tombstones: { ...(r.view.tombstones ?? {}) } } : {}) } : null,
+      view: r.view ? { scope: r.view.scope, revision: r.view.revision, keys: sortKeys(r.view.keys), ...(r.view.writers ? { writers: { ...r.view.writers }, clears: { ...(r.view.clears ?? {}) } } : {}), ...(r.view.revs ? { revs: r.view.revs } : {}) } : null,
       stock: Object.fromEntries(r.stock.map((k) => [k.anchor, { n: k.n, nonce: k.nonce, state: k.state, keyAgreement: k.keyAgreement, expiresAt: k.expiresAt }]).sort(([a], [b]) => (a as string).localeCompare(b as string))),
       nonce: r.nonce,
       nextN: r.nextN,
