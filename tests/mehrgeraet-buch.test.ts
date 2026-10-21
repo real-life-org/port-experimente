@@ -78,6 +78,18 @@ const ticketBeforeCommit: Mutation = (g) => {
     return r
   }
 }
+/** M binds each ticket's voucher to the ticket's own side (voucher anchor = own key) instead of the other side's key. */
+const wrongVoucher: Mutation = (g) => {
+  const d = priv(g.Mm)
+  const orig = d.sendDoc.bind(g.Mm)
+  d.sendDoc = async (type, ...rest) => {
+    if (type === TYPES.ticket) {
+      const p = rest[4] as { own: string; voucher: Record<string, unknown> } // sendDoc(type, issuerCtx, recipient, toRkid, replyTo, payload, fan)
+      rest[4] = { ...p, voucher: { ...p.voucher, anchor: p.own } }
+    }
+    return orig(type, ...rest)
+  }
+}
 /** A side without rule 8640.12: a consumed stock key looks active to the ticket check (restored after the frame). */
 function without8640_12(d: HolderDevice): void {
   const p = priv(d)
@@ -241,6 +253,48 @@ describe('K2 step 2b.0: mutations show each checker failing', () => {
     expect(refused).toHaveLength(2)
     const accA = r.buch.commits.filter((c) => c.person === 'A').flatMap((c) => c.ops).filter((o) => o.kind === 'ticket-accept')
     expect(accA).toHaveLength(10)
+  }, 60_000)
+
+  it('U6. Wrongly bound tickets: M binds each voucher to the ticket\'s own side → P-Commit fails (control holds); the other checkers unchanged', async () => {
+    // Control = U0's sequence and seed: P-Commit 0 violations, 2 tickets, 1 issuance.
+    const control = await runSequence(cand, one, { seed: 21, reseed })
+    expect(prop(control, 'P-Commit').violations).toEqual([])
+    expect(prop(control, 'P-Commit').counts).toEqual({ tickets: 2, issuances: 1 })
+    const r = await runSequence(cand, one, { seed: 21, reseed, mutation: wrongVoucher })
+    // Soll P-Commit: the one issuance batch holds two ticket intents, each naming its own side's key as `own` (so the
+    // `own` check alone passes) but also as voucher, not the key acquired for the other side (MV-30, 8605) → 1 violation
+    // (one per issuance). Its bytes were committed before they left → no "ticket without commit" violation. Tickets at the
+    // carrier: A and B refuse a ticket whose voucher is not the other side (8640.9), no receipt, so the deliverer repeats
+    // each after ackWait = 3 rounds; the drain has k + 3 = 6 rounds → each ticket deposited at the commit, after round 3
+    // and after round 6 → 3 × 2 = 6. P-Produktion: both tickets at the carrier in time → 1 obligation kept. P-Einmal: no
+    // acceptance (0 keys, 0 accepts). P-Paar: nothing connected.
+    expect(prop(r, 'P-Commit').violations).toHaveLength(1)
+    expect(prop(r, 'P-Commit').violations[0]).toContain('voucher')
+    expect(prop(r, 'P-Commit').counts).toEqual({ tickets: 6, issuances: 1 })
+    expect(prop(r, 'P-Produktion').violations).toEqual([])
+    expect(prop(r, 'P-Produktion').counts).toMatchObject({ introductions: 1, obliged: 1, kept: 1 })
+    expect(prop(r, 'P-Einmal')).toMatchObject({ ok: true, counts: { keys: 0, accepts: 0 } })
+    expect(prop(r, 'P-Paar')).toMatchObject({ ok: true, counts: { connectedActs: 0, bothSides: 0 } })
+    // The other bindings, each broken alone in a copy of the control ledger (dump → load): the expected receipt signer, the
+    // address, the bytes (the two intents' frames swapped). Soll each: 1 violation (the issuance), the carrier check
+    // unchanged (every deposited frame is still in the batch).
+    const broken = (f: (i: Buch['commits'][number]['intents']) => void) => {
+      const b = Buch.load(control.buch.dump())
+      const c = b.commits.find((x) => x.ops.some((o) => o.kind === 'introduce'))!
+      f(c.intents.filter((i) => i.kind === TYPES.ticket))
+      return pCommit(b)
+    }
+    const other = (xs: string[], x: string) => xs.find((y) => y !== x)!
+    const sides = (is: Buch['commits'][number]['intents']) => is.map((i) => i.expected)
+    for (const [what, f] of [
+      ['expected', (is: Buch['commits'][number]['intents']) => void (is[0]!.expected = other(sides(is), is[0]!.expected))],
+      ['address', (is: Buch['commits'][number]['intents']) => void (is[0]!.address = is[1]!.address)],
+      ['frames', (is: Buch['commits'][number]['intents']) => void ([is[0]!.frames, is[1]!.frames] = [is[1]!.frames, is[0]!.frames])],
+    ] as const) {
+      const c = broken(f)
+      expect(c.violations, what).toHaveLength(1)
+      expect(c.violations[0], what).toContain(what)
+    }
   }, 60_000)
 
   it('S1. Shrinking: a generated sequence failing P-Commit under suppressed tickets shrinks to one introduction that commits', async () => {

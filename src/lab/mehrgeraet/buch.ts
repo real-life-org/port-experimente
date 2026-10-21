@@ -324,7 +324,11 @@ export function pEinmal(b: Buch): Check {
 /**
  * P-Commit (draft 2 §5.2 no. 5, D6): (1) every ticket at the carrier has an earlier successful store commit of the same
  * device holding the same bytes and, in that batch, the consumption of both keys (`introduce`, MV-30); (2) every issuance
- * batch holds exactly two complete ticket intents bound to its act, one per named key (existence, not only "if, then").
+ * batch holds exactly two complete ticket intents bound to its act, one per named key (existence, not only "if, then"),
+ * mirror-bound (MV-30, draft 2 §2.3, 8605, 8570.1; Tor-Review 42 B1): the ticket to side X names X's acquired key as `own`
+ * and the key acquired for the other side as voucher (anchor and key agreement), carries the act's times, expects its
+ * receipt from X's key and is addressed to X's key agreement (K2, 6o.2: sealed to the holder of the named stock key), and
+ * its committed bytes are exactly the frames the device sealed for that document.
  */
 export function pCommit(b: Buch): Check {
   const v: string[] = []
@@ -341,7 +345,24 @@ export function pCommit(b: Buch): Check {
       const named = tickets.map((i) => String(b.production(i.digest)!.payload.own)).sort()
       const want = [op.act.a.key, op.act.b.key].sort()
       const complete = tickets.every((i) => i.frames.length > 0)
-      if (tickets.length !== 2 || M.canonical(named) !== M.canonical(want) || !complete) v.push(`issuance ${op.act.id.slice(0, 8)} (${c.writer}#${c.n}): ${tickets.length} ticket intents in the batch, named ${named.map((x) => x.slice(-8)).join(', ') || 'none'} (want both of ${want.map((x) => x.slice(-8)).join(', ')})`)
+      const what = `issuance ${op.act.id.slice(0, 8)} (${c.writer}#${c.n})`
+      if (tickets.length !== 2 || M.canonical(named) !== M.canonical(want) || !complete) {
+        v.push(`${what}: ${tickets.length} ticket intents in the batch, named ${named.map((x) => x.slice(-8)).join(', ') || 'none'} (want both of ${want.map((x) => x.slice(-8)).join(', ')})`)
+        continue
+      }
+      const wrong: string[] = []
+      for (const [side, other] of [[op.act.a, op.act.b], [op.act.b, op.act.a]] as const) {
+        const i = tickets.find((x) => b.production(x.digest)!.payload.own === side.key)!
+        const p = b.production(i.digest)!
+        const pl = p.payload as { issuedAt?: unknown; expiresAt?: unknown; voucher?: { anchor?: unknown; keyAgreement?: unknown } }
+        const to = `ticket → ${side.key.slice(-8)}`
+        if (pl.voucher?.anchor !== other.key || pl.voucher?.keyAgreement !== other.keyAgreement) wrong.push(`${to}: voucher ${String(pl.voucher?.anchor).slice(-8)} (want the other side's ${other.key.slice(-8)})`)
+        if (pl.issuedAt !== op.act.issuedAt || pl.expiresAt !== op.act.expiresAt) wrong.push(`${to}: act times differ from the issuance`)
+        if (i.expected !== side.key || p.recipient !== side.key) wrong.push(`${to}: expected receipt signer ${i.expected.slice(-8)} (want ${side.key.slice(-8)})`)
+        if (i.address !== side.keyAgreement) wrong.push(`${to}: address ${i.address.slice(-8)} (want ${side.keyAgreement.slice(-8)})`)
+        if (M.canonical([...i.frames].sort()) !== M.canonical([...p.frames].sort())) wrong.push(`${to}: committed frames are not the sealed frames of its document`)
+      }
+      if (wrong.length) v.push(`${what}: ${wrong.join('; ')}`)
     }
   }
   return check('P-Commit', v, { tickets: b.carrier.tickets.length, issuances })
