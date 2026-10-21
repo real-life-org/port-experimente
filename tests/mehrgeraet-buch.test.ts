@@ -10,10 +10,14 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 //   U5. The reference model's negative side: no admissible key, no obligation, no false alarm.
 //   U6. Wrongly bound tickets (voucher = own key in both) → P-Commit fails (Tor-Review 42 B1, MV-30 / draft 2 §2.3).
 //   U7. Union duties ended by `depart` (`moot`) are not open (Tor-Review 42 B2).
+//   U8. Tickets signed in the context of the other M relationship → P-Commit fails by the receiver predicate, 8640.2
+//       (Tor-Review 43 B1).
+//   U9. Carrier submission addresses swapped after the commit (intent and sealed bytes unchanged) → P-Commit fails, and
+//       P-Produktion does not count the duty kept (Tor-Review 43 B2).
 //   R1, R2. The dump is a complete artefact: dump → load → re-check gives the same results (Tor-Review 42 S1).
 //   N1. The observation seam is fail-safe: a throwing observer changes nothing in holder or carrier (Tor-Review 42 (a)).
 //   S1. Shrinking: a failing generated sequence shrinks to the smallest sequence that still fails the same property.
-//   D1. Astra's D1 sequence (design review 1): Soll 1 accepted act id on x; red on 2a (expected-fail, closes in 2b.3).
+//   D1. Astra's D1 sequence (design review 1): Soll 1 accepted act id on x; red on 2a (expected-fail, closes in 2c).
 //
 // Every expected number below is derived by hand from the scenario (comment at each), written before the run; none is
 // taken from a run (draft 3 §7.2). Randomness is seeded (as in `mehrgeraet-seeds.test.ts`) so a seed replays exactly; that
@@ -92,6 +96,32 @@ const wrongVoucher: Mutation = (g) => {
       rest[4] = { ...p, voucher: { ...p.voucher, anchor: p.own } }
     }
     return orig(type, ...rest)
+  }
+}
+/** M signs each ticket with its key of the other M relationship (ticket to A in the context of M–B and back). */
+const wrongSigner: Mutation = (g) => {
+  const d = priv(g.Mm)
+  const orig = d.sendDoc.bind(g.Mm)
+  d.sendDoc = async (type, ...rest) => {
+    if (type === TYPES.ticket) {
+      const a = M.head(M.rel(g.Mm.state, g.ma)).ownKey
+      const b = M.head(M.rel(g.Mm.state, g.mb)).ownKey
+      rest[0] = rest[0] === a ? b : a // sendDoc(type, issuerCtx, …): the signing context
+    }
+    return orig(type, ...rest)
+  }
+}
+/** After `sendDoc` M's deliverer submits each ticket at the other side's key agreement; intent and sealed bytes unchanged. */
+const swappedAddress: Mutation = (g) => {
+  const d = priv(g.Mm)
+  const orig = d.sendDoc.bind(g.Mm)
+  d.sendDoc = async (type, ...rest) => {
+    const r = await orig(type, ...rest)
+    if (type === TYPES.ticket && r) {
+      const p = rest[4] as { voucher: { keyAgreement: string } }
+      ;(g.Mm.zusteller.submissions.get(r.digest) as { address: string }).address = p.voucher.keyAgreement
+    }
+    return r
   }
 }
 /** A side without rule 8640.12: a consumed stock key looks active to the ticket check (restored after the frame). */
@@ -289,9 +319,14 @@ describe('K2 step 2b.0: mutations show each checker failing', () => {
     expect(prop(r, 'P-Produktion').counts).toMatchObject({ introductions: 1, obliged: 1, kept: 1 })
     expect(prop(r, 'P-Einmal')).toMatchObject({ ok: true, counts: { keys: 0, accepts: 0 } })
     expect(prop(r, 'P-Paar')).toMatchObject({ ok: true, counts: { connectedActs: 0, bothSides: 0 } })
-    // The other bindings, each broken alone in a copy of the control ledger (dump → load): the expected receipt signer, the
-    // address, the bytes (the two intents' frames swapped). Soll each: 1 violation (the issuance), the carrier check
-    // unchanged (every deposited frame is still in the batch).
+    // The other bindings, each broken alone in a copy of the control ledger (dump → load); the control's two tickets were
+    // each deposited once (accepted, receipted). Soll (Tor-Review 43: the carrier check binds each deposit to the address
+    // its commit holds for that frame):
+    // - expected receipt signer of one intent → 1 (the issuance; the carrier check is unchanged);
+    // - address of one intent set to the other's → 2: that ticket's deposit is no longer the committed submission (1), and
+    //   the receiver predicate refuses the ticket at the other side's key agreement (no own relationship behind it, 8640.2) (1);
+    // - frames of the two intents swapped, addresses kept → 3: each deposit's frame is now committed for the other address
+    //   (2), and the issuance's committed frames are not the sealed frames of its documents (1).
     const broken = (f: (i: Buch['commits'][number]['intents']) => void) => {
       const b = Buch.load(control.buch.dump())
       const c = b.commits.find((x) => x.ops.some((o) => o.kind === 'introduce'))!
@@ -300,15 +335,51 @@ describe('K2 step 2b.0: mutations show each checker failing', () => {
     }
     const other = (xs: string[], x: string) => xs.find((y) => y !== x)!
     const sides = (is: Buch['commits'][number]['intents']) => is.map((i) => i.expected)
-    for (const [what, f] of [
-      ['expected', (is: Buch['commits'][number]['intents']) => void (is[0]!.expected = other(sides(is), is[0]!.expected))],
-      ['address', (is: Buch['commits'][number]['intents']) => void (is[0]!.address = is[1]!.address)],
-      ['frames', (is: Buch['commits'][number]['intents']) => void ([is[0]!.frames, is[1]!.frames] = [is[1]!.frames, is[0]!.frames])],
+    for (const [what, f, n] of [
+      ['expected', (is: Buch['commits'][number]['intents']) => void (is[0]!.expected = other(sides(is), is[0]!.expected)), 1],
+      ['address', (is: Buch['commits'][number]['intents']) => void (is[0]!.address = is[1]!.address), 2],
+      ['frames', (is: Buch['commits'][number]['intents']) => void ([is[0]!.frames, is[1]!.frames] = [is[1]!.frames, is[0]!.frames]), 3],
     ] as const) {
       const c = broken(f)
-      expect(c.violations, what).toHaveLength(1)
-      expect(c.violations[0], what).toContain(what)
+      expect(c.violations, what).toHaveLength(n)
+      expect(c.violations.filter((v) => v.startsWith('issuance')), what).toHaveLength(1)
+      expect(c.violations.find((v) => v.startsWith('issuance')), what).toContain(what)
     }
+  }, 60_000)
+
+  it('U8. Tickets signed in the other M relationship\'s context → exactly P-Commit fails, by the receiver predicate (8640.2); the other checkers unchanged (Tor-Review 43 B1)', async () => {
+    const r = await runSequence(cand, one, { seed: 21, reseed, mutation: wrongSigner })
+    // Soll P-Commit: the issuance batch is complete and mirror-bound in its fields, but the ticket to A is signed with M's
+    // key of M–B and the ticket to B with M's key of M–A. The receiver predicate (the holder's own 8640 check) on A's resp.
+    // B's committed image refuses each by 8640.2 (the signer is no counterpart on that relationship) → 1 violation (the
+    // issuance, both tickets in it). The bytes left after their commit at the committed addresses → no carrier violation.
+    // Tickets at the carrier: both sides refuse (8640.2), no receipt, the deliverer repeats after 3 and 6 rounds → 3 × 2 = 6.
+    // P-Produktion: both committed submissions at the carrier in time → 1 obligation kept. P-Einmal: no acceptance.
+    // P-Paar: nothing connected.
+    expect(prop(r, 'P-Commit').violations).toHaveLength(1)
+    expect(prop(r, 'P-Commit').violations[0]).toContain('8640.2')
+    expect(prop(r, 'P-Commit').violations[0]!.match(/8640\.2/g)).toHaveLength(2)
+    expect(prop(r, 'P-Commit').counts).toEqual({ tickets: 6, issuances: 1 })
+    expect(prop(r, 'P-Produktion').violations).toEqual([])
+    expect(prop(r, 'P-Produktion').counts).toMatchObject({ introductions: 1, obliged: 1, kept: 1 })
+    expect(prop(r, 'P-Einmal')).toMatchObject({ ok: true, counts: { keys: 0, accepts: 0 } })
+    expect(prop(r, 'P-Paar')).toMatchObject({ ok: true, counts: { connectedActs: 0, bothSides: 0 } })
+  }, 60_000)
+
+  it('U9. Submission addresses swapped after sendDoc (intent and sealed bytes unchanged) → P-Commit fails per deposit; P-Produktion does not count the duty kept (Tor-Review 43 B2)', async () => {
+    const r = await runSequence(cand, one, { seed: 21, reseed, mutation: swappedAddress })
+    // Soll P-Commit: the issuance batch is unchanged and passes the receiver predicate. Each ticket is deposited at the
+    // other side's key agreement: the device there cannot open it (sealed to the named key), no receipt, the deliverer
+    // repeats after 3 and 6 rounds → 3 × 2 = 6 deposits, none of them the committed submission (frame committed for
+    // another address) → 6 violations, counts 6 tickets, 1 issuance. P-Produktion: 1 obligation; 0 of 2 committed
+    // submissions reach the carrier within k rounds → 1 violation, 0 kept. P-Einmal: no acceptance. P-Paar: nothing.
+    expect(prop(r, 'P-Commit').violations).toHaveLength(6)
+    for (const v of prop(r, 'P-Commit').violations) expect(v).toContain('address')
+    expect(prop(r, 'P-Commit').counts).toEqual({ tickets: 6, issuances: 1 })
+    expect(prop(r, 'P-Produktion').violations).toHaveLength(1)
+    expect(prop(r, 'P-Produktion').counts).toMatchObject({ introductions: 1, obliged: 1, kept: 0 })
+    expect(prop(r, 'P-Einmal')).toMatchObject({ ok: true, counts: { keys: 0, accepts: 0 } })
+    expect(prop(r, 'P-Paar')).toMatchObject({ ok: true, counts: { connectedActs: 0, bothSides: 0 } })
   }, 60_000)
 
   it('S1. Shrinking: a generated sequence failing P-Commit under suppressed tickets shrinks to one introduction that commits', async () => {
@@ -386,8 +457,8 @@ describe('K2 step 2b.0: D1 (design review 1, Astra) as a fixed test', () => {
   // Expected-fail (`it.fails`): red on the step-2a code by design. Design review 1 D1
   // (rltp/design/port-experimente-e15-codex-design-k2-schritt-2b-2026-10-20.md): A's single use does not survive the
   // allowed restore, because 8640.12 checks the current local key state and A's restored image has x active again. The
-  // incarnation rule (accept only on keys of the running incarnation, restart revision with `burn`) is step 2b.3 (draft 3
-  // §8); there this test turns green and loses `.fails`. A broken precondition returns early, so the body passes and
+  // incarnation rule (accept only on keys of the running incarnation, restart revision with `burn`) is step 2c (core
+  // draft 4 §0.2, §6); there this test turns green and loses `.fails`. A broken precondition returns early, so the body passes and
   // `it.fails` turns red: the expected failure is only the Soll on x.
   it.fails('D1. Images of A_x and M hold x unused; α (A–B) accepted; M rebuilt names x for β (A–C, fresh C key); A_x refuses β (8640.12), C accepts; A_x rebuilt from its image before its siblings catch up; a repetition of β reaches it. Soll: 1 accepted act id on x (2a: 2, α and β)', async () => {
     reseed(51)

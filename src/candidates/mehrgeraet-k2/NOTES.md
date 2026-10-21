@@ -73,21 +73,22 @@ of an issuance), fires only when the bench arms it.
 - *P-Einmal* (draft 2 §5.2 no. 4): per stock key at most one accepted act
   id over the whole history. The half "no acceptance on a key of an
   earlier incarnation" needs the incarnation in the key and comes with
-  2b.3.
-- *P-Commit* (no. 5): every ticket at the carrier has an earlier store
-  commit of the same device holding the same bytes and, in that batch,
-  the `introduce` that consumes both keys (MV-30); every issuance batch
-  holds exactly two complete ticket intents bound to its act, one per
-  named key (existence), mirror-bound (MV-30, draft 2 §2.3, 8605,
-  8570.1): the ticket to side X names X's acquired key as `own` and the
-  key acquired for the other side as voucher (anchor and key agreement),
-  carries the act's times, expects its receipt from X's key, is addressed
-  to X's key agreement (K2, 6o.2) and holds exactly the frames sealed for
-  its document.
+  2c (core draft 4 §0.2).
+- *P-Commit* (no. 5): every ticket at the carrier is a committed
+  submission: an earlier store commit of the same device holds the same
+  frame *for the same address* and, in that batch, the `introduce` that
+  consumes both keys (MV-30); every issuance batch holds exactly two
+  complete ticket intents of its act, one per named key (existence); and
+  each of them is a ticket the honest receiver accepts for this act: the
+  holder's own ticket predicate (`ticketAcceptance`, 8640.2–8640.8) on
+  the committed plaintext at the committed address, in the receiver
+  context of the named key's allocator at the issuance commit. Details
+  under "Review 43 fixes" below.
 - *P-Produktion* (no. 7): if the M device had admissible keys for both
   sides, was up and online, and the act's remaining time exceeds the
   delivery reserve (bench: 8155 consent reserve, one day), both tickets
-  are at the carrier within k = 3 rounds in which the device is up. An
+  are at the carrier within k = 3 rounds in which the device is up, as
+  committed submissions (frame and address as committed). An
   introduction that crashed before its commit is no issuance; a refusal
   while the reference admits keys for both sides is a violation. The
   **reference model** does not read `usableView`: from the delivery
@@ -145,7 +146,9 @@ derived by hand in the test before the run, draft 3 §7.2):
 | U3 | mutation: A without 8640.12; M rebuilt names x for β (A–C, fresh C key) | control: 1 act on x; mutated: 2, P-Einmal 1 violation; both runs: P-Produktion 2 introductions, 2 obliged, 2 kept | ✓ fails |
 | U4 | mutation: A connects under another key agreement | control 0; mutated 1 P-Paar violation (1 act connected on both sides) | ✓ fails |
 | U5 | reference model, negative side: 12 introductions against budget 10 | 10 obliged and kept, 2 without admissible A key (M refuses), 0 violations, 10 acceptances at A | ✓ |
-| U6 | mutation: M binds each voucher to the ticket's own side | P-Commit 1 violation (the issuance), 6 deposits (no receipt, repeats after 3 and 6 rounds); other checkers unchanged; expected signer, address, swapped frames each alone: 1 violation | ✓ fails |
+| U6 | mutation: M binds each voucher to the ticket's own side | P-Commit 1 violation (the issuance: the receiver refuses by 8640.8), 6 deposits (no receipt, repeats after 3 and 6 rounds); other checkers unchanged; each alone in the control ledger: expected signer 1, intent address 2 (deposit + 8640.2), swapped frames 3 (2 deposits + issuance) | ✓ fails |
+| U8 | mutation: M signs each ticket in the context of the other M relationship | P-Commit 1 violation (the issuance, both tickets refused by 8640.2), 6 deposits; P-Produktion kept, P-Einmal 0/0, P-Paar 0/0 | ✓ fails |
+| U9 | mutation: submission addresses swapped to the other side's key agreement after `sendDoc` | P-Commit 6 violations (each deposit not the committed submission); P-Produktion 1 violation (0 of 2 committed submissions, 0 kept); P-Einmal 0/0, P-Paar 0/0 | ✓ fails |
 | U7 | two encounters A–B, receipts lost, then A departs | open duties {A: 1, B: 1} before, {A: 0, B: 1} after (`moot`) | ✓ |
 | R1 | dump → `Buch.load` → re-check (control, U1, U2) | identical checker results and counters, same dump again; P-Commit still 1 resp. 2 violations | ✓ |
 | R2 | `byDigest` cleared after a valid issuance | dump changes, P-Commit fails (also after reload) | ✓ |
@@ -167,8 +170,8 @@ and M's deliverer repeats β: A_x accepts. Soll 1 accepted act id on x;
 the 2a code gives 2 (α by the lost incarnation, β by the rebuilt one), so
 the test is `it.fails`. A broken precondition returns early, which makes
 `it.fails` red, so only the Soll on x is the expected failure. It turns
-green with the incarnation rule of 2b.3 (draft 3 §8), and loses `.fails`
-there. This is the class gate review 40 B3 named as a price of 2a.
+green with the incarnation rule of 2c (core draft 4 §0.2, §6), and loses
+`.fails` there. This is the class gate review 40 B3 named as a price of 2a.
 
 **Review 42 fixes** (Tor-Review 42,
 `rltp/design/port-experimente-e15-codex-review42-2026-10-21.md`):
@@ -185,11 +188,64 @@ U3 logs its introductions and rounds so P-Produktion is checked on two
 introductions, not on an empty set; (a), the observation seam is
 fail-safe (N1).
 
-**Verification 2b.0:** `tests/mehrgeraet-buch.test.ts` 34 passed + 1
-expected fail (D1) in ≈ 35 s; typecheck green. No cell changed: the K2,
+**Review 43 fixes: P-Commit as receiver predicate** (Tor-Review 43,
+`rltp/design/port-experimente-e15-codex-review43-2026-10-21.md`). Review
+42 B1 and review 43 B1/B2 found three blockers in a row in the same
+hand-kept list of fields P-Commit compared (voucher, then the signer's
+relationship, then the actual carrier address). The fix is structural:
+P-Commit no longer lists fields, it asks the question a receiver asks.
+The holder's ticket check (8640) is now one pure function,
+`ticketAcceptance(doc, address, receiver, steps?)` in `holder.ts`: 8640.2
+channel (an own relationship behind the address; K2: the relationship
+whose stock key the address is) and signer (a counterpart on that
+relationship; K2: a member of its device set, `peerIn`, the same
+function behind `HolderDevice.isPeer`), 8640.3 times, 8640.5 the named
+key on this relationship at this key agreement, 8640.7 the key outlives
+the act, 8640.8 the voucher is no own stock key. The state steps sit in
+their places as callbacks only the holder passes (8640.4 repetition,
+8640.12 single use, 8640.6 key state); the predicate stops before 8640.9
+(voucher assignment), 8640.13 (budget) and the acceptance 8640.14. The
+holder's ticket branch calls it on every receipt (behaviour unchanged:
+same steps, same order, same findings; all cells identical, below).
+The ledger calls the same function as reference and re-implements no
+ticket rule. For it, the ledger keeps per device its last committed
+holder state and, at each issuance commit, records per named key the
+receiver context: the committed image of the key's allocator (`by`) at
+that moment (`ReceiverImage`, in the dump). P-Commit is then: (a) the
+existence check as before; (b) the predicate accepts the ticket to A on
+A's image and the ticket to B on B's image, at the committed address and
+the issuance time, and the act it yields is the committed act side
+(`own` = X's key, voucher = the other side's key and key agreement, the
+act's times), its receipt expected from the key it is sealed to, its
+committed bytes the frames sealed for it; (c) every deposit at the
+carrier is a committed submission, frame *and* address as committed
+(`committedSubmission`; a copy at its own address). This closes the
+class: whatever makes a ticket unacceptable to the honest receiver
+(wrong signer, wrong channel, wrong named key or address, voucher on the
+own side) fails (b) by the receiver's own rule, and whatever changes the
+submission after the commit fails (c); what is left to the ledger is the
+act identity and the frame identity, not receiver rules. P-Produktion
+counts only committed submissions, so a ticket deposited elsewhere does
+not keep the duty. Fixed tests: U8 (B1: both tickets signed in the
+context of the other M relationship, 1 P-Commit violation naming 8640.2
+twice, other checkers unchanged), U9 (B2: submission addresses swapped
+after `sendDoc`, intent and sealed bytes unchanged: 6 P-Commit
+violations, one per deposit, and P-Produktion fails with 0 kept; P-Einmal
+and P-Paar unchanged), U6 re-derived (voucher = own now refused by 8640.8;
+the single breaks in the control ledger give 1, 2 and 3 violations, see
+the table). S1: the D1 follow-up step is 2c, not 2b.3 (here and in the
+test). Not covered by the predicate, as before: the ticket has no MV-24
+form yet (2b.2), and the reference is K2-specific (without device sets the
+image holds no stock address, so a K0/K1a ledger run fails (b)).
+
+**Verification 2b.0:** `tests/mehrgeraet-buch.test.ts` 36 passed + 1
+expected fail (D1) in ≈ 47 s; typecheck green. No cell changed: the K2,
 K1a, K0 and seed-sweep files give the same 111/111 results on this branch
 as on main a290f7a (test by test; after the review 42 fixes again
-111/111, identical test by test, the four files ≈ 11 min); also green:
+111/111, identical test by test, the four files ≈ 11 min; after the
+review 43 fixes, with the holder's ticket check now `ticketAcceptance`,
+again 111/111, identical test by test, ≈ 16 min under load); also green
+(again after review 43, 9 files, 114 tests):
 gegenlauf, zustellung, träger, zustellung-harness, modell, engine,
 K1a-service, matrix, harness. Report not re-run (no cell can change).
 
