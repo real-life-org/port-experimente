@@ -1,4 +1,4 @@
-# K2: device keys (step 1), device sets and one card per act (step 2a)
+# K2: device keys (step 1), device sets and one card per act (step 2a), outcome ledger (step 2b.0)
 
 Plan E15, sections 6o.4, 6r, 6s and 6t (`rltp/design/port-experimente-e15-mehrgeraet-plan-2026-10-17.md`).
 Candidate `k2-device-keys` (K2-strict, M as single-writer fixture) in
@@ -6,9 +6,181 @@ Candidate `k2-device-keys` (K2-strict, M as single-writer fixture) in
 split); tests `tests/mehrgeraet-k2.test.ts`; measurements
 `src/lab/mehrgeraet/geraetemengen.ts`. K2 reuses K1a's journal, holder and
 model (`src/lab/mehrgeraet/{holder,model,welt}.ts`,
-`src/candidates/mehrgeraet-k1a`). Step 2a comes first; the step-2
+`src/candidates/mehrgeraet-k1a`). Step 2b.0 (the measuring instrument
+for 2b) comes first, then step 2a; the step-2
 sections follow where they still hold (with the parts 2a removed marked),
 then step 1.
+
+## Step 2b.0 (21 October 2026)
+
+Design: `rltp/design/port-experimente-e15-k2-schritt-2b-entwurf-2-2026-10-20.md`
+§5.1–§5.4, §6 "2b.0", and draft 3 (`…-entwurf-3-2026-10-21.md`) §7.1, §7.2,
+§8 "2b.0", §12 D1. 2b.0 builds the measuring instrument for step 2b and
+changes no behaviour of any candidate: the outcome ledger, four checkers,
+a minimal event generator with shrinking, and the D1 sequence of design
+review 1 as an expected-fail test. Code: `src/lab/mehrgeraet/buch.ts`
+(ledger, checkers), `src/lab/mehrgeraet/generator.ts` (generator,
+shrinking); tests `tests/mehrgeraet-buch.test.ts`.
+
+**Outcome ledger ("Außenwirkungsbuch").** One object per world, outside
+every holder; a restore or rebuild of a device never reaches it (test L1:
+the ledger is byte-identical before and after A1 is rebuilt from an image
+before α, and α, accepted by the lost incarnation, stays recorded). It is
+pure observation and is never read by a device. Three books:
+
+- *Commit protocol per device and incarnation:* every successful store
+  commit (a mark) and every journal batch this device wrote that the
+  commit made durable (`<device>@<incarnation>#n`, the full ops:
+  `introduce`, `ticket-accept` (8640.14) with act id and `own`,
+  `allocate`, `withdraw`, `age`, `consent`, `produce`, `connect`, `duty`,
+  …; the intents with digest, kind, expected signer, address and the
+  hashes of every frame). A sibling's batch folded on this device is not
+  this device's commit.
+- *Carrier book:* every frame the carrier took (before any drop rule),
+  joined by frame hash with the plaintext its producing device built:
+  revisions (signer, revision number, listed anchors, tombstones),
+  tickets (act id, signer, named anchor, frame hash, time), receipts
+  (signer, ref), each kept apart. 2a has no `for`, `inc`, `withdraw` or
+  `burn` in the revision; those columns arrive with `stock-revision@2`
+  in 2b.1.
+- *Delivery protocol per device:* every document delivered to a device
+  that passed its parser's form checks (MV-24), with time, before the
+  fold decides on it.
+
+Acceptance counts at the successful receiver commit, not at the receipt
+(commit, then crash before the receipt is a valid run); single use
+counts distinct act ids per stock key, so repeated bytes and repeated
+receipts are not a second acceptance.
+
+**Observation seam, not a second parser (MV-24).** The ledger never
+parses wire bytes. Devices report through `HolderObserver`
+(`holder.ts`): `committed` (the image the store now holds), `produced`
+(the plaintext the device signed, with the frames it sealed) and
+`admitted` (the payload its parser admitted: `dispatch` after the form
+check, a revision after its own form rules). The carrier reports every
+taken frame (`Carrier.observe`). The world wires the observer into every
+device from its first commit (`Welt15Options.observer`, `ledgerWorld`).
+All hooks are `null` outside ledger runs; no K0, K1a or K2 cell reads
+them. One new crash point, `between-sends` (after the first of several
+released submissions reached the carrier, i.e. between the two tickets
+of an issuance), fires only when the bench arms it.
+
+**Checkers** (each returns violations and counts):
+
+- *P-Einmal* (draft 2 §5.2 no. 4): per stock key at most one accepted act
+  id over the whole history. The half "no acceptance on a key of an
+  earlier incarnation" needs the incarnation in the key and comes with
+  2b.3.
+- *P-Commit* (no. 5): every ticket at the carrier has an earlier store
+  commit of the same device holding the same bytes and, in that batch,
+  the `introduce` that consumes both keys (MV-30); every issuance batch
+  holds exactly two complete ticket intents bound to its act, one per
+  named key (existence).
+- *P-Produktion* (no. 7): if the M device had admissible keys for both
+  sides, was up and online, and the act's remaining time exceeds the
+  delivery reserve (bench: 8155 consent reserve, one day), both tickets
+  are at the carrier within k = 3 rounds in which the device is up. An
+  introduction that crashed before its commit is no issuance; a refusal
+  while the reference admits keys for both sides is a violation. The
+  **reference model** does not read `usableView`: from the delivery
+  protocol it takes, per signer, the highest admitted revision of that
+  relationship, minus admitted tombstones, minus the keys the device's
+  own committed issuances consumed, usable by 8470 at that time; an
+  admission counts once a later commit of the device made it durable
+  without a crash in between (a crashed round is delivered again).
+  Admissibility, not equality of choice, is compared. Without `for` (2a:
+  M names every key) the model has no per-device filter yet (2b.1).
+- *P-Paar per act* (draft 3 §7.1 no. 6): if both sides committed a
+  `connect` for act X, their tuples are each other's mirror (own card
+  anchor = peer card anchor and back, and each side's peer key agreement
+  is the other side's card key agreement). Across acts nothing is
+  asserted: `pairCounter` counts tuples per person pair (by the person
+  behind the peer anchor) and open union duties (last committed state not
+  `united`), the measure of draft 3 §12 D1 (one side lost the tuple: 0
+  duties expected, not healed).
+
+**Generator** (draft 2 §5.3, minimal). World: A and B with two devices,
+M one device (`bench.singleDevice: ['M']`; the generator refuses a
+candidate without the fixture), class on, stock at M. Events (seeded,
+mulberry32): round; `introduce` (plain, or with a crash at
+`before-commit`, `before-send` = after the commit, `between-sends` =
+between the tickets); `consent` by a side device; reverse or duplicate
+delivery for one round; drop or delay (withhold) everything addressed to
+one device for one round; drop or delay receipts for one round; crash of
+a device at `before-commit` or `after-commit` of a round (at a side:
+after the acceptance, before the receipt); time advance (0–11 h). A
+crashed device is rebuilt from its last commit before the next round
+(restart, not restore); **no restores in the generator** in 2b.0. After
+the events a drain of k + 3 plain rounds makes every obligation
+decidable. Randomness of the run is seeded as in the seed sweep, so a
+seed replays exactly (test G0).
+
+**Shrinking** (§5.4): on a failed property, blocks (halves, quarters, …)
+and then single events are dropped while the same property still fails;
+the test prints seed, property, minimal sequence and violations (G1) and
+the minimal sequence becomes a fixed test.
+
+**Results** (`tests/mehrgeraet-buch.test.ts`, every expected number
+derived by hand in the test before the run, draft 3 §7.2):
+
+| test | what | Soll | result |
+|---|---|---|---|
+| L1 | ledger survives a restore of A1 from an image before α | dump unchanged; 1 accepted act on x (α) | ✓ |
+| G0 | replay of seed 3 | same commits, acceptances, tickets | ✓ |
+| G1 | 20 seeds × 40 events on the 2a code | 0 violations of P-Einmal, P-Commit, P-Produktion, P-Paar | ✓ 20/20 |
+| U0 | control: one introduction | 1 issuance, 2 tickets, 1 obligation kept | ✓ |
+| U1 | mutation: M suppresses its tickets | P-Commit 1 violation (0 intents in the batch), P-Produktion 1 violation (0 of 2 tickets) | ✓ both fail |
+| U2 | mutation: ticket to the carrier before the commit | P-Commit 2 violations (both tickets), P-Produktion holds | ✓ fails |
+| U3 | mutation: A without 8640.12; M rebuilt names x for β (A–C, fresh C key) | control: 1 act on x; mutated: 2, P-Einmal 1 violation | ✓ fails |
+| U4 | mutation: A connects under another key agreement | control 0; mutated 1 P-Paar violation (1 act connected on both sides) | ✓ fails |
+| U5 | reference model, negative side: 12 introductions against budget 10 | 10 obliged and kept, 2 without admissible A key (M refuses), 0 violations, 10 acceptances at A | ✓ |
+| S1 | shrinking a 16-event sequence failing P-Commit under U1's mutation | 1 event: an introduction that commits | ✓ |
+| D1 | design review 1 D1 (below) | 1 accepted act id on x | ✗ 2 (expected-fail) |
+
+The mutations are test-only hooks on the instances of one world (the
+test file wraps `sendDoc`, `handle`, `connect` of those devices); the
+code under test has no switch for them.
+
+**D1 as an expected-fail test.** Design review 1
+(`rltp/design/port-experimente-e15-codex-design-k2-schritt-2b-2026-10-20.md`,
+D1): images of A_x (the allocator of x) and M hold x unused; α between A
+and B is accepted; M rebuilt from its image names x again for β between
+A and C with a fresh C key; A_x refuses β by 8640.12, C accepts; A_x is
+rebuilt from its image before its siblings' journal arrives (held back)
+and M's deliverer repeats β: A_x accepts. Soll 1 accepted act id on x;
+the 2a code gives 2 (α by the lost incarnation, β by the rebuilt one), so
+the test is `it.fails`. A broken precondition returns early, which makes
+`it.fails` red, so only the Soll on x is the expected failure. It turns
+green with the incarnation rule of 2b.3 (draft 3 §8), and loses `.fails`
+there. This is the class gate review 40 B3 named as a price of 2a.
+
+**Verification 2b.0:** `tests/mehrgeraet-buch.test.ts` 29 passed + 1
+expected fail (D1) in ≈ 45 s; typecheck green. No cell changed: the K2,
+K1a, K0 and seed-sweep files give the same 111/111 results on this branch
+as on main a290f7a (test by test; K2 file ≈ 12–14 min); also green:
+gegenlauf, zustellung, träger, zustellung-harness, modell, engine,
+K1a-service, matrix, harness. Report not re-run (no cell can change).
+
+**What 2b.0 saw in the 2a code** (for 2b.1/2b.2):
+
+- The deliverer has no clock (rounds only); P-Produktion counts rounds
+  of the device being up, and the act-end stop (draft 3 §7.3) has no
+  hook yet.
+- `onAck` ignores ticket receipts: tickets are not in `sent`, so M learns
+  nothing from a side's receipt beyond the submission turning
+  `delivered` (draft 3 §8 2b.2 adds receipt → `accepted`).
+- Per-device acceptance check is off: `K2Device.authorize` returns `true`
+  for `ticket-accept` (`index.ts`, "Step 2: acceptance is not blocked per
+  device"); 2b.1 turns it on.
+- The ticket payload has no MV-24 form check (`DOC_SHAPES` covers
+  revision and card only); the ledger's delivery protocol for tickets
+  therefore holds DI-verified but not form-checked payloads (no checker
+  reads them in 2b.0). 2b.2's parser check of the batch should add it.
+- Issuance in 2a reaches the carrier inside the action (k = 0 rounds)
+  unless a crash interrupts it; after `between-sends` the rebuild sends
+  both tickets again (the first is a repeat at the carrier, not a second
+  act).
+- A rebuild (`reload`) commits nothing by itself (L1).
 
 ## Step 2a (20 October 2026)
 
@@ -1205,6 +1377,7 @@ throwaway script, numbers from one run; the frame counts are asserted in
 ```sh
 export PATH=/home/fritz/.n/n/versions/node/24.21.0/bin:$PATH
 pnpm vitest run tests/mehrgeraet-k2.test.ts
+pnpm vitest run tests/mehrgeraet-buch.test.ts   # 2b.0: ledger, checkers, generator (20 seeds; GEN_SEEDS=<n>), mutations, D1 expected-fail (≈ 45 s)
 SEEDS=all pnpm vitest run tests/mehrgeraet-seeds.test.ts   # 20 seeds × K2-strict, K1a (default: seed 1)
 REPORT=1 pnpm vitest run report   # column k2-device-keys in the multi-device port
 ```
