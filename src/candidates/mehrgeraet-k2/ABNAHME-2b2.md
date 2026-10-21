@@ -135,7 +135,8 @@ carrier before the crash).
 |---|---|---|---|---|
 | issuance commits | 1 [D] | 1 [D] | `flush`: commit before `before-send`/`between-sends`; reload commits nothing, no second `introduce` | ledger commits |
 | distinct ticket digests | 2 [D] | 2 [D] | two intents in the batch; repeats and redeposits are the same digest | ledger intents |
-| deposits `tA` / `tB` | 2 / 1 [D] | 1 / 1 [D] | the image is the commit snapshot (`MemoryStore.commit` clones), so after reload both submissions have `report = null` → `unreleased` → released in M1's round 1; K1a's first copy of `tA` went out before the crash. Receipts reach M1 within 2 rounds < 3 → no repeat | `ticketDeposits` |
+| deposits `tA` / `tB` | 1 / 1 [D] | 1 / 1 [D] | the image is the commit snapshot (`MemoryStore.commit` clones), so after reload both submissions have `report = null` → `unreleased`. K1a: A1 (before M1 in the order) accepts the pre-crash copy of `tA` in round 1 and its receipt reaches M1 in the same round before M1's release, so M1 knows `accepted` and omits the resubmission (decision 13); `tB` is released. K1b: both released in M1's round 1. Receipts reach M1 within 2 rounds < 3 → no repeat | `ticketDeposits` |
+| omitted:accepted | 1 [D] | 0 [D] | decision 13 | `pProduktion` counts |
 | deposits by M2 | 0 [D] | 0 [D] | M2 folds M1's batch (journal out in M1's round 1); intents with `device = M1` are not its own (MV-8) | P-Eigen |
 | acceptances A / B | 1 / 1 [D] | 1 / 1 [D] | K1a: A1 accepts the pre-crash copy in round 1, the redeposit is `duplicate-known` (8640.4, same receipt bytes again); B1 in round 2. K1b: both in round 2 | P-Einmal counts, ledger |
 | load A / B (budgetUsed; belegt A1, B1) | 1 / 1 [D] | 1 / 1 [D] | one acceptance each, no 8515 | ledger image |
@@ -148,7 +149,7 @@ carrier before the crash).
 | tuples A→B / B→A; open duties | 0 / 0; 0 [D] | same | no connection | `pairCounter` |
 | writer of M1's next batch | `M1@inc` unchanged, `n = k + 1` [D] | same | 5.3 | journal (see N1) |
 | MV-3 conflicts at M2 | 0 [D] | 0 [D] | no reused `writer@inc#n` | M2 findings |
-| P-Produktion | obliged 1, kept 1, omitted 0 [D] | same [D] | both committed submissions in M1's first up round after the reload (≤ k = 3) | `pProduktion` |
+| P-Produktion | obliged 1, kept 1, omitted 0 [D] | same [D] | both committed submissions at the carrier within M1's first up round after the reload (≤ k = 3); K1a's `tA` is the pre-crash deposit | `pProduktion` |
 | P-Bilanz max at A1 / B1 | 5 / 5 [D] | same | after the acceptance: belegt 1 + reserviert (4 − 1 + 1) = 5 | `pBilanz(b, 5)` |
 | dead tickets (all causes) | 0 [D] | 0 [D] | both accepted; expiry without consent is the 2a cause "no answer" | dead counter |
 
@@ -188,14 +189,14 @@ withhold; 4 rounds (rounds 2–5); Z.
 | quantity | Soll | derivation | asserted by |
 |---|---|---|---|
 | issuance commits / digests | 1 / 2 [D] | | ledger |
-| deposits `tA` | 2 [D] | deposit at `tI`; M1 sinceDeposit reaches 3 in round 3 → one repeat; round 6 is Z1 at `TB + 1 s`: tick `expire` before `advance` → no further repeat (open point 15: repeats of a submitted ticket to a key M knows `withdrawn`) | `ticketDeposits` |
+| deposits `tA` | 1 [D] | deposit at `tI`; M1 folds A1's withdrawal in round 2 (A1 deposited it in the action before round 2) → `expire(tA, 'withdrawn')` (decision 15) before its `advance`; the repeat would have been in round 3 | `ticketDeposits` |
 | deposits `tB` | 1 [D] | receipt in round 1 | |
-| A1 refusals of `tA` | 2, both 8640.6 (`state`, withdrawn) [D] | arrivals in rounds 2 and 4; a refusal adds no `completed`, so the repeat is `unique` again | A1 dispositions |
+| A1 refusals of `tA` | 1, 8640.6 (`state`, withdrawn) [D] | the queued copy arrives in round 2 | A1 dispositions |
 | acceptances A / B | 0 / 1 [D] | local withdrawal effective before the receipt | ledger, P-Aufhebung (0) |
 | load A / B | 0 / 1 [D] | 8640.6 refusal has no load | ledger |
 | knowledge at M1 | unknown / accepted [D] | no receipt from A | M1 state |
 | evidence `xA` / `xB` at M1 (end) | withdrawn / unlisted [D] | withdrawal by the bound writer; `xB` consumed | `M.evidence` |
-| transport `tA` (end) | handed or given-up [O 3] | | M1 zusteller |
+| transport `tA` (end) | handed [D] | decision 3: no withdrawal after carrier acceptance | M1 zusteller |
 | side acts (end) | A none; B expired [D] | A has no act; B: Z1 8325.A7 | side state |
 | dead tickets | `zurueckgezogen` 1, `deadAccepted` 1 (B) [D] | | dead counter |
 | P-Produktion | obliged 1, kept 1 [D] | both deposited in the action | `pProduktion` |
@@ -252,7 +253,7 @@ withhold `tA` at A1; 3 rounds at `tI`; clock to `TB + 1 s`; reset; 2 rounds; Z.
 | M act (end) | ended [D] | ended [D] | ended [D] | Z2 | |
 | side acts (end) | connected / connected [D] | none [D] | expired / expired [D] | | |
 | dead tickets | 0 [D] | 0 | `spaetes-ticket` 1, `deadAccepted` 2 [D] | | dead counter |
-| P-Produktion | obliged 1, kept 1 [D] | [O 2] | obliged 1, kept 1 [D] | K5b: the k up rounds lie after `TB`; no omission reason exists | `pProduktion` |
+| P-Produktion | obliged 1, kept 1 [D] | obliged 0, counted `down` 1, 0 violations [D] | obliged 1, kept 1 [D] | K5b: no round in which submission was admissible (decision 2) | `pProduktion` |
 
 ### K6 One-sided connection by a late card (1.3)
 
@@ -296,7 +297,7 @@ currently lists; A1 lists `xA` → listed → `tA` released); 3 rounds; Z.
 | M1 round in which `tA` is deposited | 2 [D] | 1 [D] | | ledger seq |
 | evidence `xA` at M1 | listed → withdrawn → listed [D] | listed → listed [D] | §3.3, §4 revocation exception; a function of the set | `M.evidence` per round |
 | acceptances A1 / B1 | 1 / 1 [D] | 1 / 1 [D] | `xA` active at A1 (it never folded the off) | ledger |
-| P-Produktion | obliged 1, kept 1, omitted 0 [D] | same [D] | `tA` within M1's first 3 up rounds after reload; window rule for a temporary omission: open point 6 | `pProduktion` |
+| P-Produktion | obliged 1, kept 1, omitted 0 [D] | same [D] | K7a: the window restarts in round 2 when `xA` is listed again (decision 6), `tA` deposited in that round | `pProduktion` |
 | P-Aufhebung | 0 [D] | 0 [D] | M1's committed image at the release holds `xA` listed | `pAufhebung` |
 | knowledge at M1 | accepted / accepted [D] | same | | M1 state |
 
@@ -380,7 +381,7 @@ accepted in round 1 unless stated. "Control" = the same row on the old path
 | test | sequence | −1 s | 0 | +1 s | asserted by |
 |---|---|---|---|---|---|
 | T1 end before carrier acceptance (card, `act-ended`) | B1 consents, its card reaches A1; `A1.online = false`; `A1.consent` (card `awaiting-transport`); clock to `AE + d`; `A1.online = true`; 2 rounds | card deposits 1; B1 connected; A1 connected [D] | the same [D] (`advance` deposits; tick not strictly after) | deposits 0, transport given-up; A1 expired, B1 expired [D] | carrier, states |
-| T2 end after carrier acceptance without receipt | both consent; withhold A1's card at B1; 2 rounds at `tI`; clock to `AE + d`; 1 round | card deposits 2 (repeat in round 3) [D] | 2 [D] | 1, no repeat after the expire [D]; transport [O 3] | carrier |
+| T2 end after carrier acceptance without receipt | both consent; withhold A1's card at B1; 2 rounds at `tI`; clock to `AE + d`; 1 round | card deposits 2 (repeat in round 3) [D] | 2 [D] | 1, no repeat after the expire, transport stays handed (taken) [D] | carrier |
 | T3 end with a late receipt | both consent; A1's card reaches B1 (B1 connects); withhold B1's receipt at A1; clock to `AE + d`; 1 round; reset; 1 round | O delivered, `late` false [D] | delivered [D] | delivered, receipt after expire counts [D] | A1 act cards, zusteller |
 | T4 receipt between `expiresAt` and `AE` (ticket) | withhold `tA` at A1; clock to `E + 1 h + d`; reset; 2 rounds | A1 accepts, receipt, knowledge accepted, load 1, A act expired in the same round (A7), `spaetes-ticket` 1 [D] | the same [D] | refused (8640.3), knowledge unknown, load 0, `spaet-zugestellt` 1 [D] | ledger, M1 state |
 | T4 control (old 8640.3 at `expiresAt`) | the same | refused [D] | refused [D] | refused [D] | ledger |
@@ -415,8 +416,8 @@ accepted in round 1 unless stated. "Control" = the same row on the old path
 | case | sequence | Soll | asserted by |
 |---|---|---|---|
 | (i) receipt signed by another A device | W2+A2 with `Ax`, `Ay`; withhold `Ax`'s receipt at M1; fixture: `Ay` signs a delivery-ack with `ref = tA` under its own key, sealed to `tA`'s `replyTo`, deposited at M1 | M1: 1 `failed(ack-from-unexpected-signer)` (`expected = xA` anchor, not a set root, so `peerIn` is plain equality); knowledge A stays unknown; after the reset `Ax`'s receipt → accepted [D] | M1 dispositions, state |
-| (ii-a) receipt reaches another M device, re-sealed | W4; M1 issues; fixture: the side's signed receipt document re-sealed to M2's key agreement of its context on the A relationship, deposited at M2 | M2: 1 `failed(ack-unbound)`, `unboundAcks` 1; M2 knowledge from M1's journal only (accepted after M1's batch); M1 accepted from its own receipt; the act ends regularly (Z), no hang [D] | M2 dispositions, measures |
-| (ii-b) the same bytes misrouted | the frame sealed to M1's `replyTo` deposited at M2's address | M2: 1 `failed(malformed): …` (it cannot open it), not `ack-unbound` [D]; open point 7 | M2 dispositions |
+| (ii-a) receipt reaches another M device, re-sealed (only if cheap, decision 7; otherwise measured) | W4; M1 issues; fixture: the side's signed receipt document re-sealed to M2's key agreement of its context on the A relationship, deposited at M2 | M2: 1 `failed(ack-unbound)`, `unboundAcks` 1; M2 knowledge from M1's journal only (accepted after M1's batch); M1 accepted from its own receipt; the act ends regularly (Z), no hang [D] | M2 dispositions, measures |
+| (ii-b) the same bytes misrouted (main fixture, decision 7) | the frame sealed to M1's `replyTo` deposited at M2's address | M2: 1 `failed(malformed): …` (it cannot open it), no `accepted` at M2 from it, no hang; M1 `accepted` only from its own receipt [D] | M2 dispositions |
 
 ## 6. Budget-cause fixture (1, `budget`)
 
@@ -437,8 +438,8 @@ W2. Test hook: A1's `acceptanceShare` returns 0 (`share` artificially lowered).
 Derived `[D]`: 215 marked values across K1–K10, the act-end, restart,
 resumption, B13 and budget tables (one marker per value or per row of values;
 relational values such as `m*` and `k + 1` included). Measured only `[M]`: 2
-(K4 follow-up issuance, R4 burn). Pending a decision `[O]`: 3 (transport state
-after `expire` in K3 and T2, open point 3; K5b P-Produktion, open point 2).
+(K4 follow-up issuance, R4 burn). Pending a decision `[O]`: 0 (the three were
+resolved by the decisions below: K3 and T2 transport `handed`, K5b `down`).
 
 ## 8. Current code against the design (for the build)
 
@@ -476,7 +477,27 @@ after `expire` in K3 and T2, open point 3; K5b P-Produktion, open point 2).
 - The bench's `consentReserveMs` is P1D; inventory 8155 states P7D (not a 2b.2
   question; the sheet uses the bench value).
 
-## Open points before build
+## Decisions before build (coordinator for Anton, 21 October 2026)
+
+1. K5: submission after a `before-send` crash, restart at `TB` (K5a) and `TB + 1 s` (K5b).
+2. P-Produktion obliges only over rounds in which submission was admissible (usable, evidence `listed`/`unlisted`, before `TB`); a k-window wholly after `TB` or inside an outage counts as `down`, no violation; "a later act end is no excuse" holds for production possible before `TB`.
+3. After `expire` of an intent the carrier already accepted, the transport stays `handed` (no withdrawal), never `given-up`; a late receipt makes it `acked`.
+4. Dead-ticket counter per act, by the cause of the failed side; `deadAccepted` separate, as in this sheet.
+5. K8c with the new bench fault (deposit at `xA` unreachable) is admissible; the crash variant is measured only.
+6. The P-Produktion window is k rounds from the first round in which submission is admissible; when the evidence returns to `listed` the window starts again (general rule in NOTES).
+7. B13 (ii): main fixture "carrier delivers to M2's address" → M2 `failed(malformed)`, no `accepted` at M2, no hang; the issuer gets `accepted` only from its own receipt; the `ack-unbound` variant only if cheap, otherwise noted as measured.
+8. A card to a key the side does not hold as `active`/`aging` is refused without ack (8850.5 sharpened) in 2b.2, with a fixed test; NOTES mark it "derived (core §1, Anton may veto)".
+9. `TB` is checked in the release (`round()`) and in the resumption themselves; `expire` from the tick only drives the deliverer state.
+10. `burned` is treated like `withdrawn` (draft 3 §1.2); R4 stays measured until 2c.
+11. Acceptance knowledge at siblings: journal op `ticket-ack@1 { act, side, receiptDigest, at }` with an MV-24 shape, written only by the issuer.
+12. Crash points: the code names hold (`before-send`, `between-sends`, round `after-commit`); the mapping to §6 is in NOTES.
+13. Submission with known `accepted` is omitted (saves transport, no outside effect, 8640.4); measure `omitted:accepted`; NOTES mark it derived.
+14. K4 follow-up issuance measured, as in this sheet.
+15. `withdrawn`/`burned` also ends the deliverer's repetition (`expire(digest, 'withdrawn')`); K3 Soll 1 deposit instead of 2 (re-derived above).
+16. One order: code units (`M.byCode`) everywhere, `introduce` switched from `localeCompare`; no K2 cell may flip (details and measures may change).
+Side finding: the bench keeps `consentReserveMs` P1D against 8155 P7D; spec follow-up in NOTES.
+
+## Open points before build (answered by the decisions above)
 
 1. **K5-Folge nicht konstruierbar wie geschrieben.** §6: „M committet X bei
    `expiresAt − consent-reserve`“. `expiresAt` entsteht beim Commit als
