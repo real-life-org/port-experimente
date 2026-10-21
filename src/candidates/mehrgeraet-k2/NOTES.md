@@ -674,7 +674,7 @@ the lost observation used to count for nothing: with U4's mutation and a
 checker was green. Now the measurement's validity is its own check,
 `P-Gueltig` (one violation per recorded observer error). On a ledger
 with errors the four property checkers are never green: `ok: false`,
-`invalid: true`, first violation `run invalid: …`. This also holds on a
+`invalid: true`, a single violation `run invalid: …`, no counts. This also holds on a
 loaded dump, since the errors are part of it. The generator lists
 `P-Gueltig` first; G1 and shrinking treat an invalid run as a failure
 (seed and errors printed). N1 still shows the holder and carrier
@@ -682,8 +682,74 @@ unchanged and now also shows the run invalid. Regression R83: U4 plus
 the throwing A hook → errors = A's commits after the first bench event
 (49), invalid, also after dump → load; the control holds `P-Gueltig`.
 
-**Verification 2b.0:** `tests/mehrgeraet-buch.test.ts` 56 passed + 1
-expected fail (D1) in ≈ 77 s after the review 47 fixes and issue #83 (opening every
+**Review 49 fixes: an exception in the measurement is never an answer.**
+Rule: **a returned `false` and an unexpected exception never have the same
+meaning for the measurement.** Every exception in the measurement
+infrastructure lands in `buch.errors` with place and cause
+(`measure:<place>`, once per place, device and message, since checks run
+more than once and a loaded dump keeps them) and makes the run invalid
+(P-Gueltig, issue #83). Nothing is filed silently as "not copied", "no
+ticket" or "invalid proof". B1: an exception in the key export was
+swallowed as "no copy", and the entry was already marked copied, so it
+was never copied again. B2: an exception in the proof check counted as
+an invalid proof, so U10's extra ticket was "no ticket" and every checker
+was green. Errors reach every checker through the final evaluation
+(review 50, below), not through the order in which they are computed.
+
+Every place in `buch.ts` that turned an exception or a missing value into
+a value, and the decision:
+
+- `ownAnchors` (`M.rel` in `try`, `[]` on throw): no exception involved.
+  `M.findRel` returns `undefined` for a relationship the state does not
+  hold, which is data, so `[]` stays.
+- `materialAt` (`false` on throw): now throws. A copy that is not readable
+  or whose public part is not its key id → `measure:keyring-import`.
+- `material` (`undefined` on throw or mismatch): now throws on both.
+  `copyKeys` records `measure:keyring-export` and marks the entry copied
+  only after success, so the next commit or deposit tries again.
+- Key import in the opener (could throw out of the checker): caught →
+  `measure:keyring-import`.
+- `JSON.parse` of a frame's bytes (`no envelope`): stays data. These are
+  carrier bytes, not ledger state, and the holder files the same case as
+  `failed(malformed)`.
+- `receive` throwing (holder: `failed(malformed)`): → `measure:open`, and
+  the frame stays unread for that device. The holder's classification is
+  unchanged; for the measurement the exception is an error.
+- `diVerify` throwing (was: invalid proof) → `measure:proof`. A returned
+  `false` stays `proof-invalid` (data).
+- `ticketAcceptance` throwing (was: 8640.2 refusal) → `measure:predicate`.
+  The refusal stays in the violation.
+- Hooks: the seam's catch already reports to `failed` (issue #83).
+- `Buch.load` and `dump`: nothing is caught; an exception reaches the
+  caller.
+
+Tests R49-B1 (the export throws once → one error `measure:keyring-export`,
+P-Gueltig red, the four checkers invalid, also after dump → load; at the
+end every key of every device is in the keyring) and R49-B2 (U10 with the
+proof check throwing for the extra ticket → one error `measure:proof`,
+invalid; the holder files its own exception as invalid proof and refuses,
+2 acceptances). Earlier counts unchanged. The cell files were not re-run:
+holder unchanged, and no cell file imports the generator or the ledger.
+
+**Review 50 fix: one final evaluation.** An error raised while a later
+checker opened frames (the proof check of a regular ticket inside
+P-Produktion) left the earlier P-Commit result green, while the loaded
+dump judged it invalid. Now `judge(b)` computes all four checkers, and
+`finalize(b, results)` judges them together against the ledger's final
+error state: P-Gueltig first. If the ledger holds any error, each
+property result is invalid, with the single line `run invalid: …` and
+no partial violations or counts, because what a checker found on an
+incomplete observation depends on when in the check the error arose. The
+generator (`runSequence`, so G1 and shrinking) and the dump round trip
+use `judge`. Test R50-B1: P-Commit computed green, then the proof check
+throws only for the ticket to A while P-Produktion opens it (1 error
+`measure:proof`). After `finalize` all four are invalid, and the five
+results equal those of `judge` on the loaded dump and of a second
+`judge` on the live ledger.
+
+**Verification 2b.0:** `tests/mehrgeraet-buch.test.ts` 59 passed + 1
+expected fail (D1) after review 50 (≈ 77 s idle; ≈ 205 s under a machine
+load of 8–14) (opening every
 deposit costs ≈ 25 s); typecheck green. No cell changed: the K2,
 K1a, K0 and seed-sweep files give the same 111/111 results on this branch
 as on main a290f7a (test by test; after the review 42 fixes again
