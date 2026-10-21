@@ -312,7 +312,9 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
       }
       if (c.cls === 'ack' && c.received) {
         await deps.hooks?.beforeAckCheck?.()
-        const chk: AckCheck = c.verdict === 'unique' ? await st.ledger.checkAck(c.received, t) : { valid: false, inTime: false, reason: 'not-unique', t }
+        const checked: AckCheck = c.verdict === 'unique' ? await st.ledger.checkAck(c.received, t) : { valid: false, inTime: false, reason: 'not-unique', t }
+        // Receipt time `t` (handler entry) and end of verification are separate (review 1 C4).
+        const chk: AckCheck = { ...checked, tVerified: now() }
         if (chk.rowId) {
           const prev = ackChecks.get(chk.rowId)
           if (!prev || (!prev.valid && chk.valid)) ackChecks.set(chk.rowId, chk)
@@ -487,12 +489,15 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
     const sizeOf = (k: Kind) => recs.find((r) => r.kind === k)?.sizes ?? null
     const mine = rows.filter((r) => r.form === form && r.stage === stage)
     const oneWay = mine.filter((r) => r.kind === 'probe' && r.outcome !== 'not-shown' && r.tRecvMs !== null).map((r) => r.tRecvMs!)
-    const round = mine.filter((r) => r.kind === 'doc' && r.ackValid && r.tAckMs !== null).map((r) => r.tAckMs!)
+    const ackRecv = mine.filter((r) => r.kind === 'doc' && r.ackValid && r.tAckReceivedMs !== null).map((r) => r.tAckReceivedMs!)
+    // Round trip document → ack verified (review 1 C4).
+    const round = mine.filter((r) => r.kind === 'doc' && r.ackValid && r.tAckVerifiedMs !== null).map((r) => r.tAckVerifiedMs!)
     return {
       form,
       stage,
       sizes: { probe: sizeOf('probe'), doc: sizeOf('doc'), ack: sizeOf('ack') },
       oneWayMs: { median: median(oneWay), max: oneWay.length ? Math.max(...oneWay) : null, n: oneWay.length },
+      ackReceivedMs: { median: median(ackRecv), max: ackRecv.length ? Math.max(...ackRecv) : null, n: ackRecv.length },
       roundTripMs: { median: median(round), max: round.length ? Math.max(...round) : null, n: round.length },
     }
   })
@@ -520,7 +525,7 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
     })
 
   const protocol = {
-    schema: 'e11b-live/1',
+    schema: 'e11b-live/2',
     head: headOf(cfg, deps.versions, t0, observeMs, info, keyBinding),
     groups,
     rows: rows.map((r) => rowView(r, registry.get(r.id)!)),
@@ -563,7 +568,7 @@ export function preconditionProtocol(cfg: LiveConfig, versions: Versions, err: E
   const t0 = Date.now()
   return {
     protocol: {
-      schema: 'e11b-live/1',
+      schema: 'e11b-live/2',
       head: headOf(cfg, versions, t0, OBSERVE_MS, null, 'not-applicable'),
       groups: [],
       rows: [],

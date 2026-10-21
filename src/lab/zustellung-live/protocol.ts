@@ -138,7 +138,8 @@ export const ROW_SCHEMA = obj({
   ackValid: n(bool),
   ackInTime: n(bool),
   ackReason: n(e(ACK_REASONS)),
-  tAckMs: n(int),
+  tAckReceivedMs: n(int),
+  tAckVerifiedMs: n(int),
   innerBytesEqual: bool,
   outerBytesEqual: bool,
   hopsLength: n(int),
@@ -151,7 +152,7 @@ export const ROW_SCHEMA = obj({
 export const NOTE_KINDS = ['key-binding-unclear', 'form-aborted', 'form-skipped', 'baseline-deviation', 'stage1-run', 'stage1-not-needed', 'consumer-failure', 'prime-not-measured'] as const
 
 export const PROTOCOL_SCHEMA = obj({
-  schema: e(['e11b-live/1']),
+  schema: e(['e11b-live/2']),
   head: obj({
     date: { k: 'iso' },
     mediatorDid: did,
@@ -194,6 +195,7 @@ export const PROTOCOL_SCHEMA = obj({
       stage: int,
       sizes: obj({ probe: n(LAYERS), doc: n(LAYERS), ack: n(LAYERS) }),
       oneWayMs: obj({ median: n(int), max: n(int), n: int }),
+      ackReceivedMs: obj({ median: n(int), max: n(int), n: int }),
       roundTripMs: obj({ median: n(int), max: n(int), n: int }),
     }),
   ),

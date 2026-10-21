@@ -21,7 +21,10 @@ export interface AckCheck {
   /** Within the ack deadline (doc receipt + timeout, inclusive). Only meaningful when valid. */
   inTime: boolean
   reason: AckReason
+  /** Receipt: entry into the handler, before decryption, receive() and the proof check. */
   t: number
+  /** End of verification (decryption, receive(), type, proof, ref, thread); set by the probe (review 1 C4). */
+  tVerified?: number
 }
 
 interface Submission {
@@ -104,7 +107,10 @@ export interface RowResult {
   ackValid: boolean | null
   ackInTime: boolean | null
   ackReason: AckReason | null
-  tAckMs: number | null
+  /** Document send → ack received at the sender (handler entry). */
+  tAckReceivedMs: number | null
+  /** Document send → ack verified at the sender (review 1 C4). */
+  tAckVerifiedMs: number | null
   innerBytesEqual: boolean
   outerBytesEqual: boolean
   hopsLength: number | null
@@ -152,7 +158,8 @@ export function evaluateRow(record: SendRecord, allEvents: RecvEvent[], ack: Ack
     ackValid: null,
     ackInTime: null,
     ackReason: null,
-    tAckMs: null,
+    tAckReceivedMs: null,
+    tAckVerifiedMs: null,
     innerBytesEqual: events.some((e) => e.layer === 'inner'),
     outerBytesEqual: events.some((e) => e.layer === 'outer'),
     hopsLength: events.find((e) => e.hopsLength !== undefined)?.hopsLength ?? null,
@@ -182,7 +189,8 @@ export function evaluateRow(record: SendRecord, allEvents: RecvEvent[], ack: Ack
   base.ackValid = ack?.valid ?? false
   base.ackInTime = ack?.valid ? ack.inTime : false
   base.ackReason = ack ? ack.reason : 'no-ack'
-  base.tAckMs = ack ? ack.t - record.tSend : null
+  base.tAckReceivedMs = ack ? ack.t - record.tSend : null
+  base.tAckVerifiedMs = ack?.tVerified !== undefined ? ack.tVerified - record.tSend : null
   if (!base.ackValid) return { ...base, firstFailed: 'ack-valid' }
   if (base.received === 'in-window' && base.ackInTime) return { ...base, firstFailed: null, outcome: 'positive' }
   return { ...base, firstFailed: null, outcome: 'late' }

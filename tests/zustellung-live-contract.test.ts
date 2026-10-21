@@ -348,3 +348,26 @@ describe('E11b end of observation (review 1 C1)', () => {
     expect(protocolJson(r.protocol)).toBe(at)
   }, 60_000)
 })
+
+describe('E11b ack times (review 1 C4)', () => {
+  it('ack received and ack verified are separate; the round trip document → ack verified includes the verification', async () => {
+    const keys = mediatorKeys()
+    const info = await fakeInfo(keys)
+    const counters = new Counters()
+    const port = new FakeMediator(FAKE_DID, keys, { direct: 'socket-sender', routed: 'forward', invite: 'none' }, counters)
+    const cfg = parseEnv({ E11B_RUNS: '1', E11B_TIMEOUT_MS: '400', E11B_FORMS: 'D-c' })
+    const slow = () => new Promise<void>((res) => setTimeout(res, 80))
+    const r = await runProbe(cfg, { info, port, counters, versions: VERSIONS, rand: seededRand(42), observeMs: 150, hooks: { beforeAckCheck: slow } })
+    const p = JSON.parse(protocolJson(r.protocol))
+    const docs = p.rows.filter((x: { kind: string; ackValid: boolean }) => x.kind === 'doc' && x.ackValid)
+    expect(docs.length).toBe(4)
+    for (const d of docs) {
+      expect(d.tAckReceivedMs).toBeTypeOf('number')
+      expect(d.tAckVerifiedMs - d.tAckReceivedMs).toBeGreaterThanOrEqual(79)
+    }
+    const cost = p.costs[0]
+    expect(cost.roundTripMs.n).toBe(4)
+    expect(cost.ackReceivedMs.n).toBe(4)
+    expect(cost.roundTripMs.median - cost.ackReceivedMs.median).toBeGreaterThanOrEqual(79)
+  }, 60_000)
+})
