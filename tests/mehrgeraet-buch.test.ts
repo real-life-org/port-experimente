@@ -32,6 +32,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 //       card primary frame signed in the other M relationship; the dump round trip with a deposit before its address is
 //       in any committed image.
 //   R83. Observer errors make a run invalid (issue #83): U4's mutation with a throwing `committed` hook for A only.
+//   R49-B1, R49-B2. An exception in the measurement itself (key export once; the proof check of U10's extra ticket) makes
+//       the run invalid, never a silent "not copied" or "no ticket" (review 49).
 //   R1, R2. The dump is a complete artefact: dump → load → re-check gives the same results (Tor-Review 42 S1).
 //   N1. The observation seam is fail-safe: a throwing observer changes nothing in holder or carrier (Tor-Review 42 (a)).
 //   S1. Shrinking: a failing generated sequence shrinks to the smallest sequence that still fails the same property.
@@ -60,9 +62,16 @@ const rng = vi.hoisted(() => ({
   },
 }))
 vi.mock('node:crypto', async (importOriginal) => ({ ...(await importOriginal<typeof import('node:crypto')>()), randomBytes: (n: number) => rng.bytes(n), randomUUID: () => rng.uuid() }))
+// Review 49 B2: a switch to make the proof check throw for chosen documents (null: the library's own `diVerify`).
+const proofHook = vi.hoisted(() => ({ throwFor: null as null | ((doc: { type?: string; payload?: { act?: string } }) => boolean) }))
+vi.mock('@real-life/trust-protocol', async (importOriginal) => {
+  const m = await importOriginal<typeof import('@real-life/trust-protocol')>()
+  return { ...m, diVerify: async (doc: Parameters<typeof m.diVerify>[0], anchor?: string) => (proofHook.throwFor?.(doc) ? Promise.reject(new Error('proof check exploded')) : m.diVerify(doc, anchor)) }
+})
 
 import { frameHash, TYPES, type HolderDevice } from '../src/lab/mehrgeraet/holder'
 import { diSign, jcs, seal, type Json } from '@real-life/trust-protocol'
+import { KeyObject } from 'node:crypto'
 import { Buch, bindingGaps, ledgerWorld, openTickets, pairCounter, pCommit, pEinmal, pGueltig, pPaar, pProduktion } from '../src/lab/mehrgeraet/buch'
 import { generate, report, runSequence, show, shrink, type GenEvent, type GenWorld, type Mutation } from '../src/lab/mehrgeraet/generator'
 import { k2 } from '../src/candidates/mehrgeraet-k2'
@@ -1152,4 +1161,56 @@ describe('K2 step 2b.0: observer errors make the run invalid (issue #83)', () =>
     expect(pGueltig(loaded).ok).toBe(false)
     expect(pPaar(loaded)).toMatchObject({ ok: false, invalid: true })
   }, 120_000)
+})
+
+describe('K2 step 2b.0: an exception in the measurement makes the run invalid (review 49)', () => {
+  const one: GenEvent[] = [{ k: 'introduce' }]
+  const four = ['P-Einmal', 'P-Commit', 'P-Produktion', 'P-Paar']
+
+  it('R49-B1. The key export throws once → P-Gueltig fails with exactly that error, the four checkers are invalid (also after dump → load); the key is copied at the next attempt', async () => {
+    const spy = vi.spyOn(KeyObject, 'from').mockImplementationOnce(() => {
+      throw new Error('export exploded')
+    })
+    try {
+      let g!: GenWorld
+      const r = await runSequence(cand, one, { seed: 21, reseed, mutation: (x) => void (g = x) })
+      // Soll: the first copy of the first key throws once (the ledger copies keys from its first commit on) → exactly one
+      // error `measure:keyring-export`; not marked copied, the next commit or deposit copies it → every key of every
+      // device in the keyring at the end. The run is invalid: P-Gueltig 1 violation, the four checkers not green.
+      expect(r.buch.errors.map((e) => e.hook)).toEqual(['measure:keyring-export'])
+      expect(prop(r, 'P-Gueltig')).toMatchObject({ ok: false, counts: { errors: 1 } })
+      for (const p of four) expect(prop(r, p), p).toMatchObject({ ok: false, invalid: true })
+      const held = new Set(r.buch.keyring.map((k) => `${k.device}|${k.rkid}`))
+      for (const d of g.w.devices) for (const [rkid] of d.receiverKeys()) expect(held.has(`${d.name}|${rkid}`), `${d.name} ${rkid.slice(-8)}`).toBe(true)
+      const loaded = Buch.load(r.buch.dump())
+      expect(pGueltig(loaded)).toMatchObject({ ok: false, counts: { errors: 1 } })
+      expect(await pCommit(loaded)).toMatchObject({ ok: false, invalid: true })
+      expect(loaded.errors).toHaveLength(1)
+    } finally {
+      spy.mockRestore()
+    }
+  }, 60_000)
+
+  it('R49-B2. U10 with the proof check throwing for the extra ticket → P-Gueltig fails, no checker green (before: "no ticket", all green)', async () => {
+    try {
+      const r = await runSequence(cand, one, {
+        seed: 21,
+        reseed,
+        mutation: (g) => {
+          unreportedTicket(g)
+          proofHook.throwFor = (doc) => doc?.type === TYPES.ticket && !g.Mm.state.mediatorActs.some((a) => a.id === doc.payload?.act)
+        },
+      })
+      // Soll: the proof check throws for the extra ticket wherever it runs. The holder files its own exception as an
+      // invalid proof and refuses (A accepts only the two regular tickets). The ledger opens the extra deposit in P-Commit and
+      // again in P-Produktion; the exception is recorded once (same place, device, message) → 1 error `measure:proof`,
+      // P-Gueltig 1 violation, the four checkers invalid.
+      expect(r.buch.errors.map((e) => e.hook)).toEqual(['measure:proof'])
+      expect(prop(r, 'P-Gueltig')).toMatchObject({ ok: false, counts: { errors: 1 } })
+      for (const p of four) expect(prop(r, p), p).toMatchObject({ ok: false, invalid: true })
+      expect(r.buch.acceptedOn().size).toBe(2)
+    } finally {
+      proofHook.throwFor = null
+    }
+  }, 60_000)
 })

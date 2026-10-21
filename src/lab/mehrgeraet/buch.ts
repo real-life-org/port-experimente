@@ -193,32 +193,22 @@ export interface DutyImage {
 const b64hash = (b64: string) => frameHash(Buffer.from(b64, 'base64'))
 /** The own anchors of the relationship `rel` (its tuples) in a holder state; empty if the state holds no such relationship. */
 function ownAnchors(state: M.HolderState, rel: string): string[] {
-  try {
-    return M.rel(state, rel).tuples.map((t) => t.own)
-  } catch {
-    return []
-  }
+  return M.findRel(state, rel)?.tuples.map((t) => t.own) ?? []
 }
-/** Is the ledger's copy `xPriv` (PKCS#8, base64) the private part of the key agreement `address`? */
+/** Is the ledger's copy `xPriv` (PKCS#8, base64) the private part of the key agreement `address`? Throws on unreadable material. */
 function materialAt(xPriv: string, address: string): boolean {
-  try {
-    const x = createPublicKey(createPrivateKey({ key: Buffer.from(xPriv, 'base64'), format: 'der', type: 'pkcs8' })).export({ format: 'jwk' }).x
-    return typeof x === 'string' && mkOfX(Buffer.from(x, 'base64url')) === address
-  } catch {
-    return false
-  }
+  const x = createPublicKey(createPrivateKey({ key: Buffer.from(xPriv, 'base64'), format: 'der', type: 'pkcs8' })).export({ format: 'jwk' }).x
+  return typeof x === 'string' && mkOfX(Buffer.from(x, 'base64url')) === address
 }
-/** The ledger's copy of a private key agreement (PKCS#8, base64), only if its public part is `address`. */
-function material(priv: CryptoKey | undefined, address: string): string | undefined {
-  if (!priv) return undefined
-  try {
-    const ko = KeyObject.from(priv)
-    const x = createPublicKey(ko).export({ format: 'jwk' }).x
-    if (typeof x !== 'string' || mkOfX(Buffer.from(x, 'base64url')) !== address) return undefined
-    return ko.export({ format: 'der', type: 'pkcs8' }).toString('base64')
-  } catch {
-    return undefined
-  }
+/**
+ * The ledger's copy of a private key agreement (PKCS#8, base64). Throws if the key cannot be exported or its public part is
+ * not `address` (issue #83, review 49: never a silent "not copied").
+ */
+function material(priv: CryptoKey, address: string): string {
+  const ko = KeyObject.from(priv)
+  const x = createPublicKey(ko).export({ format: 'jwk' }).x
+  if (typeof x !== 'string' || mkOfX(Buffer.from(x, 'base64url')) !== address) throw new Error(`the public part of the key for ${address.slice(-8)} is not that key id`)
+  return ko.export({ format: 'der', type: 'pkcs8' }).toString('base64')
 }
 /** Union duty states that end the duty (6845.3 `united`, 6845.7 `moot`): not open. */
 const TERMINAL: ReadonlySet<M.PairDuty['state']> = new Set(['united', 'moot'])
@@ -262,6 +252,18 @@ export class Buch implements HolderObserver {
   failed(d: HolderDevice | null, hook: string, error: unknown): void {
     this.errors.push({ ...this.next(), hook, device: d?.name ?? null, message: error instanceof Error ? error.message : String(error) })
   }
+  /**
+   * An exception in the measurement itself (key copy, opening, proof check, predicate; review 49): recorded like an observer
+   * error, so the run is invalid. Recorded once per place, device and message (checks may run more than once).
+   */
+  measureFailed(where: string, device: string | null, error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error)
+    const id = `${where}|${device}|${message}`
+    if (this.measureSeen.has(id)) return
+    this.measureSeen.add(id)
+    this.errors.push({ ...this.next(), hook: `measure:${where}`, device, message })
+  }
+  private readonly measureSeen = new Set<string>()
   private next() {
     return { seq: ++this.seq, at: this.now() }
   }
@@ -311,9 +313,14 @@ export class Buch implements HolderObserver {
       for (const [rkid, key] of d.receiverKeys()) {
         const id = `${d.name}|${rkid}`
         if (this.copied.has(id)) continue
-        this.copied.add(id)
-        const xPriv = material(key, rkid)
-        if (xPriv) this.keyring.push({ seq, device: d.name, rkid, xPriv })
+        // Marked copied only after the copy succeeded: a failed export is an error and is tried again at the next commit
+        // or deposit (review 49 B1).
+        try {
+          this.keyring.push({ seq, device: d.name, rkid, xPriv: material(key, rkid) })
+          this.copied.add(id)
+        } catch (e) {
+          this.measureFailed('keyring-export', d.name, e)
+        }
       }
   }
   /** The device that allocated the stock key whose key agreement is `address`, in the last committed images. */
@@ -429,6 +436,7 @@ export class Buch implements HolderObserver {
     for (const [h, i] of o.byFrame) b.byFrame.set(h, b.productions[i]!)
     for (const x of o.duties) b.duties.set(x.device, x)
     b.errors.push(...o.errors)
+    for (const e of o.errors) if (e.hook.startsWith('measure:')) b.measureSeen.add(`${e.hook.slice('measure:'.length)}|${e.device}|${e.message}`)
     b.receivers.push(...o.receivers.map((x) => ({ ...x, state: M.fromJson(x.state) })))
     b.keyring.push(...o.keyring)
     for (const k of o.keyring) b.copied.add(`${k.device}|${k.rkid}`)
@@ -529,7 +537,15 @@ class Opener {
     if (!r) {
       r = (async () => {
         const out = new Map<string, CryptoKey>()
-        for (const k of this.b.keyring) if (k.device === device && !out.has(k.rkid) && materialAt(k.xPriv, k.rkid)) out.set(k.rkid, await globalThis.crypto.subtle.importKey('pkcs8', Buffer.from(k.xPriv, 'base64'), { name: 'X25519' }, false, ['deriveBits']))
+        for (const k of this.b.keyring) {
+          if (k.device !== device || out.has(k.rkid)) continue
+          try {
+            if (!materialAt(k.xPriv, k.rkid)) throw new Error(`the key copy for ${k.rkid.slice(-8)} is not that key id`)
+            out.set(k.rkid, await globalThis.crypto.subtle.importKey('pkcs8', Buffer.from(k.xPriv, 'base64'), { name: 'X25519' }, false, ['deriveBits']))
+          } catch (e) {
+            this.b.measureFailed('keyring-import', device, e)
+          }
+        }
         return out
       })()
       this.resolvers.set(device, r)
@@ -555,6 +571,8 @@ class Opener {
       try {
         v = await receive(env, (rkid) => keys.get(rkid))
       } catch (e) {
+        // The holder files this as failed(malformed); for the measurement an exception is never an answer (review 49).
+        this.b.measureFailed('open', reader, e)
         last = e instanceof Error ? e.message : String(e)
         continue
       }
@@ -564,11 +582,13 @@ class Opener {
       }
       const doc = v.document as unknown as OpenedTicket
       if (doc?.type === TYPES.ticket) {
-        let proof = false
+        let proof: boolean
         try {
           proof = await diVerify(doc, doc.issuer)
-        } catch {
-          proof = false
+        } catch (e) {
+          // Review 49 B2: an exception in the proof check is no invalid proof; it makes the run invalid.
+          this.b.measureFailed('proof', reader, e)
+          return { ok: false, address, reason: `proof check failed at address ${a} (measurement error)` }
         }
         if (!proof) return { ok: false, address, reason: `proof-invalid: the ticket opened at address ${a} carries no valid proof of its issuer` }
       }
@@ -763,7 +783,7 @@ export async function pCommit(b: Buch): Promise<Check> {
     for (const f of tickets) {
       if (acts.has(String(f.o.doc.payload?.act))) continue
       const rx = receiverOf(b, c.seq, f.address)
-      const verdict = rx ? acceptsTicket(rx, f.o.doc, f.address, c.at) : undefined
+      const verdict = rx ? acceptsTicket(b, rx, f.o.doc, f.address, c.at) : undefined
       stray.push(`ticket ${String(f.o.doc.payload?.act).slice(0, 8)} → ${String(f.o.doc.payload?.own).slice(-8)} at address ${f.address.slice(-8)}: ticket-without-introduce${verdict && !verdict.ok ? ` (receiver ${rx!.device} refuses: ${verdict.step}: ${verdict.reason})` : ''}`)
     }
     for (const [n, op] of intro.entries()) {
@@ -785,7 +805,7 @@ export async function pCommit(b: Buch): Promise<Check> {
             wrong.push(`${at}: no receiver image at address ${f.address.slice(-8)}`)
             continue
           }
-          const verdict = acceptsTicket(rx, f.o.doc, f.address, c.at)
+          const verdict = acceptsTicket(b, rx, f.o.doc, f.address, c.at)
           if (!verdict.ok) wrong.push(`${at}: receiver ${rx.device} refuses at address ${f.address.slice(-8)} (${verdict.step}: ${verdict.reason})`)
           const x: BindingInput = {
             act: op.act,
@@ -822,7 +842,7 @@ function counterpartAgreements(rx: ReceiverImage, address: string): string[] {
   return r.tuples.flatMap((t) => [t.peerKeyAgreement, ...(rx.sets ? M.setView(M.own(rx.state.sets, t.peer)).members.map((m) => m.keyAgreement) : [])])
 }
 /** The holder's ticket predicate in the receiver context of a `ReceiverImage` at ledger time `now` (no state steps). */
-function acceptsTicket(rx: ReceiverImage, doc: { issuer: string; payload: unknown }, address: string, now: string): ReturnType<typeof ticketAcceptance> {
+function acceptsTicket(b: Buch, rx: ReceiverImage, doc: { issuer: string; payload: unknown }, address: string, now: string): ReturnType<typeof ticketAcceptance> {
   const ctx: TicketReceiver = {
     state: rx.state,
     sets: rx.sets,
@@ -838,6 +858,7 @@ function acceptsTicket(rx: ReceiverImage, doc: { issuer: string; payload: unknow
   try {
     return ticketAcceptance(doc, address, ctx)
   } catch (e) {
+    b.measureFailed('predicate', rx.device, e)
     return { ok: false, step: '8640.2', reason: `malformed ticket (${e instanceof Error ? e.message : String(e)})` }
   }
 }

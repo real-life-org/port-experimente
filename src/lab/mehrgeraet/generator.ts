@@ -222,7 +222,10 @@ export async function runSequence(candidate: () => MultiDeviceCandidate, events:
   for (let i = 0; i < (opts.drain ?? PRODUCTION.rounds + 3); i++) await round()
   // Issue #83: P-Gueltig first; on an invalid run the four property checkers are not green either, so the generator, G1
   // and shrinking treat it as a failure (seed and errors printed).
-  const checks = [pGueltig(buch), pEinmal(buch), await pCommit(buch), await pProduktion(buch), pPaar(buch)]
+  // Review 49: the checkers that open frames run first, so an error in the measurement itself reaches P-Gueltig and the rest.
+  const commit = await pCommit(buch)
+  const produktion = await pProduktion(buch)
+  const checks = [pGueltig(buch), pEinmal(buch), commit, produktion, pPaar(buch)]
   return { seed, events, checks, counter: pairCounter(buch), buch }
 }
 
