@@ -96,6 +96,7 @@ export interface CarrierTicket {
   signer: string
   named: string
 }
+/** A `stock-revision@2` at the carrier (K2 step 2b.1): listing with `for` per key, `inc`, `withdraw`, `bury`, `burn`, class. */
 export interface CarrierRevision {
   seq: number
   at: string
@@ -104,9 +105,33 @@ export interface CarrierRevision {
   device: string
   person: string
   signer: string
-  revision: number
+  digest: string
+  writer: string
+  inc: string
+  rev: number
   keys: string[]
-  tombstones: string[]
+  for: Record<string, string>
+  withdraw: string[]
+  bury: string[]
+  burn: string[]
+  classOff: boolean
+}
+/**
+ * K2 step 2b.1: the allocator's balance per store commit (core draft 4 §2.1), computed here from the committed image, not
+ * by the device: per relationship with own stock keys or the class on, `belegt` (own acceptances in the 8510 window
+ * without the 8515-confirmed), `reserviert` (own keys active or aging with now ≤ expiresAt), the members of M's set as the
+ * image knows them and per member the own usable (8470) active keys assigned to it.
+ */
+export interface BalanceRow {
+  seq: number
+  at: string
+  device: string
+  person: string
+  rel: string
+  classOn: boolean
+  belegt: number
+  reserviert: number
+  supply: Record<string, number>
 }
 export interface CarrierReceipt {
   seq: number
@@ -172,6 +197,8 @@ export class Buch implements HolderObserver {
   readonly receivers: ReceiverImage[] = []
   /** Per device its last committed holder state and whether it runs device sets (live only: feeds `receivers`). */
   private readonly lastImage = new Map<string, { person: string; sets: boolean; state: M.HolderState }>()
+  /** K2 step 2b.1: the allocator's balance per commit (`BalanceRow`). */
+  readonly balances: BalanceRow[] = []
   /** Productions by frame hash (a frame names its document) and by document digest (the first production of each). */
   private readonly byFrame = new Map<string, Production>()
   private readonly byDigest = new Map<string, Production>()
@@ -197,6 +224,7 @@ export class Buch implements HolderObserver {
     const t = this.next()
     this.marks.push({ ...t, device: d.name })
     this.duties.set(d.name, { seq: t.seq, device: d.name, person: d.person, duties: image.holder.duties.map((x) => ({ pair: [x.pair[0], x.pair[1]], state: x.state })) })
+    this.balance(t, d, image.holder)
     const batches = (image.candidate as { batches?: Array<{ writer: string; n: number; ops: M.Op[]; intents: Array<{ digest: string; kind: string; expected: string; address: string; bytes: string; copies?: Array<{ address: string; bytes: string }> }> }> } | null)?.batches ?? []
     for (const b of batches) {
       if (b.writer.split('@')[0] !== d.name) continue // a sibling's batch folded here is the sibling's commit, not this one
@@ -227,6 +255,23 @@ export class Buch implements HolderObserver {
     const img = device ? this.lastImage.get(device) : undefined
     if (device && img) this.receivers.push({ seq, act, key, device, person: img.person, sets: img.sets, state: M.cloneState(img.state) })
   }
+  /** The balance rows of one commit (`BalanceRow`), from the image only. */
+  private balance(t: { seq: number; at: string }, d: HolderDevice, s: M.HolderState): void {
+    const now = Date.parse(t.at)
+    for (const r of s.relationships) {
+      const own = r.stock.filter((k) => k.by === d.name)
+      if (r.departed || (!own.length && !r.classOn) || !own.length) continue
+      const mine = new Set(own.map((k) => k.anchor))
+      const acts = new Map(s.acts.map((a) => [a.id, a.own]))
+      const belegt = r.accepted.filter((e) => mine.has(acts.get(e.act) ?? '') && !r.confirmed.includes(e.act) && Date.parse(e.at) > now - M.PARAM.budgetWindowMs).length
+      const reserviert = own.filter((k) => (k.state === 'active' || k.state === 'aging') && now <= Date.parse(k.expiresAt)).length
+      const h = M.head(r)
+      const set = M.own(s.sets, h.peer)
+      const members = set ? M.setView(set).members.map((m) => m.anchor) : [h.peer]
+      const supply = Object.fromEntries(members.map((m) => [m, own.filter((k) => k.for === m && k.state === 'active' && M.usable(k.expiresAt, t.at)).length]))
+      this.balances.push({ ...t, device: d.name, person: d.person, rel: r.id, classOn: r.classOn, belegt, reserviert, supply })
+    }
+  }
   produced(d: HolderDevice, p: Parameters<HolderObserver['produced']>[1]): void {
     const rec: Production = { ...this.next(), device: d.name, person: d.person, digest: p.digest, type: p.type, issuer: p.issuer, recipient: p.recipient, payload: structuredClone(p.payload) as Record<string, unknown>, frames: p.frames.map(frameHash) }
     this.productions.push(rec)
@@ -247,10 +292,9 @@ export class Buch implements HolderObserver {
     const base = { ...t, frame: h, address: f.address, device: p.device }
     const pl = p.payload
     if (p.type === TYPES.ticket) this.carrier.tickets.push({ ...base, digest: p.digest, act: String(pl.act), signer: p.issuer, named: String(pl.own) })
-    else if (p.type === TYPES.revision) {
-      const keys = Array.isArray(pl.keys) ? (pl.keys as Array<{ anchor: string }>).map((k) => k.anchor) : []
-      const tombstones = Array.isArray(pl.tombstones) ? (pl.tombstones as string[]) : []
-      this.carrier.revisions.push({ ...base, person: p.person, signer: p.issuer, revision: Number(pl.revision), keys, tombstones })
+    else if (p.type === TYPES.stockRevision) {
+      const r = pl as unknown as M.StockRevision
+      this.carrier.revisions.push({ ...base, person: p.person, signer: p.issuer, digest: p.digest, writer: r.writer, inc: r.inc, rev: r.rev, keys: r.keys.map((k) => k.anchor), for: Object.fromEntries(r.keys.map((k) => [k.anchor, k.for])), withdraw: [...r.withdraw], bury: [...r.bury], burn: [...r.burn], classOff: r.classOff === true })
     } else if (p.type === TYPES.ack) this.carrier.receipts.push({ ...base, signer: p.issuer, ref: String(pl.ref) })
     else this.carrier.other++
   }
@@ -283,6 +327,7 @@ export class Buch implements HolderObserver {
       duties: [...this.duties.values()],
       errors: this.errors,
       receivers: this.receivers,
+      balances: this.balances,
     })
   }
   /** A ledger from a dump (not attached to a world): for re-checking a run later. */
@@ -300,6 +345,7 @@ export class Buch implements HolderObserver {
       duties: DutyImage[]
       errors: ObserverError[]
       receivers: ReceiverImage[]
+      balances?: BalanceRow[]
     }
     const b = new Buch()
     b.seq = o.seq
@@ -315,6 +361,7 @@ export class Buch implements HolderObserver {
     for (const x of o.duties) b.duties.set(x.device, x)
     b.errors.push(...o.errors)
     b.receivers.push(...o.receivers.map((x) => ({ ...x, state: M.fromJson(x.state) })))
+    b.balances.push(...(o.balances ?? []))
     return b
   }
   /** Every act id accepted on a stock key (8640.14 at a successful receiver commit), over the whole history. */
@@ -341,7 +388,7 @@ export function ledgerWorld(candidate: MultiDeviceCandidate, opts: Omit<Welt15Op
 // ── Checkers ──
 
 export interface Check {
-  property: 'P-Einmal' | 'P-Commit' | 'P-Produktion' | 'P-Paar'
+  property: 'P-Einmal' | 'P-Commit' | 'P-Produktion' | 'P-Paar' | 'P-Bilanz' | 'P-Recht' | 'P-Aufhebung' | 'P-Versorgung'
   ok: boolean
   violations: string[]
   counts: Record<string, number>
@@ -452,31 +499,54 @@ function acceptsTicket(rx: ReceiverImage, p: Production, address: string, now: s
   }
 }
 
+/** The `stock-revision@2` deliveries to the devices `who` before ledger time `seq` (durable ones only, if `durableFor`). */
+function revisionsBefore(b: Buch, who: (d: Delivery) => boolean, address: (a: string) => boolean, seq: number, durableFor?: string): M.StockRevision[] {
+  let durable = (_: number) => true
+  if (durableFor) {
+    const crashes = b.events.filter((e) => e.kind === 'crashed' && e.device === durableFor).map((e) => e.seq)
+    const marks = b.marks.filter((m) => m.device === durableFor).map((m) => m.seq)
+    durable = (s: number) => marks.some((m) => m > s && m < seq && !crashes.some((c) => c > s && c < m))
+  }
+  return b.deliveries.filter((d) => who(d) && d.type === TYPES.stockRevision && d.seq < seq && address(d.address) && durable(d.seq)).map((d) => d.payload as unknown as M.StockRevision)
+}
+
 /**
- * The reference model of P-Produktion (draft 2 §5.1): which stock keys of a relationship the M device was allowed to name
- * at ledger time `seq`, from its delivery protocol only (never `usableView`): per signer the highest admitted revision's
- * keys, minus admitted tombstones, minus keys the device's own committed issuances consumed, usable by 8470 at `now`. An
- * admission counts once a later store commit of the device made it durable without a crash in between (a crashed round
- * is re-delivered). Step 2a has no `for` (M is a single-writer fixture and names every key; 2b.1 adds it).
+ * The reference model of P-Produktion (draft 2 §5.1; K2 step 2b.1 with the `for` filter): which stock keys of a relationship
+ * the M device was allowed to name at ledger time `seq`, from the delivery protocol only (never `usableView`). Listings: per
+ * (writer, inc) the highest revision admitted at this device and made durable by a later commit without a crash in between
+ * (a crashed round is re-delivered), keys with `for` among `mine` (the device's anchors). Restrictions (from every device of
+ * the person `person`, so a withdrawal that reached the device through the journal first never makes a false alarm):
+ * withdrawals by the listing writer, `bury`, the class off in a writer's highest revision; minus the keys the person's own
+ * committed issuances consumed; usable by 8470 at `now`. The honest bench has no equivocation and no conflict, so the model
+ * has neither rule; a conflict in a generated run shows up as a refusal the model does not explain (a violation).
  */
-export function allowedKeys(b: Buch, device: string, address: (a: string) => boolean, seq: number, now: string): string[] {
-  const crashes = b.events.filter((e) => e.kind === 'crashed' && e.device === device).map((e) => e.seq)
-  const marks = b.marks.filter((m) => m.device === device).map((m) => m.seq)
-  const durable = (s: number) => marks.some((m) => m > s && m < seq && !crashes.some((c) => c > s && c < m))
-  const bySigner = new Map<string, { revision: number; keys: Array<{ anchor: string; expiresAt: string }> }>()
-  const buried = new Set<string>()
-  for (const d of b.deliveries) {
-    if (d.device !== device || d.type !== TYPES.revision || d.seq >= seq || !address(d.address) || !durable(d.seq)) continue
-    const p = d.payload as { revision: number; keys: Array<{ anchor: string; expiresAt: string }>; tombstones?: string[] }
-    for (const t of p.tombstones ?? []) buried.add(t)
-    const held = bySigner.get(d.issuer)
-    if (!held || p.revision > held.revision) bySigner.set(d.issuer, { revision: p.revision, keys: p.keys })
+export function allowedKeys(b: Buch, device: string, address: (a: string) => boolean, seq: number, now: string, mine?: ReadonlySet<string>): string[] {
+  const person = b.deliveries.find((d) => d.device === device)?.person ?? b.marks.length.toString()
+  const listings = revisionsBefore(b, (d) => d.device === device, address, seq, device)
+  const all = revisionsBefore(b, (d) => d.person === person, address, seq)
+  const highest = new Map<string, M.StockRevision>()
+  for (const r of listings) {
+    const k = `${r.writer}|${r.inc}`
+    if (!highest.has(k) || r.rev > highest.get(k)!.rev) highest.set(k, r)
+  }
+  const latest = new Map<string, M.StockRevision>()
+  for (const r of all) {
+    const k = `${r.writer}|${r.inc}`
+    if (!latest.has(k) || r.rev > latest.get(k)!.rev) latest.set(k, r)
+  }
+  if ([...latest.values()].some((r) => r.classOff)) return []
+  const lister = new Map<string, string>()
+  for (const r of all) for (const k of r.keys) lister.set(k.anchor, r.writer)
+  const gone = new Set<string>()
+  for (const r of all) {
+    for (const a of r.withdraw) if (lister.get(a) === r.writer) gone.add(a)
+    for (const a of r.bury) gone.add(a)
   }
   const consumed = new Set<string>()
-  for (const c of b.commits) if (c.device === device && c.seq < seq) for (const op of c.ops) if (op.kind === 'introduce') consumed.add(op.act.a.key), consumed.add(op.act.b.key)
+  for (const c of b.commits) if (c.person === person && c.seq < seq) for (const op of c.ops) if (op.kind === 'introduce') consumed.add(op.act.a.key), consumed.add(op.act.b.key)
   const horizon = Date.parse(now) + M.PARAM.actLifetimeMs + M.PARAM.actSkewMs // 8470
   const out = new Set<string>()
-  for (const { keys } of bySigner.values()) for (const k of keys) if (!buried.has(k.anchor) && !consumed.has(k.anchor) && Date.parse(k.expiresAt) >= horizon) out.add(k.anchor)
+  for (const r of highest.values()) for (const k of r.keys) if ((!mine || mine.has(k.for)) && !gone.has(k.anchor) && !consumed.has(k.anchor) && Date.parse(k.expiresAt) >= horizon) out.add(k.anchor)
   return [...out].sort()
 }
 
@@ -494,7 +564,7 @@ export function pProduktion(b: Buch, opts: { rounds?: number; reserveMs?: number
   for (const e of b.events) {
     if (e.kind !== 'introduce' || !e.device) continue
     counts.introductions++
-    const d = e.detail as { addrA: string[]; addrB: string[]; result: { act?: string; refused?: string }; armed: string | null; up: boolean }
+    const d = e.detail as { addrA: string[]; addrB: string[]; mineA?: string[]; mineB?: string[]; result: { act?: string; refused?: string }; armed: string | null; up: boolean }
     if (!d.up) {
       counts.down++
       continue
@@ -503,8 +573,8 @@ export function pProduktion(b: Buch, opts: { rounds?: number; reserveMs?: number
       counts.crashedBeforeCommit++
       continue
     }
-    const ka = allowedKeys(b, e.device, (a) => d.addrA.includes(a), e.seq, e.at)
-    const kb = allowedKeys(b, e.device, (a) => d.addrB.includes(a), e.seq, e.at)
+    const ka = allowedKeys(b, e.device, (a) => d.addrA.includes(a), e.seq, e.at, d.mineA ? new Set(d.mineA) : undefined)
+    const kb = allowedKeys(b, e.device, (a) => d.addrB.includes(a), e.seq, e.at, d.mineB ? new Set(d.mineB) : undefined)
     if (!ka.length || !kb.length) {
       counts.noKeys++
       continue
@@ -617,4 +687,110 @@ export function pairCounter(b: Buch): { tuples: Record<string, number>; openDuti
   const open: Record<string, number> = {}
   for (const [person, ds] of duties) open[person] = [...ds.values()].filter((x) => x.open && !x.ended).length
   return { tuples: out, openDuties: open }
+}
+
+// ── K2 step 2b.1: checkers of the allocation (core draft 4 §2, §3; draft 2 §5.2 no. 2, 3, 9) ──
+
+/**
+ * P-Bilanz (core draft 4 §2.1, Q3, Q8): at every store commit of an allocating device, per mediator relationship,
+ * `belegt + reserviert ≤ share`. `share` is the static share of the acceptance budget per device (MV-9), given by the run.
+ */
+export function pBilanz(b: Buch, share: number): Check {
+  const v = b.balances.filter((r) => r.belegt + r.reserviert > share).map((r) => `${r.device} on ${r.rel.slice(0, 12)} at seq ${r.seq}: belegt ${r.belegt} + reserviert ${r.reserviert} > share ${share}`)
+  return check('P-Bilanz', v, { rows: b.balances.length, max: Math.max(0, ...b.balances.map((r) => r.belegt + r.reserviert)) })
+}
+
+/**
+ * P-Recht (draft 2 §5.2 no. 3): no acceptance of a ticket whose signer is not the `for` of the named anchor after its first
+ * binding in the ledger (the first revision at the carrier that listed it). An acceptance without a ticket or a binding in
+ * the ledger is counted, not judged.
+ */
+export function pRecht(b: Buch): Check {
+  const v: string[] = []
+  const bound = new Map<string, string>()
+  for (const r of [...b.carrier.revisions].sort((x, y) => x.seq - y.seq)) for (const [a, f] of Object.entries(r.for)) if (!bound.has(a)) bound.set(a, f)
+  let judged = 0
+  let unjudged = 0
+  for (const c of b.commits)
+    for (const op of c.ops) {
+      if (op.kind !== 'ticket-accept') continue
+      const t = b.carrier.tickets.find((x) => x.act === op.act.id && x.named === op.act.own)
+      const f = bound.get(op.act.own)
+      if (!t || !f) {
+        unjudged++
+        continue
+      }
+      judged++
+      if (t.signer !== f) v.push(`act ${op.act.id.slice(0, 8)} accepted by ${c.device} on ${op.act.own.slice(-8)}: ticket signed by ${t.signer.slice(-8)}, assigned to ${f.slice(-8)}`)
+    }
+  return check('P-Recht', v, { judged, unjudged })
+}
+
+/**
+ * P-Aufhebung (draft 2 §5.2 no. 2, draft 3 §4): withdrawal, burial and class off hit exactly their anchors. (A) No device
+ * accepts on a key after its own commit that withdrew it. (M) No M device names a key at its issuance commit if a revision
+ * it had admitted and made durable before withdrew it (by the listing writer), buried it, or carried the class off as the
+ * highest revision of its (writer, inc). Future anchors are not locked: that the reference admits fresh anchors after the
+ * class is on again is P-Produktion's side.
+ */
+export function pAufhebung(b: Buch): Check {
+  const v: string[] = []
+  let accepts = 0
+  let issuances = 0
+  for (const c of b.commits)
+    for (const op of c.ops) {
+      if (op.kind === 'ticket-accept') {
+        accepts++
+        const earlier = b.commits.some((x) => x.device === c.device && x.seq < c.seq && x.ops.some((o) => o.kind === 'withdraw' && o.anchors.includes(op.act.own)))
+        if (earlier) v.push(`${c.device} accepted act ${op.act.id.slice(0, 8)} on ${op.act.own.slice(-8)} after withdrawing it`)
+      }
+      if (op.kind === 'introduce') {
+        issuances++
+        const crashes = b.events.filter((e) => e.kind === 'crashed' && e.device === c.device).map((e) => e.seq)
+        const marks = b.marks.filter((m) => m.device === c.device).map((m) => m.seq)
+        const durable = (s: number) => marks.some((m) => m > s && m < c.seq && !crashes.some((x) => x > s && x < m))
+        const seen = b.deliveries.filter((d) => d.device === c.device && d.type === TYPES.stockRevision && d.seq < c.seq && durable(d.seq))
+        for (const side of [op.act.a, op.act.b]) {
+          // The revisions of the person behind the named key (by the producing device of each admitted revision).
+          const owner = seen.find((d) => (d.payload as unknown as M.StockRevision).keys.some((k) => k.anchor === side.key))
+          const person = owner ? b.production(owner.digest)?.person : undefined
+          if (!person) continue
+          const revs = seen.filter((d) => b.production(d.digest)?.person === person).map((d) => d.payload as unknown as M.StockRevision)
+          const writer = revs.find((r) => r.keys.some((k) => k.anchor === side.key))!.writer
+          const latest = new Map<string, M.StockRevision>()
+          for (const r of revs) {
+            const k = `${r.writer}|${r.inc}`
+            if (!latest.has(k) || r.rev > latest.get(k)!.rev) latest.set(k, r)
+          }
+          const lifted = revs.some((r) => (r.withdraw.includes(side.key) && r.writer === writer) || r.bury.includes(side.key))
+          const off = [...latest.values()].some((r) => r.classOff)
+          if (lifted || off) v.push(`${c.device} named ${side.key.slice(-8)} in act ${op.act.id.slice(0, 8)} after ${lifted ? 'a withdrawal or burial' : 'the class off'} it had admitted`)
+        }
+      }
+    }
+  return check('P-Aufhebung', v, { accepts, issuances })
+}
+
+/**
+ * P-Versorgung (core draft 4 §2.3, draft 2 §5.2 no. 9): at the end of a run, per allocating device and relationship with the
+ * class on, from its last commit: if `frei_zuteilbar ≥ 1`, every member of M's set it knows holds a usable key from it
+ * (supply only from free rights, empty devices first); members without a key while nothing is free are counted
+ * (`unsupplied`, the named price of decision 9.1 (a)), not a violation.
+ */
+export function pVersorgung(b: Buch, share: number): Check {
+  const v: string[] = []
+  const last = new Map<string, BalanceRow>()
+  for (const r of b.balances) last.set(`${r.device}|${r.rel}`, r)
+  let unsupplied = 0
+  let rows = 0
+  for (const r of last.values()) {
+    if (!r.classOn) continue
+    rows++
+    const free = Math.max(0, share - r.belegt - r.reserviert)
+    const empty = Object.entries(r.supply).filter(([, n]) => n === 0).map(([m]) => m)
+    if (!empty.length) continue
+    if (free >= 1) v.push(`${r.device} on ${r.rel.slice(0, 12)}: ${free} free right(s), ${empty.length} member(s) without a key (${empty.map((m) => m.slice(-8)).join(', ')})`)
+    else unsupplied += empty.length
+  }
+  return check('P-Versorgung', v, { rows, unsupplied })
 }
