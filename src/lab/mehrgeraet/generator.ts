@@ -220,7 +220,7 @@ export async function runSequence(candidate: () => MultiDeviceCandidate, events:
     }
   }
   for (let i = 0; i < (opts.drain ?? PRODUCTION.rounds + 3); i++) await round()
-  const checks = [pEinmal(buch), pCommit(buch), pProduktion(buch), pPaar(buch)]
+  const checks = [pEinmal(buch), await pCommit(buch), await pProduktion(buch), pPaar(buch)]
   return { seed, events, checks, counter: pairCounter(buch), buch }
 }
 
