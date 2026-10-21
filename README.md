@@ -79,7 +79,10 @@ S9 is almost all waiting.
 - **T9, T10, Z1 to Z5** (`src/lab/zustellung.ts`): pair delivery over the
   wires plain envelope, TSP Rev 3 and DIDComm v2 (authcrypt, anoncrypt):
   lost receipt, device offline, what the carrier learns, carrier switch,
-  multiple devices, foreign sender, wrong recipient key.
+  multiple devices, foreign sender, wrong recipient key. E11b step 2 adds
+  the direct send forms (b) `tsp-direct-connection` and (a)
+  `tsp-direct-egress-session`, with sessions per relationship under a
+  carrier that forwards only senders holding a session.
 - **S9, S9b** (`src/lab/load.ts`): load, 30 members.
 - **X1 to X12** (`src/lab/mehrgeraet/scenarios.ts`): several devices of
   one person against the target model of Trust 0.32 §8 and §6a: double
