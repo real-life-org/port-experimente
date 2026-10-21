@@ -114,6 +114,20 @@ export interface CarrierTicket {
   signer: string
   named: string
 }
+/**
+ * A carrier frame no producer reported as a ticket, deposited at the key agreement of a stock key an observed device
+ * holds (addendum to Tor-Review 44): its bytes and the ledger's copy of that device's private key agreement for the
+ * address, taken at the deposit. P-Commit opens it; if it is a ticket, it needs a commit like every reported one.
+ */
+export interface CarrierProbe {
+  seq: number
+  at: string
+  frame: string
+  address: string
+  bytes: string
+  device: string
+  xPriv?: string
+}
 export interface CarrierRevision {
   seq: number
   at: string
@@ -207,7 +221,7 @@ const TERMINAL: ReadonlySet<M.PairDuty['state']> = new Set(['united', 'moot'])
 export class Buch implements HolderObserver {
   readonly commits: CommitEntry[] = []
   readonly marks: CommitMark[] = []
-  readonly carrier = { revisions: [] as CarrierRevision[], tickets: [] as CarrierTicket[], receipts: [] as CarrierReceipt[], other: 0, unknown: 0 }
+  readonly carrier = { revisions: [] as CarrierRevision[], tickets: [] as CarrierTicket[], receipts: [] as CarrierReceipt[], other: 0, unknown: 0, probes: [] as CarrierProbe[] }
   readonly deliveries: Delivery[] = []
   readonly events: BenchEvent[] = []
   /** Every document an observed device produced, in order. */
@@ -310,6 +324,7 @@ export class Buch implements HolderObserver {
     const t = this.next()
     const h = frameHash(f.bytes)
     const p = this.byFrame.get(h)
+    if (p?.type !== TYPES.ticket) this.probe(t, h, f)
     if (!p) {
       this.carrier.unknown++ // not produced by an observed device
       return
@@ -325,6 +340,21 @@ export class Buch implements HolderObserver {
     else this.carrier.other++
   }
 
+  /**
+   * A frame not reported as a ticket at a stock key address of an observed device (the allocator in the last committed
+   * images): kept with the ledger's copy of that device's key for the address, for P-Commit to open.
+   */
+  private probe(t: { seq: number; at: string }, frame: string, f: Frame): void {
+    let device: string | undefined
+    for (const [name, img] of this.lastImage)
+      for (const r of img.state.relationships) {
+        const k = r.stock.find((x) => x.keyAgreement === f.address)
+        if (k && !device) device = k.by ?? name
+      }
+    if (!device) return
+    const xPriv = material(this.devices.get(device)?.receiverKey(f.address), f.address)
+    this.carrier.probes.push({ ...t, frame, address: f.address, bytes: Buffer.from(f.bytes).toString('base64'), device, ...(xPriv ? { xPriv } : {}) })
+  }
   /** A bench event (generator or fixed sequence). */
   note(kind: BenchEvent['kind'], device?: string, detail?: Record<string, unknown>): BenchEvent {
     const e: BenchEvent = { ...this.next(), kind, ...(device ? { device } : {}), ...(detail ? { detail } : {}) }
@@ -462,7 +492,7 @@ const receiverOf = (b: Buch, seq: number, address: string) => b.receivers.find((
  * (`receive`, envelope, key id, decryption) with a resolver that knows just that one key, then the issuer's proof. Every
  * failure to open with that key is `sealed-to-other-key`: the honest receiver at this address cannot read the ticket.
  */
-async function openAt(rx: ReceiverImage | undefined, b64: string | undefined, address: string): Promise<Opening> {
+async function openAt(rx: Pick<ReceiverImage, 'device' | 'xPriv'> | undefined, b64: string | undefined, address: string): Promise<Opening> {
   const a = address.slice(-8)
   if (!rx) return { ok: false, address, reason: `no observed device holds a stock key at address ${a}` }
   if (!rx.xPriv) return { ok: false, address, reason: `the ledger holds no private key of ${rx.device} for address ${a}` }
@@ -522,6 +552,11 @@ export interface BindingInput {
   copies: Opening[]
   /** The committing device's own anchors on `side.rel` at the issuance commit. */
   mediator: string[]
+  /**
+   * The key agreements the receiver holds for its counterpart on the relationship behind the address (its committed
+   * image): each tuple's `peerKeyAgreement` and, under device sets, the members of the counterpart's set.
+   */
+  counterpart: string[]
   production: Production | undefined
 }
 /**
@@ -557,6 +592,9 @@ export const TICKET_BINDINGS: readonly TicketBinding[] = [
   { field: 'expected', derived: ['receiver.key'], committed: ['intent.expected'], got: (x) => x.rx.key, want: (x) => x.intent.expected },
   { field: 'recipient', derived: ['doc.recipient'], committed: ['side.key'], got: (x) => x.opened.doc.recipient, want: (x) => x.side.key },
   { field: 'replyTo', derived: ['doc.replyTo'], committed: ['intent.replyTo'], got: (x) => x.opened.doc.replyTo, want: (x) => x.intent.replyTo },
+  // The receipt goes to the mediator on this relationship: a key agreement the receiver's committed image holds for its
+  // counterpart there (the committed mediator state holds only the context name of its own key, not the key agreement).
+  { field: 'replyTo.counterpart', derived: ['doc.replyTo'], committed: ['receiver.counterpart'], got: (x) => x.opened.doc.replyTo, want: (x) => (x.counterpart.includes(x.opened.doc.replyTo) ? x.opened.doc.replyTo : `a key agreement of the counterpart on the receiver's relationship`) },
   { field: 'digest', derived: ['opened.digest'], committed: ['intent.digest'], got: (x) => x.opened.digest, want: (x) => x.intent.digest },
   { field: 'kind', derived: ['doc.type'], committed: ['intent.kind'], got: (x) => x.opened.doc.type, want: (x) => x.intent.kind },
   // The second condition next to the opening: the committed bytes are the committed frames, and those are the frames
@@ -621,6 +659,14 @@ export async function pCommit(b: Buch): Promise<Check> {
     if (held && at !== undefined && at !== t.address) v.push(`ticket ${t.act.slice(0, 8)} → ${t.named.slice(-8)} at the carrier (seq ${t.seq}) at address ${t.address.slice(-8)}: not the committed submission (${held.writer}#${held.n} holds these bytes for address ${at.slice(-8)})`)
     else v.push(`ticket ${t.act.slice(0, 8)} → ${t.named.slice(-8)} at the carrier (seq ${t.seq}) without an earlier commit of ${t.device} holding its bytes and both consumptions`)
   }
+  // Frames no producer reported as tickets, at a stock key address: opened with that key; a ticket needs an earlier commit
+  // of the signing device (its issuance relationships hold the signer) that holds these bytes for this address.
+  for (const pr of b.carrier.probes) {
+    const o = await openAt(pr, pr.bytes, pr.address)
+    if (!o.ok || o.doc.type !== TYPES.ticket) continue
+    const held = b.commits.some((c) => c.seq < pr.seq && c.mediator?.some((m) => m.own.includes(o.doc.issuer)) && c.intents.some((i) => i.frames.some((h, j) => h === pr.frame && frameAddress(i, j) === pr.address)))
+    if (!held) v.push(`ticket ${String(o.doc.payload?.act).slice(0, 8)} → ${String(o.doc.payload?.own).slice(-8)} at the carrier (seq ${pr.seq}) at address ${pr.address.slice(-8)}: ticket-without-commit (no producer reported it; it opens with the key at that address, and no earlier commit of its signer holds these bytes)`)
+  }
   const opened = await openTickets(b)
   let issuances = 0
   for (const c of b.commits) {
@@ -666,6 +712,7 @@ export async function pCommit(b: Buch): Promise<Check> {
           opened: o,
           copies: i.copies.map((_, j) => opened.get(`${c.seq}|${i.digest}|${j + 1}`)!),
           mediator: c.mediator?.find((m) => m.rel === side.rel)?.own ?? [],
+          counterpart: counterpartAgreements(rx, i.address),
           production: b.production(i.digest),
         }
         for (const row of TICKET_BINDINGS) {
@@ -680,6 +727,12 @@ export async function pCommit(b: Buch): Promise<Check> {
   return check('P-Commit', v, { tickets: b.carrier.tickets.length, issuances })
 }
 
+/** The key agreements a receiver image holds for its counterpart on the live relationship whose stock key is `address`. */
+function counterpartAgreements(rx: ReceiverImage, address: string): string[] {
+  const r = rx.state.relationships.find((x) => !x.departed && x.stock.some((k) => k.keyAgreement === address))
+  if (!r) return []
+  return r.tuples.flatMap((t) => [t.peerKeyAgreement, ...(rx.sets ? M.setView(M.own(rx.state.sets, t.peer)).members.map((m) => m.keyAgreement) : [])])
+}
 /** The holder's ticket predicate in the receiver context of a `ReceiverImage` at ledger time `now` (no state steps). */
 function acceptsTicket(rx: ReceiverImage, doc: { issuer: string; payload: unknown }, address: string, now: string): ReturnType<typeof ticketAcceptance> {
   const ctx: TicketReceiver = {

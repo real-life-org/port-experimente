@@ -20,6 +20,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 //       `own.keyAgreement` (B2).
 //   T1. The binding table covers every field of the committed act side, the act, the intent and the opened ticket.
 //   T2. The reviewer's nine binding cases of review 44 (b), parametrised, with their violation counts.
+//   U10. A ticket frame deposited at the carrier directly, no producer report, validly sealed to an A stock key →
+//       P-Commit `ticket-without-commit` (addendum to review 44, before review 45).
 //   R1, R2. The dump is a complete artefact: dump → load → re-check gives the same results (Tor-Review 42 S1).
 //   N1. The observation seam is fail-safe: a throwing observer changes nothing in holder or carrier (Tor-Review 42 (a)).
 //   S1. Shrinking: a failing generated sequence shrinks to the smallest sequence that still fails the same property.
@@ -50,6 +52,7 @@ const rng = vi.hoisted(() => ({
 vi.mock('node:crypto', async (importOriginal) => ({ ...(await importOriginal<typeof import('node:crypto')>()), randomBytes: (n: number) => rng.bytes(n), randomUUID: () => rng.uuid() }))
 
 import { frameHash, TYPES, type HolderDevice } from '../src/lab/mehrgeraet/holder'
+import { diSign, jcs, seal, type Json } from '@real-life/trust-protocol'
 import { Buch, bindingGaps, ledgerWorld, openTickets, pairCounter, pCommit, pEinmal, pPaar, pProduktion } from '../src/lab/mehrgeraet/buch'
 import { generate, report, runSequence, show, shrink, type GenEvent, type GenWorld, type Mutation } from '../src/lab/mehrgeraet/generator'
 import { k2 } from '../src/candidates/mehrgeraet-k2'
@@ -808,4 +811,50 @@ describe('K2 step 2b.0: the ledger opens frames as the receiver (Tor-Review 44)'
       expect(c.violations, c.violations.join('\n')).toHaveLength(n)
       for (const v of c.violations) expect(v).toContain(word)
     }, 60_000)
+})
+
+/**
+ * After M's real issuance, a ticket M never produced is handed to the carrier directly: signed with M's key on M–A, naming an
+ * unused A stock key and an unused B key, sealed to that A key and deposited at its key agreement. No producer reports it.
+ */
+const unreportedTicket: Mutation = (g) => {
+  const orig = g.Mm.introduce.bind(g.Mm)
+  g.Mm.introduce = async (...args: Parameters<HolderDevice['introduce']>) => {
+    const r = await orig(...args)
+    const act = g.Mm.state.mediatorActs[0]!
+    const unused = (person: string) =>
+      g.w
+        .of(person)
+        .flatMap((d) => d.state.relationships.flatMap((x) => x.stock.filter((k) => k.by === d.name && k.state === 'active')))
+        .find((k) => k.anchor !== act.a.key && k.anchor !== act.b.key)!
+    const own = unused('A')
+    const voucher = unused('B')
+    const m = await g.Mm.cand.keys.pair(M.head(M.rel(g.Mm.state, g.ma)).ownKey)
+    const now = g.w.clock.now()
+    const payload = { act: crypto.randomUUID(), issuedAt: now, expiresAt: new Date(Date.parse(now) + M.PARAM.actLifetimeMs).toISOString(), own: own.anchor, voucher: { anchor: voucher.anchor, keyAgreement: voucher.keyAgreement, name: 'B' } }
+    const doc = await diSign({ anchor: m.anchor, ed: { priv: m.ed.priv } }, { id: crypto.randomUUID(), type: TYPES.ticket, issuer: m.anchor, recipient: own.anchor, replyTo: m.rkid, issuedAt: now, payload }, now)
+    g.w.carrier.deposit(own.keyAgreement, new TextEncoder().encode(jcs(await seal(doc as unknown as Json, own.keyAgreement))))
+    return r
+  }
+}
+
+describe('K2 step 2b.0: ticket frames without a producer report (addendum to Tor-Review 44)', () => {
+  it('U10. A validly sealed ticket deposited at an A stock key address with no producer report → exactly P-Commit fails with `ticket-without-commit`; control holds', async () => {
+    const one: GenEvent[] = [{ k: 'introduce' }]
+    const control = await runSequence(cand, one, { seed: 21, reseed })
+    for (const c of control.checks) expect(c.violations, c.property).toEqual([])
+    const r = await runSequence(cand, one, { seed: 21, reseed, mutation: unreportedTicket })
+    // Soll P-Commit: the real issuance as in U0 (2 tickets, 1 issuance, bound). The extra frame is at a stock key address
+    // of an observed device (A's allocator), no producer reported it, so the ledger opens it with that key: it opens to a
+    // ticket, and no earlier commit of the signing device (M) holds these bytes → 1 violation `ticket-without-commit`.
+    // It is not a reported ticket, so `tickets` stays 2. The other checkers: A accepts the extra ticket on a third, unused
+    // key (8640 passes: M's signer, own key at the address, voucher not A's) → P-Einmal 3 keys, 3 accepts, no violation;
+    // P-Produktion reads the one logged introduction, kept; P-Paar: nothing connected.
+    expect(prop(r, 'P-Commit').violations).toHaveLength(1)
+    expect(prop(r, 'P-Commit').violations[0]).toContain('ticket-without-commit')
+    expect(prop(r, 'P-Commit').counts).toEqual({ tickets: 2, issuances: 1 })
+    expect(prop(r, 'P-Einmal')).toMatchObject({ ok: true, counts: { keys: 3, accepts: 3 } })
+    expect(prop(r, 'P-Produktion')).toMatchObject({ ok: true, counts: { obliged: 1, kept: 1 } })
+    expect(prop(r, 'P-Paar').ok).toBe(true)
+  }, 60_000)
 })

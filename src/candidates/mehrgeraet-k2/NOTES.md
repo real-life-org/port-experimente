@@ -314,19 +314,39 @@ read from the opened bytes); an edit of the committed act side's key
 agreement, which review 44 measured green, now fails (`own.keyAgreement`
 and `voucher.keyAgreement`).
 
+Addendum before review 45 (on 3efda64): **carrier frames without a
+producer report** and **`replyTo`**. Every carrier frame the producers did
+not report as a ticket, deposited at the key agreement of a stock key an
+observed device holds (in the last committed images), is kept as a probe
+with the ledger's copy of that device's key for the address
+(`carrier.probes`, `CarrierProbe`). P-Commit opens it with that key; if
+it opens to a ticket, it needs an earlier commit of its signer (an
+issuance batch whose mediator context holds the signer) holding these
+bytes for this address, otherwise `ticket-without-commit`, whether or not
+a producer reported it. Frames that do not open or are no ticket stay
+uncounted as before (`unknown`, `other`). `replyTo` is now bound twice:
+to the intent (`replyTo`) and to the mediator on the relationship
+(`replyTo.counterpart`: a key agreement the receiver's committed image
+holds for its counterpart there, `peerKeyAgreement` of its tuples and,
+under device sets, the counterpart's set members). The mediator's own
+committed state cannot give it: it holds only the context name of its
+own key, not the key agreement. Fixed test U10: a validly sealed ticket
+deposited at an A stock key address with no producer report gives
+exactly one P-Commit violation `ticket-without-commit` (A accepts it on a
+third key: P-Einmal 3 keys, 3 accepts, holds); the control holds.
+
 What stays measured only: the receiver state steps (8640.4, 8640.12,
 8640.6, 8640.9, 8640.13) are not part of the reference, so a key that is
 `consumed` or `withdrawn` in the receiver image still passes P-Commit
 (review 44 (c)); the receiver image and the opening time are those of the
-issuance commit, not of the later receipt; `replyTo` is bound to the
-intent, not to the mediator's address on that relationship; carrier
-frames are classified as tickets by the producer's report, so bytes no
-observed device produced are counted (`unknown`) but not checked; the
-reference stays K2-specific (no stock address without device sets).
+issuance commit, not of the later receipt; a frame at an address that is
+no stock key address in any observed committed image is not opened
+(`unknown`); the reference stays K2-specific (no stock address without
+device sets).
 
-**Verification 2b.0:** `tests/mehrgeraet-buch.test.ts` 48 passed + 1
-expected fail (D1) in ≈ 50 s after the review 44 fixes (before: 36 + 1,
-≈ 47 s); typecheck green. No cell changed: the K2,
+**Verification 2b.0:** `tests/mehrgeraet-buch.test.ts` 49 passed + 1
+expected fail (D1) in ≈ 45–50 s after the review 44 fixes and the
+addendum (before: 36 + 1, ≈ 47 s); typecheck green. No cell changed: the K2,
 K1a, K0 and seed-sweep files give the same 111/111 results on this branch
 as on main a290f7a (test by test; after the review 42 fixes again
 111/111, identical test by test, the four files ≈ 11 min; after the
