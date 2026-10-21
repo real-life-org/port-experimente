@@ -8,6 +8,7 @@ import { ACK_TYPE, DOC_TYPE, sealDoc } from '../src/lab/zustellung'
 import {
   aggregate,
   Counters,
+  E11bError,
   evaluateRow,
   makeParty,
   OUTCOMES,
@@ -20,6 +21,7 @@ import {
   seededRand,
   stage1Needed,
   type AckCheck,
+  type MediatorPort,
   type RecvEvent,
   type RowResult,
   type SendRecord,
@@ -521,6 +523,113 @@ describe('E11b end of observation (review 1 C1)', () => {
     expect([cost.sizes.probe.n, cost.sizes.doc.n]).toEqual([4, 4])
     // the cancelled pass skips its fresh delete-to-ack session, and no later pass starts
     expect(p.events.fresh).toEqual([])
+    expect((p.groups as Array<{ id: string }>).map((g) => g.id)).toEqual(['D-c/s0'])
+    expect(rows.every((x) => x.id.startsWith('D-c/s0/'))).toBe(true)
+  }, 60_000)
+
+  /** Wraps a port: the `n`-th `sendBinary` over all sessions first calls `at`; if `at` throws, nothing is sent. */
+  const nthSend = (base: MediatorPort, n: number, at: () => void): MediatorPort => {
+    let sends = 0
+    return {
+      open: async (id, label, onTsp, life) => {
+        const s = await base.open(id, label, onTsp, life)
+        return {
+          label: s.label,
+          sendBinary: (b) => {
+            if (++sends === n) at()
+            s.sendBinary(b)
+          },
+          ack: (text) => s.ack(text),
+          close: () => s.close(),
+        }
+      },
+    }
+  }
+  type FailRow = { id: string; kind: string; ackValid: boolean; received: string }
+  /**
+   * The shared assertions of a pass that ended in an error after one acknowledged document (#78).
+   * `failedSend`: the failing send was registered before the socket refused it (a send failure);
+   * a pack failure happens before registration and leaves no record.
+   */
+  const keptPass = (r: Awaited<ReturnType<typeof runProbe>>, group: string, err: [string, string], failedSend: boolean) => {
+    expect(r.valid).toBe(false)
+    expect(r.failures.map((f) => [f.stage, f.cls])).toEqual([err])
+    const p = JSON.parse(protocolJson(r.protocol))
+    expect(p.result.valid).toBe(false)
+    expect(p.result.error).toEqual({ stage: err[0], cls: err[1] })
+    const rows = p.rows as FailRow[]
+    // probe and document of the first direction were sent and evaluated; the document was acknowledged in time
+    expect(rows.map((x) => [x.id, x.kind])).toEqual([
+      [`${group}/AB/x2y/r1/probe`, 'probe'],
+      [`${group}/AB/x2y/r1/doc`, 'doc'],
+      ...(failedSend ? [[`${group}/AB/y2x/r1/probe`, 'probe']] : []),
+    ])
+    expect(rows.map((x) => x.received)).toEqual(['in-window', 'in-window', ...(failedSend ? ['no'] : [])])
+    expect(rows.find((x) => x.kind === 'doc')!.ackValid).toBe(true)
+    // every ack reference resolves to an exported row
+    const acks = p.acks as Array<{ docRow: string }>
+    expect(acks.map((a) => a.docRow)).toEqual([`${group}/AB/x2y/r1/doc`])
+    for (const a of acks) expect(rows.some((d) => d.id === a.docRow)).toBe(true)
+    // sizes and rows agree: every probe and document send has its row
+    const cost = (p.costs as Array<{ form: string; sizes: Record<string, { n: number } | null> }>).find((c) => `${c.form}/s0` === group)!
+    expect([cost.sizes.probe?.n, cost.sizes.doc?.n, cost.sizes.ack?.n]).toEqual([failedSend ? 2 : 1, 1, 1])
+    // the group is described, its fresh session and every later pass (also stage 1) are skipped
+    expect((p.groups as Array<{ id: string }>).map((g) => g.id)).toEqual([group])
+    expect(p.events.fresh).toEqual([])
+    expect(rows.every((x) => x.id.startsWith(`${group}/`))).toBe(true)
+    expect((p.result.notes as Array<{ kind: string }>).map((n) => n.kind)).not.toContain('stage1-run')
+    return p
+  }
+
+  it('a send failure after an acknowledged document keeps the rows of its pass (#78): run invalid with send/ws-closed, every send has its row, every ack reference resolves, no further pass', async () => {
+    for (const forms of ['D-c', 'D-c,D-es']) {
+      const { info, counters, base } = await setup()
+      // fourth send: after probe, document and ack of the first direction
+      const port = nthSend(base, 4, () => {
+        throw new E11bError('send', 'ws-closed')
+      })
+      const cfg = parseEnv({ E11B_RUNS: '1', E11B_TIMEOUT_MS: '400', E11B_FORMS: forms })
+      const r = await runProbe(cfg, { info, port, counters, versions: VERSIONS, rand: seededRand(42), observeMs: 50 })
+      keptPass(r, 'D-c/s0', ['send', 'ws-closed'], true)
+    }
+  }, 60_000)
+
+  it('a pack failure after an acknowledged document keeps the rows of its pass (#78): run invalid with send/seal-failed, no further pass', async () => {
+    const { info, counters, base } = await setup()
+    // after probe, document and ack of the first direction the routing key becomes unusable: the next pack throws
+    const port = nthSend(base, 3, () => {
+      info.routing.x25519 = new Uint8Array(3)
+    })
+    const cfg = parseEnv({ E11B_RUNS: '1', E11B_TIMEOUT_MS: '400', E11B_FORMS: 'R-c,R-es' })
+    const r = await runProbe(cfg, { info, port, counters, versions: VERSIONS, rand: seededRand(42), observeMs: 50 })
+    keptPass(r, 'R-c/s0', ['send', 'seal-failed'], false)
+  }, 60_000)
+
+  it('a failure while evaluating the pass (#78): recorded as invalid, every row evaluated, every ack reference resolves, no further pass', async () => {
+    const { info, counters, base } = await setup()
+    let lines = 0
+    const cfg = parseEnv({ E11B_RUNS: '1', E11B_TIMEOUT_MS: '400', E11B_FORMS: 'D-c,D-es', RLTP_WIRE_DEBUG: '1' })
+    const r = await runProbe(cfg, {
+      info,
+      port: base,
+      counters,
+      versions: VERSIONS,
+      rand: seededRand(42),
+      observeMs: 50,
+      // the debug line of the second row throws, inside the row evaluation
+      stderr: () => {
+        if (++lines === 2) throw new Error('stderr closed')
+      },
+    })
+    expect(r.valid).toBe(false)
+    expect(r.failures.map((f) => [f.stage, f.cls])).toEqual([['probe', 'other']])
+    const p = JSON.parse(protocolJson(r.protocol))
+    expect(p.result.error).toEqual({ stage: 'probe', cls: 'other' })
+    const rows = p.rows as FailRow[]
+    expect([rows.filter((x) => x.kind === 'probe').length, rows.filter((x) => x.kind === 'doc').length]).toEqual([4, 4])
+    const acks = p.acks as Array<{ docRow: string }>
+    expect(acks.length).toBe(4)
+    for (const a of acks) expect(rows.some((d) => d.id === a.docRow)).toBe(true)
     expect((p.groups as Array<{ id: string }>).map((g) => g.id)).toEqual(['D-c/s0'])
     expect(rows.every((x) => x.id.startsWith('D-c/s0/'))).toBe(true)
   }, 60_000)

@@ -284,10 +284,13 @@ changes no probe state and sends neither an ack nor a pickup ack, a
 pickup ack still being packed is not sent, and the session changes none
 of its counters (bytes, DIDComm types, problem codes, frame errors,
 consumer failures); decryption or encryption already started may still
-finish, without effect. Late failures are discarded. The cancelled pass is still
-evaluated: every probe and document sent so far has its row and every
-ack its resolvable `docRow`; the fresh delete-to-ack session of that pass
-and all later passes are skipped (gate review 3 C2). Rows and acks list
+finish, without effect. Late failures are discarded. A pass that ends
+early, by that settle timeout or by an error (send, pack, evaluation),
+takes the same end: it settles, closes and is still evaluated, every
+probe and document registered so far has its row and every ack its
+resolvable `docRow`, the run is invalid with the error's class, and the
+fresh delete-to-ack session of that pass and all later passes, stage 1
+included, are skipped (gate review 3 C2, #78). Rows and acks list
 every receipt (relative time, class, socket, verdict, counted, picked),
 built from the final event set when the result is frozen (gate review 2
 C2, 9d1adb0). Rows carry `tAckReceivedMs` and `tAckVerifiedMs`;

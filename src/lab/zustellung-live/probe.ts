@@ -222,6 +222,24 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
     if (cfg.debug && deps.stderr) deps.stderr(debugLine(kind, v))
   }
 
+  // ── end of a run: one path for timeout and error (#78) ──
+  // A pass that started is always closed and evaluated with what it has, whether it ended normally,
+  // by a settle timeout (`cancelled`) or by an error (`fatal`): settle, close, rows, group. Then no
+  // further pass starts (no fresh session, no later form, no stage 1).
+  let fatal: E11bError | null = null
+  /** Records an error as an invalid run; the first one is `result.error`. Never throws. */
+  const abort = (e: unknown, stage: Stage) => {
+    const err = translate(e, stage)
+    failures.push(err)
+    fatal ??= err
+    try {
+      debug('error', err)
+    } catch {
+      // Debug output only; the error itself is already recorded.
+    }
+  }
+  const stopped = () => cancelled || fatal !== null
+
   async function runFormPass(form: FormId, stage: 0 | 1) {
     const spec = FORMS[form]
     const variant = spec.prime ? info.prime! : info.routing
@@ -466,6 +484,9 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
       }
       // Post-observation from the last send of the pass; later acks do not extend it.
       await sleep(lastSend + observeMs - now())
+    } catch (e) {
+      // A send, pack or other failure ends the run, not the pass: it is closed and evaluated below.
+      if (e !== CANCELLED) abort(e, 'probe')
     } finally {
       // Fix the deadline, let accepted callbacks finish (they may still send acks), then close.
       closedAt = now()
@@ -477,8 +498,9 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
     }
     const passClosedAt = closedAt
 
-    // A cancelled pass skips its fresh session and is evaluated with what it has (review 3 C2).
-    if (stage === 0 && DELETE_TO_ACK_FORMS.includes(form) && !cancelled) {
+    // A stopped pass (timeout or error) skips its fresh session and is evaluated with what it has
+    // (review 3 C2, #78).
+    if (stage === 0 && DELETE_TO_ACK_FORMS.includes(form) && !stopped()) {
       try {
         for (const st of states) st.fresh = await open(st, 'conn', true)
         await sleep(observeMs)
@@ -494,30 +516,40 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
       }
     }
 
+    // Each row and the group description on their own: a failure there is recorded (invalid run, no
+    // further pass), and every other row of the pass is still evaluated (#78).
     for (const rec of registry.all()) {
       if (rec.group !== groupId || rec.kind === 'ack') continue
-      // Provisional `receipts`: the exported list is rebuilt from the final events at the snapshot (review 2 C2).
-      const row = evaluateRow(rec, events, ackChecks.get(rec.id), { timeoutMs, closedAt: passClosedAt })
-      rowClosedAt.set(rec.id, passClosedAt)
-      rows.push(row)
-      debug('row', rowView(row, rec))
+      try {
+        // Provisional `receipts`: the exported list is rebuilt from the final events at the snapshot (review 2 C2).
+        const row = evaluateRow(rec, events, ackChecks.get(rec.id), { timeoutMs, closedAt: passClosedAt })
+        rowClosedAt.set(rec.id, passClosedAt)
+        rows.push(row)
+        debug('row', rowView(row, rec))
+      } catch (e) {
+        abort(e, 'probe')
+      }
     }
 
-    const sideOf = (st: SideState) => st.side
-    groups.push({
-      id: groupId,
-      form,
-      stage,
-      identities: states.flatMap((st) => [
-        { label: `${st.side.label}.conn`, did: st.side.conn.did },
-        { label: `${st.side.label}.egress`, did: st.side.egress.did },
-      ]),
-      roles: states.map((st) => ({ side: st.side.label, ...roles(spec, sideOf(st)) })),
-      equalities: { innerIsSocket: spec.inner === spec.socket, outerIsSocket: spec.outer ? spec.outer === spec.socket : null, innerIsConnection: spec.inner === 'conn' },
-      linkableAcrossRelationships: linkable(states),
-      peerSees: states.map((st) => ({ side: st.side.label, dids: [`${st.side.label}.${spec.inner}`], includesConnection: spec.inner === 'conn' })),
-      sessionsPerRelationship: { sender: spec.senderSessions, receiver: 1 },
-    })
+    try {
+      const sideOf = (st: SideState) => st.side
+      groups.push({
+        id: groupId,
+        form,
+        stage,
+        identities: states.flatMap((st) => [
+          { label: `${st.side.label}.conn`, did: st.side.conn.did },
+          { label: `${st.side.label}.egress`, did: st.side.egress.did },
+        ]),
+        roles: states.map((st) => ({ side: st.side.label, ...roles(spec, sideOf(st)) })),
+        equalities: { innerIsSocket: spec.inner === spec.socket, outerIsSocket: spec.outer ? spec.outer === spec.socket : null, innerIsConnection: spec.inner === 'conn' },
+        linkableAcrossRelationships: linkable(states),
+        peerSees: states.map((st) => ({ side: st.side.label, dids: [`${st.side.label}.${spec.inner}`], includesConnection: spec.inner === 'conn' })),
+        sessionsPerRelationship: { sender: spec.senderSessions, receiver: 1 },
+      })
+    } catch (e) {
+      abort(e, 'probe')
+    }
   }
 
   function rowView(r: RowResult, rec: SendRecord) {
@@ -530,7 +562,6 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
     }
   }
 
-  let fatal: E11bError | null = null
   try {
     for (const form of FORM_IDS) {
       if (!cfg.forms.includes(form)) continue
@@ -539,27 +570,23 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
         continue
       }
       await runFormPass(form, 0)
-      if (cancelled) break
+      if (stopped()) break
     }
     const table0 = resultTable(rows, cells)
-    // No further pass after a settle timeout (review 3 C2); `result.error` names it.
-    if (cancelled) {
+    // No further pass after a settle timeout or an error (review 3 C2, #78); `result.error` names it.
+    if (stopped()) {
       /* no stage 1 */
     } else if (stage1Needed(table0)) {
       const todo = STAGE1_FORMS.filter((f) => cfg.forms.includes(f))
       if (todo.length) notes.push({ kind: 'stage1-run', form: null, cls: null })
       for (const f of todo) {
         await runFormPass(f, 1)
-        if (cancelled) break
+        if (stopped()) break
       }
     } else notes.push({ kind: 'stage1-not-needed', form: null, cls: null })
   } catch (e) {
     if (e instanceof PreconditionAbort) precondition = e.err
-    else {
-      fatal = translate(e, 'probe')
-      failures.push(fatal)
-      debug('error', fatal)
-    }
+    else abort(e, 'probe')
   }
 
   // Snapshot (review 1 C1, review 2 C1): no callback in flight over a full event-loop turn, later
