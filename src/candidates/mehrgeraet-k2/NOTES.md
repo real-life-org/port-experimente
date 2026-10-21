@@ -177,6 +177,18 @@ changes `inc`, so 5.3 (keep inc, nonce, `n`) is what makes restarts of A
 harmless at M; `allocation()` is recomputed per call (fine at bench
 sizes).
 
+**Verification 2b.1** (after the rebase onto 2b.0 83e6f81): all
+`tests/mehrgeraet-*.test.ts` plus matrix, matrix-page, zustellung,
+träger, zustellung-harness, harness: 317 passed + 1 expected fail (D1)
+in ≈ 34 min on a loaded machine; `tests/mehrgeraet-k2-zuteilung.test.ts`
+33 tests; typecheck green. Seed sweep `SEEDS=all`: 40/40 (K2-strict with
+the 17/2/1 table, K1a). K0, K1a, K1a at the service: seeded `runX15`
+identical to 2b.0 in every cell, detail and measure. `REPORT=1` run once
+(X14 changed); in `public/matrix.html` only the `k2-device-keys` column
+and its results were taken over from that run, because the same run had
+no Subduction server for `keyhive-ark` (an environment failure, not a
+change) and new timings everywhere; `public/findings.html` unchanged.
+
 **Spec follow-ups (2b.1).** 8435/8445: `for`, `signing`, `proof` per
 listed key, one nonce per listing, nonce conflict as a set rule;
 canonical list order by code units. 8500/6270 per (writer, inc) with
