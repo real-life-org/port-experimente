@@ -13,7 +13,7 @@
 
 import type { CrashPoint } from '../zustellung'
 import type { HolderDevice, MultiDeviceCandidate } from './holder'
-import { ledgerWorld, pAufhebung, pBilanz, pCommit, pEinmal, pPaar, pProduktion, pRecht, pVersorgung, pairCounter, PRODUCTION, type Buch, type Check } from './buch'
+import { ledgerWorld, pAufhebung, pBilanz, pCommit, pEinmal, pGueltig, pPaar, pProduktion, pRecht, pVersorgung, pairCounter, PRODUCTION, type Buch, type Check } from './buch'
 import * as M from './model'
 import type { Welt15 } from './welt'
 
@@ -287,8 +287,10 @@ export async function runSequence(candidate: () => MultiDeviceCandidate, events:
     }
   }
   for (let i = 0; i < (opts.drain ?? PRODUCTION.rounds + 3); i++) await round()
+  // Issue #83: P-Gueltig first; on an invalid run the property checkers are not green either, so the generator, G1/G2
+  // and shrinking treat it as a failure (seed and errors printed).
   const share = (g.A.cand as { acceptanceShare?: number }).acceptanceShare ?? Infinity
-  const checks = [pEinmal(buch), await pCommit(buch), await pProduktion(buch), pPaar(buch), pBilanz(buch, share), pRecht(buch), pAufhebung(buch), pVersorgung(buch, share)]
+  const checks = [pGueltig(buch), pEinmal(buch), await pCommit(buch), await pProduktion(buch), pPaar(buch), pBilanz(buch, share), pRecht(buch), pAufhebung(buch), pVersorgung(buch, share)]
   return { seed, events, checks, counter: pairCounter(buch), buch }
 }
 

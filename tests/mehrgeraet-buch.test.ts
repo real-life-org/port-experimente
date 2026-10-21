@@ -31,6 +31,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 //       naming key X, sealed to Y of the same device, deposited at X (b: the same bytes then at Y); a ticket copy under a
 //       card primary frame signed in the other M relationship; the dump round trip with a deposit before its address is
 //       in any committed image.
+//   R83. Observer errors make a run invalid (issue #83): U4's mutation with a throwing `committed` hook for A only.
 //   R1, R2. The dump is a complete artefact: dump → load → re-check gives the same results (Tor-Review 42 S1).
 //   N1. The observation seam is fail-safe: a throwing observer changes nothing in holder or carrier (Tor-Review 42 (a)).
 //   S1. Shrinking: a failing generated sequence shrinks to the smallest sequence that still fails the same property.
@@ -62,7 +63,7 @@ vi.mock('node:crypto', async (importOriginal) => ({ ...(await importOriginal<typ
 
 import { frameHash, TYPES, type HolderDevice } from '../src/lab/mehrgeraet/holder'
 import { diSign, jcs, seal, type Json } from '@real-life/trust-protocol'
-import { Buch, bindingGaps, ledgerWorld, openTickets, pairCounter, pCommit, pEinmal, pPaar, pProduktion } from '../src/lab/mehrgeraet/buch'
+import { Buch, bindingGaps, ledgerWorld, openTickets, pairCounter, pCommit, pEinmal, pGueltig, pPaar, pProduktion } from '../src/lab/mehrgeraet/buch'
 import { generate, report, runSequence, show, shrink, type GenEvent, type GenWorld, type Mutation } from '../src/lab/mehrgeraet/generator'
 import { k2 } from '../src/candidates/mehrgeraet-k2'
 import * as M from '../src/lab/mehrgeraet/model'
@@ -626,6 +627,11 @@ describe('K2 step 2b.0: the observation seam is fail-safe (Tor-Review 42 (a))', 
     expect(outcome(loud!)).toBe(outcome(quiet!))
     // Soll: each hook fired at least once in the sequence and its error was recorded, none escaped.
     expect([...new Set(loud!.buch.errors.map((e) => e.hook))].sort()).toEqual(['admitted', 'carrier', 'committed', 'produced'])
+    // Issue #83: the run is invalid. P-Gueltig fails with one violation per recorded error, and no property checker
+    // reports green on it.
+    const checks = [pGueltig(loud!.buch), pEinmal(loud!.buch), await pCommit(loud!.buch), await pProduktion(loud!.buch), pPaar(loud!.buch)]
+    expect(checks[0]).toMatchObject({ property: 'P-Gueltig', ok: false, counts: { errors: loud!.buch.errors.length } })
+    for (const c of checks.slice(1)) expect(c, c.property).toMatchObject({ ok: false, invalid: true })
   }, 120_000)
 })
 
@@ -1162,4 +1168,45 @@ describe('K2 step 2b.0: the ledger is an exact mirror of the holder (Tor-Review 
     expect(live.violations).toHaveLength(1)
     expect((await pCommit(Buch.load(r.buch.dump()))).violations).toEqual(live.violations)
   }, 60_000)
+})
+
+describe('K2 step 2b.0: observer errors make the run invalid (issue #83)', () => {
+  it('R83. U4\'s mutation plus a `committed` hook that throws for A only → the run is invalid (P-Gueltig fails, no checker green, also after dump → load); control: P-Gueltig holds, P-Paar fails as in U4', async () => {
+    const seq: GenEvent[] = [{ k: 'introduce' }, { k: 'round' }, { k: 'round' }, { k: 'consent', device: 'A1' }, { k: 'consent', device: 'B1' }, { k: 'round' }, { k: 'round' }, { k: 'round' }, { k: 'round' }]
+    const control = await runSequence(cand, seq, { seed: 41, reseed, drain: 6, mutation: wrongPairAtA })
+    // Soll control (= U4 mutated): observation complete → P-Gueltig 0 violations; P-Paar 1 violation (U4).
+    expect(prop(control, 'P-Gueltig')).toMatchObject({ ok: true, violations: [], counts: { errors: 0 } })
+    expect(prop(control, 'P-Paar').violations).toHaveLength(1)
+    const r = await runSequence(cand, seq, {
+      seed: 41,
+      reseed,
+      drain: 6,
+      mutation: (g) => {
+        wrongPairAtA(g)
+        const committed = g.buch.committed.bind(g.buch)
+        g.buch.committed = (d, image) => {
+          if (d.person === 'A') throw new Error('observer failed for A')
+          committed(d, image)
+        }
+      },
+    })
+    // Soll: the observer changes no device (N1), so A's devices make exactly the store commits they make in the control
+    // run. The hook is replaced by the mutation, which runs after the world is set up (`genWorld`: encounters, class on,
+    // enrolment commit before it) and before the first event; each A commit from then on throws once → errors = A's commit
+    // marks after the control's first bench event (the reporter measured 49).
+    const first = control.buch.events[0]!.seq
+    const aCommits = control.buch.marks.filter((m) => m.device.startsWith('A') && m.seq > first).length
+    expect(r.buch.errors).toHaveLength(aCommits)
+    expect(prop(r, 'P-Gueltig')).toMatchObject({ ok: false, counts: { errors: aCommits } })
+    expect(prop(r, 'P-Gueltig').violations).toHaveLength(aCommits)
+    // Soll: none of the four property checkers is green on the invalid run; each is marked invalid and names it first.
+    for (const p of ['P-Einmal', 'P-Commit', 'P-Produktion', 'P-Paar']) {
+      expect(prop(r, p), p).toMatchObject({ ok: false, invalid: true })
+      expect(prop(r, p).violations[0], p).toContain('run invalid')
+    }
+    // The errors are in the dump: re-checking a loaded ledger is invalid too.
+    const loaded = Buch.load(r.buch.dump())
+    expect(pGueltig(loaded).ok).toBe(false)
+    expect(pPaar(loaded)).toMatchObject({ ok: false, invalid: true })
+  }, 120_000)
 })
