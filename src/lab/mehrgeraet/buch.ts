@@ -360,7 +360,8 @@ export class Buch implements HolderObserver {
     const now = Date.parse(t.at)
     for (const r of s.relationships) {
       const own = r.stock.filter((k) => k.by === d.name)
-      if (r.departed || (!own.length && !r.classOn) || !own.length) continue
+      // Tor-Review 46 B2: a relationship with the class on gets a row also with an empty own stock (a missing first supply).
+      if (r.departed || (!own.length && !r.classOn)) continue
       const mine = new Set(own.map((k) => k.anchor))
       const acts = new Map(s.acts.map((a) => [a.id, a.own]))
       const belegt = r.accepted.filter((e) => mine.has(acts.get(e.act) ?? '') && !r.confirmed.includes(e.act) && Date.parse(e.at) > now - M.PARAM.budgetWindowMs).length
@@ -1128,19 +1129,32 @@ export function pAufhebung(b: Buch): Check {
           const person = owner ? b.production(owner.digest)?.person : undefined
           if (!person) continue
           const revs = seen.filter((d) => b.production(d.digest)?.person === person).map((d) => d.payload as unknown as M.StockRevision)
-          const writer = revs.find((r) => r.keys.some((k) => k.anchor === side.key))!.writer
-          const latest = new Map<string, M.StockRevision>()
-          for (const r of revs) {
-            const k = `${r.writer}|${r.inc}`
-            if (!latest.has(k) || r.rev > latest.get(k)!.rev) latest.set(k, r)
-          }
-          const lifted = revs.some((r) => (r.withdraw.includes(side.key) && r.writer === writer) || r.bury.includes(side.key))
-          const off = [...latest.values()].some((r) => r.classOff)
+          // Tor-Review 46 B3: the model's own set function decides (no second copy of the rules): withdrawal by the bound
+          // writer, burial with the revocation exception ("currently lists", B6), class off of a non-revoked writer. The
+          // revocations are those any device of M had admitted before (a superset of the namer's knowledge: it can only make
+          // a burial count less, never a false alarm).
+          const al = M.allocation(revs, { revoked: revokedAt(b, c.person, c.seq), members: new Set(revs.flatMap((r) => r.keys.map((k) => k.for))) })
+          const lifted = al.fold.withdrawn.has(side.key) || al.buried(side.key)
+          const off = al.classOff
           if (lifted || off) v.push(`${c.device} named ${side.key.slice(-8)} in act ${op.act.id.slice(0, 8)} after ${lifted ? 'a withdrawal or burial' : 'the class off'} it had admitted`)
         }
       }
     }
   return check('P-Aufhebung', v, { accepts, issuances })
+}
+
+/** The writers (signer ids) revoked in any counterpart set the devices of `person` admitted before ledger time `seq`. */
+function revokedAt(b: Buch, person: string, seq: number): Set<string> {
+  const sets = new Map<string, M.DeviceSet>()
+  for (const d of b.deliveries) {
+    if (d.person !== person || d.type !== TYPES.deviceSet || d.seq >= seq) continue
+    const p = d.payload as unknown as { root: string; rootKeyAgreement: string; entries: M.SetCert[] }
+    if (!sets.has(p.root)) sets.set(p.root, { root: p.root, rootKeyAgreement: p.rootKeyAgreement, certs: M.table(), revs: M.table(), seen: [] })
+    for (const c of p.entries) M.put(sets.get(p.root)!.certs, M.certKey(c), c)
+  }
+  const out = new Set<string>()
+  for (const set of sets.values()) for (const a of M.setView(set).revoked) out.add(M.signerId(a))
+  return out
 }
 
 /**

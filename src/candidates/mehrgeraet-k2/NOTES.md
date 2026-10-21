@@ -183,6 +183,28 @@ changes `inc`, so 5.3 (keep inc, nonce, `n`) is what makes restarts of A
 harmless at M; `allocation()` is recomputed per call (fine at bench
 sizes).
 
+**After Tor-Review 46** (Sol, "trägt nicht": B1–B3, S1, S2). B1: the
+supply step computed the plan from the relationship before its own
+withdrawal (`apply` folds on a clone), so a revocation of an M device
+listed only part of the successors in its batch (share 2: none, share 5:
+one of three); the plan is now computed after the withdrawal, and B4
+checks the batch itself for share 5 and share 2 (`withdraw`, `allocate`
+with 3 resp. 1 key for m1, `revision` listing all 5 resp. 2). B2: the
+ledger wrote balance rows only for relationships with own keys, so a
+missing first supply was invisible; now every relationship with the
+class on has a row (P1: Soll 1 violation). B3: P-Aufhebung judged
+burials without the revocation exception; it now calls the model's
+`allocation` (withdrawal by the bound writer, `buried` with "currently
+lists", class off of non-revoked writers) with the revocations any M
+device had admitted (P2: the reviewer's counter-run, Soll 0 violations;
+P3 control: a burial by a non-revoked issuer still fails, Soll 1). S1:
+fold findings declared historical diagnostics (above). S2: V2 ported to
+`stock-revision@2` (conflicting bindings, burial by a later revoked
+writer, set revocation; Soll w, y usable); it fails again without the
+revocation exception. Base: 2b.0 4efc56b merged into this branch (a
+merge, not a rebase: the branch was already pushed and is not
+force-pushed).
+
 **Verification 2b.1** (after the rebase onto 2b.0 83e6f81): all
 `tests/mehrgeraet-*.test.ts` plus matrix, matrix-page, zustellung,
 träger, zustellung-harness, harness: 317 passed + 1 expected fail (D1)
