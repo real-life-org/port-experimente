@@ -123,6 +123,31 @@ REPORT=1 pnpm vitest run report # result table of all candidates and matrix.md
 pnpm dev                        # browser run, local
 ```
 
+### Live probe against the VTI mediator (E11b)
+
+`tests/zustellung-live.test.ts` measures Rev 3 routed TSP against a live
+mediator. It needs the network, is skipped by default and never enters
+the report. Results: `src/candidates/zustellung/NOTES.md`, section
+"E11b live".
+
+```sh
+RLTP_LIVE_MEDIATOR=1 pnpm vitest run tests/zustellung-live.test.ts
+```
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `RLTP_LIVE_MEDIATOR` | `1` runs the probe | off |
+| `MEDIATOR_DID` | another mediator instance | instance of 27 September 2026 |
+| `MEDIATOR_ALLOW_INSECURE` | net policy `allowInsecure` and `allowPrivate` (local mediator) | off |
+| `RLTP_WIRE_DEBUG` | row outcomes and error classes on stderr | off |
+| `E11B_FORMS` | comma list of forms (`D-c,D-es,D-e,R-cc,R-c,R-c',R-es,R-ce`) | all |
+| `E11B_RUNS` | runs per form pass (integer ≥ 1) | 3 |
+| `E11B_TIMEOUT_MS` | delivery window and ack deadline | 20000 |
+| `E11B_PROTOCOL_OUT` | path of the protocol JSON | `.cache/e11b-live/<UTC-ISO>.json` |
+
+The protocol holds no keys, seeds, tokens, payloads or error texts: only
+shortened DIDs, digest prefixes, counts, hosts and values from fixed lists.
+
 The browser page is published via GitHub Pages on every push to `main`.
 There, all runs can be started on a real device (S9, for example on
 GrapheneOS) and the result copied as JSON.
