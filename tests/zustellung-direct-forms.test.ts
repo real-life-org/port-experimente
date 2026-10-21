@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { decodeEnvelope, pack, packInvite } from '@openvtc/vti-tsp-js'
 import { HORIZON, Welt, party, runDelivery, type Wire } from '../src/lab/zustellung'
-import { sessionCell } from '../src/lab/zustellung-sessions'
+import { SessionCarrier, pairWithSessions, rebindSessions, sessionCell, tspSender } from '../src/lab/zustellung-sessions'
 import { wires } from '../src/candidates/zustellung'
 import { tspWire } from '../src/candidates/zustellung/tsp'
 import { admitDirect, relationshipIdentities, type SessionEndpoint } from '../src/candidates/zustellung/tsp-direct'
@@ -201,6 +201,44 @@ describe('E11b step 2: sessions per relationship under the session rule', () => 
     const { A } = await w.pair(await party('alice'), await party('bob'))
     const d = await A.send({ note: 'ohne-regel' })
     expect(await w.until(() => A.zusteller.report(d)?.state === 'delivered')).toBeGreaterThan(0)
+  }, 60_000)
+
+  /**
+   * Z2 under the session rule (review 1 of step 3, hint): a carrier switch while a document waits. Every device reopens
+   * its sessions at the new carrier (`rebindSessions`, as `rebindWithSessions` on the routed bench); (a) needs its egress
+   * session reopened, `Device.rebind()` alone (the connection address only) leaves the waiting frame dropped there.
+   */
+  const switchCell = async (wire: Wire, reopen: 'sessions' | 'address-only') => {
+    const w = new Welt(wire)
+    const old = new SessionCarrier(tspSender)
+    w.carrier = old
+    const { A, B } = await pairWithSessions(w, await party('alice'), await party('bob'))
+    const d1 = await A.send({ note: 'vorher' })
+    await w.until(() => A.zusteller.report(d1)?.state === 'delivered')
+    old.unreachable = true
+    const d2 = await A.send({ note: 'waehrend' })
+    await w.rounds(HORIZON.status)
+    const before = A.zusteller.report(d2)?.state
+    const neu = new SessionCarrier(tspSender)
+    if (reopen === 'sessions') rebindSessions(w.devices, neu)
+    else for (const d of w.devices) d.rebind(neu.viewFor(d.name))
+    w.carrier = neu
+    await w.until(() => ['delivered', 'failed'].includes(A.zusteller.report(d2)?.state ?? ''), HORIZON.giveUp + 4)
+    return { before, after: A.zusteller.report(d2)?.state, received: B.received.length, sessions: neu.sessions(), refused: neu.refused.length }
+  }
+
+  it('Z2 with sessions, (a): after a carrier switch the egress sessions are reopened (4) and the waiting document is delivered', async () => {
+    expect(await switchCell(tspDirectEgressSessionWire(), 'sessions')).toEqual({ before: 'awaiting-transport', after: 'delivered', received: 2, sessions: 4, refused: 0 })
+  }, 60_000)
+
+  it('Z2 with sessions, (b): after a carrier switch the connection sessions are reopened (2) and the waiting document is delivered', async () => {
+    expect(await switchCell(tspDirectConnectionWire(), 'sessions')).toEqual({ before: 'awaiting-transport', after: 'delivered', received: 2, sessions: 2, refused: 0 })
+  }, 60_000)
+
+  it('Z2 with sessions, (a) control: reopening only the connection address drops the waiting document at the new carrier', async () => {
+    const r = await switchCell(tspDirectEgressSessionWire(), 'address-only')
+    expect(r).toMatchObject({ before: 'awaiting-transport', after: 'failed', received: 1, sessions: 2 })
+    expect(r.refused).toBeGreaterThan(0)
   }, 60_000)
 
   it('same frame size for the same payload in all three direct wires (same VID kind, same frame layout)', async () => {
