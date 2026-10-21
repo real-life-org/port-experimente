@@ -100,8 +100,10 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
   const t0 = now()
   const rt = (t: number) => t - t0
 
-  const registry = new SendRegistry()
-  const xrfi = new XrfiRegistry()
+  // Output archives over all passes. Matching uses per-pass registers (draft 3 §3.2: discarded
+  // before the next pass), created in `runFormPass`.
+  const archive = new SendRegistry()
+  const xrfiArchive = new XrfiRegistry()
   const events: GroupEvent[] = []
   const freshEvents: Array<{ group: string; socket: string; recordId: string | null; cls: FrameClass; kind: 'redelivered' | 'first-in-fresh' | 'unassigned'; tMs: number }> = []
   const unassigned: Array<{ group: string; socket: string; size: number; cls: FrameClass; tMs: number }> = []
@@ -169,6 +171,8 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
     const groupId = `${form}/s${stage}`
     counters.current = groupId
     const group: IdentityGroup = await makeIdentityGroup(groupId, info.did, rand)
+    const registry = new SendRegistry()
+    const xrfi = new XrfiRegistry()
     cells.push({ form, stage })
 
     const mediatorEntry = (receiver: { did: string; xSecret: Uint8Array }): ListEntry => ({ sender: info.did, receiver: receiver.did, signing: info.edCandidates, receiverSecret: receiver.xSecret, allowed: new Set(['control']) })
@@ -226,6 +230,7 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
         ...(meta.docRow ? { docRow: meta.docRow } : {}),
       }
       registry.add(rec)
+      archive.add(rec)
       const session = from.sessions[spec.socket]
       if (!session) throw new E11bError('send', 'other')
       session.sendBinary(packed.wire)
@@ -359,7 +364,9 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
       if (stage === 1) {
         for (const st of states) {
           const inv = await packInvite(st.side.conn.did, info.did, { senderSigningKey: st.side.conn.edSecret, receiverEncryptionKey: info.routing.x25519 })
-          xrfi.add({ group: groupId, socket: `${st.side.label}.conn`, threadDigest: hexOf(inv.threadDigest), tSend: now() })
+          const entry = { group: groupId, socket: `${st.side.label}.conn`, threadDigest: hexOf(inv.threadDigest), tSend: now() }
+          xrfi.add(entry)
+          xrfiArchive.add(entry)
           st.sessions.conn!.sendBinary(inv.bytes)
           lastSend = now()
         }
@@ -487,7 +494,7 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
   const outcome = probeOutcome({ preconditionFailed: precondition !== null, forms: cfg.forms, table })
 
   const costs = cells.map(({ form, stage }) => {
-    const recs = registry.all().filter((r) => r.form === form && r.stage === stage)
+    const recs = archive.all().filter((r) => r.form === form && r.stage === stage)
     // Every send of a kind, min / median / max per layer (review 1 H1); null when the kind was not sent.
     const sizeOf = (k: Kind) => {
       const ofKind = recs.filter((r) => r.kind === k)
@@ -511,7 +518,7 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
     }
   })
 
-  const acks = registry
+  const acks = archive
     .all()
     .filter((r) => r.kind === 'ack')
     .map((r) => {
@@ -541,10 +548,10 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
     schema: 'e11b-live/2',
     head: headOf(cfg, deps.versions, t0, observeMs, info, keyBinding),
     groups,
-    rows: rows.map((r) => rowView(r, registry.get(r.id)!)),
+    rows: rows.map((r) => rowView(r, archive.get(r.id)!)),
     acks,
     controls,
-    xrfi: xrfi.all().map((x) => ({ group: x.group, socket: x.socket, threadDigest: short8(x.threadDigest), tSendMs: rt(x.tSend) })),
+    xrfi: xrfiArchive.all().map((x) => ({ group: x.group, socket: x.socket, threadDigest: short8(x.threadDigest), tSendMs: rt(x.tSend) })),
     events: { unassigned, fresh: freshEvents, afterClose: afterCloseEvents },
     counters: { classes: classCounts, perScope: [...counters.scopes.entries()].map(([k, s]) => countersView(k, s)), total: countersView('total', total) },
     costs,
