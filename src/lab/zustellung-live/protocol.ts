@@ -265,8 +265,9 @@ export function parseEnv(env: Record<string, string | undefined>): LiveConfig {
     live: env.RLTP_LIVE_MEDIATOR === '1',
     mediatorDid: didRaw || DEFAULT_MEDIATOR_DID,
     mediatorDidSet: Boolean(didRaw),
-    allowInsecure: Boolean(env.MEDIATOR_ALLOW_INSECURE),
-    debug: Boolean(env.RLTP_WIRE_DEBUG),
+    // Switches: only `1` enables, as for RLTP_LIVE_MEDIATOR (`0` or `false` must not turn them on).
+    allowInsecure: env.MEDIATOR_ALLOW_INSECURE === '1',
+    debug: env.RLTP_WIRE_DEBUG === '1',
     forms,
     runs: posInt(env.E11B_RUNS, 3, 'E11B_RUNS'),
     timeoutMs: posInt(env.E11B_TIMEOUT_MS, 20000, 'E11B_TIMEOUT_MS'),

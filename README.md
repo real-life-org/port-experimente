@@ -138,12 +138,15 @@ RLTP_LIVE_MEDIATOR=1 pnpm vitest run tests/zustellung-live.test.ts
 |---|---|---|
 | `RLTP_LIVE_MEDIATOR` | `1` runs the probe | off |
 | `MEDIATOR_DID` | another mediator instance | instance of 27 September 2026 |
-| `MEDIATOR_ALLOW_INSECURE` | net policy `allowInsecure` and `allowPrivate` (local mediator) | off |
-| `RLTP_WIRE_DEBUG` | row outcomes and error classes on stderr | off |
+| `MEDIATOR_ALLOW_INSECURE` | `1` sets net policy `allowInsecure` and `allowPrivate` (local mediator) | off |
+| `RLTP_WIRE_DEBUG` | `1` prints row outcomes and error classes on stderr | off |
 | `E11B_FORMS` | comma list of forms (`D-c,D-es,D-e,R-cc,R-c,R-c',R-es,R-ce`) | all |
 | `E11B_RUNS` | runs per form pass (integer ≥ 1) | 3 |
 | `E11B_TIMEOUT_MS` | delivery window and ack deadline | 20000 |
 | `E11B_PROTOCOL_OUT` | path of the protocol JSON | `.cache/e11b-live/<UTC-ISO>.json` |
+
+The post-observation per form pass is the constant `OBSERVE_MS` (30 s),
+not a variable.
 
 The protocol holds no keys, seeds, tokens, payloads or error texts: only
 shortened DIDs, digest prefixes, counts, hosts and values from fixed lists.

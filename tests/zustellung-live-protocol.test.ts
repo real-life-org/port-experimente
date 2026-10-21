@@ -256,6 +256,13 @@ describe('E11b env: each value released on its own', () => {
       expect(msg).toContain('E11B_RUNS')
       assertClean(msg)
     }
+    // switches: only `1` enables (CodeRabbit); `0`, `false` or any other value keeps them off
+    for (const v of ['0', 'false', 'no', 'true', ' 1']) {
+      const c0 = parseEnv({ MEDIATOR_ALLOW_INSECURE: v, RLTP_WIRE_DEBUG: v })
+      expect([c0.allowInsecure, c0.debug]).toEqual([false, false])
+    }
+    const c1 = parseEnv({ MEDIATOR_ALLOW_INSECURE: '1', RLTP_WIRE_DEBUG: '1' })
+    expect([c1.allowInsecure, c1.debug]).toEqual([true, true])
     expect(() => parseEnv({ E11B_TIMEOUT_MS: '0' })).toThrow(/E11B_TIMEOUT_MS/)
     expect(() => parseEnv({ E11B_FORMS: `D-c,${MARKER}` })).toThrow(/E11B_FORMS/)
     expect(() => parseEnv({ MEDIATOR_DID: `not a did ${MARKER}` })).toThrow(/MEDIATOR_DID/)
