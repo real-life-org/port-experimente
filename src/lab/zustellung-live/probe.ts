@@ -34,6 +34,8 @@ export interface ProbeDeps {
   stderr?: (line: string) => void
   /** Post-observation window; the constant `OBSERVE_MS` unless a test shortens it. */
   observeMs?: number
+  /** Test seams only (offline counterproofs); the live probe passes none. */
+  hooks?: { beforeAckCheck?: () => Promise<void> }
 }
 
 export interface ProbeRun {
@@ -113,6 +115,27 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
   const failures: E11bError[] = []
   let anySessionOk = false
   let precondition: E11bError | null = null
+  const afterCloseEvents: Array<{ group: string; socket: string; session: 'main' | 'fresh'; recordId: string | null; cls: FrameClass; tMs: number }> = []
+
+  // ── callbacks in flight (review 1 C1) ──
+  // Every accepted callback is tracked; a pass closes its sockets and the probe takes its
+  // snapshot only after all of them settled. After the snapshot (`finished`) callbacks do nothing.
+  let finished = false
+  const pending = new Set<Promise<void>>()
+  const track = (p: Promise<void>) => {
+    pending.add(p)
+    const done = () => void pending.delete(p)
+    p.then(done, done)
+    return p
+  }
+  /** Wait until no callback is in flight (bounded by the delivery window); a hang invalidates the run. */
+  const settle = async () => {
+    const deadline = now() + timeoutMs
+    while (pending.size > 0 && now() < deadline) await Promise.race([Promise.allSettled([...pending]), sleep(deadline - now())])
+    if (pending.size > 0) failures.push(new E11bError('probe', 'timeout'))
+    // one macrotask, so a session wrapper records a consumer exception before `close()` collects it
+    await new Promise<void>((r) => setImmediate(r))
+  }
 
   // ── waiting ──
   const waiters = new Set<() => void>()
@@ -222,11 +245,13 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
       await send(receiver, 'ack', enc.encode(jcs(ackEnv)), { dir: docRecord.dir === 'x2y' ? 'y2x' : 'x2y', run: docRecord.run, docRow: docRecord.id, recordId: `${docRecord.id}/ack` })
     }
 
-    const handler = (st: SideState, which: 'conn' | 'egress', fresh: boolean) => async (qb2: Uint8Array, text: string) => {
-      const t = now()
-      const socket = `${st.side.label}.${which}`
-      const session = fresh ? st.fresh : st.sessions[which]
-      const c = await classifyFrame(qb2, {
+    // End of observation (review 1 C1): `closedAt` (main sessions) and `freshClosedAt` (fresh
+    // delete-to-ack sessions) are fixed acceptance deadlines. A callback entering later is only
+    // listed as `after-close`: no counters, no transitions, no acks, no pickup ack.
+    let closedAt: number | null = null
+    let freshClosedAt: number | null = null
+    const classify = (st: SideState, which: 'conn' | 'egress', socket: string, qb2: Uint8Array) =>
+      classifyFrame(qb2, {
         list: which === 'conn' ? st.listConn : st.listEgress,
         registry,
         xrfi,
@@ -234,6 +259,25 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
         resolve: (rkid) => (rkid === st.side.party.rkid ? st.side.party.x.priv : undefined),
         completed: st.completed,
       })
+    const afterClose = async (st: SideState, which: 'conn' | 'egress', fresh: boolean, qb2: Uint8Array, t: number) => {
+      const socket = `${st.side.label}.${which}`
+      try {
+        const c = await classify(st, which, socket, qb2)
+        afterCloseEvents.push({ group: groupId, socket, session: fresh ? 'fresh' : 'main', recordId: c.recordId ?? null, cls: c.cls, tMs: rt(t) })
+      } catch (e) {
+        failures.push(translate(e, 'classify'))
+      }
+    }
+    const handler = (st: SideState, which: 'conn' | 'egress', fresh: boolean) => (qb2: Uint8Array, text: string) => {
+      const t = now()
+      if (finished) return Promise.resolve()
+      const end = fresh ? freshClosedAt : closedAt
+      return track(end !== null && t > end ? afterClose(st, which, fresh, qb2, t) : handle(st, which, fresh, qb2, text, t))
+    }
+    const handle = async (st: SideState, which: 'conn' | 'egress', fresh: boolean, qb2: Uint8Array, text: string, t: number) => {
+      const socket = `${st.side.label}.${which}`
+      const session = fresh ? st.fresh : st.sessions[which]
+      const c = await classify(st, which, socket, qb2)
       classCounts[c.cls] = (classCounts[c.cls] ?? 0) + 1
       // Reservation (review 1 C2): two copies classified concurrently both get `unique` from
       // receive(), since `completed` grows only after the effect. The first copy reserves the
@@ -267,6 +311,7 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
         }
       }
       if (c.cls === 'ack' && c.received) {
+        await deps.hooks?.beforeAckCheck?.()
         const chk: AckCheck = c.verdict === 'unique' ? await st.ledger.checkAck(c.received, t) : { valid: false, inTime: false, reason: 'not-unique', t }
         if (chk.rowId) {
           const prev = ackChecks.get(chk.rowId)
@@ -339,9 +384,12 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
       // Post-observation from the last send of the pass; later acks do not extend it.
       await sleep(lastSend + observeMs - now())
     } finally {
+      // Fix the deadline, let accepted callbacks finish (they may still send acks), then close.
+      closedAt = now()
+      await settle()
       closeAll()
     }
-    const closedAt = now()
+    const passClosedAt = closedAt
 
     if (stage === 0 && DELETE_TO_ACK_FORMS.includes(form)) {
       try {
@@ -350,13 +398,15 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
       } catch (e) {
         notes.push({ kind: 'form-aborted', form, cls: translate(e, 'login').cls })
       } finally {
+        freshClosedAt = now()
+        await settle()
         for (const st of states) st.fresh?.close()
       }
     }
 
     for (const rec of registry.all()) {
       if (rec.group !== groupId || rec.kind === 'ack') continue
-      const row = evaluateRow(rec, events, ackChecks.get(rec.id), { timeoutMs, closedAt })
+      const row = evaluateRow(rec, events, ackChecks.get(rec.id), { timeoutMs, closedAt: passClosedAt })
       rows.push(row)
       debug('row', rowView(row, rec))
     }
@@ -412,6 +462,9 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
     }
   }
 
+  // Snapshot (review 1 C1): no callback in flight, later ones are ignored.
+  await settle()
+  finished = true
   const total = counters.total()
   for (const cls of total.consumerFailures) failures.push(new E11bError('consumer', cls))
   if (total.consumerFailures.length) notes.push({ kind: 'consumer-failure', form: null, cls: total.consumerFailures[0] ?? null })
@@ -474,12 +527,13 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
     acks,
     controls,
     xrfi: xrfi.all().map((x) => ({ group: x.group, socket: x.socket, threadDigest: short8(x.threadDigest), tSendMs: rt(x.tSend) })),
-    events: { unassigned, fresh: freshEvents },
+    events: { unassigned, fresh: freshEvents, afterClose: afterCloseEvents },
     counters: { classes: classCounts, perScope: [...counters.scopes.entries()].map(([k, s]) => countersView(k, s)), total: countersView('total', total) },
     costs,
     result: { table, outcome, error: precondition ? { stage: precondition.stage, cls: precondition.cls } : fatal ? { stage: fatal.stage, cls: fatal.cls } : null, notes, baseline, valid: failures.length === 0 },
   }
-  return { protocol, failures, valid: failures.length === 0 }
+  // A deep copy: nothing that still holds a reference to the probe's state can change the result.
+  return { protocol: structuredClone(protocol), failures: [...failures], valid: failures.length === 0 }
 }
 
 function linkable(states: SideState[]): boolean {
@@ -516,7 +570,7 @@ export function preconditionProtocol(cfg: LiveConfig, versions: Versions, err: E
       acks: [],
       controls: [],
       xrfi: [],
-      events: { unassigned: [], fresh: [] },
+      events: { unassigned: [], fresh: [], afterClose: [] },
       counters: { classes: {}, perScope: [], total: countersView('total', new Counters().total()) },
       costs: [],
       result: { table: [], outcome: 'precondition-failed', error: { stage: err.stage, cls: err.cls }, notes: [], baseline: [], valid: true },

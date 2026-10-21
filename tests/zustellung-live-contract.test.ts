@@ -25,7 +25,7 @@ import {
   type SendRecord,
   type TableRow,
 } from '../src/lab/zustellung-live'
-import { FAKE_DID, FakeMediator, fakeInfo, mediatorKeys, type FakeOptions } from './zustellung-live-fixtures'
+import { delayedPort, FAKE_DID, FakeMediator, fakeInfo, mediatorKeys, type FakeOptions } from './zustellung-live-fixtures'
 
 const VERSIONS = { tsp: '0.3.0', didcomm: '0.12.0', trustProtocol: '0.3.2', node: 'v24' }
 const T = '2026-10-21T00:00:00.000Z'
@@ -283,5 +283,68 @@ describe('E11b concurrent copies (review 1 C2)', () => {
     expect(new Set(ids).size).toBe(4)
     // the copies are counted as receipt events, the second one never as unique
     expect(docs.every((x: { events: number }) => x.events === 2)).toBe(true)
+  }, 60_000)
+})
+
+describe('E11b end of observation (review 1 C1)', () => {
+  it('a receipt one millisecond after closedAt is not counted; at closedAt it is (bound inclusive)', () => {
+    const o = { timeoutMs: 2000, closedAt: 1000 }
+    expect(evaluateRow(rec('probe'), [ev({ cls: 'probe', t: 1001 })], undefined, o)).toMatchObject({ received: 'no', outcome: 'not-shown', firstFailed: 'received', events: 0 })
+    expect(evaluateRow(rec('probe'), [ev({ cls: 'probe', t: 1000 })], undefined, o)).toMatchObject({ received: 'in-window', outcome: 'positive', events: 1 })
+    // an ack received after closedAt does not count either
+    expect(evaluateRow(rec('doc'), [ev({ cls: 'doc', verdict: 'unique', t: 900 })], okAck(1001), o)).toMatchObject({ ackValid: false, ackReason: 'no-ack', outcome: 'not-shown' })
+  })
+
+  const setup = async (o: Partial<FakeOptions> = {}) => {
+    const keys = mediatorKeys()
+    const info = await fakeInfo(keys)
+    const counters = new Counters()
+    const base = new FakeMediator(FAKE_DID, keys, { direct: 'socket-sender', routed: 'forward', invite: 'none', ...o }, counters)
+    return { info, counters, base }
+  }
+
+  it('callbacks arriving after the form pass closed and after the probe returned change nothing in the returned protocol', async () => {
+    const { info, counters, base } = await setup()
+    // every frame reaches the handler 250 ms late: the last document of the pass arrives after closedAt
+    const port = delayedPort(base, () => 250)
+    const cfg = parseEnv({ E11B_RUNS: '1', E11B_TIMEOUT_MS: '100', E11B_FORMS: 'D-c' })
+    const r = await runProbe(cfg, { info, port, counters, versions: VERSIONS, rand: seededRand(42), observeMs: 50 })
+    const at = protocolJson(r.protocol)
+    const valid = r.valid
+    await new Promise((res) => setTimeout(res, 800))
+    expect(protocolJson(r.protocol)).toBe(at)
+    expect(r.valid).toBe(valid)
+    const p = JSON.parse(at)
+    expect(p.events.afterClose.length).toBeGreaterThan(0)
+    // nothing received after closedAt counts in a row
+    const docs = p.rows.filter((x: { kind: string }) => x.kind === 'doc')
+    expect(docs.some((x: { received: string }) => x.received === 'no')).toBe(true)
+  }, 60_000)
+
+  it('a handler still verifying an ack at the end of the pass is awaited before the result is frozen', async () => {
+    const { info, counters, base } = await setup()
+    let started = 0
+    let finished = 0
+    const cfg = parseEnv({ E11B_RUNS: '1', E11B_TIMEOUT_MS: '100', E11B_FORMS: 'D-c' })
+    const r = await runProbe(cfg, {
+      info,
+      port: base,
+      counters,
+      versions: VERSIONS,
+      rand: seededRand(42),
+      observeMs: 50,
+      hooks: {
+        beforeAckCheck: async () => {
+          started++
+          await new Promise((res) => setTimeout(res, 400))
+          finished++
+        },
+      },
+    })
+    expect(started).toBeGreaterThan(0)
+    expect(finished).toBe(started)
+    const at = protocolJson(r.protocol)
+    await new Promise((res) => setTimeout(res, 600))
+    expect(protocolJson(r.protocol)).toBe(at)
   }, 60_000)
 })

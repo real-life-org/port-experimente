@@ -185,6 +185,7 @@ export const PROTOCOL_SCHEMA = obj({
   events: obj({
     unassigned: arr(obj({ group: label, socket: label, size: int, cls: CLASS, tMs: int })),
     fresh: arr(obj({ group: label, socket: label, recordId: n(label), cls: CLASS, kind: e(['redelivered', 'first-in-fresh', 'unassigned']), tMs: int })),
+    afterClose: arr(obj({ group: label, socket: label, session: e(['main', 'fresh']), recordId: n(label), cls: CLASS, tMs: int })),
   }),
   counters: obj({ classes: rec(FRAME_CLASSES, int), perScope: arr(COUNTERS), total: COUNTERS }),
   costs: arr(

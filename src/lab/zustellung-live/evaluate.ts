@@ -123,12 +123,15 @@ function successful(e: RecvEvent, kind: 'probe' | 'doc'): boolean {
 /**
  * Row predicates in order of precedence. The pick is the first successful receipt
  * (a later duplicate never replaces an earlier `unique`), else the first event.
- * Events from the fresh delete-to-ack session never count (`first-in-fresh` does not change the row).
+ * Events from the fresh delete-to-ack session never count (`first-in-fresh` does not change the row),
+ * nor does any receipt or ack after `closedAt`.
  */
 export function evaluateRow(record: SendRecord, allEvents: RecvEvent[], ack: AckCheck | undefined, opts: { timeoutMs: number; closedAt: number }): RowResult {
   if (record.kind === 'ack') throw new Error('e11b: ack records have no row')
   const kind = record.kind
-  const events = allEvents.filter((e) => e.recordId === record.id && !e.fresh).sort((a, b) => a.t - b.t)
+  // Only receipts up to the end of observation count (review 1 C1); `closedAt` itself is inside.
+  const events = allEvents.filter((e) => e.recordId === record.id && !e.fresh && e.t <= opts.closedAt).sort((a, b) => a.t - b.t)
+  if (ack && ack.t > opts.closedAt) ack = undefined
   const pick = events.find((e) => successful(e, kind)) ?? events[0]
   const base: RowResult = {
     id: record.id,
