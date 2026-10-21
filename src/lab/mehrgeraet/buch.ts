@@ -113,6 +113,15 @@ export interface BenchEvent {
   detail?: Record<string, unknown>
 }
 
+/** An exception an observer hook threw; the seam caught it (holder, carrier) and went on. */
+export interface ObserverError {
+  seq: number
+  at: string
+  hook: string
+  device: string | null
+  message: string
+}
+
 const b64hash = (b64: string) => frameHash(Buffer.from(b64, 'base64'))
 
 export class Buch implements HolderObserver {
@@ -121,6 +130,7 @@ export class Buch implements HolderObserver {
   readonly carrier = { revisions: [] as CarrierRevision[], tickets: [] as CarrierTicket[], receipts: [] as CarrierReceipt[], other: 0, unknown: 0 }
   readonly deliveries: Delivery[] = []
   readonly events: BenchEvent[] = []
+  readonly errors: ObserverError[] = []
   /** Productions by frame hash (a frame names its document) and by document digest. */
   private readonly byFrame = new Map<string, Production>()
   private readonly byDigest = new Map<string, Production>()
@@ -132,6 +142,11 @@ export class Buch implements HolderObserver {
   attach(w: Welt15): void {
     this.now = () => w.clock.now()
     w.carrier.observe = (f) => this.deposited(f)
+    w.carrier.observeFailed = (_f, e) => this.failed(null, 'carrier', e)
+  }
+  /** An observer hook threw (holder or carrier caught it): recorded, nothing else happens. */
+  failed(d: HolderDevice | null, hook: string, error: unknown): void {
+    this.errors.push({ ...this.next(), hook, device: d?.name ?? null, message: error instanceof Error ? error.message : String(error) })
   }
   private next() {
     return { seq: ++this.seq, at: this.now() }

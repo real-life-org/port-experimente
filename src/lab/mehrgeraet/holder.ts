@@ -408,6 +408,8 @@ export type ActionResult = 'ok' | 'blocked' | 'crashed'
  * E15 K2 step 2b.0: the bench's observation seam for the outcome ledger (`buch.ts`). Pure observation: every call hands
  * out the device's own values (its committed image, the plaintext of a document it built, a document its parser admitted)
  * and nothing it returns is read; no decision of the device depends on it. Unset (`null`) everywhere but in ledger runs.
+ * Fail-safe (Tor-Review 42 (a)): an exception in a hook is caught at the seam, handed to `failed` and the device goes on
+ * exactly as without an observer.
  */
 export interface HolderObserver {
   /** A successful store commit of this device; `image` is what the store now holds (the observer copies what it keeps). */
@@ -416,6 +418,8 @@ export interface HolderObserver {
   produced(d: HolderDevice, p: { digest: string; type: string; issuer: string; recipient: string; payload: Record<string, Json>; frames: Uint8Array[] }): void
   /** A document delivered to this device that passed its parser's form checks (MV-24), before the fold decides on it. */
   admitted(d: HolderDevice, a: { digest: string; type: string; issuer: string; address: string; payload: Record<string, unknown> }): void
+  /** A hook above threw; the seam caught it (an exception here is swallowed too). */
+  failed?(d: HolderDevice, hook: 'committed' | 'produced' | 'admitted', error: unknown): void
 }
 
 export class HolderDevice {
@@ -433,6 +437,8 @@ export class HolderDevice {
   readonly crashes: CrashPoint[] = []
   /** E15 2b.0: observation seam for the outcome ledger (bench only, never read back). */
   observer: HolderObserver | null = null
+  /** Exceptions observer hooks threw (caught at the seam, never read by the device). */
+  observerFailures = 0
   measures: Measures = { framesOut: 0, bytesOut: 0, ownFramesOut: 0, ownBytesOut: 0, blocked: 0, unboundAcks: 0 }
   private down = false
   private counter = 0
@@ -854,7 +860,22 @@ export class HolderDevice {
     if (!this.store) return
     const image = this.snapshotState()
     this.store.commit(image)
-    this.observer?.committed(this, image)
+    this.observe('committed', (o) => o.committed(this, image))
+  }
+  /** The fail-safe observation seam: a hook that throws changes nothing in what the device does next (Tor-Review 42 (a)). */
+  private observe(hook: 'committed' | 'produced' | 'admitted', f: (o: HolderObserver) => void): void {
+    const o = this.observer
+    if (!o) return
+    try {
+      f(o)
+    } catch (e) {
+      this.observerFailures++
+      try {
+        o.failed?.(this, hook, e)
+      } catch {
+        // the report of a failed hook may fail too; the device goes on
+      }
+    }
   }
   /** Neuaufbau aus dem Store (#57): alles Flüchtige wird aus dem Abbild ersetzt, nichts bleibt aus dem alten Lauf. */
   async reload(): Promise<void> {
@@ -1002,7 +1023,7 @@ export class HolderDevice {
     const digest = await digestBytes(enc.encode(jcs(doc)))
     const kind = type === TYPES.journalSync ? (payload.reply ? 'journal-sync-reply' : 'journal-sync') : (type.split('/').slice(-2)[0] ?? type)
     for (const f of frames) this.produced.set(frameHash(f.frame), kind)
-    this.observer?.produced(this, { digest, type, issuer: k.anchor, recipient, payload, frames: frames.map((f) => f.frame) })
+    this.observe('produced', (o) => o.produced(this, { digest, type, issuer: k.anchor, recipient, payload, frames: frames.map((f) => f.frame) }))
     this.zusteller.record(digest, bytes, address, extra.length ? extra : undefined)
     this.held.push(digest)
     this.expected.set(digest, recipient)
@@ -2258,7 +2279,7 @@ export class HolderDevice {
     const ackBytes = enc.encode(jcs(ackEnv))
     const ackDigest = await digestBytes(enc.encode(jcs(ackDoc)))
     this.produced.set(frameHash(ackBytes), 'delivery-ack')
-    this.observer?.produced(this, { digest: ackDigest, type: TYPES.ack, issuer: k.anchor, recipient: doc.issuer, payload: { ref: v.digest!, meaning: 'received' }, frames: [ackBytes] })
+    this.observe('produced', (o) => o.produced(this, { digest: ackDigest, type: TYPES.ack, issuer: k.anchor, recipient: doc.issuer, payload: { ref: v.digest!, meaning: 'received' }, frames: [ackBytes] }))
     this.acks.set(v.digest!, { frame: ackBytes, digest: ackDigest, address: doc.replyTo })
     this.zusteller.record(ackDigest, ackBytes, doc.replyTo)
     this.held.push(ackDigest)
@@ -2297,7 +2318,7 @@ export class HolderDevice {
 
   /** E15 2b.0: a document that passed its form checks, for the outcome ledger (observation only). */
   private admitted(doc: Doc, address: string, digest: string): void {
-    this.observer?.admitted(this, { digest, type: doc.type, issuer: doc.issuer, address, payload: doc.payload as Record<string, unknown> })
+    this.observe('admitted', (o) => o.admitted(this, { digest, type: doc.type, issuer: doc.issuer, address, payload: doc.payload as Record<string, unknown> }))
   }
 
   /** Fachliche Auswertung je Typ; true = Wirkung (quittieren), false = abgewiesen (keine Quittung). Jeder Zweig bindet das Dokument an den erwarteten Signierer (#55). */

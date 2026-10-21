@@ -196,8 +196,12 @@ export class Carrier {
   readonly dropDeliveryTo = new Set<string>()
   /** Nächste Einlieferung geht still verloren (einmal). */
   dropNextDeposit = false
-  /** E15 K2 2b.0: observation seam for the outcome ledger: every frame the carrier took (before any drop rule). Never read back. */
+  /**
+   * E15 K2 2b.0: observation seam for the outcome ledger: every frame the carrier took (before any drop rule). Never read
+   * back. Fail-safe (Tor-Review 42 (a)): an exception in it goes to `observeFailed` and the deposit goes on unchanged.
+   */
   observe: ((f: Frame) => void) | null = null
+  observeFailed: ((f: Frame, error: unknown) => void) | null = null
   /** Rahmen, die eine drop-Regel verschluckt hat. */
   readonly swallowed: Frame[] = []
   private dropRules: Array<(f: Frame) => boolean> = []
@@ -270,7 +274,17 @@ export class Carrier {
     if (this.unreachable) throw new WireUnreachable('Träger unerreichbar')
     const f: Frame = { id: ++this.seq, address, bytes }
     this.carried.push(f)
-    this.observe?.(f)
+    if (this.observe) {
+      try {
+        this.observe(f)
+      } catch (e) {
+        try {
+          this.observeFailed?.(f, e)
+        } catch {
+          // the report of a failed hook may fail too; the carrier goes on
+        }
+      }
+    }
     if (this.dropNextDeposit) {
       this.dropNextDeposit = false
       return

@@ -35,9 +35,9 @@ const rng = vi.hoisted(() => ({
 }))
 vi.mock('node:crypto', async (importOriginal) => ({ ...(await importOriginal<typeof import('node:crypto')>()), randomBytes: (n: number) => rng.bytes(n), randomUUID: () => rng.uuid() }))
 
-import { TYPES, type HolderDevice } from '../src/lab/mehrgeraet/holder'
+import { frameHash, TYPES, type HolderDevice } from '../src/lab/mehrgeraet/holder'
 import { ledgerWorld, pCommit, pEinmal, pPaar, pProduktion, type Buch } from '../src/lab/mehrgeraet/buch'
-import { generate, report, runSequence, show, shrink, type GenEvent, type Mutation } from '../src/lab/mehrgeraet/generator'
+import { generate, report, runSequence, show, shrink, type GenEvent, type GenWorld, type Mutation } from '../src/lab/mehrgeraet/generator'
 import { k2 } from '../src/candidates/mehrgeraet-k2'
 import * as M from '../src/lab/mehrgeraet/model'
 
@@ -354,5 +354,41 @@ describe('K2 step 2b.0: D1 (design review 1, Astra) as a fixed test', () => {
     // Soll (draft 3 §7.2): 1 accepted act id on x over the whole history (P-Einmal). Step 2a: A_x's lost incarnation
     // accepted α, its rebuilt incarnation accepts β → 2.
     expect([...(buch.acceptedOn().get(x) ?? [])].length, `accepted on x: ${[...(buch.acceptedOn().get(x) ?? [])].join(', ')}`).toBe(1)
+  }, 120_000)
+})
+
+describe('K2 step 2b.0: the observation seam is fail-safe (Tor-Review 42 (a))', () => {
+  it('N1. Observers that throw in every hook (committed, produced, admitted, carrier) leave holder and carrier exactly as without observers; the errors land in the ledger', async () => {
+    // U4's sequence (issuance, both consents, connect): every hook fires.
+    const seq: GenEvent[] = [{ k: 'introduce' }, { k: 'round' }, { k: 'round' }, { k: 'consent', device: 'A1' }, { k: 'consent', device: 'B1' }, { k: 'round' }, { k: 'round' }, { k: 'round' }, { k: 'round' }]
+    const outcome = (g: GenWorld) => M.canonical({ devices: g.w.devices.map((d) => [d.name, d.state, d.dispositions]), carried: g.w.carrier.carried.map((f) => [f.address, frameHash(f.bytes)]), introduced: g.buch.events.filter((e) => e.kind === 'introduce').map((e) => e.detail?.result) })
+    let quiet: GenWorld | undefined
+    let loud: GenWorld | undefined
+    await runSequence(cand, seq, {
+      seed: 41,
+      reseed,
+      mutation: (g) => {
+        quiet = g
+        for (const d of g.w.devices) d.observer = null
+        g.w.carrier.observe = null
+      },
+    })
+    await runSequence(cand, seq, {
+      seed: 41,
+      reseed,
+      mutation: (g) => {
+        loud = g
+        const boom = (hook: string) => () => {
+          throw new Error(`observer failed in ${hook}`)
+        }
+        g.buch.committed = boom('committed')
+        g.buch.produced = boom('produced')
+        g.buch.admitted = boom('admitted')
+        g.w.carrier.observe = boom('carrier')
+      },
+    })
+    expect(outcome(loud!)).toBe(outcome(quiet!))
+    // Soll: each hook fired at least once in the sequence and its error was recorded, none escaped.
+    expect([...new Set(loud!.buch.errors.map((e) => e.hook))].sort()).toEqual(['admitted', 'carrier', 'committed', 'produced'])
   }, 120_000)
 })
