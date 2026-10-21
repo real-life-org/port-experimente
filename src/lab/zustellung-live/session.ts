@@ -5,6 +5,8 @@
 // says so; unlike the template it neither swallows a consumer exception (it is
 // recorded, the probe fails) nor prints raw error texts. No session keeps the
 // default `onError` (review 3 C6). The injected resolver goes into every login.
+// The whole processing of every inbound frame, DIDComm included, runs under the
+// probe's lifecycle (`SessionLife`, gate review 3 C1).
 
 import { authenticateToMediator, isTspFrameText, MediatorSession } from '@openvtc/vti-didcomm-js'
 import { E11bError, translate, type ErrorClass } from './errors'
@@ -22,9 +24,22 @@ export interface PortSession {
   close(): void
 }
 
+/**
+ * The probe's lifecycle, shared by every frame a session processes (gate review 3 C1). The
+ * library's own processing (DIDComm unpack, `onMessage`, `onError`) runs outside the TSP handler;
+ * it is registered here so the probe settles it like a TSP handler, and its counter changes stop
+ * once the probe no longer accepts them.
+ */
+export interface SessionLife {
+  /** Registers the whole processing of one inbound frame with the probe's settle. */
+  track(p: Promise<void>): void
+  /** False once the probe was cancelled or its snapshot taken: no session counter changes after that. */
+  accepting(): boolean
+}
+
 export interface MediatorPort {
   /** ATM login as `id`, open the socket, enable live delivery. Throws `E11bError` (stage login or socket). */
-  open(id: WireIdentity, label: string, onTsp: TspHandler): Promise<PortSession>
+  open(id: WireIdentity, label: string, onTsp: TspHandler, life?: SessionLife): Promise<PortSession>
 }
 
 // ── Counters (draft 3 §7 RT7, review 3 C4/H2) ────────────────────────────────
@@ -125,10 +140,11 @@ export class Counters {
   }
 }
 
-/** Byte accounting of one socket, attributed to the scope the session was opened in. */
-export function byteSink(c: ScopeCounters) {
+/** Byte accounting of one socket, attributed to the scope the session was opened in; counts only while `accepting()`. */
+export function byteSink(c: ScopeCounters, accepting: () => boolean = () => true) {
   return {
     outbound(data: unknown) {
+      if (!accepting()) return
       if (typeof data === 'string') c.bytes.out.socket += enc.encode(data).length
       else if (data instanceof Uint8Array) {
         // Only TSP goes out as binary (sendBinary).
@@ -138,6 +154,7 @@ export function byteSink(c: ScopeCounters) {
       } else if (data instanceof ArrayBuffer) c.bytes.out.socket += data.byteLength
     },
     inbound(data: unknown) {
+      if (!accepting()) return
       if (typeof data === 'string') {
         const n = enc.encode(data).length
         c.bytes.in.socket += n
@@ -172,11 +189,19 @@ export function countingWebSocket(Base: WsCtor, sink: ReturnType<typeof byteSink
 export class ProbeMediatorSession extends MediatorSession {
   handler: TspHandler | null = null
   failures: ErrorClass[] = []
+  life: SessionLife | null = null
+  /** Every inbound frame, TSP or DIDComm, is registered with the probe's settle when it arrives (gate review 3 C1). */
+  override _onFrame(data: unknown): Promise<void> {
+    const p = super._onFrame(data)
+    this.life?.track(p)
+    return p
+  }
   override async _dispatchTspFrame(qb2: Uint8Array, text: string): Promise<void> {
     if (!this.handler) return
     try {
       await this.handler(qb2, text)
     } catch (e) {
+      if (this.life && !this.life.accepting()) return
       this.failures.push(translate(e, 'consumer').cls)
     }
   }
@@ -195,8 +220,9 @@ export interface LivePortOptions {
 export function liveMediatorPort(info: MediatorInfo, opts: LivePortOptions): MediatorPort {
   const Base: WsCtor = opts.WebSocketImpl ?? (globalThis.WebSocket as unknown as WsCtor)
   return {
-    async open(id, label, onTsp) {
+    async open(id, label, onTsp, life) {
       const scope = opts.counters.scope()
+      const accepting = () => life?.accepting() ?? true
       scope.logins.attempted++
       let auth: Awaited<ReturnType<typeof authenticateToMediator>>
       try {
@@ -218,16 +244,18 @@ export function liveMediatorPort(info: MediatorInfo, opts: LivePortOptions): Med
         mediator: auth.mediator,
         mediatorJwt: auth.accessToken,
         client: { did: id.did, kid: id.kid, privateKey: id.xSecret, publicKey: id.xPublic },
-        WebSocketImpl: countingWebSocket(Base, byteSink(scope)),
+        WebSocketImpl: countingWebSocket(Base, byteSink(scope, accepting)),
         ...(opts.netPolicy ? { netPolicy: opts.netPolicy } : {}),
         onTspFrame: () => {},
         onError: (_err: unknown, ctx?: { stage?: unknown }) => {
+          if (!accepting()) return
           const st = frameErrorStage(ctx?.stage)
           const e = (scope.frameErrors[st] ??= { acked: 0, notAcked: 0 })
           if (st === 'refused-dropped') e.acked++
           else e.notAcked++
         },
         onMessage: (m: { type?: unknown; body?: { code?: unknown } }) => {
+          if (!accepting()) return
           const t = didcommType(m?.type)
           scope.didcomm[t] = (scope.didcomm[t] ?? 0) + 1
           if (t === 'https://didcomm.org/report-problem/2.0/problem-report') {
@@ -238,6 +266,7 @@ export function liveMediatorPort(info: MediatorInfo, opts: LivePortOptions): Med
       } as never)
       session.onMediatorMessage = session.onMessage
       session.handler = onTsp
+      session.life = life ?? null
       try {
         await session.connect()
       } catch (e) {

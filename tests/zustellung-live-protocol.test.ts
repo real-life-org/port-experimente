@@ -7,7 +7,7 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { multibase } from '@openvtc/vti-didcomm-js'
+import { jwk, MediatorSession, multibase, pack as didcommPack } from '@openvtc/vti-didcomm-js'
 import { pack } from '@openvtc/vti-tsp-js'
 import {
   byteSink,
@@ -27,9 +27,10 @@ import {
   summarizeMediator,
   translate,
   ROW_SCHEMA,
+  type MediatorPort,
   type ResolvedDoc,
 } from '../src/lab/zustellung-live'
-import { FAKE_DID, FakeMediator, fakeDoc, mediatorKeys, markerForms, markerRand } from './zustellung-live-fixtures'
+import { deferred, FAKE_DID, FakeMediator, fakeDoc, instrumentedPort, mediatorKeys, markerForms, markerRand } from './zustellung-live-fixtures'
 
 const VERSIONS = { tsp: '0.3.0', didcomm: '0.12.0', trustProtocol: '0.3.2', node: 'v24.21.0' }
 const MARKER = 'MRK_x7Q2_SEC'
@@ -324,6 +325,153 @@ describe('E11b mediator document: routing variants (review 3 C2)', () => {
     const webvh = await summarizeMediator(FAKE_DID, doc(target), resolveOther)
     expect([webvh.primeNote, webvh.prime?.firstHopVid, webvh.prime?.methodRef, webvh.prime?.sourceDocVersion]).toEqual(['measured', target, 'key-1', '5-QmAbcdef'])
   })
+})
+
+// Review 3 C1: the library's own frame processing (DIDComm unpack, `onMessage`, `onError`) runs
+// under the same settle as the TSP handlers. A correctly encrypted mediator status and an
+// unparsable frame arrive while a pass settles; a barrier holds the frame processing before the
+// unpack (decryption). Released within the settle: both are counted in the snapshot. Held past
+// the settle timeout: the run is invalid and releasing them afterwards changes no counter.
+describe('E11b session-wide settle (review 3 C1)', () => {
+  const STATUS = 'https://didcomm.org/messagepickup/3.0/status'
+  async function sessionProbe(timeoutMs: number, release: 'during-settle' | 'after-return') {
+    const keys = mediatorKeys()
+    const { info, counters, port: base } = await livePort('ok')
+    FakeWs.instances = []
+    const frames: Array<{ ws: FakeWs; status: string }> = []
+    // Every session gets a status packed by the mediator to its own client key.
+    const port: MediatorPort = {
+      open: async (...args: Parameters<MediatorPort['open']>) => {
+        const s = await base.open(...args)
+        const id = args[0]
+        const status = await didcommPack({
+          message: { id: crypto.randomUUID(), type: STATUS, from: info.did, to: [id.did], created_time: Math.floor(Date.now() / 1000), body: { message_count: 0 } },
+          sender: { kid: `${info.did}#key-1`, privateJwk: jwk.privateJwk('X25519', keys.xSecret, keys.xPublic) },
+          recipient: { kid: id.kid, publicJwk: jwk.publicJwk('X25519', id.xPublic) },
+        })
+        frames.push({ ws: FakeWs.instances.at(-1)!, status })
+        return s
+      },
+    }
+    const garbage = '{"protected":"held"}'
+    const targets = new Set<string>([garbage])
+    const gate = deferred()
+    let processed = 0
+    const orig = MediatorSession.prototype._onFrame
+    const spy = vi.spyOn(MediatorSession.prototype, '_onFrame').mockImplementation(async function (this: MediatorSession, data: unknown) {
+      if (!targets.has(data as string)) return orig.call(this, data)
+      await gate.promise
+      await orig.call(this, data)
+      processed++
+    })
+    let delivered = false
+    const cfg = parseEnv({ E11B_RUNS: '1', E11B_TIMEOUT_MS: String(timeoutMs), E11B_FORMS: 'D-es' })
+    try {
+      const r = await runProbe(cfg, {
+        info,
+        port,
+        counters,
+        versions: VERSIONS,
+        rand: seededRand(42),
+        observeMs: 50,
+        hooks: {
+          settling: (phase) => {
+            if (phase !== 'pass' || delivered) return
+            delivered = true
+            const last = frames.at(-1)!
+            targets.add(last.status)
+            last.ws.deliver(last.status)
+            last.ws.deliver(garbage)
+            if (release === 'during-settle') setTimeout(() => gate.resolve(), 30)
+          },
+        },
+      })
+      return { r, counters, gate, processed: () => processed, delivered: () => delivered }
+    } finally {
+      // Restoring does not touch invocations already waiting at the barrier.
+      spy.mockRestore()
+    }
+  }
+  const drain = async (done: () => boolean, turns = 10_000) => {
+    for (let i = 0; i < turns && !done(); i++) await new Promise<void>((r) => setImmediate(r))
+    return done()
+  }
+
+  it('DIDComm status and frame error held across the settle start, released within it: both in the snapshot, run valid', async () => {
+    const { r, delivered, processed } = await sessionProbe(400, 'during-settle')
+    expect(delivered()).toBe(true)
+    expect(processed()).toBe(2)
+    expect(r.failures).toEqual([])
+    expect(r.valid).toBe(true)
+    const p = JSON.parse(protocolJson(r.protocol))
+    expect(p.counters.total.didcomm[STATUS]).toBe(1)
+    expect(p.counters.total.frameErrors.unpack).toEqual({ acked: 0, notAcked: 1 })
+  }, 60_000)
+
+  it('held beyond the settle timeout: run invalid with settle-timeout; released after the return, no counter changes', async () => {
+    const { r, counters, gate, processed } = await sessionProbe(100, 'after-return')
+    expect(r.valid).toBe(false)
+    expect(r.failures.map((f) => [f.stage, f.cls])).toContainEqual(['probe', 'settle-timeout'])
+    const at = protocolJson(r.protocol)
+    const total = JSON.stringify(counters.total())
+    expect(total.includes(STATUS)).toBe(false)
+    gate.resolve()
+    expect(await drain(() => processed() === 2)).toBe(true)
+    expect(JSON.stringify(counters.total())).toBe(total)
+    expect(protocolJson(r.protocol)).toBe(at)
+  }, 60_000)
+})
+
+// Review 3 (d): a handler that fails after the cancel with a marker in its error. The failure is
+// discarded: neither the result JSON, nor the debug lines, nor any console or stderr channel, nor
+// an unhandled rejection carries the marker.
+describe('E11b discarded late failure (review 3 d)', () => {
+  it('a late failure carrying a marker after the settle timeout leaves no trace', async () => {
+    const keys = mediatorKeys()
+    const info = await summarizeMediator(FAKE_DID, fakeDoc(keys), async () => {
+      throw new Error('x')
+    })
+    const counters = new Counters()
+    const inst = instrumentedPort(new FakeMediator(FAKE_DID, keys, { direct: 'socket-sender', routed: 'forward', invite: 'none' }, counters))
+    const gate = deferred()
+    const rejections: unknown[] = []
+    const onRejection = (e: unknown) => void rejections.push(e)
+    process.on('unhandledRejection', onRejection)
+    const lines: string[] = []
+    try {
+      const cfg = parseEnv({ E11B_RUNS: '1', E11B_TIMEOUT_MS: '100', E11B_FORMS: 'D-c', RLTP_WIRE_DEBUG: '1' })
+      const r = await runProbe(cfg, {
+        info,
+        port: inst.port,
+        counters,
+        versions: VERSIONS,
+        rand: seededRand(42),
+        observeMs: 50,
+        stderr: (l) => lines.push(l),
+        hooks: {
+          beforeAckCheck: async () => {
+            await gate.promise
+            throw new Error(`late ${MARKER}`, { cause: new Error(MARKER) })
+          },
+        },
+      })
+      expect(r.valid).toBe(false)
+      gate.resolve()
+      for (let i = 0; i < 10_000 && inst.active() > 0; i++) await new Promise<void>((res) => setImmediate(res))
+      await new Promise((res) => setTimeout(res, 20))
+      expect(inst.active()).toBe(0)
+      expect(inst.rejected()).toBe(0)
+      const json = protocolJson(r.protocol)
+      assertClean(json)
+      assertClean(JSON.stringify(r.failures.map((f) => [f.stage, f.cls, String(f), f.stack])))
+      assertClean(lines.join('\n'))
+      assertClean(captured.join('\n'))
+      assertClean(rejections.map((e) => `${String(e)} ${(e as Error)?.stack}`).join('\n'))
+      expect(rejections).toEqual([])
+    } finally {
+      process.off('unhandledRejection', onRejection)
+    }
+  }, 60_000)
 })
 
 describe('E11b byte balance (review 3 C4)', () => {

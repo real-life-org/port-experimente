@@ -454,6 +454,46 @@ describe('E11b end of observation (review 1 C1)', () => {
     }, 60_000)
   }
 
+  it('a settle timeout keeps the rows of its pass (review 3 C2): run invalid, one row per probe and document send, every ack reference resolves, no further pass', async () => {
+    const { info, counters, base } = await setup()
+    const inst = instrumentedPort(base)
+    const gate = deferred()
+    const cfg = parseEnv({ E11B_RUNS: '1', E11B_TIMEOUT_MS: '100', E11B_FORMS: 'D-c,D-es' })
+    const r = await runProbe(cfg, {
+      info,
+      port: inst.port,
+      counters,
+      versions: VERSIONS,
+      rand: seededRand(42),
+      observeMs: 50,
+      hooks: {
+        // every ack check is held past the settle timeout
+        beforeAckCheck: () => gate.promise,
+      },
+    })
+    gate.resolve()
+    expect(r.valid).toBe(false)
+    expect(r.failures.map((f) => [f.stage, f.cls])).toEqual([['probe', 'settle-timeout']])
+    const p = JSON.parse(protocolJson(r.protocol))
+    expect(p.result.valid).toBe(false)
+    expect(p.result.error).toEqual({ stage: 'probe', cls: 'settle-timeout' })
+    const rows = p.rows as Array<{ id: string; kind: string; ackValid: boolean }>
+    expect(rows.filter((x) => x.kind === 'probe').length).toBe(4)
+    const docs = rows.filter((x) => x.kind === 'doc')
+    expect(docs.length).toBe(4)
+    expect(docs.every((x) => !x.ackValid)).toBe(true)
+    const acks = p.acks as Array<{ docRow: string }>
+    expect(acks.length).toBe(4)
+    for (const a of acks) expect(docs.some((d) => d.id === a.docRow)).toBe(true)
+    // sizes and rows agree: every probe and document send has its row
+    const cost = (p.costs as Array<{ form: string; sizes: { probe: { n: number }; doc: { n: number } } }>).find((c) => c.form === 'D-c')!
+    expect([cost.sizes.probe.n, cost.sizes.doc.n]).toEqual([4, 4])
+    // the cancelled pass skips its fresh delete-to-ack session, and no later pass starts
+    expect(p.events.fresh).toEqual([])
+    expect((p.groups as Array<{ id: string }>).map((g) => g.id)).toEqual(['D-c/s0'])
+    expect(rows.every((x) => x.id.startsWith('D-c/s0/'))).toBe(true)
+  }, 60_000)
+
   it('a handler failing before the snapshot (review 2 C1, counterproof 3): the failure is in the snapshot', async () => {
     const { info, counters, base } = await setup()
     const inst = instrumentedPort(base)

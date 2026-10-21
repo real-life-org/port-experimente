@@ -15,7 +15,7 @@ import { makeIdentityGroup, type IdentityGroup, type Side } from './identities'
 import { summarizeMediator, type MediatorInfo, type ResolvedDoc, type RoutingVariant } from './mediator'
 import { debugLine, envSummary, OBSERVE_MS, type LiveConfig } from './protocol'
 import { SendRegistry, XrfiRegistry, type Dir, type Kind, type SendRecord } from './register'
-import { Counters, liveMediatorPort, type MediatorPort, type PortSession, type ScopeCounters } from './session'
+import { Counters, liveMediatorPort, type MediatorPort, type PortSession, type ScopeCounters, type SessionLife } from './session'
 import { cryptoRand, enc, hexOf, median, sha256hex, short8, type Rand } from './util'
 
 export interface Versions {
@@ -130,13 +130,16 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
   let precondition: E11bError | null = null
   const afterCloseEvents: Array<{ group: string; socket: string; session: 'main' | 'fresh'; recordId: string | null; cls: FrameClass; tMs: number }> = []
 
-  // ── callbacks in flight (review 1 C1, review 2 C1) ──
-  // Every accepted callback is tracked; a pass closes its sockets and the probe takes its
-  // snapshot only after all of them settled. After the snapshot (`finished`) callbacks do nothing.
-  // A settle that runs out of time cancels the probe: `cancelled` is checked by every callback
-  // before each state change and each transport effect, so a callback still running after the
-  // cancel changes nothing and sends nothing; its late failure is discarded (the run is already
-  // invalid with `settle-timeout`).
+  // ── callbacks in flight (review 1 C1, review 2 C1, review 3 C1) ──
+  // Every accepted callback is tracked: the TSP handlers, and through `SessionLife` the whole
+  // processing of every inbound frame in the session (DIDComm unpack, status and problem-report
+  // counters, frame errors). A pass closes its sockets and the probe takes its snapshot only after
+  // all of them settled. After the snapshot (`finished`) callbacks do nothing. A settle that runs
+  // out of time cancels the probe: `cancelled` is checked by every TSP callback before each state
+  // change and each transport effect, and by the session before each counter change, so a
+  // callback still running after the cancel changes nothing and sends nothing; its late failure
+  // is discarded (the run is already invalid with `settle-timeout`). The cancelled pass is still
+  // evaluated (review 3 C2); no later pass starts.
   let finished = false
   let cancelled = false
   const pending = new Set<Promise<void>>()
@@ -150,6 +153,18 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
     const done = () => void pending.delete(guarded)
     guarded.then(done, done)
     return guarded
+  }
+  /** The session side of the same lifecycle (review 3 C1). */
+  const life: SessionLife = {
+    track: (p) => {
+      const quiet = p.then(
+        () => undefined,
+        () => undefined,
+      )
+      pending.add(quiet)
+      void quiet.then(() => pending.delete(quiet))
+    },
+    accepting: () => !cancelled && !finished,
   }
   /** Throws `CANCELLED` once the probe was cancelled; called before every state change or effect. */
   const live = () => {
@@ -165,7 +180,7 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
    * Wait until no callback is in flight and none entered during one full event-loop turn
    * (bounded by the delivery window and `SETTLE_TURNS`). The turn also lets a session wrapper
    * record a consumer exception before `close()` collects it. Running out of time or turns cancels
-   * the probe and throws.
+   * the probe; the caller still evaluates what it has (review 3 C2).
    */
   const settle = async (phase: 'pass' | 'fresh' | 'final', group: string | null) => {
     if (cancelled) return
@@ -178,7 +193,6 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
       if (pending.size === 0) return
     }
     cancel()
-    throw settleTimeout
   }
 
   // ── waiting ──
@@ -398,7 +412,7 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
       }
     }
     const open = async (st: SideState, which: 'conn' | 'egress', fresh: boolean) => {
-      const s = await port.open(which === 'conn' ? st.side.conn : st.side.egress, `${st.side.label}.${which}`, handler(st, which, fresh))
+      const s = await port.open(which === 'conn' ? st.side.conn : st.side.egress, `${st.side.label}.${which}`, handler(st, which, fresh), life)
       anySessionOk = true
       return s
     }
@@ -462,7 +476,8 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
     }
     const passClosedAt = closedAt
 
-    if (stage === 0 && DELETE_TO_ACK_FORMS.includes(form)) {
+    // A cancelled pass skips its fresh session and is evaluated with what it has (review 3 C2).
+    if (stage === 0 && DELETE_TO_ACK_FORMS.includes(form) && !cancelled) {
       try {
         for (const st of states) st.fresh = await open(st, 'conn', true)
         await sleep(observeMs)
@@ -522,16 +537,22 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
         continue
       }
       await runFormPass(form, 0)
+      if (cancelled) break
     }
     const table0 = resultTable(rows, cells)
-    if (stage1Needed(table0)) {
+    // No further pass after a settle timeout (review 3 C2); `result.error` names it.
+    if (cancelled) {
+      /* no stage 1 */
+    } else if (stage1Needed(table0)) {
       const todo = STAGE1_FORMS.filter((f) => cfg.forms.includes(f))
       if (todo.length) notes.push({ kind: 'stage1-run', form: null, cls: null })
-      for (const f of todo) await runFormPass(f, 1)
+      for (const f of todo) {
+        await runFormPass(f, 1)
+        if (cancelled) break
+      }
     } else notes.push({ kind: 'stage1-not-needed', form: null, cls: null })
   } catch (e) {
     if (e instanceof PreconditionAbort) precondition = e.err
-    else if (e === settleTimeout) fatal = settleTimeout
     else {
       fatal = translate(e, 'probe')
       failures.push(fatal)
@@ -541,12 +562,8 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
 
   // Snapshot (review 1 C1, review 2 C1): no callback in flight over a full event-loop turn, later
   // ones are ignored; after a cancel the remaining callbacks are inert.
-  try {
-    await settle('final', null)
-  } catch (e) {
-    if (e !== settleTimeout) throw e
-    fatal ??= settleTimeout
-  }
+  await settle('final', null)
+  if (cancelled) fatal ??= settleTimeout
   finished = true
   const total = counters.total()
   for (const cls of total.consumerFailures) failures.push(new E11bError('consumer', cls))
