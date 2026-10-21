@@ -104,7 +104,10 @@ past `expiresAt + key-retention` becomes `tombstoned` (B2). The revision
 is sent when something changed or the class is on again while the own
 last revision was off (the sibling's MV-12 follow-up sends its own off
 revision with `withdraw` and `bury`). At A the ticket is refused when its
-signer is not `StockKey.for` (`fremde-zuteilung`, once per finding; W1).
+signer is not `StockKey.for` (`fremde-zuteilung`, once per finding; W1);
+the step lives inside the side's predicate `ticketAcceptance` (after
+8640.5, a binding step, not state), so P-Commit's receiver reference
+applies it too.
 
 Tests with derived Soll: B1 small quota (budget 4: one right frees by
 8515, the empty M2 gets it); B2 full reservation (5 keys for M1, M2
@@ -142,8 +145,8 @@ without key while nothing is free are counted, `unsupplied`). Generator
 `generate(seed, n, { allocation: true })` adds 8515 refill, withdrawal,
 class off/on, M2 enrolment and revocation, introductions by either M
 device; no restores. G2: 20 seeds × 40 events, all eight properties
-hold; G1 (2b.0 distribution) unchanged and green. Mutations: U8 (no
-`belegt`) breaks P-Bilanz (max 6), U9 (A1 does not supply) breaks
+hold; G1 (2b.0 distribution) unchanged and green. Mutations: U10 (no
+`belegt`) breaks P-Bilanz (max 6), U11 (A1 does not supply) breaks
 P-Versorgung (1 violation; control: 3 unsupplied, A2, B1, B2 without a
 free right).
 

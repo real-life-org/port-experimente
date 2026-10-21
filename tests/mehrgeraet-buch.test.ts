@@ -639,7 +639,7 @@ describe('K2 step 2b.1: mutations show the allocation checkers failing', () => {
     ;(g.A as unknown as { supply: () => Promise<void> }).supply = async () => {}
   }
 
-  it('U8. P-Bilanz: A devices without `belegt` → after the first acceptance the device refills to 5 again (belegt 1 + reserviert 5 > 5); control holds', async () => {
+  it('U10. P-Bilanz: A devices without `belegt` → after the first acceptance the device refills to 5 again (belegt 1 + reserviert 5 > 5); control holds', async () => {
     const seq: GenEvent[] = [{ k: 'introduce' }, { k: 'round' }, { k: 'round' }, { k: 'round' }]
     const control = await runSequence(cand, seq, { seed: 81, reseed })
     expect(prop(control, 'P-Bilanz').violations).toEqual([])
@@ -651,7 +651,7 @@ describe('K2 step 2b.1: mutations show the allocation checkers failing', () => {
     expect(prop(mutated, 'P-Bilanz').counts.max).toBe(6)
   }, 120_000)
 
-  it('U9. P-Versorgung: M2 enrolled, A1 frees one right (withdrawal) but does not supply → 1 violation; control: the empty M2 gets the right', async () => {
+  it('U11. P-Versorgung: M2 enrolled, A1 frees one right (withdrawal) but does not supply → 1 violation; control: the empty M2 gets the right', async () => {
     const seq: GenEvent[] = [{ k: 'enrol-m' }, { k: 'round' }, { k: 'round' }, { k: 'round' }, { k: 'withdraw', device: 'A1' }, { k: 'round' }, { k: 'round' }]
     const control = await runSequence(cand, seq, { seed: 91, reseed })
     // Soll control: A1 withdraws one of its 5 keys for M1 → frei 1, M2 empty → M2 gets it; A2 (frei 0) leaves M2 without
