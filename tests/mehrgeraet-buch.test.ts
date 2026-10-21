@@ -1019,7 +1019,7 @@ describe('K2 step 2b.0: one path for every opened ticket frame (Tor-Review 45)',
     let known = true
     d.sendDoc = async (type, ...rest) => {
       const x = await send(type, ...rest)
-      if (type === TYPES.revision && !address) {
+      if ((type === TYPES.revision || type === TYPES.stockRevision) && !address) { // K2 2b.1: the listing is `stock-revision@2`
         const own = g.A.state.relationships.flatMap((y) => y.stock).find((k) => k.state === 'active' && k.by === g.A.name)!
         address = own.keyAgreement
         known = [...(r.buch as unknown as { lastImage: Map<string, { state: M.HolderState }> }).lastImage.values()].some((y) => y.state.relationships.some((z) => z.stock.some((k) => k.keyAgreement === address)))
