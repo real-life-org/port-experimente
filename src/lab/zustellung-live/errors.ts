@@ -2,7 +2,7 @@
 // never serialized, printed or rethrown as is: it becomes an `E11bError` that
 // carries only a stage and a class from a fixed list, without `cause`.
 
-export const ERROR_CLASSES = ['timeout', 'ws-closed', 'auth-refused', 'http-4xx', 'http-5xx', 'resolve-failed', 'unpack-failed', 'seal-failed', 'other'] as const
+export const ERROR_CLASSES = ['timeout', 'ws-closed', 'auth-refused', 'http-4xx', 'http-5xx', 'resolve-failed', 'unpack-failed', 'seal-failed', 'settle-timeout', 'other'] as const
 export type ErrorClass = (typeof ERROR_CLASSES)[number]
 
 export const STAGES = ['config', 'resolve', 'login', 'socket', 'send', 'classify', 'consumer', 'gate', 'probe', 'write'] as const

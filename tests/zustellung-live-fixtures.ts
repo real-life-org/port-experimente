@@ -126,6 +126,8 @@ export interface FakeOptions {
   holdLive?: boolean
   /** Push every frame twice at once (concurrent copies, review 1 C2). */
   duplicate?: boolean
+  /** On `close()`, hand the last frame of that session to the handler once more via `setImmediate` (review 2 C1). */
+  redeliverOnClose?: boolean
 }
 
 interface Queued {
@@ -134,9 +136,15 @@ interface Queued {
   acked: boolean
 }
 
+interface Sub {
+  onTsp: TspHandler
+  scope: Counters
+  last?: Queued
+}
+
 export class FakeMediator implements MediatorPort {
   readonly queues = new Map<string, Queued[]>()
-  private readonly subs = new Map<string, Set<{ onTsp: TspHandler; scope: Counters }>>()
+  private readonly subs = new Map<string, Set<Sub>>()
   readonly delivered: string[] = []
   constructor(
     readonly did: string,
@@ -152,7 +160,7 @@ export class FakeMediator implements MediatorPort {
     scope.sockets.opened++
     scope.sockets.open++
     scope.sockets.maxConcurrent = Math.max(scope.sockets.maxConcurrent, scope.sockets.open)
-    const sub = { onTsp, scope: this.counters }
+    const sub: Sub = { onTsp, scope: this.counters }
     let set = this.subs.get(id.did)
     if (!set) this.subs.set(id.did, (set = new Set()))
     set.add(sub)
@@ -174,12 +182,15 @@ export class FakeMediator implements MediatorPort {
         closed = true
         scope.sockets.open--
         set!.delete(sub)
+        const last = sub.last
+        if (this.opts.redeliverOnClose && last) setImmediate(() => void sub.onTsp(last.bytes, last.text).catch(() => sub.scope.scope().consumerFailures.push('other')))
       },
     }
   }
 
-  private push(sub: { onTsp: TspHandler; scope: Counters }, q: Queued, onOpen = false) {
+  private push(sub: Sub, q: Queued, onOpen = false) {
     if (this.opts.holdLive && !onOpen) return
+    sub.last = q
     for (let i = 0; i < (this.opts.duplicate ? 2 : 1); i++)
       setTimeout(() => {
         sub.onTsp(q.bytes, q.text).catch(() => sub.scope.scope().consumerFailures.push('other'))
@@ -213,25 +224,72 @@ export class FakeMediator implements MediatorPort {
   }
 }
 
+/** A promise resolved from outside: an ordering barrier for the tests (review 2 H1). */
+export function deferred<T = void>() {
+  let resolve!: (v: T) => void
+  let reject!: (e: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
 /**
- * A port that hands every frame to the probe's handler only after `delayMs(n)`
- * (n = delivery index), also after the session was closed: late callbacks
- * around the end of a form pass and after the probe returned (review 1 C1).
+ * A port that observes the probe's handlers and can hold frames back (review 2 C1/C2/H1):
+ * `active()` handlers in flight, `acks()` pickup-ack calls, `rejected()` handler promises that
+ * rejected. `hold(label, text)` returns a bucket name to keep a frame back, or null to pass it on;
+ * `release(bucket)` hands the held frames to the handler and resolves when they all settled.
+ * Held frames reach the handler also after the session was closed, like a late callback.
  */
-export function delayedPort(base: MediatorPort, delayMs: (n: number) => number): MediatorPort & { delivered: () => number } {
-  let n = 0
-  let done = 0
+export function instrumentedPort(base: MediatorPort, hold: (label: string, text: string) => string | null = () => null) {
+  let active = 0
+  let acks = 0
+  let rejected = 0
+  const held = new Map<string, Array<() => Promise<void>>>()
+  const run = (onTsp: TspHandler, qb2: Uint8Array, text: string) => {
+    active++
+    return onTsp(qb2, text).then(
+      () => void active--,
+      (e) => {
+        active--
+        rejected++
+        throw e
+      },
+    )
+  }
+  const port: MediatorPort = {
+    open: async (id, label, onTsp) => {
+      const s = await base.open(id, label, (qb2, text) => {
+        const bucket = hold(label, text)
+        if (bucket === null) return run(onTsp, qb2, text)
+        let list = held.get(bucket)
+        if (!list) held.set(bucket, (list = []))
+        list.push(() => run(onTsp, qb2, text))
+        return Promise.resolve()
+      })
+      return {
+        label: s.label,
+        sendBinary: (b) => s.sendBinary(b),
+        ack: (text) => {
+          acks++
+          return s.ack(text)
+        },
+        close: () => s.close(),
+      }
+    },
+  }
   return {
-    delivered: () => done,
-    open: (id, label, onTsp) =>
-      base.open(id, label, (qb2, text) => {
-        const d = delayMs(n++)
-        return new Promise<void>((resolve, reject) => {
-          setTimeout(() => {
-            onTsp(qb2, text).then(resolve, reject).finally(() => done++)
-          }, d)
-        })
-      }),
+    port,
+    active: () => active,
+    acks: () => acks,
+    rejected: () => rejected,
+    heldCount: (bucket: string) => held.get(bucket)?.length ?? 0,
+    release: async (bucket: string) => {
+      const list = held.get(bucket) ?? []
+      held.delete(bucket)
+      await Promise.allSettled(list.map((f) => f()))
+    },
   }
 }
 

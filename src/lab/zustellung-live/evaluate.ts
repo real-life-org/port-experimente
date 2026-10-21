@@ -54,8 +54,11 @@ export class SenderLedger {
     for (const s of this.subs.values()) if (s.rowId === rowId) return s.state
     return undefined
   }
-  /** Check an ack built by `receive()`. Transitions only when valid and in time; `observeOnly` never transitions. */
-  async checkAck(v: Received, t: number, observeOnly = false): Promise<AckCheck> {
+  /**
+   * Check an ack built by `receive()`. Transitions only when valid and in time; `observeOnly` never
+   * transitions, nor does a check whose `mayTransition()` is false at the end (a cancelled probe).
+   */
+  async checkAck(v: Received, t: number, observeOnly = false, mayTransition: () => boolean = () => true): Promise<AckCheck> {
     if (v.disposition !== 'unique' || !v.document) return { valid: false, inTime: false, reason: 'not-unique', t }
     const doc = v.document as { type?: unknown; threadId?: unknown; payload?: { ref?: unknown } }
     if (doc.type !== ACK_TYPE) return { valid: false, inTime: false, reason: 'wrong-type', t }
@@ -65,7 +68,7 @@ export class SenderLedger {
     if (!s) return { valid: false, inTime: false, reason: 'ref-unknown', t }
     if (doc.threadId !== s.threadId) return { rowId: s.rowId, valid: false, inTime: false, reason: 'thread-mismatch', t }
     const inTime = s.docReceivedAt !== undefined && t - s.docReceivedAt <= this.timeoutMs
-    if (inTime && !observeOnly) s.state = 'delivered'
+    if (inTime && !observeOnly && mayTransition()) s.state = 'delivered'
     return { rowId: s.rowId, valid: true, inTime, reason: 'ok', t }
   }
 }
@@ -92,7 +95,7 @@ export interface Receipt {
   cls: FrameClass
   socket: string
   verdict: Verdict | null
-  /** Within the end of observation (`t ≤ closedAt`). */
+  /** Within the end of observation (`t ≤ closedAt` and entered before the deadline was fixed). */
   counted: boolean
   /** The receipt the row (or ack) uses: the first successful one, else the first. */
   picked: boolean
@@ -148,15 +151,32 @@ function successful(e: RecvEvent, kind: 'probe' | 'doc'): boolean {
  * Events from the fresh delete-to-ack session never count (`first-in-fresh` does not change the row),
  * nor does any receipt or ack after `closedAt`.
  */
+function pickOf(record: SendRecord, allEvents: RecvEvent[], closedAt: number) {
+  const kind = record.kind as 'probe' | 'doc'
+  // Only receipts up to the end of observation count (review 1 C1); `closedAt` itself is inside.
+  const all = allEvents.filter((e) => e.recordId === record.id && !e.fresh).sort((a, b) => a.t - b.t)
+  const counted = (e: RecvEvent) => !e.afterClose && e.t <= closedAt
+  const events = all.filter(counted)
+  const pick = events.find((e) => successful(e, kind)) ?? events[0]
+  return { all, events, pick, counted }
+}
+
+/**
+ * Every receipt of a row's record outside the fresh session, in time order, with `counted` and
+ * `picked`. The probe calls it again at the snapshot with the final event set (review 2 C2).
+ */
+export function rowReceipts(record: SendRecord, allEvents: RecvEvent[], closedAt: number): Receipt[] {
+  if (record.kind === 'ack') throw new Error('e11b: ack records have no row')
+  const { all, pick, counted } = pickOf(record, allEvents, closedAt)
+  return all.map((e) => ({ tMs: e.t - record.tSend, cls: e.cls, socket: e.socket, verdict: e.verdict ?? null, counted: counted(e), picked: e === pick }))
+}
+
 export function evaluateRow(record: SendRecord, allEvents: RecvEvent[], ack: AckCheck | undefined, opts: { timeoutMs: number; closedAt: number }): RowResult {
   if (record.kind === 'ack') throw new Error('e11b: ack records have no row')
   const kind = record.kind
-  // Only receipts up to the end of observation count (review 1 C1); `closedAt` itself is inside.
-  const all = allEvents.filter((e) => e.recordId === record.id && !e.fresh).sort((a, b) => a.t - b.t)
-  const events = all.filter((e) => e.t <= opts.closedAt)
+  const { events, pick } = pickOf(record, allEvents, opts.closedAt)
   if (ack && ack.t > opts.closedAt) ack = undefined
-  const pick = events.find((e) => successful(e, kind)) ?? events[0]
-  const receipts: Receipt[] = all.map((e) => ({ tMs: e.t - record.tSend, cls: e.cls, socket: e.socket, verdict: e.verdict ?? null, counted: e.t <= opts.closedAt, picked: e === pick }))
+  const receipts = rowReceipts(record, allEvents, opts.closedAt)
   const base: RowResult = {
     id: record.id,
     form: record.form,

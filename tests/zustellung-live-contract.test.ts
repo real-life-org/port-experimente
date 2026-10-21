@@ -25,7 +25,7 @@ import {
   type SendRecord,
   type TableRow,
 } from '../src/lab/zustellung-live'
-import { delayedPort, FAKE_DID, FakeMediator, fakeInfo, mediatorKeys, type FakeOptions } from './zustellung-live-fixtures'
+import { deferred, FAKE_DID, FakeMediator, fakeInfo, instrumentedPort, mediatorKeys, type FakeOptions } from './zustellung-live-fixtures'
 
 const VERSIONS = { tsp: '0.3.0', didcomm: '0.12.0', trustProtocol: '0.3.2', node: 'v24' }
 const T = '2026-10-21T00:00:00.000Z'
@@ -309,6 +309,10 @@ describe('E11b end of observation (review 1 C1)', () => {
     expect(evaluateRow(rec('probe'), [ev({ cls: 'probe', t: 1000 })], undefined, o)).toMatchObject({ received: 'in-window', outcome: 'positive', events: 1 })
     // an ack received after closedAt does not count either
     expect(evaluateRow(rec('doc'), [ev({ cls: 'doc', verdict: 'unique', t: 900 })], okAck(1001), o)).toMatchObject({ ackValid: false, ackReason: 'no-ack', outcome: 'not-shown' })
+    // entered after the deadline was fixed, in the same millisecond (review 2 C1): listed, not counted
+    const same = evaluateRow(rec('probe'), [ev({ cls: 'probe', t: 1000, afterClose: true })], undefined, o)
+    expect(same).toMatchObject({ received: 'no', events: 0 })
+    expect(same.receipts).toEqual([expect.objectContaining({ counted: false, picked: false })])
   })
 
   const setup = async (o: Partial<FakeOptions> = {}) => {
@@ -319,52 +323,197 @@ describe('E11b end of observation (review 1 C1)', () => {
     return { info, counters, base }
   }
 
-  it('callbacks arriving after the form pass closed and after the probe returned change nothing in the returned protocol', async () => {
-    const { info, counters, base } = await setup()
-    // every frame reaches the handler 130 ms late: the last document of each pass arrives after its
-    // closedAt (D-c: while its fresh window or R-cc runs; R-cc: after the probe returned)
-    const port = delayedPort(base, () => 130)
-    const cfg = parseEnv({ E11B_RUNS: '1', E11B_TIMEOUT_MS: '100', E11B_FORMS: 'D-c,R-cc' })
-    const r = await runProbe(cfg, { info, port, counters, versions: VERSIONS, rand: seededRand(42), observeMs: 50 })
+  type Receipt = { tMs: number; counted: boolean; picked: boolean; verdict: string | null }
+  type Exported = { id: string; receipts: Receipt[] }
+  /** Let the event loop run until `done()` holds; bounded by turns, not by time. */
+  const drain = async (done: () => boolean, turns = 10_000) => {
+    for (let i = 0; i < turns && !done(); i++) await new Promise<void>((r) => setImmediate(r))
+    return done()
+  }
+
+  it('second copies released after the row evaluation of their pass (review 2 C2): listed in the row and ack receipts as not counted, and in afterClose; copies after the return change nothing', async () => {
+    const { info, counters, base } = await setup({ duplicate: true })
+    const seen = new Set<string>()
+    // Hold the second copy of every frame, in a bucket named after the pass it belongs to.
+    const inst = instrumentedPort(base, (_label, text) => {
+      if (!seen.has(text)) {
+        seen.add(text)
+        return null
+      }
+      return counters.current
+    })
+    const cfg = parseEnv({ E11B_RUNS: '1', E11B_TIMEOUT_MS: '400', E11B_FORMS: 'D-c,R-cc' })
+    let heldDc = 0
+    const r = await runProbe(cfg, {
+      info,
+      port: inst.port,
+      counters,
+      versions: VERSIONS,
+      rand: seededRand(42),
+      observeMs: 50,
+      hooks: {
+        // D-c's rows are evaluated by now (its pass and fresh window are over); its copies enter while R-cc settles.
+        settling: (phase, group) => {
+          if (phase === 'pass' && group === 'R-cc/s0') {
+            heldDc = inst.heldCount('D-c/s0')
+            void inst.release('D-c/s0')
+          }
+        },
+      },
+    })
+    expect(r.failures).toEqual([])
+    expect(r.valid).toBe(true)
+    expect(inst.active()).toBe(0)
     const at = protocolJson(r.protocol)
-    const valid = r.valid
-    await new Promise((res) => setTimeout(res, 800))
-    expect(protocolJson(r.protocol)).toBe(at)
-    expect(r.valid).toBe(valid)
     const p = JSON.parse(at)
-    expect(p.events.afterClose.length).toBeGreaterThan(0)
-    // nothing received after closedAt counts in a row; the receipt is listed as not counted (C3)
-    const docs = p.rows.filter((x: { kind: string }) => x.kind === 'doc')
-    const late = docs.filter((x: { received: string }) => x.received === 'no')
-    expect(late.length).toBeGreaterThan(0)
-    expect(late.some((x: { receipts: Array<{ counted: boolean; picked: boolean }> }) => x.receipts.some((e) => !e.counted && !e.picked))).toBe(true)
+    // D-c: 8 rows (probe + doc per relationship and direction) and 4 acks, each copied once
+    expect(heldDc).toBe(12)
+    const late = (p.events.afterClose as Array<{ group: string; recordId: string | null; session: string }>).filter((e) => e.group === 'D-c/s0')
+    expect(late.length).toBe(12)
+    expect(late.every((e) => e.session === 'main' && e.recordId !== null)).toBe(true)
+    const dcRows = (p.rows as Array<Exported & { form: string; outcome: string }>).filter((x) => x.form === 'D-c')
+    const dcAcks = (p.acks as Array<Exported & { form: string }>).filter((x) => x.form === 'D-c')
+    expect(dcRows.length).toBe(8)
+    expect(dcAcks.length).toBe(4)
+    for (const x of [...dcRows, ...dcAcks]) {
+      expect(x.receipts.length).toBe(2)
+      expect(x.receipts.filter((e) => e.counted && e.picked).length).toBe(1)
+      expect(x.receipts.filter((e) => !e.counted && !e.picked).length).toBe(1)
+    }
+    expect(dcRows.every((x) => x.outcome === 'positive')).toBe(true)
+    // R-cc copies reach the handler only after the probe returned: nothing changes
+    const acks = inst.acks()
+    expect(inst.heldCount('R-cc/s0')).toBe(12)
+    await inst.release('R-cc/s0')
+    expect(inst.active()).toBe(0)
+    expect(inst.acks()).toBe(acks)
+    expect(protocolJson(r.protocol)).toBe(at)
+    expect(r.valid).toBe(true)
+    expect((p.events.afterClose as Array<{ group: string }>).some((e) => e.group === 'R-cc/s0')).toBe(false)
   }, 60_000)
 
-  it('a handler still verifying an ack at the end of the pass is awaited before the result is frozen', async () => {
+  it('a frame entering during the last event-loop turn of the settle (review 2 C1, counterproof 1): in the snapshot, no handler active at return', async () => {
+    const { info, counters, base } = await setup({ redeliverOnClose: true })
+    const inst = instrumentedPort(base)
+    const cfg = parseEnv({ E11B_RUNS: '1', E11B_TIMEOUT_MS: '400', E11B_FORMS: 'R-cc' })
+    const r = await runProbe(cfg, { info, port: inst.port, counters, versions: VERSIONS, rand: seededRand(42), observeMs: 50 })
+    expect(inst.active()).toBe(0)
+    expect(r.failures).toEqual([])
+    expect(r.valid).toBe(true)
+    const p = JSON.parse(protocolJson(r.protocol))
+    // closing the four main sessions hands their last frame over again, after the pass settled
+    const late = p.events.afterClose as Array<{ recordId: string | null }>
+    expect(late.length).toBe(4)
+    const exported = [...(p.rows as Exported[]), ...(p.acks as Exported[])]
+    for (const e of late) {
+      const x = exported.find((y) => y.id === e.recordId)!
+      expect(x.receipts.some((y) => !y.counted && !y.picked)).toBe(true)
+    }
+  }, 60_000)
+
+  for (const late of ['continues', 'fails'] as const) {
+    it(`a handler beyond the settle timeout (review 2 C1, counterproofs 2 and 3, ${late}): run invalid with settle-timeout, then no pickup ack, no counter change, the late failure discarded`, async () => {
+      const { info, counters, base } = await setup()
+      const inst = instrumentedPort(base)
+      const gate = deferred()
+      let entered = 0
+      const cfg = parseEnv({ E11B_RUNS: '1', E11B_TIMEOUT_MS: '100', E11B_FORMS: 'D-c' })
+      const r = await runProbe(cfg, {
+        info,
+        port: inst.port,
+        counters,
+        versions: VERSIONS,
+        rand: seededRand(42),
+        observeMs: 50,
+        hooks: {
+          beforeAckCheck: async () => {
+            entered++
+            await gate.promise
+            if (late === 'fails') throw new Error('late failure')
+          },
+        },
+      })
+      expect(entered).toBeGreaterThan(0)
+      expect(inst.active()).toBeGreaterThan(0)
+      expect(r.valid).toBe(false)
+      expect(r.failures.map((f) => [f.stage, f.cls])).toContainEqual(['probe', 'settle-timeout'])
+      const at = protocolJson(r.protocol)
+      const p = JSON.parse(at)
+      expect(p.result.valid).toBe(false)
+      expect(p.result.error).toEqual({ stage: 'probe', cls: 'settle-timeout' })
+      const acks = inst.acks()
+      const total = JSON.stringify(counters.total())
+      const failures = r.failures.length
+      gate.resolve()
+      expect(await drain(() => inst.active() === 0)).toBe(true)
+      expect(inst.acks()).toBe(acks)
+      expect(JSON.stringify(counters.total())).toBe(total)
+      expect(inst.rejected()).toBe(0)
+      expect(r.failures.length).toBe(failures)
+      expect(protocolJson(r.protocol)).toBe(at)
+    }, 60_000)
+  }
+
+  it('a handler failing before the snapshot (review 2 C1, counterproof 3): the failure is in the snapshot', async () => {
     const { info, counters, base } = await setup()
-    let started = 0
-    let finished = 0
+    const inst = instrumentedPort(base)
     const cfg = parseEnv({ E11B_RUNS: '1', E11B_TIMEOUT_MS: '100', E11B_FORMS: 'D-c' })
     const r = await runProbe(cfg, {
       info,
-      port: base,
+      port: inst.port,
       counters,
       versions: VERSIONS,
       rand: seededRand(42),
       observeMs: 50,
       hooks: {
         beforeAckCheck: async () => {
-          started++
-          await new Promise((res) => setTimeout(res, 400))
-          finished++
+          throw new Error('ack check failed')
         },
       },
     })
-    expect(started).toBeGreaterThan(0)
-    expect(finished).toBe(started)
-    const at = protocolJson(r.protocol)
-    await new Promise((res) => setTimeout(res, 600))
-    expect(protocolJson(r.protocol)).toBe(at)
+    expect(inst.active()).toBe(0)
+    expect(inst.rejected()).toBeGreaterThan(0)
+    expect(r.valid).toBe(false)
+    expect(r.failures.some((f) => f.stage === 'consumer')).toBe(true)
+    expect(JSON.parse(protocolJson(r.protocol)).result.valid).toBe(false)
+  }, 60_000)
+
+  it('a handler still verifying an ack when the pass settles is awaited before the result is frozen (barrier, review 2 H1)', async () => {
+    const { info, counters, base } = await setup()
+    const inst = instrumentedPort(base)
+    const gate = deferred()
+    let started = 0
+    let finished = 0
+    let settledWhileHeld = false
+    const cfg = parseEnv({ E11B_RUNS: '1', E11B_TIMEOUT_MS: '1000', E11B_FORMS: 'D-c' })
+    const r = await runProbe(cfg, {
+      info,
+      port: inst.port,
+      counters,
+      versions: VERSIONS,
+      rand: seededRand(42),
+      observeMs: 50,
+      hooks: {
+        // the last of the four acks is held until the pass settles
+        beforeAckCheck: async () => {
+          if (++started === 4) await gate.promise
+          finished++
+        },
+        settling: (phase) => {
+          if (phase === 'pass' && started === 4 && finished === 3) settledWhileHeld = true
+          gate.resolve()
+        },
+      },
+    })
+    expect(settledWhileHeld).toBe(true)
+    expect([started, finished]).toEqual([4, 4])
+    expect(inst.active()).toBe(0)
+    expect(r.failures).toEqual([])
+    expect(r.valid).toBe(true)
+    const p = JSON.parse(protocolJson(r.protocol))
+    const docs = p.rows.filter((x: { kind: string }) => x.kind === 'doc')
+    expect(docs.length).toBe(4)
+    expect(docs.every((x: { ackValid: boolean }) => x.ackValid)).toBe(true)
   }, 60_000)
 })
 
@@ -377,6 +526,8 @@ describe('E11b ack times (review 1 C4)', () => {
     const cfg = parseEnv({ E11B_RUNS: '1', E11B_TIMEOUT_MS: '400', E11B_FORMS: 'D-c' })
     const slow = () => new Promise<void>((res) => setTimeout(res, 80))
     const r = await runProbe(cfg, { info, port, counters, versions: VERSIONS, rand: seededRand(42), observeMs: 150, hooks: { beforeAckCheck: slow } })
+    expect(r.failures).toEqual([])
+    expect(r.valid).toBe(true)
     const p = JSON.parse(protocolJson(r.protocol))
     const docs = p.rows.filter((x: { kind: string; ackValid: boolean }) => x.kind === 'doc' && x.ackValid)
     expect(docs.length).toBe(4)

@@ -9,7 +9,7 @@ import { didWebvh } from '@openvtc/vti-didcomm-js'
 import { ACK_TYPE, sealDoc } from '../zustellung'
 import { classifyFrame, FRAME_CLASSES, PositiveList, type Classified, type FrameClass, type ListEntry } from './classifier'
 import { E11bError, translate, type ErrorClass, type Stage } from './errors'
-import { evaluateRow, probeOutcome, resultTable, SenderLedger, stage1Needed, type AckCheck, type RecvEvent, type RowResult, type TableRow } from './evaluate'
+import { evaluateRow, probeOutcome, rowReceipts, resultTable, SenderLedger, stage1Needed, type AckCheck, type RecvEvent, type RowResult, type TableRow } from './evaluate'
 import { BASELINE, DELETE_TO_ACK_FORMS, FORMS, FORM_IDS, STAGE1_FORMS, id, packForm, roles, type FormId } from './forms'
 import { makeIdentityGroup, type IdentityGroup, type Side } from './identities'
 import { summarizeMediator, type MediatorInfo, type ResolvedDoc, type RoutingVariant } from './mediator'
@@ -35,7 +35,11 @@ export interface ProbeDeps {
   /** Post-observation window; the constant `OBSERVE_MS` unless a test shortens it. */
   observeMs?: number
   /** Test seams only (offline counterproofs); the live probe passes none. */
-  hooks?: { beforeAckCheck?: () => Promise<void> }
+  hooks?: {
+    beforeAckCheck?: () => Promise<void>
+    /** Called synchronously when a settle starts, after its end of observation is fixed. */
+    settling?: (phase: 'pass' | 'fresh' | 'final', group: string | null) => void
+  }
 }
 
 export interface ProbeRun {
@@ -50,6 +54,12 @@ class PreconditionAbort extends Error {
     super('e11b precondition')
   }
 }
+
+/** Thrown inside a handler continuation after the probe was cancelled; the handler wrapper discards it. */
+const CANCELLED = Symbol('e11b cancelled')
+
+/** Upper bound on event-loop turns a settle waits for callbacks entering while it waits. */
+const SETTLE_TURNS = 10_000
 
 interface SideState {
   side: Side
@@ -111,6 +121,7 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
   const ackChecks = new Map<string, AckCheck>()
   const classCounts: Record<string, number> = Object.fromEntries(FRAME_CLASSES.map((c) => [c, 0]))
   const rows: RowResult[] = []
+  const rowClosedAt = new Map<string, number>()
   const groups: Array<Record<string, unknown>> = []
   const notes: Array<{ kind: string; form: FormId | null; cls: string | null }> = []
   const cells: Array<{ form: FormId; stage: 0 | 1 }> = []
@@ -119,24 +130,55 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
   let precondition: E11bError | null = null
   const afterCloseEvents: Array<{ group: string; socket: string; session: 'main' | 'fresh'; recordId: string | null; cls: FrameClass; tMs: number }> = []
 
-  // ── callbacks in flight (review 1 C1) ──
+  // ── callbacks in flight (review 1 C1, review 2 C1) ──
   // Every accepted callback is tracked; a pass closes its sockets and the probe takes its
   // snapshot only after all of them settled. After the snapshot (`finished`) callbacks do nothing.
+  // A settle that runs out of time cancels the probe: `cancelled` is checked by every callback
+  // before each state change and each transport effect, so a callback still running after the
+  // cancel changes nothing and sends nothing; its late failure is discarded (the run is already
+  // invalid with `settle-timeout`).
   let finished = false
+  let cancelled = false
   const pending = new Set<Promise<void>>()
-  const track = (p: Promise<void>) => {
-    pending.add(p)
-    const done = () => void pending.delete(p)
-    p.then(done, done)
-    return p
+  const track = (p: Promise<void>): Promise<void> => {
+    const guarded = p.catch((e: unknown) => {
+      // Discarded on purpose: after the cancel nothing may reach the counters or the failure list.
+      if (cancelled || e === CANCELLED) return
+      throw e
+    })
+    pending.add(guarded)
+    const done = () => void pending.delete(guarded)
+    guarded.then(done, done)
+    return guarded
   }
-  /** Wait until no callback is in flight (bounded by the delivery window); a hang invalidates the run. */
-  const settle = async () => {
+  /** Throws `CANCELLED` once the probe was cancelled; called before every state change or effect. */
+  const live = () => {
+    if (cancelled) throw CANCELLED
+  }
+  const settleTimeout = new E11bError('probe', 'settle-timeout')
+  const cancel = () => {
+    if (cancelled) return
+    cancelled = true
+    failures.push(settleTimeout)
+  }
+  /**
+   * Wait until no callback is in flight and none entered during one full event-loop turn
+   * (bounded by the delivery window and `SETTLE_TURNS`). The turn also lets a session wrapper
+   * record a consumer exception before `close()` collects it. Running out of time or turns cancels
+   * the probe and throws.
+   */
+  const settle = async (phase: 'pass' | 'fresh' | 'final', group: string | null) => {
+    if (cancelled) return
+    deps.hooks?.settling?.(phase, group)
     const deadline = now() + timeoutMs
-    while (pending.size > 0 && now() < deadline) await Promise.race([Promise.allSettled([...pending]), sleep(deadline - now())])
-    if (pending.size > 0) failures.push(new E11bError('probe', 'timeout'))
-    // one macrotask, so a session wrapper records a consumer exception before `close()` collects it
-    await new Promise<void>((r) => setImmediate(r))
+    for (let turn = 0; turn < SETTLE_TURNS; turn++) {
+      while (pending.size > 0 && now() < deadline) await Promise.race([Promise.allSettled([...pending]), sleep(deadline - now())])
+      if (pending.size > 0) break
+      await new Promise<void>((r) => setImmediate(r))
+      if (pending.size === 0) return
+    }
+    cancel()
+    throw settleTimeout
   }
 
   // ── waiting ──
@@ -212,6 +254,7 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
       } catch (e) {
         throw translate(e, 'send')
       }
+      live()
       const rec: SendRecord = {
         id: meta.recordId,
         group: groupId,
@@ -247,12 +290,13 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
         iso(now()),
       )
       const ackEnv = await seal(ackDoc as unknown as Json, sender.side.party.rkid)
+      live()
       await send(receiver, 'ack', enc.encode(jcs(ackEnv)), { dir: docRecord.dir === 'x2y' ? 'y2x' : 'x2y', run: docRecord.run, docRow: docRecord.id, recordId: `${docRecord.id}/ack` })
     }
 
     // End of observation (review 1 C1): `closedAt` (main sessions) and `freshClosedAt` (fresh
-    // delete-to-ack sessions) are fixed acceptance deadlines. A callback entering later is only
-    // listed as `after-close`: no counters, no transitions, no acks, no pickup ack.
+    // delete-to-ack sessions) are fixed acceptance deadlines. A callback entering after the deadline
+    // was fixed is only listed as `after-close`: no counters, no transitions, no acks, no pickup ack.
     let closedAt: number | null = null
     let freshClosedAt: number | null = null
     const classify = (st: SideState, which: 'conn' | 'egress', socket: string, qb2: Uint8Array) =>
@@ -268,23 +312,28 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
       const socket = `${st.side.label}.${which}`
       try {
         const c = await classify(st, which, socket, qb2)
+        live()
         afterCloseEvents.push({ group: groupId, socket, session: fresh ? 'fresh' : 'main', recordId: c.recordId ?? null, cls: c.cls, tMs: rt(t) })
         // Main-session receipts after close also appear in the record's receipt list, as not counted (C3).
         if (!fresh && c.recordId) events.push({ group: groupId, socket, size: c.size, cls: c.cls, t, fresh: false, afterClose: true, recordId: c.recordId, ...(c.verdict ? { verdict: c.verdict } : {}) })
       } catch (e) {
+        if (e === CANCELLED || cancelled) return
         failures.push(translate(e, 'classify'))
       }
     }
     const handler = (st: SideState, which: 'conn' | 'egress', fresh: boolean) => (qb2: Uint8Array, text: string) => {
       const t = now()
-      if (finished) return Promise.resolve()
+      if (finished || cancelled) return Promise.resolve()
+      // Closed once the deadline is fixed: a callback entering in the same millisecond as `closedAt`,
+      // but after it was fixed, is after-close too (review 2 C1).
       const end = fresh ? freshClosedAt : closedAt
-      return track(end !== null && t > end ? afterClose(st, which, fresh, qb2, t) : handle(st, which, fresh, qb2, text, t))
+      return track(end !== null ? afterClose(st, which, fresh, qb2, t) : handle(st, which, fresh, qb2, text, t))
     }
     const handle = async (st: SideState, which: 'conn' | 'egress', fresh: boolean, qb2: Uint8Array, text: string, t: number) => {
       const socket = `${st.side.label}.${which}`
       const session = fresh ? st.fresh : st.sessions[which]
       const c = await classify(st, which, socket, qb2)
+      live()
       classCounts[c.cls] = (classCounts[c.cls] ?? 0) + 1
       // Reservation (review 1 C2): two copies classified concurrently both get `unique` from
       // receive(), since `completed` grows only after the effect. The first copy reserves the
@@ -299,6 +348,7 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
       if (fresh) {
         // Observation only: no contract transitions, no acks (C1); the pickup ack cleans the queue.
         const earlier = c.recordId !== undefined && events.some((e) => e.recordId === c.recordId)
+        live()
         freshEvents.push({ group: groupId, socket, recordId: c.recordId ?? null, cls: c.cls, kind: c.recordId === undefined ? 'unassigned' : earlier ? 'redelivered' : 'first-in-fresh', tMs: rt(t) })
         await session?.ack(text)
         return
@@ -309,16 +359,22 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
       else if (!c.recordId) unassigned.push({ group: groupId, socket, size: c.size, cls: c.cls, tMs: rt(t) })
       const rec = c.recordId ? registry.get(c.recordId) : undefined
       if (c.cls === 'doc' && c.verdict === 'unique' && c.received && rec?.kind === 'doc' && rec.group === groupId) {
-        if (!(await diVerify(c.received.document, st.partner!.side.party.anchor))) ev.verdict = 'proof-invalid'
+        const proofOk = await diVerify(c.received.document, st.partner!.side.party.anchor)
+        live()
+        if (!proofOk) ev.verdict = 'proof-invalid'
         else {
           st.partner!.ledger.docReceived(c.received.digest!, t)
           await sendAck(st, rec, c)
+          live()
           st.completed.add(c.received.digest!)
         }
       }
       if (c.cls === 'ack' && c.received) {
         await deps.hooks?.beforeAckCheck?.()
-        const checked: AckCheck = c.verdict === 'unique' ? await st.ledger.checkAck(c.received, t) : { valid: false, inTime: false, reason: 'not-unique', t }
+        live()
+        // The ledger transition is guarded too: it happens only while the probe is not cancelled.
+        const checked: AckCheck = c.verdict === 'unique' ? await st.ledger.checkAck(c.received, t, false, () => !cancelled) : { valid: false, inTime: false, reason: 'not-unique', t }
+        live()
         // Receipt time `t` (handler entry) and end of verification are separate (review 1 C4).
         const chk: AckCheck = { ...checked, tVerified: now() }
         ev.ackCheck = chk
@@ -329,6 +385,7 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
         if (chk.valid) st.completed.add(c.received.digest!)
       }
       // Pickup ack only after the frame was handled (conclude).
+      live()
       await session?.ack(text)
       notify()
     }
@@ -397,8 +454,11 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
     } finally {
       // Fix the deadline, let accepted callbacks finish (they may still send acks), then close.
       closedAt = now()
-      await settle()
-      closeAll()
+      try {
+        await settle('pass', groupId)
+      } finally {
+        closeAll()
+      }
     }
     const passClosedAt = closedAt
 
@@ -410,14 +470,19 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
         notes.push({ kind: 'form-aborted', form, cls: translate(e, 'login').cls })
       } finally {
         freshClosedAt = now()
-        await settle()
-        for (const st of states) st.fresh?.close()
+        try {
+          await settle('fresh', groupId)
+        } finally {
+          for (const st of states) st.fresh?.close()
+        }
       }
     }
 
     for (const rec of registry.all()) {
       if (rec.group !== groupId || rec.kind === 'ack') continue
+      // Provisional `receipts`: the exported list is rebuilt from the final events at the snapshot (review 2 C2).
       const row = evaluateRow(rec, events, ackChecks.get(rec.id), { timeoutMs, closedAt: passClosedAt })
+      rowClosedAt.set(rec.id, passClosedAt)
       rows.push(row)
       debug('row', rowView(row, rec))
     }
@@ -466,6 +531,7 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
     } else notes.push({ kind: 'stage1-not-needed', form: null, cls: null })
   } catch (e) {
     if (e instanceof PreconditionAbort) precondition = e.err
+    else if (e === settleTimeout) fatal = settleTimeout
     else {
       fatal = translate(e, 'probe')
       failures.push(fatal)
@@ -473,8 +539,14 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
     }
   }
 
-  // Snapshot (review 1 C1): no callback in flight, later ones are ignored.
-  await settle()
+  // Snapshot (review 1 C1, review 2 C1): no callback in flight over a full event-loop turn, later
+  // ones are ignored; after a cancel the remaining callbacks are inert.
+  try {
+    await settle('final', null)
+  } catch (e) {
+    if (e !== settleTimeout) throw e
+    fatal ??= settleTimeout
+  }
   finished = true
   const total = counters.total()
   for (const cls of total.consumerFailures) failures.push(new E11bError('consumer', cls))
@@ -548,7 +620,11 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
     schema: 'e11b-live/2',
     head: headOf(cfg, deps.versions, t0, observeMs, info, keyBinding),
     groups,
-    rows: rows.map((r) => rowView(r, archive.get(r.id)!)),
+    // Receipt lists from the final event set (review 2 C2), not from the pass evaluation.
+    rows: rows.map((r) => {
+      const rec = archive.get(r.id)!
+      return { ...rowView(r, rec), receipts: rowReceipts(rec, events, rowClosedAt.get(r.id)!) }
+    }),
     acks,
     controls,
     xrfi: xrfiArchive.all().map((x) => ({ group: x.group, socket: x.socket, threadDigest: short8(x.threadDigest), tSendMs: rt(x.tSend) })),
