@@ -488,7 +488,14 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
 
   const costs = cells.map(({ form, stage }) => {
     const recs = registry.all().filter((r) => r.form === form && r.stage === stage)
-    const sizeOf = (k: Kind) => recs.find((r) => r.kind === k)?.sizes ?? null
+    // Every send of a kind, min / median / max per layer (review 1 H1); null when the kind was not sent.
+    const sizeOf = (k: Kind) => {
+      const ofKind = recs.filter((r) => r.kind === k)
+      if (ofKind.length === 0) return null
+      const stat = (xs: number[]) => ({ min: Math.min(...xs), median: median(xs), max: Math.max(...xs) })
+      const outer = ofKind.map((r) => r.sizes.outer).filter((x): x is number => x !== null)
+      return { n: ofKind.length, payload: stat(ofKind.map((r) => r.sizes.payload)), inner: stat(ofKind.map((r) => r.sizes.inner)), outer: outer.length ? stat(outer) : null, wire: stat(ofKind.map((r) => r.sizes.wire)) }
+    }
     const mine = rows.filter((r) => r.form === form && r.stage === stage)
     const oneWay = mine.filter((r) => r.kind === 'probe' && r.outcome !== 'not-shown' && r.tRecvMs !== null).map((r) => r.tRecvMs!)
     const ackRecv = mine.filter((r) => r.kind === 'doc' && r.ackValid && r.tAckReceivedMs !== null).map((r) => r.tAckReceivedMs!)

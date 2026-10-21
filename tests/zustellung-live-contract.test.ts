@@ -390,3 +390,28 @@ describe('E11b ack times (review 1 C4)', () => {
     expect(cost.roundTripMs.median - cost.ackReceivedMs.median).toBeGreaterThanOrEqual(79)
   }, 60_000)
 })
+
+describe('E11b cost sizes (review 1 H1)', () => {
+  it('sizes per kind are min / median / max over all sends of the pass, not the first send', async () => {
+    const keys = mediatorKeys()
+    const info = await fakeInfo(keys)
+    const counters = new Counters()
+    const port = new FakeMediator(FAKE_DID, keys, { direct: 'socket-sender', routed: 'forward', invite: 'none' }, counters)
+    const cfg = parseEnv({ E11B_RUNS: '2', E11B_TIMEOUT_MS: '400', E11B_FORMS: 'R-cc' })
+    const r = await runProbe(cfg, { info, port, counters, versions: VERSIONS, rand: seededRand(42), observeMs: 100 })
+    const p = JSON.parse(protocolJson(r.protocol))
+    const stat = (xs: number[]) => {
+      const s = [...xs].sort((a, b) => a - b)
+      const m = Math.floor(s.length / 2)
+      return { min: s[0], median: s.length % 2 ? s[m] : Math.round((s[m - 1]! + s[m]!) / 2), max: s.at(-1) }
+    }
+    const acks = p.acks as Array<{ bytes: { inner: number; outer: number } }>
+    expect(acks.length).toBe(8)
+    const size = p.costs[0].sizes.ack
+    expect(size.n).toBe(8)
+    expect(size.inner).toEqual(stat(acks.map((a) => a.bytes.inner)))
+    expect(size.outer).toEqual(stat(acks.map((a) => a.bytes.outer)))
+    expect(p.costs[0].sizes.probe.n).toBe(8)
+    expect(p.costs[0].sizes.doc.inner.min).toBeLessThanOrEqual(p.costs[0].sizes.doc.inner.max)
+  }, 60_000)
+})

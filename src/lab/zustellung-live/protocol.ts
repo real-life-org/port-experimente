@@ -116,6 +116,8 @@ const COUNTERS = obj({
 })
 const VARIANT = obj({ firstHopVid: did, methodRef: frag, x25519Fingerprint: hex8, sourceDocVersion: version })
 const LAYERS = obj({ payload: int, inner: int, outer: n(int), wire: int })
+const STAT = obj({ min: int, median: int, max: int })
+const SIZES = obj({ n: int, payload: STAT, inner: STAT, outer: n(STAT), wire: STAT })
 
 const RECEIPT_FIELDS = { tMs: int, cls: CLASS, socket: label, verdict: n(e(VERDICTS)), counted: bool, picked: bool }
 
@@ -196,7 +198,7 @@ export const PROTOCOL_SCHEMA = obj({
     obj({
       form: FORM,
       stage: int,
-      sizes: obj({ probe: n(LAYERS), doc: n(LAYERS), ack: n(LAYERS) }),
+      sizes: obj({ probe: n(SIZES), doc: n(SIZES), ack: n(SIZES) }),
       oneWayMs: obj({ median: n(int), max: n(int), n: int }),
       ackReceivedMs: obj({ median: n(int), max: n(int), n: int }),
       roundTripMs: obj({ median: n(int), max: n(int), n: int }),
