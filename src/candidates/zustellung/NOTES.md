@@ -423,3 +423,139 @@ the two sessions of (a) (live: "E11b live", RT6), routed forms (step 3). `sessio
 (carrier switch, Z2) registers only the connection address, not the
 egress session of (a): a carrier switch with egress sessions is not
 modelled (Z2 runs on the default carrier, without the rule).
+
+## E11b step 3: routed intermediary (21 October 2026)
+
+The routed send form (c) of the E11b plan (§2) as a wire of the bench,
+with an intermediary that rebuilds what the live run showed positively
+(`src/lab/zustellung-routed.ts`, wire
+`src/candidates/zustellung/tsp-routed.ts`, tests
+`tests/zustellung-routed.test.ts`, seed sweep
+`tests/zustellung-routed-seeds.test.ts`; draft and build decisions C1 to
+C6, H1 of design review 1 in
+`rltp/design/port-experimente-e11b-step3-intermediary-entwurf-2026-10-21.md`).
+Identities as in step 2. A frame is TSP Rev 3 routed (vti-tsp-js 0.3.0):
+the inner `direct` from the sender's egress identity to the partner's
+connection DID, sealed end to end; the outer layer
+`packRouted(inner, [partner account], outerSender, intermediary)`.
+
+- **R-c `tsp-routed` (default):** outer sender = the connection DID (the
+  account, its one session).
+- **R-es `tsp-routed-egress-session`:** outer sender = the egress
+  identity, which holds a session of its own.
+- **R-ce (control, not registered):** outer sender = the egress identity
+  without a session.
+
+**The intermediary.** `RoutedIntermediary` is a subclass of
+`SessionCarrier` (step 2; the only change there is that the session check
+became `protected sessionHeld`). It has a did:key VID from a fixed seed.
+A deposit addressed to it runs synchronous checks and goes into its own
+inbox (the deposit counts as `accepted`); opening is asynchronous
+(`unpack` is a promise) and the scenario flow awaits `drain()` before
+every device's round (`RoutedWelt`), so the core dispatcher stays
+synchronous and unchanged. After opening it takes the next hop from the
+library parser (`nextHop` on `m.hops`, never read by hand) and passes
+the inner frame byte for byte to the next hop's pickup through the base
+`Carrier` deposit, where the carrier faults act. It never checks the
+inner frame (signature, `next` against the inner receiver): rejecting
+foreign or altered inner frames is the receiver's. Bench assumptions
+beyond the live run: the session rule on the outer layer (as D-e; R-ce
+live not shown), and forwarding only to a next hop that holds a session
+at the intermediary (pin §5.3: no relationship to the next hop is an
+error).
+
+**Refusal classes, in the order checked** (parser rule #95, MV-24; each
+refusal silent for the sender, counted with its class, never forwarded,
+never a payload): `foreign-address` (deposit not addressed to this
+VID), `undecodable`, `session`, `wrong-receiver`, `bad-vid` (outer
+sender key not resolvable from a did:key), then after the inbox
+`unpack-failed`, `wrong-revision`, `type/<t>` (not `routed`),
+`multi-hop`, `deliver-to-self`, `empty-inner`, `no-session-next`. Each
+class reachable on the wire has a test with a real frame
+(`foreign-address`, `undecodable`, `session`, `wrong-receiver`,
+`bad-vid`, `unpack-failed`, `type/direct`, `type/nested`,
+`type/control`, `multi-hop`, `empty-inner`, `no-session-next`); the
+others are defensive guards tested on the classification function
+(`wrong-revision`: Rev 2 is refused by `unpack` already;
+`deliver-to-self`: `packWithHops(…, 'routed', [])` opens as `nested`;
+`type/padding`, `type/other`).
+
+| Form | Sessions per relationship | Bytes per document, inner / outer (20 seeds) | Z1: sender visible to the partner | Delivery address = account | What the intermediary learns per frame | Intermediary rebinding with unchanged endpoints (RT5) |
+|---|---|---|---|---|---|---|
+| (b) `tsp-direct-connection` (step 2) | 2 | 1491–1494 B, no outer layer | yes, the account | yes | the account as sender and as receiver | waiting frames survive a carrier switch (Z2) |
+| (a) `tsp-direct-egress-session` (step 2) | 4 | 1491–1494 B, no outer layer | no, egress | yes | egress as sender, the receiver's account; account and egress linked over the device's two sessions | as (b); the egress session is reopened |
+| (c) R-c `tsp-routed` | 2 | 1491–1494 / 1875–1878 B (+384 B) | no, egress | **yes** | outer sender = the sender's **account**, next hop = the receiver's account, inner sender (egress) and receiver in clear after opening: account and egress linked in one frame | waiting frames **strand** (sealed to the old intermediary, refused `foreign-address`, `failed` after 12 rounds); sessions reopened at the new one (2) |
+| (c-es) R-es `tsp-routed-egress-session` | 4 | as R-c | no, egress | **yes** | outer sender = egress, next hop = the receiver's account, inner as R-c; account linked over the device's second session | as R-c, 4 sessions reopened |
+| R-ce (control) | 2 | – | – | – | nothing: dropped as `session` | – |
+
+All cells pass on R-c and R-es: RT4a (T9), RT4b (T10), Z1r, Z2r, Z3r,
+RT3a, RT3b, Z5r, RT5, T3r (5 branches), T5r (28 branches); RT1-K on
+R-ce. What it shows:
+
+1. **RT3, where foreign inner frames are rejected.** The intermediary
+   forwards a foreign inner sender (Mallory with a session of her own,
+   RT3a), a spoofed inner sender name (Alice's egress VID signed with
+   Mallory's key, RT3b) and a frame routed to Bob's Alice pickup but
+   sealed to his Carol account (Z5r), because it does not open the inner
+   frame; Bob rejects all three at the wire (signature), effect 0.
+2. **RT4, the triad on the routed wire.** A lost receipt is repeated,
+   deduplicated and the kept receipt resent byte-identical, outer and
+   inner (RT4a); offline, intermediary unreachable and receiver offline
+   report `awaiting-transport(offline)`, `awaiting-transport(transport-
+   unreachable)`, `accepted`, then `delivered` (RT4b). A new instance with
+   the same VID and keys takes the waiting frame (Z2r; devices re-register
+   their sessions and are bound to the new views, H1).
+3. **RT5, intermediary rebinding.** A frame waiting while the old
+   intermediary is unreachable stays sealed to it: the core dispatcher
+   deposits the same bytes again, the new intermediary refuses them as
+   `foreign-address`, and Alice reports `failed` 12 rounds after the
+   acceptance at the new one, never silent; d1 and d3 are delivered. In
+   (a) and (b) the frame is bound to the partner's connection DID, not to
+   the carrier, and survives (Z2).
+4. **T3r, duplicates per direction.** A duplicated document (pickup,
+   forwarded at once or one round later) gives Bob effect 1 and
+   `duplicate-known`, and the kept receipt again byte-identical; a
+   duplicated receipt gives Bob no `duplicate-known`; Alice is
+   acknowledged exactly once (one `unique` receipt), later receipts are
+   `duplicate-known` at her. Cells run past the first `delivered`.
+5. **T5r, tampering per direction.** Inner header, ciphertext, signature
+   or garbage: the receiver rejects at the wire, never an effect from a
+   changed frame. Once on a document: repeated and delivered, effect 1;
+   always: no effect, Alice `failed` 12 rounds after acceptance. Once on
+   a receipt: Alice rejects it, repeats, Bob `duplicate-known` resends the
+   kept receipt, delivered; always: Bob effect 1, Alice `failed`. Outer
+   ciphertext: refused at the intermediary as `unpack-failed`; outer
+   header (a byte of the sender VID): refused before opening, class from
+   {`undecodable`, `session`, `wrong-receiver`, `bad-vid`,
+   `unpack-failed`} (seen: `session`). Misrouting to Bob's Carol pickup:
+   rejected at the wire by that endpoint.
+6. **Z1r.** The partner sees the inner frame as in (a): sender egress,
+   Alice's account not in the frame (byte search). **Bob's receipts are
+   routed to Alice's account: also in (c) the partner knows the account as
+   the delivery address.** The forms hide the account as sender, never as
+   address. Alice's two relationships share no DID.
+7. **Branches and seeds.** The intermediary makes no random decision; its
+   fault parameters are cells of their own. The seed sweep runs every cell
+   on R-c and R-es and RT1-K on R-ce under 20 seeds (1700 cells) and
+   checks the Z1r sessions, outer sender and sizes per seed, and min/max
+   over the seeds: inner 1491–1494 B, outer 1875–1878 B, +384 B for every
+   forwarded frame.
+
+### Not answered by step 3
+
+- The real mediator beyond the live result: whether it checks the inner
+  signature, `next` against the inner receiver, relationships (Rev 3
+  §7.2.2), whether it stores endpoint VIDs.
+- A new receiver endpoint, or an egress change without an account change
+  (plan R5 in the wider sense): RT5 covers only intermediary rebinding with
+  unchanged endpoint identities.
+- Several hops, separate intermediaries for sender and receiver.
+- Repacking waiting frames on rebinding (the core dispatcher does not;
+  whether an adapter must is a question for step 4). In the lib's
+  derivation the connection DID is carrier-scoped: a real change of
+  intermediary would change it as well; the bench keeps `BENCH_CARRIER`.
+- Referrals (vti-tsp-js 0.3.0 cannot produce them), nested mode,
+  XRFI/XRFA at the receiver, T2 reordering.
+- Sockets as objects: R-es links account and egress at the
+  intermediary over the same device (an approximation of the same socket
+  or address, not measured live).

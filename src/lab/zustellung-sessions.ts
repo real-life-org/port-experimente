@@ -41,15 +41,17 @@ export class SessionCarrier extends Carrier {
   override deposit(address: string, bytes: Uint8Array) {
     this.depositFrom(undefined, address, bytes)
   }
+  /** The session rule: `device` holds a session for the frame's envelope sender; `undefined`: some device does (weaker rule, see top). */
+  protected sessionHeld(device: string | undefined, bytes: Uint8Array): boolean {
+    const sender = this.senderOf(bytes)
+    const holders = sender === undefined ? [] : this.registeredAt(sender)
+    return device === undefined ? holders.length > 0 : holders.includes(device)
+  }
   /** A deposit by `device` (on its socket for the envelope sender); `undefined`: by no known device (weaker rule, see top). */
   depositFrom(device: string | undefined, address: string, bytes: Uint8Array) {
-    if (!this.unreachable) {
-      const sender = this.senderOf(bytes)
-      const holders = sender === undefined ? [] : this.registeredAt(sender)
-      if (device === undefined ? holders.length === 0 : !holders.includes(device)) {
-        this.refused.push({ address, sender: sender ?? '?', bytes: bytes.length })
-        return
-      }
+    if (!this.unreachable && !this.sessionHeld(device, bytes)) {
+      this.refused.push({ address, sender: this.senderOf(bytes) ?? '?', bytes: bytes.length })
+      return
     }
     super.deposit(address, bytes)
   }
