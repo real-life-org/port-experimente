@@ -22,6 +22,11 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 //   T2. The reviewer's nine binding cases of review 44 (b), parametrised, with their violation counts.
 //   U10. A ticket frame deposited at the carrier directly, no producer report, validly sealed to an A stock key →
 //       P-Commit `ticket-without-commit` (addendum to review 44, before review 45).
+//   R45-B1a, R45-B1b. A third, correctly sealed ticket of a new act in the issuance batch, reported and committed as a
+//       `card`, without an `introduce` of its act (b: signed in the other M relationship) → P-Commit
+//       `ticket-without-introduce` (b: and 8640.2); every opened ticket frame takes the same path (Tor-Review 45 B1).
+//   R45-S1. An unreported ticket at a stock key address before the first commit that makes it known → drawn in at that
+//       commit, P-Commit `ticket-without-commit`.
 //   R1, R2. The dump is a complete artefact: dump → load → re-check gives the same results (Tor-Review 42 S1).
 //   N1. The observation seam is fail-safe: a throwing observer changes nothing in holder or carrier (Tor-Review 42 (a)).
 //   S1. Shrinking: a failing generated sequence shrinks to the smallest sequence that still fails the same property.
@@ -847,14 +852,133 @@ describe('K2 step 2b.0: ticket frames without a producer report (addendum to Tor
     // Soll P-Commit: the real issuance as in U0 (2 tickets, 1 issuance, bound). The extra frame is at a stock key address
     // of an observed device (A's allocator), no producer reported it, so the ledger opens it with that key: it opens to a
     // ticket, and no earlier commit of the signing device (M) holds these bytes → 1 violation `ticket-without-commit`.
-    // It is not a reported ticket, so `tickets` stays 2. The other checkers: A accepts the extra ticket on a third, unused
+    // Tickets at the carrier count by content (Tor-Review 45): the two reported ones and this one → 3. The other checkers: A accepts the extra ticket on a third, unused
     // key (8640 passes: M's signer, own key at the address, voucher not A's) → P-Einmal 3 keys, 3 accepts, no violation;
     // P-Produktion reads the one logged introduction, kept; P-Paar: nothing connected.
     expect(prop(r, 'P-Commit').violations).toHaveLength(1)
     expect(prop(r, 'P-Commit').violations[0]).toContain('ticket-without-commit')
-    expect(prop(r, 'P-Commit').counts).toEqual({ tickets: 2, issuances: 1 })
+    expect(prop(r, 'P-Commit').counts).toEqual({ tickets: 3, issuances: 1 })
     expect(prop(r, 'P-Einmal')).toMatchObject({ ok: true, counts: { keys: 3, accepts: 3 } })
     expect(prop(r, 'P-Produktion')).toMatchObject({ ok: true, counts: { obliged: 1, kept: 1 } })
     expect(prop(r, 'P-Paar').ok).toBe(true)
+  }, 60_000)
+})
+
+/** An unused active stock key of `person` (allocated by the device holding it), other than the keys of M's first act. */
+const unusedKey = (g: GenWorld, person: string) => {
+  const act = g.Mm.state.mediatorActs[0]
+  return g.w
+    .of(person)
+    .flatMap((d) => d.state.relationships.flatMap((x) => x.stock.filter((k) => k.by === d.name && k.state === 'active')))
+    .find((k) => k.anchor !== act?.a.key && k.anchor !== act?.b.key)!
+}
+/**
+ * Tor-Review 45 B1: while building the second regular ticket, M also builds a third ticket of a new act (an unused A key,
+ * an unused B key) in the same action, so in the same issuance batch; its production report and its intent call it a
+ * `card`, its bytes are a ticket. `rel`: the M relationship whose key signs it (`ma` correct, `mb` the other one).
+ */
+const disguisedTicket =
+  (rel: 'ma' | 'mb'): Mutation =>
+  (g) => {
+    const d = priv(g.Mm)
+    const send = d.sendDoc.bind(g.Mm)
+    const produced = g.buch.produced.bind(g.buch)
+    let disguise = false
+    let n = 0
+    g.buch.produced = (dev, p) => produced(dev, disguise ? { ...p, type: TYPES.card } : p)
+    d.sendDoc = async (type, ...rest) => {
+      const r = await send(type, ...rest)
+      if (type === TYPES.ticket && ++n === 2) {
+        const a = unusedKey(g, 'A')
+        const b = unusedKey(g, 'B')
+        const signer = M.head(M.rel(g.Mm.state, g[rel])).ownKey
+        const replyTo = (await g.Mm.cand.keys.pair(M.head(M.rel(g.Mm.state, g.ma)).ownKey)).rkid
+        const now = g.w.clock.now()
+        disguise = true
+        const extra = await send(TYPES.ticket, signer, a.anchor, a.keyAgreement, replyTo, { act: crypto.randomUUID(), issuedAt: now, expiresAt: new Date(Date.parse(now) + M.PARAM.actLifetimeMs).toISOString(), own: a.anchor, voucher: { anchor: b.anchor, keyAgreement: b.keyAgreement, name: 'B' } }, [{ anchor: a.anchor, rkid: a.keyAgreement }])
+        disguise = false
+        ;((g.Mm as unknown as { intents: Map<string, { kind: string }> }).intents.get(extra!.digest)!).kind = TYPES.card
+      }
+      return r
+    }
+  }
+/** A ticket M never produced, signed with M's key on M–A, sealed to `own` and deposited at its key agreement. */
+async function forgeTicket(g: GenWorld, own: M.StockKey, voucher: M.StockKey): Promise<void> {
+  const m = await g.Mm.cand.keys.pair(M.head(M.rel(g.Mm.state, g.ma)).ownKey)
+  const now = g.w.clock.now()
+  const payload = { act: crypto.randomUUID(), issuedAt: now, expiresAt: new Date(Date.parse(now) + M.PARAM.actLifetimeMs).toISOString(), own: own.anchor, voucher: { anchor: voucher.anchor, keyAgreement: voucher.keyAgreement, name: 'B' } }
+  const doc = await diSign({ anchor: m.anchor, ed: { priv: m.ed.priv } }, { id: crypto.randomUUID(), type: TYPES.ticket, issuer: m.anchor, recipient: own.anchor, replyTo: m.rkid, issuedAt: now, payload }, now)
+  g.w.carrier.deposit(own.keyAgreement, new TextEncoder().encode(jcs(await seal(doc as unknown as Json, own.keyAgreement))))
+}
+
+describe('K2 step 2b.0: one path for every opened ticket frame (Tor-Review 45)', () => {
+  const one: GenEvent[] = [{ k: 'introduce' }]
+
+  it('R45-B1a. A third ticket of a new act in the issuance batch, reported and committed as `card`, no `introduce` of its act → exactly P-Commit fails with `ticket-without-introduce`', async () => {
+    const r = await runSequence(cand, one, { seed: 21, reseed, mutation: disguisedTicket('ma') })
+    // Soll P-Commit: the batch holds three intents at stock key addresses; opened, all three are tickets (the kind
+    // decides nothing). The two of the introduced act are bound as in U0. The third names an act the batch does not
+    // introduce → in the issuance's violation `ticket-without-introduce` (A's predicate accepts it: no refusal) → 1. At
+    // the carrier: A and B accept and receipt each regular ticket at once (2 deposits, committed submissions); A accepts
+    // the third (M's signer on M–A, its own key at the address, B's voucher) and receipts → 1 deposit, opened a ticket,
+    // its bytes committed but no `introduce` of its act → `ticket-without-introduce` → 1. Total 2. Tickets at the
+    // carrier by content: 3; issuances: 1. P-Einmal: 3 keys, 3 accepts, no violation. P-Produktion: kept. P-Paar: nothing.
+    expect(prop(r, 'P-Commit').violations).toHaveLength(2)
+    for (const v of prop(r, 'P-Commit').violations) expect(v).toContain('ticket-without-introduce')
+    expect(prop(r, 'P-Commit').violations.filter((v) => v.startsWith('issuance'))).toHaveLength(1)
+    expect(prop(r, 'P-Commit').counts).toEqual({ tickets: 3, issuances: 1 })
+    expect(prop(r, 'P-Einmal')).toMatchObject({ ok: true, counts: { keys: 3, accepts: 3 } })
+    expect(prop(r, 'P-Produktion')).toMatchObject({ ok: true, counts: { obliged: 1, kept: 1 } })
+    expect(prop(r, 'P-Paar').ok).toBe(true)
+  }, 60_000)
+
+  it('R45-B1b. The same third ticket signed in the other M relationship → exactly P-Commit fails, `ticket-without-introduce` and 8640.2', async () => {
+    const r = await runSequence(cand, one, { seed: 21, reseed, mutation: disguisedTicket('mb') })
+    // Soll P-Commit: the issuance's violation names the third ticket `ticket-without-introduce` with A's refusal by 8640.2
+    // (the signer is no counterpart on A's relationship) → 1. At the carrier: the regular tickets as in U0 (2 deposits);
+    // A refuses the third, no receipt, the deliverer repeats it after 3 and 6 rounds → 3 deposits, each a ticket by
+    // content without an `introduce` of its act → 3. Total 4; tickets by content 2 + 3 = 5, issuances 1. P-Einmal: 2 keys,
+    // 2 accepts. P-Produktion: kept. P-Paar: nothing.
+    expect(prop(r, 'P-Commit').violations).toHaveLength(4)
+    for (const v of prop(r, 'P-Commit').violations) expect(v).toContain('ticket-without-introduce')
+    const issuance = prop(r, 'P-Commit').violations.filter((v) => v.startsWith('issuance'))
+    expect(issuance).toHaveLength(1)
+    expect(issuance[0]).toContain('8640.2')
+    expect(prop(r, 'P-Commit').counts).toEqual({ tickets: 5, issuances: 1 })
+    expect(prop(r, 'P-Einmal')).toMatchObject({ ok: true, counts: { keys: 2, accepts: 2 } })
+    expect(prop(r, 'P-Produktion')).toMatchObject({ ok: true, counts: { obliged: 1, kept: 1 } })
+    expect(prop(r, 'P-Paar').ok).toBe(true)
+  }, 60_000)
+
+  it('R45-S1. An unreported ticket at a new stock key address before the commit that allocates it → drawn in at that commit, exactly P-Commit fails with `ticket-without-commit`', async () => {
+    let g!: GenWorld
+    const r = await runSequence(cand, one, { seed: 21, reseed, mutation: (x) => void (g = x) })
+    expect((await pCommit(r.buch)).ok, 'Voraussetzung: der Kontrolllauf hält').toBe(true)
+    const rel = g.A.state.relationships.find((x) => x.stock.some((k) => k.by === g.A.name))!
+    await g.A.setClass(rel.id, false)
+    const d = priv(g.A)
+    const send = d.sendDoc.bind(g.A)
+    let address = ''
+    let known = true
+    d.sendDoc = async (type, ...rest) => {
+      const x = await send(type, ...rest)
+      if (type === TYPES.revision && !address) {
+        const own = g.A.state.relationships.flatMap((y) => y.stock).find((k) => k.state === 'active' && k.by === g.A.name)!
+        address = own.keyAgreement
+        known = [...(r.buch as unknown as { lastImage: Map<string, { state: M.HolderState }> }).lastImage.values()].some((y) => y.state.relationships.some((z) => z.stock.some((k) => k.keyAgreement === address)))
+        await forgeTicket(g, own, unusedKey(g, 'B'))
+      }
+      return x
+    }
+    await g.A.setClass(rel.id, true)
+    await g.w.rounds(1)
+    // Soll: class on again allocates fresh A keys and sends the revision inside the action, before its commit; the forged
+    // ticket reaches the first fresh key's address then, when no committed image knows that address. The ledger holds the
+    // deposit and draws it in at A's commit; opened with that key it is a ticket no commit holds → 1 violation
+    // `ticket-without-commit`, nothing else (the issuance of U0 stays bound).
+    expect(known, 'Voraussetzung: die Adresse ist beim Einliefern unbekannt').toBe(false)
+    const c = await pCommit(r.buch)
+    expect(c.violations, c.violations.join('\n')).toHaveLength(1)
+    expect(c.violations[0]).toContain('ticket-without-commit')
   }, 60_000)
 })

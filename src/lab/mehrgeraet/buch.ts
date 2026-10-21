@@ -233,6 +233,8 @@ export class Buch implements HolderObserver {
   readonly receivers: ReceiverImage[] = []
   /** Per device its last committed holder state and whether it runs device sets (live only: feeds `receivers`). */
   private readonly lastImage = new Map<string, { person: string; sets: boolean; state: M.HolderState }>()
+  /** Deposits at addresses no committed image knows as a stock key address yet (live only; Tor-Review 45 S1). */
+  private readonly pending = new Map<string, Array<{ t: { seq: number; at: string }; frame: string; f: Frame }>>()
   /** Every device that committed (live only: the receiver material at an issuance commit is read from it). */
   private readonly devices = new Map<string, HolderDevice>()
   /** Productions by frame hash (a frame names its document) and by document digest (the first production of each). */
@@ -283,14 +285,33 @@ export class Buch implements HolderObserver {
           replyTo: i.replyTo,
           frames: [b64hash(i.bytes), ...(i.copies ?? []).map((c) => b64hash(c.bytes))],
           copies: (i.copies ?? []).map((c) => c.address),
-          ...(i.kind === TYPES.ticket ? { sealed: [i.bytes, ...(i.copies ?? []).map((c) => c.bytes)] } : {}),
+          // Tor-Review 45: kind decides nothing; every intent with a frame at a stock key address keeps its bytes.
+          ...([i.address, ...(i.copies ?? []).map((c) => c.address)].some((a) => this.allocatorAt(a)) ? { sealed: [i.bytes, ...(i.copies ?? []).map((c) => c.bytes)] } : {}),
         })),
         // The mediator context of an issuance: per act side, the committing device's own anchors on that relationship.
         ...(intro.length ? { mediator: intro.flatMap((op) => [op.act.a, op.act.b]).map((side) => ({ rel: side.rel, own: ownAnchors(image.holder, side.rel) })) } : {}),
       })
-      if (intro.length) for (const i of b.intents) if (i.kind === TYPES.ticket) for (const a of [i.address, ...(i.copies ?? []).map((c) => c.address)]) this.receiverAt(t.seq, intro[0]!.act.id, a)
+      for (const i of b.intents) for (const a of [i.address, ...(i.copies ?? []).map((c) => c.address)]) this.receiverAt(t.seq, intro[0]?.act.id ?? '', a)
     }
     this.lastImage.set(d.name, { person: d.person, sets: !!d.cand.deviceSets, state: image.holder })
+    // Review 45 S1: deposits at an address no committed image knew yet are drawn in once a commit makes it a stock key
+    // address (with the deposit's own seq and time).
+    for (const r of image.holder.relationships)
+      for (const k of r.stock) {
+        const held = this.pending.get(k.keyAgreement)
+        if (!held) continue
+        this.pending.delete(k.keyAgreement)
+        for (const x of held) this.probe(x.t, x.frame, x.f)
+      }
+  }
+  /** The device that allocated the stock key whose key agreement is `address`, in the last committed images. */
+  private allocatorAt(address: string): string | undefined {
+    for (const [name, img] of this.lastImage)
+      for (const r of img.state.relationships) {
+        const k = r.stock.find((x) => x.keyAgreement === address)
+        if (k) return k.by ?? name
+      }
+    return undefined
   }
   /**
    * The receiver of a ticket frame at `address`: the last committed image of the device that allocated the stock key whose
@@ -299,12 +320,7 @@ export class Buch implements HolderObserver {
    */
   private receiverAt(seq: number, act: string, address: string): void {
     if (this.receivers.some((x) => x.seq === seq && x.address === address)) return
-    let device: string | undefined
-    for (const [name, img] of this.lastImage)
-      for (const r of img.state.relationships) {
-        const k = r.stock.find((x) => x.keyAgreement === address)
-        if (k && !device) device = k.by ?? name
-      }
+    const device = this.allocatorAt(address)
     const img = device ? this.lastImage.get(device) : undefined
     const k = img?.state.relationships.flatMap((r) => r.stock).find((x) => x.keyAgreement === address)
     if (!device || !img || !k) return
@@ -324,7 +340,8 @@ export class Buch implements HolderObserver {
     const t = this.next()
     const h = frameHash(f.bytes)
     const p = this.byFrame.get(h)
-    if (p?.type !== TYPES.ticket) this.probe(t, h, f)
+    // Tor-Review 45: every deposit at a stock key address is a probe, reported or not; its content decides.
+    this.probe(t, h, f)
     if (!p) {
       this.carrier.unknown++ // not produced by an observed device
       return
@@ -341,17 +358,18 @@ export class Buch implements HolderObserver {
   }
 
   /**
-   * A frame not reported as a ticket at a stock key address of an observed device (the allocator in the last committed
-   * images): kept with the ledger's copy of that device's key for the address, for P-Commit to open.
+   * A deposit at a stock key address of an observed device (the allocator in the last committed images): kept with the
+   * ledger's copy of that device's key for the address, for P-Commit to open. A deposit at an address no committed image
+   * knows yet waits (`pending`, live only) until a commit makes the address known (Tor-Review 45 S1).
    */
   private probe(t: { seq: number; at: string }, frame: string, f: Frame): void {
-    let device: string | undefined
-    for (const [name, img] of this.lastImage)
-      for (const r of img.state.relationships) {
-        const k = r.stock.find((x) => x.keyAgreement === f.address)
-        if (k && !device) device = k.by ?? name
-      }
-    if (!device) return
+    const device = this.allocatorAt(f.address)
+    if (!device) {
+      const held = this.pending.get(f.address) ?? []
+      held.push({ t, frame, f })
+      this.pending.set(f.address, held)
+      return
+    }
     const xPriv = material(this.devices.get(device)?.receiverKey(f.address), f.address)
     this.carrier.probes.push({ ...t, frame, address: f.address, bytes: Buffer.from(f.bytes).toString('base64'), device, ...(xPriv ? { xPriv } : {}) })
   }
@@ -525,17 +543,48 @@ async function openAt(rx: Pick<ReceiverImage, 'device' | 'xPriv'> | undefined, b
 }
 
 /**
- * Every committed ticket frame of every issuance batch, opened with the key its address names (`openAt`), keyed
- * `${commit seq}|${intent digest}|${frame index}` (0 = the primary frame).
+ * Every committed frame at a stock key address (any intent, any commit: its `kind` decides nothing, Tor-Review 45), opened
+ * with the key its address names (`openAt`), keyed `${commit seq}|${intent digest}|${frame index}` (0 = the primary frame).
+ * Frames without kept bytes or without a receiver image at their address are not opened.
  */
 export async function openTickets(b: Buch): Promise<Map<string, Opening>> {
   const out = new Map<string, Opening>()
-  for (const c of b.commits) {
-    if (!c.ops.some((op) => op.kind === 'introduce')) continue
+  for (const c of b.commits)
     for (const i of c.intents) {
-      if (i.kind !== TYPES.ticket) continue
-      for (let j = 0; j < i.frames.length; j++) out.set(`${c.seq}|${i.digest}|${j}`, await openAt(receiverOf(b, c.seq, frameAddress(i, j)), i.sealed?.[j], frameAddress(i, j)))
+      if (!i.sealed) continue
+      for (let j = 0; j < i.frames.length; j++) {
+        const rx = receiverOf(b, c.seq, frameAddress(i, j))
+        if (rx) out.set(`${c.seq}|${i.digest}|${j}`, await openAt(rx, i.sealed[j], frameAddress(i, j)))
+      }
     }
+  return out
+}
+const isTicket = (o: Opening | undefined): o is Extract<Opening, { ok: true }> => !!o?.ok && o.doc.type === TYPES.ticket
+
+/** A deposit at a stock key address that opens with that key to a ticket: the one kind of ticket deposit P-Commit knows. */
+export interface TicketDeposit {
+  probe: CarrierProbe
+  opened: Extract<Opening, { ok: true }>
+  /** The issuance commit it is the committed submission of, or why there is none. */
+  commit: CommitEntry | undefined
+  reason?: 'ticket-without-commit' | 'ticket-without-introduce'
+}
+/**
+ * The single path for every ticket at the carrier (Tor-Review 45 B1), reported by a producer or not, whatever its intent
+ * was called: open the deposit with the key its address names; if the content is a ticket, it needs an earlier commit that
+ * holds these bytes for this address (`ticket-without-commit`) and whose batch holds the `introduce` of this ticket's act
+ * consuming the key it names (`ticket-without-introduce`). That commit's issuance check (P-Commit) then applies the
+ * receiver predicate and the binding table to the same committed bytes.
+ */
+export async function ticketDeposits(b: Buch): Promise<TicketDeposit[]> {
+  const out: TicketDeposit[] = []
+  for (const pr of b.carrier.probes) {
+    const o = await openAt(pr, pr.bytes, pr.address)
+    if (!isTicket(o)) continue
+    const p = o.doc.payload
+    const holders = b.commits.filter((c) => c.seq < pr.seq && c.intents.some((i) => i.frames.some((h, j) => h === pr.frame && frameAddress(i, j) === pr.address)))
+    const commit = holders.find((c) => c.ops.some((op) => op.kind === 'introduce' && op.act.id === p?.act && (op.act.a.key === p.own || op.act.b.key === p.own)))
+    out.push({ probe: pr, opened: o, commit, ...(commit ? {} : { reason: holders.length ? 'ticket-without-introduce' : 'ticket-without-commit' }) })
   }
   return out
 }
@@ -548,8 +597,8 @@ export interface BindingInput {
   intent: CommitIntent
   rx: ReceiverImage
   opened: Extract<Opening, { ok: true }>
-  /** The openings of the intent's copies, in order. */
-  copies: Opening[]
+  /** The openings of the intent's copies, in order (undefined: no receiver image at the copy's address). */
+  copies: Array<Opening | undefined>
   /** The committing device's own anchors on `side.rel` at the issuance commit. */
   mediator: string[]
   /**
@@ -601,7 +650,7 @@ export const TICKET_BINDINGS: readonly TicketBinding[] = [
   // the producer sealed for this document.
   { field: 'frames', derived: ['opened.bytes'], committed: ['intent.frames', 'intent.sealed'], got: (x) => (x.intent.sealed ?? []).map(b64hash), want: (x) => x.intent.frames },
   { field: 'production', derived: ['production.frames'], committed: ['intent.frames'], got: (x) => (x.production ? [...x.production.frames].sort() : null), want: (x) => [...x.intent.frames].sort() },
-  { field: 'copies', derived: ['copies.opened'], committed: ['intent.copies'], got: (x) => x.copies.filter((o) => o.ok && o.digest === x.opened.digest).map((o) => o.address), want: (x) => x.intent.copies },
+  { field: 'copies', derived: ['copies.opened'], committed: ['intent.copies'], got: (x) => x.copies.filter((o): o is Extract<Opening, { ok: true }> => !!o?.ok && o.digest === x.opened.digest).map((o) => o.address), want: (x) => x.intent.copies },
 ]
 /** Fields deliberately not bound by a row, with the reason (`bindingGaps` accepts them and everything under them). */
 export const UNBOUND: Readonly<Record<string, string>> = {
@@ -651,46 +700,59 @@ const shown = (x: unknown) => {
  */
 export async function pCommit(b: Buch): Promise<Check> {
   const v: string[] = []
+  // (1) Every ticket at the carrier, one path (`ticketDeposits`).
+  const deposits = await ticketDeposits(b)
+  const judged = new Set(deposits.map((d) => d.probe.seq))
+  for (const d of deposits) {
+    if (!d.reason) continue
+    const p = d.opened.doc.payload
+    const why = d.reason === 'ticket-without-commit' ? 'at the carrier without an earlier commit holding these bytes for this address' : 'its bytes are committed, but no batch holding them introduces its act on the key it names'
+    v.push(`ticket ${String(p?.act).slice(0, 8)} → ${String(p?.own).slice(-8)} at the carrier (seq ${d.probe.seq}) at address ${d.probe.address.slice(-8)}: ${d.reason} (${why})`)
+  }
+  // A ticket a producer reported that the key at its deposit address does not open (or not at a stock key address): its
+  // receiver cannot read it; it still must be the committed submission (frame and address as committed).
   for (const t of b.carrier.tickets) {
-    if (committedSubmission(b, t)) continue
+    if (judged.has(t.seq) || committedSubmission(b, t)) continue
     const held = b.commits.find((c) => c.device === t.device && c.seq < t.seq && c.intents.some((i) => i.frames.includes(t.frame)))
     const i = held?.intents.find((x) => x.frames.includes(t.frame))
     const at = i ? frameAddress(i, i.frames.indexOf(t.frame)) : undefined
     if (held && at !== undefined && at !== t.address) v.push(`ticket ${t.act.slice(0, 8)} → ${t.named.slice(-8)} at the carrier (seq ${t.seq}) at address ${t.address.slice(-8)}: not the committed submission (${held.writer}#${held.n} holds these bytes for address ${at.slice(-8)})`)
     else v.push(`ticket ${t.act.slice(0, 8)} → ${t.named.slice(-8)} at the carrier (seq ${t.seq}) without an earlier commit of ${t.device} holding its bytes and both consumptions`)
   }
-  // Frames no producer reported as tickets, at a stock key address: opened with that key; a ticket needs an earlier commit
-  // of the signing device (its issuance relationships hold the signer) that holds these bytes for this address.
-  for (const pr of b.carrier.probes) {
-    const o = await openAt(pr, pr.bytes, pr.address)
-    if (!o.ok || o.doc.type !== TYPES.ticket) continue
-    const held = b.commits.some((c) => c.seq < pr.seq && c.mediator?.some((m) => m.own.includes(o.doc.issuer)) && c.intents.some((i) => i.frames.some((h, j) => h === pr.frame && frameAddress(i, j) === pr.address)))
-    if (!held) v.push(`ticket ${String(o.doc.payload?.act).slice(0, 8)} → ${String(o.doc.payload?.own).slice(-8)} at the carrier (seq ${pr.seq}) at address ${pr.address.slice(-8)}: ticket-without-commit (no producer reported it; it opens with the key at that address, and no earlier commit of its signer holds these bytes)`)
-  }
   const opened = await openTickets(b)
   let issuances = 0
   for (const c of b.commits) {
     const intro = c.ops.filter((op): op is M.Op & { kind: 'introduce' } => op.kind === 'introduce')
-    if (!intro.length) continue
-    const tickets = c.intents.filter((i) => i.kind === TYPES.ticket)
     const primary = (i: CommitIntent) => opened.get(`${c.seq}|${i.digest}|0`)
-    for (const op of intro) {
+    // Tickets by content (the opened primary frame), never by the intent's `kind`.
+    const tickets = c.intents.filter((i) => isTicket(primary(i)))
+    const acts = new Set(intro.map((op) => op.act.id))
+    // Tickets of an act this batch does not introduce, with the receiver's verdict on them.
+    const stray: string[] = []
+    for (const i of tickets) {
+      const o = primary(i) as Extract<Opening, { ok: true }>
+      if (acts.has(String(o.doc.payload?.act))) continue
+      const rx = receiverOf(b, c.seq, i.address)!
+      const verdict = acceptsTicket(rx, o.doc, i.address, c.at)
+      stray.push(`ticket ${String(o.doc.payload?.act).slice(0, 8)} → ${String(o.doc.payload?.own).slice(-8)} at address ${i.address.slice(-8)}: ticket-without-introduce${verdict.ok ? '' : ` (receiver ${rx.device} refuses: ${verdict.step}: ${verdict.reason})`}`)
+    }
+    if (!intro.length) {
+      if (stray.length) v.push(`commit ${c.writer}#${c.n}: ${stray.join('; ')}`)
+      continue
+    }
+    for (const [n, op] of intro.entries()) {
       issuances++
       const what = `issuance ${op.act.id.slice(0, 8)} (${c.writer}#${c.n})`
-      const wrong: string[] = []
-      if (tickets.length !== 2 * intro.length) wrong.push(`${tickets.length} ticket intents in the batch (want ${2 * intro.length})`)
-      // A frame the key at its address does not open belongs to no act the ledger can read: with one issuance in the
-      // batch it is that issuance's.
+      const wrong: string[] = n === 0 ? [...stray] : []
+      // A committed frame the key at its address does not open belongs to no act the ledger can read: with one issuance in
+      // the batch it is that issuance's.
       if (intro.length === 1)
-        for (const i of tickets)
+        for (const i of c.intents)
           for (let j = 0; j < i.frames.length; j++) {
             const o = opened.get(`${c.seq}|${i.digest}|${j}`)
             if (o && !o.ok) wrong.push(`ticket intent ${i.digest.slice(0, 8)}${j ? ` copy ${j}` : ''} at address ${frameAddress(i, j).slice(-8)}: ${o.reason}`)
           }
-      const mine = tickets.filter((i) => {
-        const o = primary(i)
-        return o?.ok && o.doc.payload?.act === op.act.id
-      })
+      const mine = tickets.filter((i) => (primary(i) as Extract<Opening, { ok: true }>).doc.payload?.act === op.act.id)
       for (const [side, other] of [[op.act.a, op.act.b], [op.act.b, op.act.a]] as const) {
         const to = `ticket → ${side.key.slice(-8)}`
         const xs = mine.filter((i) => (primary(i) as Extract<Opening, { ok: true }>).doc.payload.own === side.key)
@@ -710,7 +772,7 @@ export async function pCommit(b: Buch): Promise<Check> {
           intent: i,
           rx,
           opened: o,
-          copies: i.copies.map((_, j) => opened.get(`${c.seq}|${i.digest}|${j + 1}`)!),
+          copies: i.copies.map((_, j) => opened.get(`${c.seq}|${i.digest}|${j + 1}`)),
           mediator: c.mediator?.find((m) => m.rel === side.rel)?.own ?? [],
           counterpart: counterpartAgreements(rx, i.address),
           production: b.production(i.digest),
@@ -724,7 +786,8 @@ export async function pCommit(b: Buch): Promise<Check> {
       if (wrong.length) v.push(`${what}: ${wrong.join('; ')}`)
     }
   }
-  return check('P-Commit', v, { tickets: b.carrier.tickets.length, issuances })
+  // Tickets at the carrier: every deposit whose content is a ticket, and every deposit a producer reported as one.
+  return check('P-Commit', v, { tickets: new Set([...judged, ...b.carrier.tickets.map((t) => t.seq)]).size, issuances })
 }
 
 /** The key agreements a receiver image holds for its counterpart on the live relationship whose stock key is `address`. */
@@ -790,7 +853,7 @@ export function allowedKeys(b: Buch, device: string, address: (a: string) => boo
  * reference model admits keys for both sides is a violation (silent refusal).
  */
 export async function pProduktion(b: Buch, opts: { rounds?: number; reserveMs?: number } = {}): Promise<Check> {
-  const opened = await openTickets(b)
+  const deposits = await ticketDeposits(b)
   const k = opts.rounds ?? PRODUCTION.rounds
   const reserve = opts.reserveMs ?? PRODUCTION.reserveMs
   const v: string[] = []
@@ -834,18 +897,10 @@ export async function pProduktion(b: Buch, opts: { rounds?: number; reserveMs?: 
     // Tor-Review 43 B2: only committed submissions count (a ticket deposited at another address does not keep the duty);
     // Tor-Review 44 B1: and only if its committed frame opens with the key its address names (the side named is the one
     // the opened ticket names).
+    // Tor-Review 45: the same single path as P-Commit (`ticketDeposits`): a deposit counts if its content is a ticket of
+    // this act, it opens with the key its address names, and it is the committed submission of this device's issuance.
     const named = new Set<string>()
-    for (const t of b.carrier.tickets) {
-      if (t.act !== act || t.device !== e.device || t.seq >= deadline) continue
-      const c = committedSubmission(b, t)
-      if (!c) continue
-      for (const i of c.intents)
-        i.frames.forEach((h, j) => {
-          if (h !== t.frame || frameAddress(i, j) !== t.address) return
-          const o = opened.get(`${c.seq}|${i.digest}|${j}`)
-          if (o?.ok && o.doc.payload?.act === act) named.add(String(o.doc.payload.own))
-        })
-    }
+    for (const d of deposits) if (!d.reason && d.probe.seq < deadline && d.commit!.device === e.device && d.opened.doc.payload?.act === act) named.add(String(d.opened.doc.payload.own))
     if (named.size === 2) counts.kept++
     else v.push(`issuance ${act.slice(0, 8)} on ${e.device}: ${named.size} of 2 tickets at the carrier within ${k} rounds`)
   }

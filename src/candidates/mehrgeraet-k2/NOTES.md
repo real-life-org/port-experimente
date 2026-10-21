@@ -335,24 +335,71 @@ deposited at an A stock key address with no producer report gives
 exactly one P-Commit violation `ticket-without-commit` (A accepts it on a
 third key: P-Einmal 3 keys, 3 accepts, holds); the control holds.
 
+**Review 45 fixes: one path for every opened ticket frame** (Tor-Review
+45, `rltp/design/port-experimente-e15-codex-review45-2026-10-21.md`). B1:
+the addendum's probe check was a second, weaker path (an earlier commit
+with the signer, frame hash and address), and the full check still reached
+only intents whose `kind` was `ticket`. Counter-run: a third, correctly
+sealed ticket of a new act in the issuance batch, reported and committed
+as `card`, no `introduce` of its act: three acceptances, every checker
+green; signed in the other M relationship, the holder refuses (8640.2) and
+the ledger stayed green. Now neither the producer's report nor the
+intent's `kind` decides anything:
+
+- **At the carrier, one path** (`ticketDeposits`): every deposit at a
+  stock key address is a probe, reported or not. Opened with the key
+  its address names, its content decides whether it is a ticket. A ticket
+  needs an earlier commit holding these bytes for this address
+  (`ticket-without-commit`) whose batch holds the `introduce` of *this*
+  ticket's act on the key it names (`ticket-without-introduce`). The
+  receiver predicate and the binding table then judge the same committed
+  bytes in that issuance. A reported ticket that the key at its deposit
+  address does not open (its receiver cannot read it) still must be the
+  committed submission (U9). P-Produktion counts through the same path.
+  `tickets` in the counts is the number of deposits that are tickets by
+  content or by report.
+- **In the commit protocol** every intent with a frame at a stock key
+  address keeps its bytes and gets a receiver image, whatever its kind.
+  Each batch's frames are opened, and its tickets are found by content.
+  A ticket of an act the batch does not introduce is
+  `ticket-without-introduce`, with the receiver's verdict (8640.x) on it,
+  also in a batch without any `introduce`. The two tickets of the
+  introduced act go through the predicate and the table as before. A
+  frame at a stock key address that does not open is
+  `sealed-to-other-key`.
+- **S1, closed for addresses that become known:** a deposit at an address
+  no committed image knows yet is held (live only) and drawn in as a probe,
+  with its own seq and time, at the first commit that makes the address a
+  stock key address.
+
+Fixed tests: R45-B1a (2 violations `ticket-without-introduce`: the
+issuance and the one deposit; tickets 3, accepts 3), R45-B1b (4: the
+issuance with 8640.2 and three deposits, the third ticket refused and
+repeated; tickets 5, accepts 2), R45-S1 (the reviewer's case: 1
+`ticket-without-commit`), U10 still 1 (its `tickets` count is now 3: by
+content). All earlier counts unchanged.
+
 What stays measured only: the receiver state steps (8640.4, 8640.12,
 8640.6, 8640.9, 8640.13) are not part of the reference, so a key that is
 `consumed` or `withdrawn` in the receiver image still passes P-Commit
 (review 44 (c)); the receiver image and the opening time are those of the
-issuance commit, not of the later receipt; a frame at an address that is
-no stock key address in any observed committed image is not opened
-(`unknown`); the reference stays K2-specific (no stock address without
-device sets).
+issuance commit, not of the later receipt; a frame at an address that
+never becomes a stock key address in an observed committed image is not
+opened (`unknown`: the ledger has no key for it, and no observed receiver
+reads tickets there); held deposits are live state, not in the dump (once
+drawn in they are); the reference stays K2-specific (no stock address
+without device sets).
 
-**Verification 2b.0:** `tests/mehrgeraet-buch.test.ts` 49 passed + 1
-expected fail (D1) in ≈ 45–50 s after the review 44 fixes and the
-addendum (before: 36 + 1, ≈ 47 s); typecheck green. No cell changed: the K2,
+**Verification 2b.0:** `tests/mehrgeraet-buch.test.ts` 52 passed + 1
+expected fail (D1) in ≈ 47 s after the review 45 fixes (before: 36 + 1,
+≈ 47 s); typecheck green. No cell changed: the K2,
 K1a, K0 and seed-sweep files give the same 111/111 results on this branch
 as on main a290f7a (test by test; after the review 42 fixes again
 111/111, identical test by test, the four files ≈ 11 min; after the
 review 43 fixes, with the holder's ticket check now `ticketAcceptance`,
 again 111/111, identical test by test, ≈ 16 min under load; after the
-review 44 fixes again 111/111, identical test by test, ≈ 11 min); also green
+review 44 fixes again 111/111, identical test by test, ≈ 11 min; after the
+review 45 fixes: see the PR comment); also green
 (again after review 43, 9 files, 114 tests; not re-run for review 44,
 which changes the ledger and adds one read-only holder accessor):
 gegenlauf, zustellung, träger, zustellung-harness, modell, engine,
@@ -1574,7 +1621,7 @@ throwaway script, numbers from one run; the frame counts are asserted in
 ```sh
 export PATH=/home/fritz/.n/n/versions/node/24.21.0/bin:$PATH
 pnpm vitest run tests/mehrgeraet-k2.test.ts
-pnpm vitest run tests/mehrgeraet-buch.test.ts   # 2b.0: ledger, checkers, generator (20 seeds; GEN_SEEDS=<n>), mutations, review-44 opening and binding table, D1 expected-fail (≈ 55 s)
+pnpm vitest run tests/mehrgeraet-buch.test.ts   # 2b.0: ledger, checkers, generator (20 seeds; GEN_SEEDS=<n>), mutations, review-44/45 opening, binding table and ticket path, D1 expected-fail (≈ 50 s)
 SEEDS=all pnpm vitest run tests/mehrgeraet-seeds.test.ts   # 20 seeds × K2-strict, K1a (default: seed 1)
 REPORT=1 pnpm vitest run report   # column k2-device-keys in the multi-device port
 ```
