@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 //   G0. Replay: a seed and a sequence give the same run.
 //   G1. Generator, fixed seeds: every property holds on the step-2a code (failure: seed + shrunk sequence printed).
 //   U1–U4. Mutations (test-only hooks on the devices, never flags in the code): each checker is shown failing.
+//   U5. The reference model's negative side: no admissible key, no obligation, no false alarm.
 //   S1. Shrinking: a failing generated sequence shrinks to the smallest sequence that still fails the same property.
 //   D1. Astra's D1 sequence (design review 1): Soll 1 accepted act id on x; red on 2a (expected-fail, closes in 2b.3).
 //
@@ -224,6 +225,22 @@ describe('K2 step 2b.0: mutations show each checker failing', () => {
     // Soll: the same act connected on both sides, A's tuple names a key agreement that is not B's card's → 1 violation.
     expect(prop(mutated, 'P-Paar').counts).toEqual({ connectedActs: 1, bothSides: 1 })
     expect(prop(mutated, 'P-Paar').violations).toHaveLength(1)
+  }, 60_000)
+
+  it('U5. Reference model, negative side: twelve introductions against a budget of ten; the last two find no admissible A key in the delivery protocol, M refuses them, no violation', async () => {
+    // Soll: 8510 budget 10 per relationship for the person, split over A's two devices (MV-9: share 5 each); a device lists
+    // at most as many own keys as it has acceptances left (`quotaLeft`), so after 10 acceptances A lists no key. With three
+    // rounds after each introduction (ticket, acceptance and the next revision arrive), introductions 1–10 are issued and
+    // obliged (10 kept), 11 and 12 find no admissible A key (reference: noKeys 2) and M refuses them. B has the same budget
+    // and is never the short side first. A accepts 10 acts on 10 keys; P-Einmal holds.
+    const seq: GenEvent[] = Array.from({ length: 12 }, () => [{ k: 'introduce' }, { k: 'round' }, { k: 'round' }, { k: 'round' }] as GenEvent[]).flat()
+    const r = await runSequence(cand, seq, { seed: 61, reseed })
+    for (const c of r.checks) expect(c.violations, c.property).toEqual([])
+    expect(prop(r, 'P-Produktion').counts).toMatchObject({ introductions: 12, obliged: 10, kept: 10, noKeys: 2 })
+    const refused = r.buch.events.filter((e) => e.kind === 'introduce' && 'refused' in ((e.detail?.result as object) ?? {}))
+    expect(refused).toHaveLength(2)
+    const accA = r.buch.commits.filter((c) => c.person === 'A').flatMap((c) => c.ops).filter((o) => o.kind === 'ticket-accept')
+    expect(accA).toHaveLength(10)
   }, 60_000)
 
   it('S1. Shrinking: a generated sequence failing P-Commit under suppressed tickets shrinks to one introduction that commits', async () => {
