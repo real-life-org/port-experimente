@@ -16,6 +16,7 @@ import {
   protocolJson,
   runProbe,
   SenderLedger,
+  SendRegistry,
   seededRand,
   stage1Needed,
   type AckCheck,
@@ -254,5 +255,33 @@ describe('E11b probe against a fake mediator (offline)', () => {
     expect(p.events.fresh.length).toBe(8)
     expect(p.events.fresh.every((e: { kind: string }) => e.kind === 'first-in-fresh')).toBe(true)
     expect(p.acks).toEqual([])
+  }, 60_000)
+})
+
+describe('E11b concurrent copies (review 1 C2)', () => {
+  it('the send register refuses a second record with the same id instead of overwriting its index', () => {
+    const r = new SendRegistry()
+    r.add(rec('doc', 0, 'x/ack'))
+    expect(() => r.add({ ...rec('doc', 1, 'x/ack'), innerDigest: 'other' })).toThrow()
+    expect(r.all().length).toBe(1)
+  })
+
+  it('two copies of each frame arriving at once: one ack per document, unique ack ids, the second copy is duplicate-known', async () => {
+    const keys = mediatorKeys()
+    const info = await fakeInfo(keys)
+    const counters = new Counters()
+    const port = new FakeMediator(FAKE_DID, keys, { direct: 'socket-sender', routed: 'forward', invite: 'none', duplicate: true }, counters)
+    const cfg = parseEnv({ E11B_RUNS: '1', E11B_TIMEOUT_MS: '400', E11B_FORMS: 'D-c' })
+    const r = await runProbe(cfg, { info, port, counters, versions: VERSIONS, rand: seededRand(42), observeMs: 150 })
+    expect(r.failures).toEqual([])
+    const p = JSON.parse(protocolJson(r.protocol))
+    const docs = p.rows.filter((x: { kind: string }) => x.kind === 'doc')
+    expect(docs.length).toBe(4)
+    expect(docs.every((x: { outcome: string }) => x.outcome === 'positive')).toBe(true)
+    const ids = p.acks.map((a: { id: string }) => a.id)
+    expect(ids.length).toBe(4)
+    expect(new Set(ids).size).toBe(4)
+    // the copies are counted as receipt events, the second one never as unique
+    expect(docs.every((x: { events: number }) => x.events === 2)).toBe(true)
   }, 60_000)
 })

@@ -30,9 +30,13 @@ export type Layer = 'inner' | 'outer'
 
 export class SendRegistry {
   private readonly records: SendRecord[] = []
+  private readonly byId = new Map<string, SendRecord>()
   private readonly byFrame = new Map<string, { record: SendRecord; layer: Layer }>()
   private readonly byPayload = new Map<string, SendRecord>()
+  /** Record ids are unique: a second record under the same id is an internal error, never an overwrite (review 1 C2). */
   add(r: SendRecord) {
+    if (this.byId.has(r.id)) throw new Error('e11b: send record id not unique')
+    this.byId.set(r.id, r)
     this.records.push(r)
     this.byFrame.set(r.innerDigest, { record: r, layer: 'inner' })
     if (r.outerDigest) this.byFrame.set(r.outerDigest, { record: r, layer: 'outer' })
@@ -45,7 +49,7 @@ export class SendRegistry {
     return this.byPayload.get(digest)
   }
   get(id: string) {
-    return this.records.find((r) => r.id === id)
+    return this.byId.get(id)
   }
   all(): readonly SendRecord[] {
     return this.records

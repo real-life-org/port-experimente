@@ -55,7 +55,10 @@ interface SideState {
   pos: 'x' | 'y'
   partner: SideState | null
   ledger: SenderLedger
+  /** Digests whose effect (ack sent, ack checked) is done; handed to `receive()`. */
   completed: Set<string>
+  /** Digests reserved synchronously before the first await of their effect (review 1 C2). */
+  inflight: Set<string>
   listConn: PositiveList
   listEgress: PositiveList
   sessions: { conn?: PortSession; egress?: PortSession }
@@ -157,6 +160,7 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
           partner: null,
           ledger: new SenderLedger(partnerSide.party.anchor, timeoutMs),
           completed: new Set(),
+          inflight: new Set(),
           listConn: new PositiveList([
             { sender: peerInner.did, receiver: s.conn.did, signing: [{ ref: 'peer', pub: peerInner.edPublic }], receiverSecret: s.conn.xSecret, allowed: new Set(['direct']) },
             mediatorEntry(s.conn),
@@ -231,6 +235,16 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
         completed: st.completed,
       })
       classCounts[c.cls] = (classCounts[c.cls] ?? 0) + 1
+      // Reservation (review 1 C2): two copies classified concurrently both get `unique` from
+      // receive(), since `completed` grows only after the effect. The first copy reserves the
+      // digest synchronously, before any await; every later copy is `duplicate-known`.
+      // Probe simplification: a duplicate gets no second ack. Delivery §6.2 would send the kept
+      // ack again; the probe measures the first delivery and its ack only.
+      const digest = c.received?.digest
+      if (!fresh && (c.cls === 'doc' || c.cls === 'ack') && c.verdict === 'unique' && digest) {
+        if (st.inflight.has(digest) || st.completed.has(digest)) c.verdict = 'duplicate-known'
+        else st.inflight.add(digest)
+      }
       if (fresh) {
         // Observation only: no contract transitions, no acks (C1); the pickup ack cleans the queue.
         const earlier = c.recordId !== undefined && events.some((e) => e.recordId === c.recordId)
@@ -253,7 +267,7 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
         }
       }
       if (c.cls === 'ack' && c.received) {
-        const chk = await st.ledger.checkAck(c.received, t)
+        const chk: AckCheck = c.verdict === 'unique' ? await st.ledger.checkAck(c.received, t) : { valid: false, inTime: false, reason: 'not-unique', t }
         if (chk.rowId) {
           const prev = ackChecks.get(chk.rowId)
           if (!prev || (!prev.valid && chk.valid)) ackChecks.set(chk.rowId, chk)

@@ -124,6 +124,8 @@ export interface FakeOptions {
   invite: 'accept' | 'none'
   /** Queue, but push only when a session opens (delete-to-ack observation tests). */
   holdLive?: boolean
+  /** Push every frame twice at once (concurrent copies, review 1 C2). */
+  duplicate?: boolean
 }
 
 interface Queued {
@@ -178,9 +180,10 @@ export class FakeMediator implements MediatorPort {
 
   private push(sub: { onTsp: TspHandler; scope: Counters }, q: Queued, onOpen = false) {
     if (this.opts.holdLive && !onOpen) return
-    setTimeout(() => {
-      sub.onTsp(q.bytes, q.text).catch(() => sub.scope.scope().consumerFailures.push('other'))
-    }, 1)
+    for (let i = 0; i < (this.opts.duplicate ? 2 : 1); i++)
+      setTimeout(() => {
+        sub.onTsp(q.bytes, q.text).catch(() => sub.scope.scope().consumerFailures.push('other'))
+      }, 1)
   }
 
   private store(did: string, bytes: Uint8Array) {
@@ -207,6 +210,28 @@ export class FakeMediator implements MediatorPort {
       const acc = await packAccept(m.threadDigest, this.did, envelope.sender, { senderSigningKey: this.keys.edSecret, receiverEncryptionKey: didKeyKeys(envelope.sender).encPub })
       this.store(envelope.sender, acc.bytes)
     }
+  }
+}
+
+/**
+ * A port that hands every frame to the probe's handler only after `delayMs(n)`
+ * (n = delivery index), also after the session was closed: late callbacks
+ * around the end of a form pass and after the probe returned (review 1 C1).
+ */
+export function delayedPort(base: MediatorPort, delayMs: (n: number) => number): MediatorPort & { delivered: () => number } {
+  let n = 0
+  let done = 0
+  return {
+    delivered: () => done,
+    open: (id, label, onTsp) =>
+      base.open(id, label, (qb2, text) => {
+        const d = delayMs(n++)
+        return new Promise<void>((resolve, reject) => {
+          setTimeout(() => {
+            onTsp(qb2, text).then(resolve, reject).finally(() => done++)
+          }, d)
+        })
+      }),
   }
 }
 
