@@ -133,6 +133,7 @@ export interface KeyCopy {
   rkid: string
   xPriv: string
 }
+/** A `stock-revision@2` at the carrier (K2 step 2b.1): listing with `for` per key, `inc`, `withdraw`, `bury`, `burn`, class. */
 export interface CarrierRevision {
   seq: number
   at: string
@@ -141,9 +142,45 @@ export interface CarrierRevision {
   device: string
   person: string
   signer: string
-  revision: number
+  digest: string
+  writer: string
+  inc: string
+  rev: number
   keys: string[]
-  tombstones: string[]
+  for: Record<string, string>
+  withdraw: string[]
+  bury: string[]
+  burn: string[]
+  classOff: boolean
+}
+/**
+ * K2 step 2b.1: the allocator's balance per store commit (core draft 4 §2.1), computed here from the committed image, not
+ * by the device: per relationship with own stock keys or the class on, `belegt` (own acceptances in the 8510 window
+ * without the 8515-confirmed), `reserviert` (own keys active or aging with now ≤ expiresAt), the members of M's set as the
+ * image knows them and per member the own usable (8470) active keys assigned to it.
+ */
+/**
+ * K2 step 2b.1 (Tor-Review 52): at an issuance commit, what the issuing M device's committed image says about each named
+ * key, by the model's own functions (`M.evidence`, `M.classOff`): the device-local durable knowledge (deliveries and
+ * journal folded), never a projection of the ledger's own.
+ */
+export interface IssuerImage {
+  seq: number
+  device: string
+  person: string
+  act: string
+  keys: Array<{ rel: string; key: string; evidence: M.Evidence; classOff: boolean }>
+}
+export interface BalanceRow {
+  seq: number
+  at: string
+  device: string
+  person: string
+  rel: string
+  classOn: boolean
+  belegt: number
+  reserviert: number
+  supply: Record<string, number>
 }
 export interface CarrierReceipt {
   seq: number
@@ -228,6 +265,10 @@ export class Buch implements HolderObserver {
   readonly receivers: ReceiverImage[] = []
   /** Per device its last committed holder state and whether it runs device sets (live only: feeds `receivers`). */
   private readonly lastImage = new Map<string, { person: string; sets: boolean; state: M.HolderState }>()
+  /** K2 step 2b.1: the allocator's balance per commit (`BalanceRow`). */
+  readonly balances: BalanceRow[] = []
+  /** K2 step 2b.1: the issuer's knowledge of the named keys at each issuance commit (`IssuerImage`). */
+  readonly issuers: IssuerImage[] = []
   /** The ledger's copy of every device resolver (Tor-Review 47), in the dump. */
   readonly keyring: KeyCopy[] = []
   private readonly copied = new Set<string>()
@@ -274,6 +315,7 @@ export class Buch implements HolderObserver {
     this.copyKeys(t.seq)
     this.marks.push({ ...t, device: d.name })
     this.duties.set(d.name, { seq: t.seq, device: d.name, person: d.person, duties: image.holder.duties.map((x) => ({ pair: [x.pair[0], x.pair[1]], state: x.state })) })
+    this.balance(t, d, image.holder)
     const batches = (image.candidate as { batches?: Array<{ writer: string; n: number; ops: M.Op[]; intents: Array<{ digest: string; kind: string; expected: string; address: string; replyTo: string; bytes: string; copies?: Array<{ address: string; bytes: string }> }> }> } | null)?.batches ?? []
     for (const b of batches) {
       if (b.writer.split('@')[0] !== d.name) continue // a sibling's batch folded here is the sibling's commit, not this one
@@ -302,6 +344,7 @@ export class Buch implements HolderObserver {
         // The mediator context of an issuance: per act side, the committing device's own anchors on that relationship.
         ...(intro.length ? { mediator: intro.flatMap((op) => [op.act.a, op.act.b]).map((side) => ({ rel: side.rel, own: ownAnchors(image.holder, side.rel) })) } : {}),
       })
+      for (const op of b.ops) if (op.kind === 'introduce') this.issuers.push({ ...t, device: d.name, person: d.person, act: op.act.id, keys: [op.act.a, op.act.b].map((x) => ({ rel: x.rel, key: x.key, evidence: M.evidence(image.holder, x.rel, x.key), classOff: M.classOff(image.holder, x.rel) })) })
       if (intro.length) for (const i of b.intents) for (const a of [i.address, ...(i.copies ?? []).map((c) => c.address)]) this.receiverAt(t.seq, intro[0]!.act.id, a)
     }
     this.lastImage.set(d.name, { person: d.person, sets: !!d.cand.deviceSets, state: image.holder })
@@ -344,6 +387,24 @@ export class Buch implements HolderObserver {
     if (!device || !img || !k) return
     this.receivers.push({ seq, act, address, key: k.anchor, keyAgreement: k.keyAgreement, device, person: img.person, sets: img.sets, state: M.cloneState(img.state) })
   }
+  /** The balance rows of one commit (`BalanceRow`), from the image only. */
+  private balance(t: { seq: number; at: string }, d: HolderDevice, s: M.HolderState): void {
+    const now = Date.parse(t.at)
+    for (const r of s.relationships) {
+      const own = r.stock.filter((k) => k.by === d.name)
+      // Tor-Review 46 B2: a relationship with the class on gets a row also with an empty own stock (a missing first supply).
+      if (r.departed || (!own.length && !r.classOn)) continue
+      const mine = new Set(own.map((k) => k.anchor))
+      const acts = new Map(s.acts.map((a) => [a.id, a.own]))
+      const belegt = r.accepted.filter((e) => mine.has(acts.get(e.act) ?? '') && !r.confirmed.includes(e.act) && Date.parse(e.at) > now - M.PARAM.budgetWindowMs).length
+      const reserviert = own.filter((k) => (k.state === 'active' || k.state === 'aging') && now <= Date.parse(k.expiresAt)).length
+      const h = M.head(r)
+      const set = M.own(s.sets, h.peer)
+      const members = set ? M.setView(set).members.map((m) => m.anchor) : [h.peer]
+      const supply = Object.fromEntries(members.map((m) => [m, own.filter((k) => k.for === m && k.state === 'active' && M.usable(k.expiresAt, t.at)).length]))
+      this.balances.push({ ...t, device: d.name, person: d.person, rel: r.id, classOn: r.classOn, belegt, reserviert, supply })
+    }
+  }
   produced(d: HolderDevice, p: Parameters<HolderObserver['produced']>[1]): void {
     const rec: Production = { ...this.next(), device: d.name, person: d.person, digest: p.digest, type: p.type, issuer: p.issuer, recipient: p.recipient, payload: structuredClone(p.payload) as Record<string, unknown>, frames: p.frames.map(frameHash) }
     this.productions.push(rec)
@@ -367,16 +428,25 @@ export class Buch implements HolderObserver {
     const base = { ...t, frame: h, address: f.address, device: p.device }
     const pl = p.payload
     if (p.type === TYPES.ticket) this.carrier.tickets.push({ ...base, digest: p.digest, act: String(pl.act), signer: p.issuer, named: String(pl.own) })
-    else if (p.type === TYPES.revision) {
-      const keys = Array.isArray(pl.keys) ? (pl.keys as Array<{ anchor: string }>).map((k) => k.anchor) : []
-      const tombstones = Array.isArray(pl.tombstones) ? (pl.tombstones as string[]) : []
-      this.carrier.revisions.push({ ...base, person: p.person, signer: p.issuer, revision: Number(pl.revision), keys, tombstones })
+    else if (p.type === TYPES.stockRevision) {
+      const r = pl as unknown as M.StockRevision
+      this.carrier.revisions.push({ ...base, person: p.person, signer: p.issuer, digest: p.digest, writer: r.writer, inc: r.inc, rev: r.rev, keys: r.keys.map((k) => k.anchor), for: Object.fromEntries(r.keys.map((k) => [k.anchor, k.for])), withdraw: [...r.withdraw], bury: [...r.bury], burn: [...r.burn], classOff: r.classOff === true })
     } else if (p.type === TYPES.ack) this.carrier.receipts.push({ ...base, signer: p.issuer, ref: String(pl.ref) })
     else this.carrier.other++
   }
 
   /** A bench event (generator or fixed sequence). */
   note(kind: BenchEvent['kind'], device?: string, detail?: Record<string, unknown>): BenchEvent {
+    // K2 step 2b.1 (Tor-Review 52 B2): an introduction carries what the M device was allowed to name, read from its last
+    // committed image by the model's one computation (`M.usableView` with its own anchors: `for`, class state, tombstones
+    // with the revocation exception, 8470, consumption); the ledger never projects listings itself.
+    const img = kind === 'introduce' && device ? this.lastImage.get(device) : undefined
+    if (img && detail && typeof detail.relA === 'string' && typeof detail.relB === 'string') {
+      const at = this.now()
+      const allowed = (rel: string, mine: unknown) => M.usableView(img.state, rel, at, Array.isArray(mine) ? new Set(mine as string[]) : undefined).unconsumed.map((k) => k.anchor)
+      detail.allowedA = allowed(detail.relA, detail.mineA)
+      detail.allowedB = allowed(detail.relB, detail.mineB)
+    }
     const e: BenchEvent = { ...this.next(), kind, ...(device ? { device } : {}), ...(detail ? { detail } : {}) }
     this.events.push(e)
     return e
@@ -403,6 +473,8 @@ export class Buch implements HolderObserver {
       duties: [...this.duties.values()],
       errors: this.errors,
       receivers: this.receivers,
+      balances: this.balances,
+      issuers: this.issuers,
       keyring: this.keyring,
     })
   }
@@ -421,6 +493,8 @@ export class Buch implements HolderObserver {
       duties: DutyImage[]
       errors: ObserverError[]
       receivers: ReceiverImage[]
+      balances?: BalanceRow[]
+      issuers?: IssuerImage[]
       keyring: KeyCopy[]
     }
     const b = new Buch()
@@ -438,6 +512,8 @@ export class Buch implements HolderObserver {
     b.errors.push(...o.errors)
     for (const e of o.errors) if (e.hook.startsWith('measure:')) b.measureSeen.add(`${e.hook.slice('measure:'.length)}|${e.device}|${e.message}`)
     b.receivers.push(...o.receivers.map((x) => ({ ...x, state: M.fromJson(x.state) })))
+    b.balances.push(...(o.balances ?? []))
+    b.issuers.push(...(o.issuers ?? []))
     b.keyring.push(...o.keyring)
     for (const k of o.keyring) b.copied.add(`${k.device}|${k.rkid}`)
     return b
@@ -466,7 +542,7 @@ export function ledgerWorld(candidate: MultiDeviceCandidate, opts: Omit<Welt15Op
 // ── Checkers ──
 
 export interface Check {
-  property: 'P-Gueltig' | 'P-Einmal' | 'P-Commit' | 'P-Produktion' | 'P-Paar'
+  property: 'P-Gueltig' | 'P-Einmal' | 'P-Commit' | 'P-Produktion' | 'P-Paar' | 'P-Bilanz' | 'P-Recht' | 'P-Aufhebung' | 'P-Versorgung'
   ok: boolean
   violations: string[]
   counts: Record<string, number>
@@ -489,11 +565,16 @@ const check = (b: Buch, property: Check['property'], violations: string[], count
 export function finalize(b: Buch, results: Check[]): Check[] {
   return [pGueltig(b), ...results.map((c) => (b.errors.length ? invalidResult(b, c.property) : c))]
 }
-/** Every checker of a run, the frame-opening ones first, then judged together (`finalize`): the generator and the tests use it. */
-export async function judge(b: Buch): Promise<Check[]> {
+/**
+ * Every checker of a run, the frame-opening ones first, then judged together (`finalize`): the generator and the tests use
+ * it. K2 step 2b.1: with the static share per allocating device (`share`, MV-9) also P-Bilanz, P-Recht, P-Aufhebung and
+ * P-Versorgung, judged the same way (an invalid run marks them invalid too).
+ */
+export async function judge(b: Buch, opts: { share?: number } = {}): Promise<Check[]> {
   const commit = await pCommit(b)
   const produktion = await pProduktion(b)
-  return finalize(b, [pEinmal(b), commit, produktion, pPaar(b)])
+  const allocation = opts.share === undefined ? [] : [pBilanz(b, opts.share), pRecht(b), pAufhebung(b), pVersorgung(b, opts.share)]
+  return finalize(b, [pEinmal(b), commit, produktion, pPaar(b), ...allocation])
 }
 
 /**
@@ -880,34 +961,6 @@ function acceptsTicket(b: Buch, rx: ReceiverImage, doc: { issuer: string; payloa
 }
 
 /**
- * The reference model of P-Produktion (draft 2 §5.1): which stock keys of a relationship the M device was allowed to name
- * at ledger time `seq`, from its delivery protocol only (never `usableView`): per signer the highest admitted revision's
- * keys, minus admitted tombstones, minus keys the device's own committed issuances consumed, usable by 8470 at `now`. An
- * admission counts once a later store commit of the device made it durable without a crash in between (a crashed round
- * is re-delivered). Step 2a has no `for` (M is a single-writer fixture and names every key; 2b.1 adds it).
- */
-export function allowedKeys(b: Buch, device: string, address: (a: string) => boolean, seq: number, now: string): string[] {
-  const crashes = b.events.filter((e) => e.kind === 'crashed' && e.device === device).map((e) => e.seq)
-  const marks = b.marks.filter((m) => m.device === device).map((m) => m.seq)
-  const durable = (s: number) => marks.some((m) => m > s && m < seq && !crashes.some((c) => c > s && c < m))
-  const bySigner = new Map<string, { revision: number; keys: Array<{ anchor: string; expiresAt: string }> }>()
-  const buried = new Set<string>()
-  for (const d of b.deliveries) {
-    if (d.device !== device || d.type !== TYPES.revision || d.seq >= seq || !address(d.address) || !durable(d.seq)) continue
-    const p = d.payload as { revision: number; keys: Array<{ anchor: string; expiresAt: string }>; tombstones?: string[] }
-    for (const t of p.tombstones ?? []) buried.add(t)
-    const held = bySigner.get(d.issuer)
-    if (!held || p.revision > held.revision) bySigner.set(d.issuer, { revision: p.revision, keys: p.keys })
-  }
-  const consumed = new Set<string>()
-  for (const c of b.commits) if (c.device === device && c.seq < seq) for (const op of c.ops) if (op.kind === 'introduce') consumed.add(op.act.a.key), consumed.add(op.act.b.key)
-  const horizon = Date.parse(now) + M.PARAM.actLifetimeMs + M.PARAM.actSkewMs // 8470
-  const out = new Set<string>()
-  for (const { keys } of bySigner.values()) for (const k of keys) if (!buried.has(k.anchor) && !consumed.has(k.anchor) && Date.parse(k.expiresAt) >= horizon) out.add(k.anchor)
-  return [...out].sort()
-}
-
-/**
  * P-Produktion (draft 2 §5.2 no. 7): if the M device had admissible keys for both sides (reference model), was up and
  * online and the act's remaining time exceeds the delivery reserve, both tickets reach the carrier within k rounds in which
  * the device is up, as committed submissions (frame and address as committed, Tor-Review 43 B2) that open with the key
@@ -923,7 +976,7 @@ export async function pProduktion(b: Buch, opts: { rounds?: number; reserveMs?: 
   for (const e of b.events) {
     if (e.kind !== 'introduce' || !e.device) continue
     counts.introductions++
-    const d = e.detail as { addrA: string[]; addrB: string[]; result: { act?: string; refused?: string }; armed: string | null; up: boolean }
+    const d = e.detail as { allowedA?: string[]; allowedB?: string[]; result: { act?: string; refused?: string }; armed: string | null; up: boolean }
     if (!d.up) {
       counts.down++
       continue
@@ -932,8 +985,8 @@ export async function pProduktion(b: Buch, opts: { rounds?: number; reserveMs?: 
       counts.crashedBeforeCommit++
       continue
     }
-    const ka = allowedKeys(b, e.device, (a) => d.addrA.includes(a), e.seq, e.at)
-    const kb = allowedKeys(b, e.device, (a) => d.addrB.includes(a), e.seq, e.at)
+    const ka = d.allowedA ?? []
+    const kb = d.allowedB ?? []
     if (!ka.length || !kb.length) {
       counts.noKeys++
       continue
@@ -1051,4 +1104,93 @@ export function pairCounter(b: Buch): { tuples: Record<string, number>; openDuti
   const open: Record<string, number> = {}
   for (const [person, ds] of duties) open[person] = [...ds.values()].filter((x) => x.open && !x.ended).length
   return { tuples: out, openDuties: open }
+}
+
+// ── K2 step 2b.1: checkers of the allocation (core draft 4 §2, §3; draft 2 §5.2 no. 2, 3, 9) ──
+
+/**
+ * P-Bilanz (core draft 4 §2.1, Q3, Q8): at every store commit of an allocating device, per mediator relationship,
+ * `belegt + reserviert ≤ share`. `share` is the static share of the acceptance budget per device (MV-9), given by the run.
+ */
+export function pBilanz(b: Buch, share: number): Check {
+  const v = b.balances.filter((r) => r.belegt + r.reserviert > share).map((r) => `${r.device} on ${r.rel.slice(0, 12)} at seq ${r.seq}: belegt ${r.belegt} + reserviert ${r.reserviert} > share ${share}`)
+  return check(b, 'P-Bilanz', v, { rows: b.balances.length, max: Math.max(0, ...b.balances.map((r) => r.belegt + r.reserviert)) })
+}
+
+/**
+ * P-Recht (draft 2 §5.2 no. 3): no acceptance of a ticket whose signer is not the `for` of the named anchor after its first
+ * binding in the ledger (the first revision at the carrier that listed it). An acceptance without a ticket or a binding in
+ * the ledger is counted, not judged.
+ */
+export function pRecht(b: Buch): Check {
+  const v: string[] = []
+  const bound = new Map<string, string>()
+  for (const r of [...b.carrier.revisions].sort((x, y) => x.seq - y.seq)) for (const [a, f] of Object.entries(r.for)) if (!bound.has(a)) bound.set(a, f)
+  let judged = 0
+  let unjudged = 0
+  for (const c of b.commits)
+    for (const op of c.ops) {
+      if (op.kind !== 'ticket-accept') continue
+      const t = b.carrier.tickets.find((x) => x.act === op.act.id && x.named === op.act.own)
+      const f = bound.get(op.act.own)
+      if (!t || !f) {
+        unjudged++
+        continue
+      }
+      judged++
+      if (t.signer !== f) v.push(`act ${op.act.id.slice(0, 8)} accepted by ${c.device} on ${op.act.own.slice(-8)}: ticket signed by ${t.signer.slice(-8)}, assigned to ${f.slice(-8)}`)
+    }
+  return check(b, 'P-Recht', v, { judged, unjudged })
+}
+
+/**
+ * P-Aufhebung (draft 2 §5.2 no. 2, draft 3 §4): withdrawal, burial and class off hit exactly their anchors. (A) No device
+ * accepts on a key after its own commit that withdrew it. (M) No M device names a key at its issuance commit if a revision
+ * it had admitted and made durable before withdrew it (by the listing writer), buried it, or carried the class off as the
+ * highest revision of its (writer, inc). Future anchors are not locked: that the reference admits fresh anchors after the
+ * class is on again is P-Produktion's side.
+ */
+export function pAufhebung(b: Buch): Check {
+  const v: string[] = []
+  let accepts = 0
+  let issuances = 0
+  for (const c of b.commits)
+    for (const op of c.ops) {
+      if (op.kind === 'ticket-accept') {
+        accepts++
+        const earlier = b.commits.some((x) => x.device === c.device && x.seq < c.seq && x.ops.some((o) => o.kind === 'withdraw' && o.anchors.includes(op.act.own)))
+        if (earlier) v.push(`${c.device} accepted act ${op.act.id.slice(0, 8)} on ${op.act.own.slice(-8)} after withdrawing it`)
+      }
+    }
+  // M side (Tor-Review 52 B1): the issuer's own committed knowledge at the issuance commit decides (`IssuerImage`, the
+  // model's `evidence` and `classOff`): a named key withdrawn, buried or of a revoked writer there, or the class off there.
+  for (const x of b.issuers) {
+    issuances++
+    for (const k of x.keys) if (k.evidence.state === 'withdrawn' || k.classOff) v.push(`${x.device} named ${k.key.slice(-8)} in act ${x.act.slice(0, 8)} although its committed state held it ${k.classOff ? 'under the class off' : 'withdrawn, buried or revoked'}`)
+  }
+  return check(b, 'P-Aufhebung', v, { accepts, issuances })
+}
+
+/**
+ * P-Versorgung (core draft 4 §2.3, draft 2 §5.2 no. 9): at the end of a run, per allocating device and relationship with the
+ * class on, from its last commit: if `frei_zuteilbar ≥ 1`, every member of M's set it knows holds a usable key from it
+ * (supply only from free rights, empty devices first); members without a key while nothing is free are counted
+ * (`unsupplied`, the named price of decision 9.1 (a)), not a violation.
+ */
+export function pVersorgung(b: Buch, share: number): Check {
+  const v: string[] = []
+  const last = new Map<string, BalanceRow>()
+  for (const r of b.balances) last.set(`${r.device}|${r.rel}`, r)
+  let unsupplied = 0
+  let rows = 0
+  for (const r of last.values()) {
+    if (!r.classOn) continue
+    rows++
+    const free = Math.max(0, share - r.belegt - r.reserviert)
+    const empty = Object.entries(r.supply).filter(([, n]) => n === 0).map(([m]) => m)
+    if (!empty.length) continue
+    if (free >= 1) v.push(`${r.device} on ${r.rel.slice(0, 12)}: ${free} free right(s), ${empty.length} member(s) without a key (${empty.map((m) => m.slice(-8)).join(', ')})`)
+    else unsupplied += empty.length
+  }
+  return check(b, 'P-Versorgung', v, { rows, unsupplied })
 }

@@ -466,7 +466,7 @@ async function restoredMediator(seed: number, mutate: boolean): Promise<{ buch: 
     }
   }
   const introduce = async (rel1: string, rel2: string, a1: string[], a2: string[]) => {
-    const detail: Record<string, unknown> = { addrA: a1, addrB: a2, result: null, armed: null, up: true }
+    const detail: Record<string, unknown> = { relA: rel1, relB: rel2, addrA: a1, addrB: a2, result: null, armed: null, up: true }
     buch.note('introduce', Mm.name, detail)
     const r = await Mm.introduce(rel1, rel2)
     detail.result = r
@@ -643,6 +643,63 @@ describe('K2 step 2b.0: the observation seam is fail-safe (Tor-Review 42 (a))', 
     const checks = [pGueltig(loud!.buch), pEinmal(loud!.buch), await pCommit(loud!.buch), await pProduktion(loud!.buch), pPaar(loud!.buch)]
     expect(checks[0]).toMatchObject({ property: 'P-Gueltig', ok: false, counts: { errors: loud!.buch.errors.length } })
     for (const c of checks.slice(1)) expect(c, c.property).toMatchObject({ ok: false, invalid: true })
+  }, 120_000)
+})
+
+describe('K2 step 2b.1: generator with the allocation events, all eight properties', () => {
+  // Fixed seeds (standing bench rule: 20 per configuration), 40 events each, the 2b.1 events in a third of them (refill by
+  // 8515, withdrawal, class off/on, enrolment and revocation of M2, introductions by either M device). Soll: no violation of
+  // P-Einmal, P-Commit, P-Produktion, P-Paar, P-Bilanz, P-Recht, P-Aufhebung, P-Versorgung; restores are not generated.
+  const SEEDS = Array.from({ length: Number(process.env.GEN_SEEDS ?? 20) }, (_, i) => i + 1)
+  for (const seed of SEEDS) {
+    it(`G2. seed ${String(seed).padStart(2, '0')}: all properties hold with allocation events`, async () => {
+      const events = generate(seed, 40, { allocation: true })
+      const r = await runSequence(cand, events, { seed, reseed })
+      const failed = r.checks.filter((c) => !c.ok)
+      const reports: string[] = []
+      for (const c of failed) {
+        const s = await shrink(cand, events, c.property, { seed, reseed, maxRuns: 60 })
+        const min = await runSequence(cand, s.events, { seed, reseed })
+        reports.push(report(seed, c.property, s.events, prop(min, c.property).violations))
+      }
+      expect(reports, reports.join('\n')).toEqual([])
+      expect(prop(r, 'P-Bilanz').counts.rows, events.map(show).join(', ')).toBeGreaterThan(0)
+    }, 180_000)
+  }
+})
+
+describe('K2 step 2b.1: mutations show the allocation checkers failing', () => {
+  /** A devices that never count their acceptances (`belegt` 0): they refill past the share and accept past it. */
+  const noOccupied: Mutation = (g) => {
+    for (const d of g.w.of('A')) (d.cand as { occupied?: () => number }).occupied = () => 0
+  }
+  /** A1 never supplies (its allocator step does nothing). */
+  const noSupplyA1: Mutation = (g) => {
+    ;(g.A as unknown as { supply: () => Promise<void> }).supply = async () => {}
+  }
+
+  it('U10. P-Bilanz: A devices without `belegt` → after the first acceptance the device refills to 5 again (belegt 1 + reserviert 5 > 5); control holds', async () => {
+    const seq: GenEvent[] = [{ k: 'introduce' }, { k: 'round' }, { k: 'round' }, { k: 'round' }]
+    const control = await runSequence(cand, seq, { seed: 81, reseed })
+    expect(prop(control, 'P-Bilanz').violations).toEqual([])
+    // Soll control: the accepting device holds belegt 1 + reserviert 4 = 5 at most.
+    expect(prop(control, 'P-Bilanz').counts.max).toBe(5)
+    const mutated = await runSequence(cand, seq, { seed: 81, reseed, mutation: noOccupied })
+    // Soll mutated: the accepting device refills one key (frei = 5 − 0 − 4 = 1): 1 + 5 = 6 > 5 at its next commits.
+    expect(prop(mutated, 'P-Bilanz').ok).toBe(false)
+    expect(prop(mutated, 'P-Bilanz').counts.max).toBe(6)
+  }, 120_000)
+
+  it('U11. P-Versorgung: M2 enrolled, A1 frees one right (withdrawal) but does not supply → 1 violation; control: the empty M2 gets the right', async () => {
+    const seq: GenEvent[] = [{ k: 'enrol-m' }, { k: 'round' }, { k: 'round' }, { k: 'round' }, { k: 'withdraw', device: 'A1' }, { k: 'round' }, { k: 'round' }]
+    const control = await runSequence(cand, seq, { seed: 91, reseed })
+    // Soll control: A1 withdraws one of its 5 keys for M1 → frei 1, M2 empty → M2 gets it; A2 (frei 0) leaves M2 without
+    // a key of A2, and so do B1 and B2 (each 5 keys for M1, frei 0): counted as unsupplied (3), not a violation.
+    expect(prop(control, 'P-Versorgung').violations).toEqual([])
+    expect(prop(control, 'P-Versorgung').counts.unsupplied).toBe(3)
+    const mutated = await runSequence(cand, seq, { seed: 91, reseed, mutation: noSupplyA1 })
+    // Soll mutated: A1 frei 1 (the withdrawal), M2 without a key of A1 → 1 violation.
+    expect(prop(mutated, 'P-Versorgung').violations).toHaveLength(1)
   }, 120_000)
 })
 
@@ -988,7 +1045,7 @@ describe('K2 step 2b.0: one path for every opened ticket frame (Tor-Review 45)',
     let known = true
     d.sendDoc = async (type, ...rest) => {
       const x = await send(type, ...rest)
-      if (type === TYPES.revision && !address) {
+      if ((type === TYPES.revision || type === TYPES.stockRevision) && !address) { // K2 2b.1: the listing is `stock-revision@2`
         const own = g.A.state.relationships.flatMap((y) => y.stock).find((k) => k.state === 'active' && k.by === g.A.name)!
         address = own.keyAgreement
         known = [...(r.buch as unknown as { lastImage: Map<string, { state: M.HolderState }> }).lastImage.values()].some((y) => y.state.relationships.some((z) => z.stock.some((k) => k.keyAgreement === address)))
@@ -1098,7 +1155,7 @@ describe('K2 step 2b.0: the ledger is an exact mirror of the holder (Tor-Review 
     let at: { dump: string; bytes: string; live: string[]; loaded: string[]; again: string } | undefined
     d.sendDoc = async (type, ...rest) => {
       const x = await send(type, ...rest)
-      if (type === TYPES.revision && !at) {
+      if ((type === TYPES.revision || type === TYPES.stockRevision) && !at) { // K2 2b.1: the listing is `stock-revision@2`
         const own = g.A.state.relationships.flatMap((y) => y.stock).find((k) => k.state === 'active' && k.by === g.A.name)!
         const bytes = await forgeTicket(g, own, unusedKey(g, 'B'))
         const dump = r.buch.dump()

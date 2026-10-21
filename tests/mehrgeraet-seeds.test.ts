@@ -45,10 +45,10 @@ const na = { o: 'nicht abbildbar' } as const
 const CELLS = ['X1', 'X2', 'X3', 'X4', 'X5', 'X6', 'X7', 'X7b', 'X8', 'X9', 'X10', 'X11', 'X12', 'X13', 'X14', 'X15', 'X16', 'X17', 'X18', 'X21']
 const table = (special: Expected): Expected => Object.fromEntries(CELLS.map((x) => [x, special[x] ?? ok]))
 /**
- * K2 NOTES, step 2a "Results": 16/3/1, ≈ X3, X9, X13, X18; red X7 strict, X14 (distributed mediator, not accepted in 2a),
+ * K2 NOTES, step 2b.1 "Cells": 17/2/1, ≈ X3, X9, X13, X18; red X7 strict,
  * X21 (restore artefact, MV-6 new); X10 n/a.
  */
-const K2: Expected = table({ X3: changed, X7: red, X9: changed, X10: na, X13: changed, X14: red, X18: changed, X21: red })
+const K2: Expected = table({ X3: changed, X7: red, X9: changed, X10: na, X13: changed, X18: changed, X21: red })
 /** K1a NOTES: 17/2/1, ≈ X3, X18; red X7, X9; X10 n/a. */
 const K1A: Expected = table({ X3: changed, X7: red, X9: red, X10: na, X18: changed })
 

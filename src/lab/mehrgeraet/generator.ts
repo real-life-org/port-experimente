@@ -1,19 +1,25 @@
 // E15 K2 step 2b.0: the minimal event generator (design 2b draft 2 §5.3, §5.4; draft 3 §8 "2b.0"). Seeded random event
-// sequences over the existing step-2a paths (holder, carrier, deliverer, store) with M as single-writer fixture
-// (`bench.singleDevice: ['M']`): introduce(m), rounds, reorder / duplicate / drop / delay delivery per address, lost or
-// delayed receipts, crashes at `before-commit`, `before-send` (after the commit), `between-sends` (between the two tickets)
-// and `after-commit` of a round (at a side: after the acceptance, before the receipt), time advance. No restores (2b.0;
-// the one fixed restore sequence, D1, is a test). The outcome ledger (`buch.ts`) observes; the checkers judge. On a failed
-// property the sequence is shrunk (§5.4): blocks, then single events are dropped while the same property still fails.
+// sequences over the existing paths (holder, carrier, deliverer, store), M starting with one device: introduce(m), rounds,
+// reorder / duplicate / drop / delay delivery per address, lost or delayed receipts, crashes at `before-commit`,
+// `before-send` (after the commit), `between-sends` (between the two tickets) and `after-commit` of a round (at a side:
+// after the acceptance, before the receipt), time advance. No restores (the fixed restore sequences are tests). The outcome
+// ledger (`buch.ts`) observes; the checkers judge. On a failed property the sequence is shrunk (§5.4): blocks, then single
+// events are dropped while the same property still fails.
+//
+// K2 step 2b.1 (core draft 4 §6 "2b.1"): `generate(seed, n, { allocation: true })` adds the allocation events: an A device
+// confirms its budget (8515, the refill path), withdraws an own key (user action), turns the class off or on; M enrols a
+// second device and revokes it; introductions come from either M device. Still no restores. The 2b.0 distribution stays
+// what it was without the option (its seeds replay).
 
 import type { CrashPoint } from '../zustellung'
 import type { HolderDevice, MultiDeviceCandidate } from './holder'
 import { judge, ledgerWorld, pairCounter, PRODUCTION, type Buch, type Check } from './buch'
+import * as M from './model'
 import type { Welt15 } from './welt'
 
 export type GenEvent =
   | { k: 'round' }
-  | { k: 'introduce'; crash?: Extract<CrashPoint, 'before-commit' | 'before-send' | 'between-sends'> }
+  | { k: 'introduce'; crash?: Extract<CrashPoint, 'before-commit' | 'before-send' | 'between-sends'>; by?: 'M1' | 'M2' }
   | { k: 'reverse' }
   | { k: 'duplicate' }
   | { k: 'drop'; device: string }
@@ -23,6 +29,11 @@ export type GenEvent =
   | { k: 'crash'; device: string; point: Extract<CrashPoint, 'before-commit' | 'after-commit'> }
   | { k: 'advance'; ms: number }
   | { k: 'consent'; device: string }
+  | { k: 'refill'; device: string }
+  | { k: 'withdraw'; device: string }
+  | { k: 'class'; device: string; on: boolean }
+  | { k: 'enrol-m' }
+  | { k: 'revoke-m' }
 
 /** Versioned generator (mulberry32); a seed always gives the same sequence. */
 export function prng(seed: number): () => number {
@@ -40,11 +51,24 @@ export function prng(seed: number): () => number {
 export const DEVICES = ['A1', 'A2', 'B1', 'B2', 'M1'] as const
 const SIDES = ['A1', 'A2', 'B1', 'B2'] as const
 
-export function generate(seed: number, length: number): GenEvent[] {
+const AS = ['A1', 'A2'] as const
+export function generate(seed: number, length: number, opts: { allocation?: boolean } = {}): GenEvent[] {
   const r = prng(seed)
   const pick = <T>(xs: readonly T[]): T => xs[Math.floor(r() * xs.length)]!
   const out: GenEvent[] = []
   for (let i = 0; i < length; i++) {
+    if (opts.allocation && r() < 0.3) {
+      // 2b.1 events (a third of the sequence): allocation, withdrawal, class, M's device set, introductions by either M device.
+      const y = r()
+      if (y < 0.2) out.push({ k: 'refill', device: pick(AS) })
+      else if (y < 0.35) out.push({ k: 'withdraw', device: pick(AS) })
+      else if (y < 0.5) out.push({ k: 'class', device: pick(AS), on: r() < 0.5 })
+      else if (y < 0.6) out.push({ k: 'enrol-m' })
+      else if (y < 0.65) out.push({ k: 'revoke-m' })
+      else if (y < 0.85) out.push({ k: 'introduce', by: pick(['M1', 'M2'] as const) })
+      else out.push({ k: 'crash', device: pick([...DEVICES, 'M2']), point: pick(['before-commit', 'after-commit'] as const) })
+      continue
+    }
     const x = r()
     if (x < 0.25) out.push({ k: 'round' })
     else if (x < 0.45) out.push(r() < 0.6 ? { k: 'introduce' } : { k: 'introduce', crash: pick(['before-commit', 'before-send', 'between-sends'] as const) })
@@ -61,7 +85,7 @@ export function generate(seed: number, length: number): GenEvent[] {
   return out
 }
 
-export const show = (e: GenEvent) => (e.k === 'introduce' ? `introduce${e.crash ? `@${e.crash}` : ''}` : e.k === 'crash' ? `crash ${e.device}@${e.point}` : e.k === 'drop' || e.k === 'delay' || e.k === 'consent' ? `${e.k} ${e.device}` : e.k === 'advance' ? `advance ${e.ms / 3600_000}h` : e.k)
+export const show = (e: GenEvent) => (e.k === 'introduce' ? `introduce${e.by ? ` ${e.by}` : ''}${e.crash ? `@${e.crash}` : ''}` : e.k === 'crash' ? `crash ${e.device}@${e.point}` : e.k === 'drop' || e.k === 'delay' || e.k === 'consent' || e.k === 'refill' || e.k === 'withdraw' ? `${e.k} ${e.device}` : e.k === 'class' ? `class ${e.device} ${e.on ? 'on' : 'off'}` : e.k === 'advance' ? `advance ${e.ms / 3600_000}h` : e.k)
 
 export interface GenWorld {
   w: Welt15
@@ -72,11 +96,13 @@ export interface GenWorld {
   /** M's relationship ids to A and B, and the addresses (M's tuple keys) revisions of each side arrive at. */
   ma: string
   mb: string
+  /** A's relationship id to M (the same on both A devices). */
+  am: string
   addrA: string[]
   addrB: string[]
 }
 
-/** The world of draft 2 §5.3 for 2b.0: A, B with two devices each, M as one device (fixture), class on, stock at M. */
+/** The world of draft 2 §5.3: A, B with two devices each, M starting with one device, class on, stock at M. */
 export async function genWorld(candidate: MultiDeviceCandidate): Promise<GenWorld> {
   const { w, buch } = ledgerWorld(candidate)
   const A = await w.person('A', 'A1')
@@ -90,10 +116,15 @@ export async function genWorld(candidate: MultiDeviceCandidate): Promise<GenWorl
   await w.rounds(3)
   await w.enrol(A, 'A2')
   await w.enrol(B, 'B2')
-  if (!candidate.bench?.singleDevice?.includes('M')) throw new Error('2b.0 generator: M must be a single-writer fixture (bench.singleDevice)')
   await w.rounds(2)
-  const addr = async (rel: string) => Promise.all(M_tuples(Mm, rel).map(async (ctx) => (await Mm.cand.keys.pair(ctx)).rkid))
-  return { w, buch, A, B, Mm, ma: am.y.id, mb: bm.y.id, addrA: await addr(am.y.id), addrB: await addr(bm.y.id) }
+  const { addr: addrA } = await mSide(Mm, am.y.id)
+  const { addr: addrB } = await mSide(Mm, bm.y.id)
+  return { w, buch, A, B, Mm, ma: am.y.id, mb: bm.y.id, am: am.x.id, addrA, addrB }
+}
+/** An M device's addresses (its tuple keys) and anchors (the `for` of keys assigned to it) in one relationship. */
+async function mSide(d: HolderDevice, rel: string): Promise<{ addr: string[]; mine: string[] }> {
+  const ks = await Promise.all(M_tuples(d, rel).map((ctx) => d.cand.keys.pair(ctx)))
+  return { addr: ks.map((k) => k.rkid), mine: ks.map((k) => k.anchor) }
 }
 function M_tuples(d: HolderDevice, rel: string): string[] {
   const r = d.state.relationships.find((x) => x.id === rel || x.tuples.some((t) => t.id === rel))
@@ -122,6 +153,7 @@ export async function runSequence(candidate: () => MultiDeviceCandidate, events:
   opts.mutation?.(g)
   const { w, buch } = g
   const down = new Set<string>()
+  let mRevoked = false
   const crashCount = new Map<string, number>()
   const dev = (name: string) => w.devices.find((d) => d.name === name)
   const detect = () => {
@@ -164,13 +196,15 @@ export async function runSequence(candidate: () => MultiDeviceCandidate, events:
         await round()
         break
       case 'introduce': {
-        const m = g.Mm
+        const m = (e.by === 'M2' ? dev('M2') : undefined) ?? g.Mm
         const up = !down.has(m.name) && m.online
         // Noted before the call: the reference model reads the ledger up to this point, the issuance's commit follows it.
-        const detail: Record<string, unknown> = { addrA: g.addrA, addrB: g.addrB, result: null, armed: e.crash ?? null, up }
+        const sa = await mSide(m, g.ma)
+        const sb = await mSide(m, g.mb)
+        const detail: Record<string, unknown> = { relA: g.ma, relB: g.mb, addrA: sa.addr, addrB: sb.addr, mineA: sa.mine, mineB: sb.mine, result: null, armed: e.crash ?? null, up }
         buch.note('introduce', m.name, detail)
         if (e.crash) m.crashAt = e.crash
-        detail.result = await m.introduce(g.ma, g.mb)
+        detail.result = up ? await m.introduce(g.ma, g.mb) : { refused: 'down' }
         m.crashAt = null // targeted: an unused crash point does not fire later
         detect()
         break
@@ -217,13 +251,48 @@ export async function runSequence(candidate: () => MultiDeviceCandidate, events:
         w.clock.advance(e.ms)
         buch.note('advance', undefined, { ms: e.ms })
         break
+      case 'refill':
+      case 'withdraw':
+      case 'class': {
+        const d = dev(e.device)
+        if (!d || down.has(d.name)) break
+        const r = M.findRel(d.state, g.am)
+        if (!r) break
+        buch.note('fault', d.name, { what: show(e) })
+        if (e.k === 'refill') await d.confirmBudget(r.id)
+        else if (e.k === 'class') await d.setClass(r.id, e.on)
+        else {
+          const k = r.stock.filter((x) => x.by === d.name && x.state === 'active').sort((x, y) => (x.anchor < y.anchor ? -1 : 1))[0]
+          if (k) await d.withdrawStock(r.id, [k.anchor])
+        }
+        detect()
+        break
+      }
+      case 'enrol-m':
+        if (!dev('M2') && !mRevoked) {
+          await w.enrol(g.Mm, 'M2')
+          buch.note('fault', 'M2', { what: 'enrol-m' })
+        }
+        break
+      case 'revoke-m': {
+        const m2 = dev('M2')
+        if (m2 && !down.has(g.Mm.name)) {
+          await w.revoke(g.Mm, m2)
+          mRevoked = true
+          down.delete('M2')
+          buch.note('fault', 'M2', { what: 'revoke-m' })
+        }
+        break
+      }
     }
   }
   for (let i = 0; i < (opts.drain ?? PRODUCTION.rounds + 3); i++) await round()
-  // Issue #83: P-Gueltig first; on an invalid run the four property checkers are not green either, so the generator, G1
+  // Issue #83: P-Gueltig first; on an invalid run the property checkers are not green either, so the generator, G1/G2
   // and shrinking treat it as a failure (seed and errors printed).
-  // Review 50: all checkers, then judged together against the final error state (`judge`, `finalize`).
-  const checks = await judge(buch)
+  // Review 50: all checkers, then judged together against the final error state (`judge`, `finalize`); K2 2b.1: with the
+  // allocation checkers at the A devices' share.
+  const share = (g.A.cand as { acceptanceShare?: number }).acceptanceShare
+  const checks = await judge(buch, share === undefined ? {} : { share })
   return { seed, events, checks, counter: pairCounter(buch), buch }
 }
 
