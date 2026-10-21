@@ -1138,7 +1138,7 @@ describe('K2 step 2b.0: the ledger is an exact mirror of the holder (Tor-Review 
     let at: { dump: string; bytes: string; live: string[]; loaded: string[]; again: string } | undefined
     d.sendDoc = async (type, ...rest) => {
       const x = await send(type, ...rest)
-      if (type === TYPES.revision && !at) {
+      if ((type === TYPES.revision || type === TYPES.stockRevision) && !at) { // K2 2b.1: the listing is `stock-revision@2`
         const own = g.A.state.relationships.flatMap((y) => y.stock).find((k) => k.state === 'active' && k.by === g.A.name)!
         const bytes = await forgeTicket(g, own, unusedKey(g, 'B'))
         const dump = r.buch.dump()
