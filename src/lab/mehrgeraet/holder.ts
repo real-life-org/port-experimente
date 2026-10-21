@@ -422,6 +422,76 @@ export interface HolderObserver {
   failed?(d: HolderDevice, hook: 'committed' | 'produced' | 'admitted', error: unknown): void
 }
 
+/**
+ * Is `issuer` the signer the counterpart may show for the recorded key `recorded`? K0/K1a: exactly that key. K2 step 2: a
+ * member of the device set this receiver knows for the root `recorded` from received proofs (without a proof the root
+ * alone; a revoked device never: a known revocation beats). Pure over the receiver's state (`HolderDevice.isPeer`, and the
+ * ticket predicate below).
+ */
+export function peerIn(state: M.HolderState, sets: boolean, issuer: string, recorded: string): boolean {
+  if (!sets) return issuer === recorded
+  const set = M.own(state.sets, recorded)
+  if (!set) return issuer === recorded
+  return M.setView(set).members.some((m) => m.anchor === issuer)
+}
+
+/** The ticket payload as sent (`issue`) and read by the side (8640). */
+export interface TicketPayload {
+  act: string
+  issuedAt: string
+  expiresAt: string
+  own: string
+  voucher: { anchor: string; keyAgreement: string; name: string }
+}
+/** What the ticket check (8640) reads of the receiving device: its state, whether it runs device sets, its time, its channel. */
+export interface TicketReceiver {
+  state: M.HolderState
+  sets: boolean
+  now: string
+  /** 8640.2 channel: the own tuple behind the address (K2: the head of the relationship whose stock key the address is). */
+  tupleAt(address: string): M.Tuple | undefined
+}
+/**
+ * The receiver's state steps between the binding steps of 8640 (the holder on receipt passes them; the outcome ledger's
+ * reference does not: they are state, not binding).
+ */
+export interface TicketStateSteps {
+  /** 8640.4: the act is held already (a repetition: effect, no new act). */
+  repeated(p: TicketPayload): boolean
+  /** 8640.12 (single use as a rule), 8640.6 (key active or aging): false refuses. */
+  usable(own: M.StockKey, p: TicketPayload): boolean
+}
+export type TicketVerdict =
+  | { ok: true; repeated: true }
+  | { ok: true; repeated: false; rel: M.Relationship; own: M.StockKey; p: TicketPayload }
+  | { ok: false; step: '8640.2' | '8640.3' | '8640.5' | '8640.7' | '8640.8' | 'state'; reason: string; p?: TicketPayload }
+
+/**
+ * E15 2b.0 (Tor-Review 43): the side's ticket acceptance predicate (8640, up to the voucher check 8640.8), pure over the
+ * receiver's context; the holder calls it on receipt, the outcome ledger as the reference of P-Commit, so the ledger never
+ * re-implements a ticket rule. Steps in order: 8640.2 channel (an own relationship behind the address) and signer (a
+ * counterpart on that relationship; K2: a member of its device set), 8640.3 times; [8640.4 repetition: state]; 8640.5 the
+ * named key on this relationship (K2: the address is its key agreement); [8640.12, 8640.6: state]; 8640.7 the key outlives
+ * the act; 8640.8 the voucher is no own stock key. It stops before 8640.9 (voucher assignment), 8640.13 (budget) and the
+ * acceptance 8640.14: state, not binding. Tickets have no MV-24 form in 2a (`DOC_SHAPES`; 2b.2 adds it).
+ */
+export function ticketAcceptance(doc: { issuer: string; payload: unknown }, address: string, rx: TicketReceiver, steps?: TicketStateSteps): TicketVerdict {
+  const t = rx.tupleAt(address)
+  if (!t) return { ok: false, step: '8640.2', reason: `no own relationship behind address ${address.slice(-8)}` }
+  const r = M.relOfTuple(rx.state, t.id)!
+  const peer = rx.sets ? r.tuples.some((x) => peerIn(rx.state, true, doc.issuer, x.peer)) : peerIn(rx.state, false, doc.issuer, t.peer)
+  if (!peer) return { ok: false, step: '8640.2', reason: `signer ${doc.issuer.slice(-8)} is no counterpart on this relationship` }
+  const p = doc.payload as TicketPayload
+  if (Date.parse(rx.now) > Date.parse(p.expiresAt) || Date.parse(p.issuedAt) > Date.parse(rx.now) + M.PARAM.actSkewMs) return { ok: false, step: '8640.3', reason: 'outside the act times', p } // 8110
+  if (steps?.repeated(p)) return { ok: true, repeated: true }
+  const own = r.stock.find((k) => k.anchor === p.own && (!rx.sets || k.keyAgreement === address))
+  if (!own) return { ok: false, step: '8640.5', reason: `own ${p.own.slice(-8)} not on this relationship at address ${address.slice(-8)}`, p }
+  if (steps && !steps.usable(own, p)) return { ok: false, step: 'state', reason: `own ${own.anchor.slice(-8)} in state ${own.state}`, p }
+  if (Date.parse(own.expiresAt) < Date.parse(p.expiresAt) + M.PARAM.actSkewMs) return { ok: false, step: '8640.7', reason: `own ${own.anchor.slice(-8)} expires before the act`, p }
+  if (r.stock.some((k) => k.anchor === p.voucher.anchor)) return { ok: false, step: '8640.8', reason: `voucher ${p.voucher.anchor.slice(-8)} is an own stock key`, p }
+  return { ok: true, repeated: false, rel: r, own, p }
+}
+
 export class HolderDevice {
   state: M.HolderState
   readonly zusteller: Zusteller
@@ -657,10 +727,7 @@ export class HolderDevice {
    * Nachweisen kennt (ohne Nachweis die Wurzel allein; ein widerrufenes Gerät nie: ein bekannter Widerruf schlägt).
    */
   private async isPeer(issuer: string, recorded: string): Promise<boolean> {
-    if (!this.sets) return issuer === recorded
-    const set = this.setOf(recorded)
-    if (!set) return issuer === recorded
-    return M.setView(set).members.some((m) => m.anchor === issuer)
+    return peerIn(this.state, this.sets, issuer, recorded)
   }
   /** K2: der Kontext eines aufgezeichneten eigenen Ankers (der des Geräts, das ihn erzeugt hat): Tupel, Vorrat, Karte. */
   private recordedCtx(anchor: string): string | undefined {
@@ -1290,6 +1357,10 @@ export class HolderDevice {
     if (!ctx) return undefined
     const r = this.state.relationships.find((x) => !x.departed && x.stock.some((k) => k.key === ctx))
     return r ? M.head(r) : undefined
+  }
+  /** The context of the ticket predicate on this device (8640.2 channel: K2 by stock address, K0/K1a by tuple address). */
+  private ticketReceiver(now: string): TicketReceiver {
+    return { state: this.state, sets: this.sets, now, tupleAt: (a) => (this.sets ? this.tupleOfStock(a) : this.tupleOfAddress(a)) }
   }
   /**
    * Arrival of a card under device sets (E1 (a), E3 (a)): the card names the revision of `device-set@1` that carries its
@@ -2372,29 +2443,27 @@ export class HolderDevice {
       case TYPES.ticket: {
         // Seite: 8640. K2 Schritt 2: das Ticket ist an den benannten Vorrats-Schlüssel versiegelt (nur sein Halter öffnet es);
         // Kanal ist dessen Beziehung, der Signierer ein Mitglied von Ms Menge auf einem ihrer Tupel.
-        const t = this.sets ? this.tupleOfStock(address) : this.tupleOfAddress(address)
-        if (!t) return false
-        const r = M.relOfTuple(this.state, t.id)!
-        const peer = this.sets ? (await Promise.all(r.tuples.map((x) => this.isPeer(doc.issuer, x.peer)))).some(Boolean) : await this.isPeer(doc.issuer, t.peer)
-        if (!peer) return false // 8640.2: Kanal und Signierer (K2: ein Gerät der Gegenperson)
-        const p = doc.payload as unknown as { act: string; issuedAt: string; expiresAt: string; own: string; voucher: { anchor: string; keyAgreement: string; name: string } }
-        if (Date.parse(now) > Date.parse(p.expiresAt) || Date.parse(p.issuedAt) > Date.parse(now) + M.PARAM.actSkewMs) return false // 8640.3 / 8110
-        if (this.state.acts.some((a) => a.id === p.act)) return true // 8640.4: Wiederholung
-        const own = r.stock.find((k) => k.anchor === p.own && (!this.sets || k.keyAgreement === address))
-        if (!own) {
-          this.emit({ kind: 'finding', text: `ticket ${p.act.slice(0, 8)}: own ${p.own.slice(-8)} nicht auf dieser Beziehung (8640.5)` })
+        // E15 2b.0 (Tor-Review 43): 8640.2–8640.8 as one predicate (`ticketAcceptance`), the same the outcome ledger applies
+        // as reference; the state steps 8640.4, 8640.12, 8640.6 come in here, in their place.
+        const v = ticketAcceptance(doc, address, this.ticketReceiver(now), {
+          repeated: (p) => this.state.acts.some((a) => a.id === p.act), // 8640.4: Wiederholung
+          usable: (own, p) => {
+            if (own.state === 'consumed') {
+              // 8640.12 als Regel (MV-6 neu, Anton 20.10.): A hält den Einmalverbrauch. Ein zweiter Akt auf einem verbrauchten
+              // Schlüssel ist abgewiesen, gleich ob der Mediator nach einem Restore aus dem erreichbaren Stand benannt hat
+              // (benannter Preis) oder fehlerhaft ist; kein Akt, keine Quittung. M nimmt danach den nächsten Schlüssel.
+              this.emit({ kind: 'finding', text: `ticket ${p.act.slice(0, 8)}: own ${p.own.slice(-8)} schon verbraucht: abgewiesen nach Regel 8640.12 (Einmalverbrauch bei A; Restore-Artefakt oder Konformitätsfehler des Mediators)` })
+              return false
+            }
+            return own.state === 'active' || own.state === 'aging' // 8640.6
+          },
+        })
+        if (!v.ok) {
+          if (v.step === '8640.5') this.emit({ kind: 'finding', text: `ticket ${v.p!.act.slice(0, 8)}: own ${v.p!.own.slice(-8)} nicht auf dieser Beziehung (8640.5)` })
           return false
         }
-        if (own.state === 'consumed') {
-          // 8640.12 als Regel (MV-6 neu, Anton 20.10.): A hält den Einmalverbrauch. Ein zweiter Akt auf einem verbrauchten
-          // Schlüssel ist abgewiesen, gleich ob der Mediator nach einem Restore aus dem erreichbaren Stand benannt hat
-          // (benannter Preis) oder fehlerhaft ist; kein Akt, keine Quittung. M nimmt danach den nächsten Schlüssel.
-          this.emit({ kind: 'finding', text: `ticket ${p.act.slice(0, 8)}: own ${p.own.slice(-8)} schon verbraucht: abgewiesen nach Regel 8640.12 (Einmalverbrauch bei A; Restore-Artefakt oder Konformitätsfehler des Mediators)` })
-          return false
-        }
-        if (own.state !== 'active' && own.state !== 'aging') return false // 8640.6
-        if (Date.parse(own.expiresAt) < Date.parse(p.expiresAt) + M.PARAM.actSkewMs) return false // 8640.7
-        if (r.stock.some((k) => k.anchor === p.voucher.anchor)) return false // 8640.8
+        if (v.repeated) return true
+        const { rel: r, own, p } = v
         const assigned = this.state.voucherAssigned.find((x) => x.anchor === p.voucher.anchor)
         if (assigned && assigned.act !== p.act) {
           this.emit({ kind: 'finding', text: `ticket ${p.act.slice(0, 8)}: voucher schon einem anderen Akt zugeordnet (8640.9, 8640.12)` })
