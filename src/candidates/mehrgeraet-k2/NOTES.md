@@ -1,4 +1,4 @@
-# K2: device keys (step 1), device sets and one card per act (step 2a), outcome ledger (step 2b.0)
+# K2: device keys (step 1), device sets and one card per act (step 2a), outcome ledger (step 2b.0), allocation by A (step 2b.1)
 
 Plan E15, sections 6o.4, 6r, 6s and 6t (`rltp/design/port-experimente-e15-mehrgeraet-plan-2026-10-17.md`).
 Candidate `k2-device-keys` (K2-strict, M as single-writer fixture) in
@@ -6,10 +6,183 @@ Candidate `k2-device-keys` (K2-strict, M as single-writer fixture) in
 split); tests `tests/mehrgeraet-k2.test.ts`; measurements
 `src/lab/mehrgeraet/geraetemengen.ts`. K2 reuses K1a's journal, holder and
 model (`src/lab/mehrgeraet/{holder,model,welt}.ts`,
-`src/candidates/mehrgeraet-k1a`). Step 2b.0 (the measuring instrument
-for 2b) comes first, then step 2a; the step-2
+`src/candidates/mehrgeraet-k1a`). Step 2b.1 (allocation per M device
+by A) comes first, then step 2b.0 (the measuring instrument for 2b),
+then step 2a; the step-2
 sections follow where they still hold (with the parts 2a removed marked),
 then step 1.
+
+## Step 2b.1 (21 October 2026): allocation per M device by A
+
+Design: `rltp/design/port-experimente-e15-k2-schritt-2b-kern-entwurf-4-2026-10-21.md`
+(core draft 4, Fassung 4) §0–§4, §6 "2b.1", §7, §8; draft 2 §3.1–3.4,
+§3.6 (points 1, 2, 4, 5), §3.7; draft 3 §4, §5.4. Restores are outside
+the perimeter (§0.2): they behave as in 2a and are measured, not
+asserted. Tests: `tests/mehrgeraet-k2-zuteilung.test.ts` (fold, parser,
+world), the 2b.1 blocks of `tests/mehrgeraet-buch.test.ts` (generator,
+mutations); the adapted K2 tests in `tests/mehrgeraet-k2.test.ts`.
+
+**Format `stock-revision@2`** (`TYPES.stockRevision`, `M.StockRevision`,
+`M.revisionFormProblem`). `{writer, inc, rev, keys[{n, nonce, anchor,
+signing, keyAgreement, expiresAt, for, proof}], withdraw[], bury[],
+burn[], classOff?}`. `writer` = `signerId` of the authenticated signer,
+`inc` = HMAC of the journal incarnation over the relationship
+(`K2Device.incTag`). The form is checked per revision without history:
+shape (every value; `signing` 32 and `proof` 64 bytes base64url),
+writer = signer, `rev` in [1, 2³²−1], `n` integer in [0, 2³²−1], bounds
+(keys 64, withdraw 256, bury 512, burn 16), every list strictly
+increasing in UTF-16 code-unit order (sorted and unique; this is the
+canonical form, `M.byCode`, never locale order), `n` unique, `classOff`
+only `true`, `bury` only with `classOff`, `burn` never the running `inc`,
+one nonce per revision, `anchor = anchorOfEd(signing)`, `keyAgreement` a
+valid X25519 multikey, `for` a syntactically valid anchor, and the
+signature of `proof` over `JCS({purpose: "rltp/stock-revision@2/proof",
+writer, inc, for, n, nonce, anchor, keyAgreement, expiresAt})`
+(`M.proofContent`, Web Crypto Ed25519 in `holder.proofProblem`). A form
+error is a finding `stock-revision von …: Form <path> (MV-24)`, nothing
+is folded, no receipt (poison vectors F1: 16 vectors). Under device keys
+a version-1 revision is a form error. Version 1 stays the path of K0
+and K1a unchanged (same code, `allocationByA` absent).
+
+**Set rules at M** (`M.allocFold`, `M.allocation`, `M.evidence`,
+`M.classOff`). M keeps every folded revision of the scope (MV-31,
+`view.revs`, canonical, once); everything is a function of that set:
+binding per anchor through a listing with proof; differing immutable
+field incl. `inc` → `conflict:assignment:<anchor>` for ever, beating
+every higher listing; two writers → also `doppelte-bindung:<anchor>`;
+withdrawal effective when the anchor is bound to the withdrawing writer
+(also if the withdrawal came first), otherwise `fremder-anker:<w′>:<a>`
+and kept; two nonces in one (writer, inc) → `conflict:nonce:<w>:<i>`, no
+listing of it usable, its withdrawals, burials and burns still count;
+same `rev` with other bytes → `equivocation:<w>:<i>:<rev>`, the current
+listing is the highest non-equivocated `rev`, all equivocated → no
+current listing and no class value; burnt (writer, inc) unusable;
+revoked writers (from `device-set@1`) unusable. Usable for an M device:
+in a current listing of a non-revoked writer, no mark, not withdrawn,
+not buried, `for` a member of M's own set known here and one of the
+device's own anchors in that relationship, class on. An unknown `for`
+is folded and usable for nobody until the set brings the member (Z11).
+Evidence state per anchor: `unknown` / `listed` / `unlisted` /
+`withdrawn` plus a conflict flag, a function of the set, not a latch
+(Z10). Tests Z1–Z17: every row in forward and reverse order, with
+duplicates (fresh op ids, as from a sibling's journal) and six seeded
+shuffles; W3 runs the same through the journal (M2 gets A's revisions
+only from M1's journal; equal usability and evidence; the late direct
+copies change nothing).
+
+**Class state and tombstones (§4, B6 with the revocation exception).**
+Class state = the `classOff` of the current listing per (writer, inc),
+person off while any non-revoked one is off ("aus gewinnt"). Tombstones
+= `bury[]` of off revisions plus the own anchors of lower revs of the
+same (writer, inc). A tombstone of a non-revoked issuer is final; one of
+a revoked issuer counts only while no non-revoked writer currently lists
+the anchor (Z9, K1 in both versions: revoked → A1's keys usable again;
+not revoked and on again → buried, A2's fresh keys usable). U1/T1 of 2a
+stay green with `bury[]` as mechanism (T1 now sends a `stock-revision@2`
+with `classOff` and `bury`). **Named price**, fixed test K2: a sister
+offline through the whole off phase whose new anchor the issuer did not
+know is blocked only by the class state; after "on" M can name it and
+the sister accepts: Soll and result 1 acceptance.
+
+**Balance and supply (§2.1, §2.3, `HolderDevice.supply`).** Per A
+device and mediator relationship: `reserviert` = own keys active or
+aging with now ≤ expiresAt, `belegt` = own acceptances in the 8510
+window without the 8515-confirmed, `frei_zuteilbar = max(0, share −
+belegt − reserviert)`. Supply only from free rights: first M devices
+with no usable (8470) key of this device, by anchor, then those under
+`to_am = max(1, ⌊(share − belegt)/|M|⌋)`, by anchor; nothing is
+withdrawn to re-supply (9.1 (a)). [Prüfstand, decided here] `to_am` is
+also bounded by the 8485 refill target (5) and by ⌊64/|M|⌋ (the form
+bound of one listing); with the default share 5 the bound never bites,
+without it the X23 world (budget 1000) listed 500 keys and broke the
+64 KiB seal limit. M's set as known at A: unknown → the root alone,
+known → members, known empty → no key (E4). Revocation of an M device:
+withdrawal of its live keys and the successor listing in the same batch
+(B4). Acceptance per device is on: `belegt ≥ share` → 8640.13 (key
+consumed, no act, no receipt, no load). 8475.S8 in the bench: an own key
+past `expiresAt + key-retention` becomes `tombstoned` (B2). The revision
+is sent when something changed or the class is on again while the own
+last revision was off (the sibling's MV-12 follow-up sends its own off
+revision with `withdraw` and `bury`). At A the ticket is refused when its
+signer is not `StockKey.for` (`fremde-zuteilung`, once per finding; W1).
+
+Tests with derived Soll: B1 small quota (budget 4: one right frees by
+8515, the empty M2 gets it); B2 full reservation (5 keys for M1, M2
+enrolled): no supply until the first `expiresAt`; steps of one day from
+day 172: 9 steps, 8 of them (days 173–180) with no nameable A key at any
+M device (aging under 8470 but still reserved), day 181 supplies 2 + 2;
+day 271 the old keys are tombstones; B3 aging with a ticket in flight:
+no refill, the late acceptance fits, P-Bilanz max 5; B4 M-device
+revocation; E1–E4 the causal cases of draft 2 §3.4 (delayed admission,
+revocation before the older admission in reverse order, different set
+states at A1 and A2 incl. the journal, unknown and known-empty sets);
+E3 (c) (unknown admission chain) has no bench case beyond S1 of step 2:
+the cumulative `device-set@1` revision carries the whole chain.
+
+**Price observed (to name):** the 8470 gap of B2. All keys of a supply
+run age together; between aging and `expiresAt` (7 days + 1 h) they are
+reserved but not nameable, so M cannot introduce that A device at all
+in that window. Spec follow-up for 8485/8510: supply before aging needs
+share headroom (or ageing keys must not reserve once M cannot name them,
+which contradicts in-flight tickets).
+
+**Ledger and generator.** Carrier book of revisions with `for` per key,
+`inc`, `withdraw`, `bury`, `burn`, class. The reference model of
+P-Produktion reads per (writer, inc) the highest durable admitted
+listing at the device with `for` among the device's anchors; withdrawals
+by the listing writer, burials and a class off from the deliveries to
+any device of M (so a journal-first withdrawal never makes a false
+alarm). New checkers: P-Bilanz (`belegt + reserviert ≤ share` per A
+commit, computed by the ledger from the image), P-Recht (accepted
+ticket's signer = `for` of the first binding at the carrier), P-Aufhebung
+(no acceptance after the own withdrawal; no issuance naming a key after a
+durable admitted withdrawal, burial or class off), P-Versorgung (at the
+end: a free right and a member without a key is a violation; members
+without key while nothing is free are counted, `unsupplied`). Generator
+`generate(seed, n, { allocation: true })` adds 8515 refill, withdrawal,
+class off/on, M2 enrolment and revocation, introductions by either M
+device; no restores. G2: 20 seeds × 40 events, all eight properties
+hold; G1 (2b.0 distribution) unchanged and green. Mutations: U8 (no
+`belegt`) breaks P-Bilanz (max 6), U9 (A1 does not supply) breaks
+P-Versorgung (1 violation; control: 3 unsupplied, A2, B1, B2 without a
+free right).
+
+**Cells changed (REPORT=1 run once).** K2 `k2-device-keys`: X14 ✗ → ✓
+(A mediates on two devices there; B and C assign each key to one A
+device, so A1 and A2 never name the same key: no double consumption,
+no 8640.12 finding). Counter-run `singleDevice: []` (test 2b): X1, X13,
+X14 ✗ → ✓, with 0 doubly named keys; there M2 is enrolled after A has
+reserved its whole share for M1, so M2 has no A key (9.1 (a)) and M1
+introduces after the heal (X1: 2 key refusals of M2, counted). K2 now
+17/2/1 (red X7 strict, X21). Measures moved without a cell change (X3,
+X6, X8, X11, X12, X16, X17, X21: more keys listed per device (5 instead
+of 3), bigger revisions). K0, K1a, K1a at the service: every cell,
+detail and measure identical to 2b.0 (seeded run of `runX15`, compared
+cell by cell against a copy under `~/.cache`).
+
+**Measured, not asserted (restores, §0.2).** A restart is still a
+restore in the core (new incarnation, 5.3 is 2b.2): the new `inc` lists
+only its own new keys, the old (writer, inc) keeps its last listing at
+M, its keys stay nameable; an off value left by a lost incarnation stays
+off until 2c (class state per device). The restore-containing tests
+(U3, D1 expected-fail, N2, B3, B4, C7, X21) run unchanged.
+
+**For 2b.2 (observations).** `onAck` still ignores ticket receipts; the
+issuance is still one batch inside the action; the reference model of
+P-Produktion has no `withdrawn`-suppression rule yet (1.4); a restart
+changes `inc`, so 5.3 (keep inc, nonce, `n`) is what makes restarts of A
+harmless at M; `allocation()` is recomputed per call (fine at bench
+sizes).
+
+**Spec follow-ups (2b.1).** 8435/8445: `for`, `signing`, `proof` per
+listed key, one nonce per listing, nonce conflict as a set rule;
+canonical list order by code units. 8500/6270 per (writer, inc) with
+the rules above. 8510/8515: reservation over exercisable rights incl.
+aging until `expiresAt`, `frei_zuteilbar`, supply of whole rights,
+empty devices first, the bench bound of `to_am`, the 8470 gap.
+8475.S8. 8640: `fremde-zuteilung`, 8640.13 per device without load.
+MV-12: class state per (writer, inc) and B6 with the revocation
+exception.
 
 ## Step 2b.0 (21 October 2026)
 
@@ -1465,7 +1638,8 @@ throwaway script, numbers from one run; the frame counts are asserted in
 ```sh
 export PATH=/home/fritz/.n/n/versions/node/24.21.0/bin:$PATH
 pnpm vitest run tests/mehrgeraet-k2.test.ts
-pnpm vitest run tests/mehrgeraet-buch.test.ts   # 2b.0: ledger, checkers, generator (20 seeds; GEN_SEEDS=<n>), mutations, D1 expected-fail (≈ 45 s)
+pnpm vitest run tests/mehrgeraet-buch.test.ts   # 2b.0 + 2b.1: ledger, checkers, generator G1/G2 (20 seeds each; GEN_SEEDS=<n>), mutations, D1 expected-fail
+pnpm vitest run tests/mehrgeraet-k2-zuteilung.test.ts   # 2b.1: fold rows Z1–Z19, poison vectors F1, world tests W, B, E, K
 SEEDS=all pnpm vitest run tests/mehrgeraet-seeds.test.ts   # 20 seeds × K2-strict, K1a (default: seed 1)
 REPORT=1 pnpm vitest run report   # column k2-device-keys in the multi-device port
 ```
