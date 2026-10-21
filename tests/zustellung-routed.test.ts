@@ -6,6 +6,7 @@ import { REFUSAL_CLASSES, RoutedIntermediary, RoutedWelt, classifyOpened, hopIde
 import { routedWires } from '../src/candidates/zustellung'
 import { tspRoutedControlWire, tspRoutedEgressSessionWire, tspRoutedWire } from '../src/candidates/zustellung/tsp-routed'
 import { relationshipIdentities } from '../src/candidates/zustellung/tsp-direct'
+import { paddingFrame } from './zustellung-live-fixtures'
 
 // E11b step 3: the routed intermediary in the delivery bench and the wire `tsp-routed` (draft rltp/design/port-
 // experimente-e11b-step3-intermediary-entwurf-2026-10-21.md, build decisions C1–C6, H1). Findings: NOTES section
@@ -69,6 +70,16 @@ describe('C1: asynchronous opening behind a barrier', () => {
     expect(w.hop.refusals()).toEqual({ 'unpack-failed': 1 })
   }, 30_000)
 
+  it('a bench fault after a successful opening is not a refusal class: drain() rethrows it, nothing counted (CodeRabbit)', async () => {
+    const { w, ia, ib, hop, keys } = await bench()
+    // An undecodable inner frame is forwarded opaquely; a tamper rule on its header then throws inside open().
+    w.hop.tamper('inner-header', 'once', { outerSender: ia.conn.did, next: ib.conn.did })
+    w.hop.depositFrom('alice', hop.vid, (await packRouted(new Uint8Array(300).fill(9), [ib.conn.did], ia.conn.did, hop.vid, keys)).bytes)
+    await expect(w.hop.drain()).rejects.toThrow()
+    expect(w.hop.refusals()).toEqual({})
+    await w.hop.drain() // reported once, then cleared
+  }, 30_000)
+
   it('unreachable: the deposit throws WireUnreachable (T10), nothing enters the inbox', async () => {
     const { w, hop, ia, keys, inner } = await bench()
     w.hop.unreachable = true
@@ -93,6 +104,8 @@ describe('C2: refusal classes, reachable on the wire (one real frame each)', () 
     ['type/direct', async ({ ia, keys }) => ({ frame: (await pack(DOC, ia.conn.did, H.vid, keys)).bytes })],
     ['type/nested', async ({ ia, keys, inner }) => ({ frame: (await packNested(await inner(), ia.conn.did, H.vid, keys)).bytes })],
     ['type/control', async ({ ia, keys }) => ({ frame: (await packInvite(ia.conn.did, H.vid, keys)).bytes })],
+    // A padding-only frame (XPAD, hand-built: the library does not pack it), signed by Alice's account and sealed to the intermediary.
+    ['type/padding', async ({ ia }) => ({ frame: await paddingFrame(ia.conn.did, H.vid, ia.conn.edSecret, H.xPublic) })],
     ['multi-hop', async ({ ia, ib, keys, inner }) => ({ frame: (await packRouted(await inner(), [ib.conn.did, ia.conn.did], ia.conn.did, H.vid, keys)).bytes })],
     ['empty-inner', async ({ ia, ib, keys }) => ({ frame: (await packRouted(new Uint8Array(0), [ib.conn.did], ia.conn.did, H.vid, keys)).bytes })],
     ['no-session-next', async ({ ia, keys, inner }) => ({ frame: (await packRouted(await inner(), [(await relationshipIdentities(await party('x'), await party('y'))).conn.did], ia.conn.did, H.vid, keys)).bytes })],
@@ -104,12 +117,12 @@ describe('C2: refusal classes, reachable on the wire (one real frame each)', () 
     if (c.session) b.w.hop.register(c.device ?? 'x', c.session)
     b.w.hop.depositFrom(c.device ?? 'alice', c.address ?? b.hop.vid, c.frame)
     await b.w.hop.drain()
-    return { refused: b.w.hop.refusedRouted.map((r) => r.cls), forwarded: b.w.hop.opened.length }
+    return { refused: b.w.hop.refusedRouted.map((r) => r.cls), counted: b.w.hop.refusals(), forwarded: b.w.hop.opened.length + b.w.hop.carried.length }
   }
   for (const [cls, make] of cases) {
     it(`${cls}: refused with exactly this class, nothing forwarded`, async () => {
       const r = await run(make)
-      expect(r).toEqual({ refused: [cls], forwarded: 0 })
+      expect(r).toEqual({ refused: [cls], counted: { [cls]: 1 }, forwarded: 0 })
     }, 30_000)
   }
 
@@ -125,7 +138,7 @@ describe('C2: refusal classes, reachable on the wire (one real frame each)', () 
 
   it('every class of the closed list is covered here or by a guard test', () => {
     const wire = cases.map(([c]) => c)
-    const guards: RefusalClass[] = ['wrong-revision', 'deliver-to-self', 'type/padding', 'type/other']
+    const guards: RefusalClass[] = ['wrong-revision', 'deliver-to-self', 'type/other']
     expect([...wire, ...guards].sort()).toEqual([...REFUSAL_CLASSES].sort())
   })
 })
@@ -133,7 +146,7 @@ describe('C2: refusal classes, reachable on the wire (one real frame each)', () 
 describe('C2: defensive guards (the classification function on its own)', () => {
   const ok = () => true
   const m = (over: Partial<Parameters<typeof classifyOpened>[0]>) => ({ revision: 'rev3', messageType: 'routed', hops: ['did:key:zNext'], payload: new Uint8Array([1, 2, 3, 4]), ...over })
-  it('wrong-revision, deliver-to-self, type/padding, type/other', () => {
+  it('wrong-revision, deliver-to-self, type/other (type/padding as the function sees it; on the wire above)', () => {
     expect(classifyOpened(m({ revision: 'rev2' }), ok)).toEqual({ kind: 'refuse', cls: 'wrong-revision' })
     expect(classifyOpened(m({ hops: [] }), ok)).toEqual({ kind: 'refuse', cls: 'deliver-to-self' })
     expect(classifyOpened(m({ messageType: 'padding' }), ok)).toEqual({ kind: 'refuse', cls: 'type/padding' })

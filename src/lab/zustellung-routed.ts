@@ -20,7 +20,7 @@ import { multibase } from '@openvtc/vti-didcomm-js'
 import { ed25519, x25519 } from '@noble/curves/ed25519.js'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { Carrier, Device, HORIZON, Welt, party, type Endpoint, type Party, type Report, type Wire } from './zustellung'
-import { SessionCarrier, pairWithSessions, sessionsOf, tspSender } from './zustellung-sessions'
+import { SessionCarrier, pairWithSessions, rebindSessions, sessionsOf, tspSender } from './zustellung-sessions'
 import { didKeyKeys } from './zustellung-live/identities'
 
 const enc = new TextEncoder()
@@ -152,6 +152,8 @@ export class RoutedIntermediary extends SessionCarrier {
   /** Every outer frame deposited here (before any check): device, address, bytes. */
   readonly inbound: Array<{ device: string; address: string; bytes: Uint8Array }> = []
   private readonly inflight = new Set<Promise<void>>()
+  /** Exceptions thrown inside an opening after its own classification (bench faults); `drain()` rethrows them. */
+  private readonly internalErrors: unknown[] = []
   private readonly tamperRules: Array<Rule & { region: TamperRegion; outerSender: string; next: string }> = []
   private readonly misrouteRules: Array<Rule & { next: string; to: string }> = []
   private readonly duplicateRules: Array<{ next: string; delay: 0 | 1 }> = []
@@ -215,8 +217,12 @@ export class RoutedIntermediary extends SessionCarrier {
     } catch {
       return this.refuse('bad-vid', device, address, bytes)
     }
-    // Into the inbox: the deposit is accepted; the opening runs asynchronously and never rejects.
-    const p = this.open(device ?? '?', address, bytes, outer.sender, senderKey).catch(() => this.refuse('unpack-failed', device, address, bytes))
+    // Into the inbox: the deposit is accepted; the opening runs asynchronously and never rejects. `open` classifies its
+    // own refusals (`unpack-failed` included); anything thrown past that is a bench fault, never a refusal class, and
+    // `drain()` rethrows it.
+    const p = this.open(device ?? '?', address, bytes, outer.sender, senderKey).catch((e: unknown) => {
+      this.internalErrors.push(e)
+    })
     this.inflight.add(p)
     void p.finally(() => this.inflight.delete(p))
   }
@@ -267,9 +273,13 @@ export class RoutedIntermediary extends SessionCarrier {
     }
   }
 
-  /** The barrier (C1): wait until every opening in the inbox has finished (forwarded or refused). */
+  /** The barrier (C1): wait until every opening in the inbox has finished (forwarded or refused); rethrow bench faults once. */
   async drain() {
     while (this.inflight.size > 0) await Promise.all([...this.inflight])
+    if (this.internalErrors.length > 0) {
+      const errors = this.internalErrors.splice(0)
+      throw errors.length === 1 ? errors[0] : new AggregateError(errors, `${errors.length} bench faults while opening`)
+    }
   }
   /** A new round: copies held back by `duplicateForward(…, 1)` are forwarded now. */
   tick() {
@@ -357,10 +367,7 @@ export function addDevice(w: RoutedWelt, name: string, self: Party, endpoint: Ro
 
 /** Carrier change (H1): every device registers its sessions at the new intermediary and is bound to its view there. */
 export function rebindWithSessions(w: RoutedWelt, next: RoutedIntermediary) {
-  for (const d of w.devices) {
-    for (const s of sessionsOf(d.endpoint)) next.register(d.name, s)
-    d.rebind(next.viewFor(d.name))
-  }
+  rebindSessions(w.devices, next)
   w.carrier = next
   w.hop = next
 }

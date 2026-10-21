@@ -6,8 +6,9 @@ import { afterAll, describe, expect, it, vi } from 'vitest'
 // HPKE, all from `crypto.getRandomValues` / `crypto.randomUUID`, seeded with the generator of
 // tests/mehrgeraet-seeds.test.ts (LCG, version 1). Every seed must give: all cells passed; Z1r with 2 (R-c) and 4
 // (R-es) sessions per relationship, the outer sender as in the NOTES, the inner document frame inside the step-2 range
-// and the outer frame = inner + 384 B for every forwarded frame. A failing seed prints its number; every counterexample
-// becomes a permanent test. `SEEDS=<n>` runs the first n.
+// (Z1r), and the outer frame = inner + 384 B for every frame any intermediary forwarded in any cell of either form
+// (documents, receipts, duplicates, tampered and misrouted frames). A failing seed prints its number; every
+// counterexample becomes a permanent test. `SEEDS=<n>` runs the first n.
 
 const rng = vi.hoisted(() => ({
   version: 1,
@@ -29,7 +30,7 @@ const rng = vi.hoisted(() => ({
   },
 }))
 
-import { routedDeliveryScenarios, runRouted } from '../src/lab/zustellung-routed'
+import { RoutedIntermediary, routedDeliveryScenarios, runRouted, type OpenedRecord } from '../src/lab/zustellung-routed'
 import { tspRoutedControlWire, tspRoutedEgressSessionWire, tspRoutedWire } from '../src/candidates/zustellung/tsp-routed'
 
 const FORMS = [
@@ -42,7 +43,26 @@ const OVERHEAD = 384
 const env = process.env.SEEDS
 const SEEDS = Array.from({ length: env === undefined || env === 'all' ? 20 : Math.min(20, Math.max(1, Number(env) || 20)) }, (_, i) => i + 1)
 const formCells = routedDeliveryScenarios.filter((s) => s.role === 'form').length
-const seen = { inner: [] as number[], outer: [] as number[], seeds: 0, cells: 0 }
+const seen = { inner: [] as number[], outer: [] as number[], seeds: 0, cells: 0, forwarded: 0, overheads: new Set<number>() }
+
+/**
+ * Every frame every intermediary forwards, across all cells (review 1 of step 3, C-b): each instance's `opened` records
+ * are collected after each opening, from the index seen last for that instance (openings run concurrently).
+ */
+const forwarded: OpenedRecord[] = []
+const read = new WeakMap<RoutedIntermediary, number>()
+type Open = (this: RoutedIntermediary, ...a: unknown[]) => Promise<void>
+const proto = RoutedIntermediary.prototype as unknown as { open: Open }
+const open = proto.open
+vi.spyOn(proto, 'open').mockImplementation(async function (this: RoutedIntermediary, ...a: unknown[]) {
+  try {
+    await open.apply(this, a)
+  } finally {
+    const from = read.get(this) ?? 0
+    forwarded.push(...this.opened.slice(from))
+    read.set(this, this.opened.length)
+  }
+})
 
 describe('E11b step 3 seed sweep: every seed gives the NOTES table', () => {
   for (const seed of SEEDS) {
@@ -55,6 +75,7 @@ describe('E11b step 3 seed sweep: every seed gives the NOTES table', () => {
       })
       try {
         const diff: string[] = []
+        forwarded.length = 0
         for (const f of FORMS) {
           const results = await runRouted(f.make)
           if (results.length !== formCells) diff.push(`${f.id}: ${results.length} cells, expected ${formCells}`)
@@ -73,6 +94,12 @@ describe('E11b step 3 seed sweep: every seed gives the NOTES table', () => {
           const rt5 = results.find((r) => r.scenario === 'RT5')?.measure ?? {}
           if (rt5.sessionsI2 !== f.sessions) diff.push(`${f.id} RT5 sessions at I2 ${rt5.sessionsI2}`)
         }
+        if (forwarded.length === 0) diff.push('no forwarded frame seen')
+        for (const o of forwarded) {
+          seen.overheads.add(o.outerBytes - o.innerBytes)
+          if (o.outerBytes - o.innerBytes !== OVERHEAD) diff.push(`forwarded ${o.outerSender} → ${o.next}: outer ${o.outerBytes} ≠ inner ${o.innerBytes} + ${OVERHEAD}`)
+        }
+        seen.forwarded += forwarded.length
         const control = await runRouted(tspRoutedControlWire)
         seen.cells += control.length
         if (control.map((r) => `${r.scenario}:${r.outcome}`).join() !== 'RT1-K:bestanden') diff.push(`R-ce: ${JSON.stringify(control)}`)
@@ -92,9 +119,11 @@ describe('E11b step 3 seed sweep: every seed gives the NOTES table', () => {
     expect(Math.max(...seen.inner)).toBeLessThanOrEqual(INNER[1])
     expect(Math.min(...seen.outer)).toBeGreaterThanOrEqual(INNER[0] + OVERHEAD)
     expect(Math.max(...seen.outer)).toBeLessThanOrEqual(INNER[1] + OVERHEAD)
+    expect(seen.forwarded).toBeGreaterThan(0)
+    expect([...seen.overheads]).toEqual([OVERHEAD])
   })
 })
 
 afterAll(() => {
-  if (seen.seeds) process.stderr.write(`E11b step 3 over ${seen.seeds} seeds, ${seen.cells} cells: inner document ${Math.min(...seen.inner)}–${Math.max(...seen.inner)} B, outer ${Math.min(...seen.outer)}–${Math.max(...seen.outer)} B\n`)
+  if (seen.seeds) process.stderr.write(`E11b step 3 over ${seen.seeds} seeds, ${seen.cells} cells: inner document ${Math.min(...seen.inner)}–${Math.max(...seen.inner)} B, outer ${Math.min(...seen.outer)}–${Math.max(...seen.outer)} B; ${seen.forwarded} forwarded frames, overhead ${[...seen.overheads].join('/')} B\n`)
 })

@@ -84,6 +84,17 @@ export async function pairWithSessions(w: Welt, a: Party, b: Party, extraB: stri
   return out
 }
 
+/**
+ * Carrier switch under the session rule: every device reopens a session for each identity its endpoint names at `next`
+ * and is bound to its view there (`Device.rebind()` alone registers only the address). The caller sets `w.carrier`.
+ */
+export function rebindSessions(devices: readonly Device[], next: SessionCarrier) {
+  for (const d of devices) {
+    for (const s of sessionsOf(d.endpoint)) next.register(d.name, s)
+    d.rebind(next.viewFor(d.name))
+  }
+}
+
 /** One cell under the session rule: Alice sends one document to Bob, Bob's receipt comes back under the same rule. */
 export interface SessionCellResult {
   delivered: boolean

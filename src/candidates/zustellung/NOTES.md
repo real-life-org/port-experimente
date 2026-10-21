@@ -421,8 +421,12 @@ the mediator's login and its handshake, what the mediator links across
 the two sessions of (a) (live: "E11b live", RT6), routed forms (step 3). `sessions()` counts the registrations opened so far
 (cumulative), not the sessions open at a moment. `Device.rebind()`
 (carrier switch, Z2) registers only the connection address, not the
-egress session of (a): a carrier switch with egress sessions is not
-modelled (Z2 runs on the default carrier, without the rule).
+egress session of (a); the bench Z2 runs on the default carrier, without
+the rule. Z2 under the session rule is a test of its own
+(`tests/zustellung-direct-forms.test.ts`, step 3): with `rebindSessions`
+(every device reopens all its sessions) the waiting document is
+delivered in (a) (4 sessions) and (b) (2); in (a) reopening only the
+address leaves it dropped at the new carrier, `failed`.
 
 ## E11b step 3: routed intermediary (21 October 2026)
 
@@ -447,13 +451,16 @@ connection DID, sealed end to end; the outer layer
   without a session.
 
 **The intermediary.** `RoutedIntermediary` is a subclass of
-`SessionCarrier` (step 2; the only change there is that the session check
-became `protected sessionHeld`). It has a did:key VID from a fixed seed.
+`SessionCarrier` (step 2; the changes there: the session check became
+`protected sessionHeld`, and `rebindSessions` reopens every device's
+sessions at a new carrier, shared with `rebindWithSessions`). It has a did:key VID from a fixed seed.
 A deposit addressed to it runs synchronous checks and goes into its own
 inbox (the deposit counts as `accepted`); opening is asynchronous
 (`unpack` is a promise) and the scenario flow awaits `drain()` before
 every device's round (`RoutedWelt`), so the core dispatcher stays
-synchronous and unchanged. After opening it takes the next hop from the
+synchronous and unchanged. An exception after the opening's own
+classification is a bench fault, never a refusal class: `drain()`
+rethrows it. After opening it takes the next hop from the
 library parser (`nextHop` on `m.hops`, never read by hand) and passes
 the inner frame byte for byte to the next hop's pickup through the base
 `Carrier` deposit, where the carrier faults act. It never checks the
@@ -474,16 +481,18 @@ sender key not resolvable from a did:key), then after the inbox
 class reachable on the wire has a test with a real frame
 (`foreign-address`, `undecodable`, `session`, `wrong-receiver`,
 `bad-vid`, `unpack-failed`, `type/direct`, `type/nested`,
-`type/control`, `multi-hop`, `empty-inner`, `no-session-next`); the
-others are defensive guards tested on the classification function
+`type/control`, `type/padding` (a hand-built, signed and sealed XPAD
+frame), `multi-hop`, `empty-inner`, `no-session-next`); the others are
+defensive guards tested on the classification function
 (`wrong-revision`: Rev 2 is refused by `unpack` already;
 `deliver-to-self`: `packWithHops(…, 'routed', [])` opens as `nested`;
-`type/padding`, `type/other`).
+`type/other`: `unpack` knows no further message type, a frame with an
+unknown type marker fails as `unpack-failed`).
 
 | Form | Sessions per relationship | Bytes per document, inner / outer (20 seeds) | Z1: sender visible to the partner | Delivery address = account | What the intermediary learns per frame | Intermediary rebinding with unchanged endpoints (RT5) |
 |---|---|---|---|---|---|---|
 | (b) `tsp-direct-connection` (step 2) | 2 | 1491–1494 B, no outer layer | yes, the account | yes | the account as sender and as receiver | waiting frames survive a carrier switch (Z2) |
-| (a) `tsp-direct-egress-session` (step 2) | 4 | 1491–1494 B, no outer layer | no, egress | yes | egress as sender, the receiver's account; account and egress linked over the device's two sessions | as (b); the egress session is reopened |
+| (a) `tsp-direct-egress-session` (step 2) | 4 | 1491–1494 B, no outer layer | no, egress | yes | egress as sender, the receiver's account; account and egress linked over the device's two sessions | as (b), if the egress session is reopened at the new carrier (4 sessions); reopening the address alone drops the waiting frame (Z2 under the session rule) |
 | (c) R-c `tsp-routed` | 2 | 1491–1494 / 1875–1878 B (+384 B) | no, egress | **yes** | outer sender = the sender's **account**, next hop = the receiver's account, inner sender (egress) and receiver in clear after opening: account and egress linked in one frame | waiting frames **strand** (sealed to the old intermediary, refused `foreign-address`, `failed` after 12 rounds); sessions reopened at the new one (2) |
 | (c-es) R-es `tsp-routed-egress-session` | 4 | as R-c | no, egress | **yes** | outer sender = egress, next hop = the receiver's account, inner as R-c; account linked over the device's second session | as R-c, 4 sessions reopened |
 | R-ce (control) | 2 | – | – | – | nothing: dropped as `session` | – |
@@ -537,9 +546,11 @@ R-ce. What it shows:
 7. **Branches and seeds.** The intermediary makes no random decision; its
    fault parameters are cells of their own. The seed sweep runs every cell
    on R-c and R-es and RT1-K on R-ce under 20 seeds (1700 cells) and
-   checks the Z1r sessions, outer sender and sizes per seed, and min/max
-   over the seeds: inner 1491–1494 B, outer 1875–1878 B, +384 B for every
-   forwarded frame.
+   checks the Z1r sessions, outer sender and document sizes per seed, and
+   min/max over the seeds: inner 1491–1494 B, outer 1875–1878 B (Z1r).
+   Every frame any intermediary forwarded in any cell of either form
+   (documents, receipts, duplicates, tampered and misrouted frames; 8360
+   over the 20 seeds) is outer = inner + 384 B.
 
 ### Not answered by step 3
 
