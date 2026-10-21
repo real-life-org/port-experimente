@@ -117,6 +117,8 @@ const COUNTERS = obj({
 const VARIANT = obj({ firstHopVid: did, methodRef: frag, x25519Fingerprint: hex8, sourceDocVersion: version })
 const LAYERS = obj({ payload: int, inner: int, outer: n(int), wire: int })
 
+const RECEIPT_FIELDS = { tMs: int, cls: CLASS, socket: label, verdict: n(e(VERDICTS)), counted: bool, picked: bool }
+
 export const ROW_SCHEMA = obj({
   id: label,
   form: FORM,
@@ -147,6 +149,7 @@ export const ROW_SCHEMA = obj({
   firstFailed: n(e(PREDICATES)),
   outcome: ROW_OUTCOME,
   events: int,
+  receipts: arr(obj(RECEIPT_FIELDS)),
 })
 
 export const NOTE_KINDS = ['key-binding-unclear', 'form-aborted', 'form-skipped', 'baseline-deviation', 'stage1-run', 'stage1-not-needed', 'consumer-failure', 'prime-not-measured'] as const
@@ -180,7 +183,7 @@ export const PROTOCOL_SCHEMA = obj({
     }),
   ),
   rows: arr(ROW_SCHEMA),
-  acks: arr(obj({ id: label, docRow: label, form: FORM, stage: int, digests: obj({ payload: hex8, inner: hex8, outer: n(hex8) }), bytes: LAYERS, tSendMs: int, received: bool, receivedClass: n(CLASS), tRecvMs: n(int), check: n(e(ACK_REASONS)), inTime: n(bool) })),
+  acks: arr(obj({ id: label, docRow: label, form: FORM, stage: int, digests: obj({ payload: hex8, inner: hex8, outer: n(hex8) }), bytes: LAYERS, tSendMs: int, received: bool, receivedClass: n(CLASS), tRecvMs: n(int), check: n(e(ACK_REASONS)), inTime: n(bool), receipts: arr(obj({ ...RECEIPT_FIELDS, check: n(e(ACK_REASONS)) })) })),
   controls: arr(obj({ group: label, socket: label, controlType: e(['invite', 'accept', 'cancel', 'control-opaque', 'other']), correlation: e(['own-xrfi', 'unknown', 'none']), signatureMethod: n(frag), tMs: int })),
   xrfi: arr(obj({ group: label, socket: label, threadDigest: hex8, tSendMs: int })),
   events: obj({

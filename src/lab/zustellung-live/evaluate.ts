@@ -82,6 +82,20 @@ export interface RecvEvent {
   layer?: 'inner' | 'outer' | 'payload'
   hopsLength?: number
   fresh: boolean
+  /** Entered after the end of observation (review 1 C1): listed, never counted. */
+  afterClose?: boolean
+}
+
+/** One receipt of a sent frame as exported (review 1 C3). `tMs` relative to the send. */
+export interface Receipt {
+  tMs: number
+  cls: FrameClass
+  socket: string
+  verdict: Verdict | null
+  /** Within the end of observation (`t ≤ closedAt`). */
+  counted: boolean
+  /** The receipt the row (or ack) uses: the first successful one, else the first. */
+  picked: boolean
 }
 
 export const PREDICATES = ['received', 'opened', 'type', 'payload-match', 'doc-verdict', 'ack-valid', 'ack-in-time'] as const
@@ -118,6 +132,8 @@ export interface RowResult {
   firstFailed: Predicate | null
   outcome: RowOutcome
   events: number
+  /** Every receipt of this record outside the fresh session, in time order (review 1 C3). */
+  receipts: Receipt[]
 }
 
 const UNOPENED: ReadonlySet<FrameClass> = new Set(['unopenable/undecodable', 'unopenable/unlisted', 'unopenable/unpack-failed', 'wrong-revision', 'mismatch'])
@@ -136,9 +152,11 @@ export function evaluateRow(record: SendRecord, allEvents: RecvEvent[], ack: Ack
   if (record.kind === 'ack') throw new Error('e11b: ack records have no row')
   const kind = record.kind
   // Only receipts up to the end of observation count (review 1 C1); `closedAt` itself is inside.
-  const events = allEvents.filter((e) => e.recordId === record.id && !e.fresh && e.t <= opts.closedAt).sort((a, b) => a.t - b.t)
+  const all = allEvents.filter((e) => e.recordId === record.id && !e.fresh).sort((a, b) => a.t - b.t)
+  const events = all.filter((e) => e.t <= opts.closedAt)
   if (ack && ack.t > opts.closedAt) ack = undefined
   const pick = events.find((e) => successful(e, kind)) ?? events[0]
+  const receipts: Receipt[] = all.map((e) => ({ tMs: e.t - record.tSend, cls: e.cls, socket: e.socket, verdict: e.verdict ?? null, counted: e.t <= opts.closedAt, picked: e === pick }))
   const base: RowResult = {
     id: record.id,
     form: record.form,
@@ -167,6 +185,7 @@ export function evaluateRow(record: SendRecord, allEvents: RecvEvent[], ack: Ack
     firstFailed: 'received',
     outcome: 'not-shown',
     events: events.length,
+    receipts,
   }
   if (!pick) return base
   const dt = pick.t - record.tSend

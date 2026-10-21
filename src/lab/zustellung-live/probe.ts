@@ -67,7 +67,8 @@ interface SideState {
   fresh?: PortSession
 }
 
-type GroupEvent = RecvEvent & { group: string }
+/** In memory only: `ackCheck` is the check this ack receipt produced (review 1 C3). */
+type GroupEvent = RecvEvent & { group: string; ackCheck?: AckCheck }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, Math.max(0, ms)))
 const iso = (t: number) => new Date(t).toISOString()
@@ -106,7 +107,6 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
   const unassigned: Array<{ group: string; socket: string; size: number; cls: FrameClass; tMs: number }> = []
   const controls: Array<{ group: string; socket: string; controlType: string; correlation: string; signatureMethod: string | null; tMs: number }> = []
   const ackChecks = new Map<string, AckCheck>()
-  const ackEvents = new Map<string, { cls: FrameClass; t: number }>()
   const classCounts: Record<string, number> = Object.fromEntries(FRAME_CLASSES.map((c) => [c, 0]))
   const rows: RowResult[] = []
   const groups: Array<Record<string, unknown>> = []
@@ -264,6 +264,8 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
       try {
         const c = await classify(st, which, socket, qb2)
         afterCloseEvents.push({ group: groupId, socket, session: fresh ? 'fresh' : 'main', recordId: c.recordId ?? null, cls: c.cls, tMs: rt(t) })
+        // Main-session receipts after close also appear in the record's receipt list, as not counted (C3).
+        if (!fresh && c.recordId) events.push({ group: groupId, socket, size: c.size, cls: c.cls, t, fresh: false, afterClose: true, recordId: c.recordId, ...(c.verdict ? { verdict: c.verdict } : {}) })
       } catch (e) {
         failures.push(translate(e, 'classify'))
       }
@@ -301,7 +303,6 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
       if (c.controlType) controls.push({ group: groupId, socket, controlType: c.controlType, correlation: c.correlation ?? 'none', signatureMethod: c.signatureMethod ?? null, tMs: rt(t) })
       else if (!c.recordId) unassigned.push({ group: groupId, socket, size: c.size, cls: c.cls, tMs: rt(t) })
       const rec = c.recordId ? registry.get(c.recordId) : undefined
-      if (rec?.kind === 'ack' && !ackEvents.has(rec.id)) ackEvents.set(rec.id, { cls: c.cls, t })
       if (c.cls === 'doc' && c.verdict === 'unique' && c.received && rec?.kind === 'doc' && rec.group === groupId) {
         if (!(await diVerify(c.received.document, st.partner!.side.party.anchor))) ev.verdict = 'proof-invalid'
         else {
@@ -315,6 +316,7 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
         const checked: AckCheck = c.verdict === 'unique' ? await st.ledger.checkAck(c.received, t) : { valid: false, inTime: false, reason: 'not-unique', t }
         // Receipt time `t` (handler entry) and end of verification are separate (review 1 C4).
         const chk: AckCheck = { ...checked, tVerified: now() }
+        ev.ackCheck = chk
         if (chk.rowId) {
           const prev = ackChecks.get(chk.rowId)
           if (!prev || (!prev.valid && chk.valid)) ackChecks.set(chk.rowId, chk)
@@ -506,8 +508,11 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
     .all()
     .filter((r) => r.kind === 'ack')
     .map((r) => {
-      const ev = ackEvents.get(r.id)
       const chk = r.docRow ? ackChecks.get(r.docRow) : undefined
+      const mine = events.filter((e) => e.recordId === r.id).sort((a, b) => a.t - b.t)
+      // `received*` describe the first receipt within the observation; `receipts` lists all (C3).
+      const ev = mine.find((e) => !e.afterClose)
+      const receipts = mine.map((e) => ({ tMs: e.t - r.tSend, cls: e.cls, socket: e.socket, verdict: e.verdict ?? null, counted: !e.afterClose, picked: chk !== undefined && e.ackCheck === chk, check: e.ackCheck?.reason ?? null }))
       return {
         id: r.id,
         docRow: r.docRow,
@@ -521,6 +526,7 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
         tRecvMs: ev ? ev.t - r.tSend : null,
         check: chk?.reason ?? null,
         inTime: chk ? chk.inTime : null,
+        receipts,
       }
     })
 

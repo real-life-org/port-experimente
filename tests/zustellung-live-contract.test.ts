@@ -283,6 +283,22 @@ describe('E11b concurrent copies (review 1 C2)', () => {
     expect(new Set(ids).size).toBe(4)
     // the copies are counted as receipt events, the second one never as unique
     expect(docs.every((x: { events: number }) => x.events === 2)).toBe(true)
+    // review 1 C3: every receipt is exported; the pick (first successful) is checkable from the JSON
+    type Receipt = { tMs: number; cls: string; socket: string; verdict: string | null; counted: boolean; picked: boolean; check?: string | null }
+    for (const d of docs as Array<{ receipts: Receipt[]; tRecvMs: number }>) {
+      expect(d.receipts.length).toBe(2)
+      expect(d.receipts.every((x) => x.counted && x.cls === 'doc' && x.socket.endsWith('.conn'))).toBe(true)
+      expect(d.receipts.map((x) => x.verdict).sort()).toEqual(['duplicate-known', 'unique'])
+      const picked = d.receipts.filter((x) => x.picked)
+      expect(picked.length).toBe(1)
+      expect([picked[0]!.verdict, picked[0]!.tMs]).toEqual(['unique', d.tRecvMs])
+    }
+    for (const a of p.acks as Array<{ receipts: Receipt[]; check: string }>) {
+      expect(a.receipts.length).toBe(2)
+      expect(a.receipts.map((x) => x.check).sort()).toEqual(['not-unique', 'ok'])
+      expect(a.receipts.filter((x) => x.picked).map((x) => x.check)).toEqual(['ok'])
+      expect(a.check).toBe('ok')
+    }
   }, 60_000)
 })
 
@@ -305,9 +321,10 @@ describe('E11b end of observation (review 1 C1)', () => {
 
   it('callbacks arriving after the form pass closed and after the probe returned change nothing in the returned protocol', async () => {
     const { info, counters, base } = await setup()
-    // every frame reaches the handler 250 ms late: the last document of the pass arrives after closedAt
-    const port = delayedPort(base, () => 250)
-    const cfg = parseEnv({ E11B_RUNS: '1', E11B_TIMEOUT_MS: '100', E11B_FORMS: 'D-c' })
+    // every frame reaches the handler 130 ms late: the last document of each pass arrives after its
+    // closedAt (D-c: while its fresh window or R-cc runs; R-cc: after the probe returned)
+    const port = delayedPort(base, () => 130)
+    const cfg = parseEnv({ E11B_RUNS: '1', E11B_TIMEOUT_MS: '100', E11B_FORMS: 'D-c,R-cc' })
     const r = await runProbe(cfg, { info, port, counters, versions: VERSIONS, rand: seededRand(42), observeMs: 50 })
     const at = protocolJson(r.protocol)
     const valid = r.valid
@@ -316,9 +333,11 @@ describe('E11b end of observation (review 1 C1)', () => {
     expect(r.valid).toBe(valid)
     const p = JSON.parse(at)
     expect(p.events.afterClose.length).toBeGreaterThan(0)
-    // nothing received after closedAt counts in a row
+    // nothing received after closedAt counts in a row; the receipt is listed as not counted (C3)
     const docs = p.rows.filter((x: { kind: string }) => x.kind === 'doc')
-    expect(docs.some((x: { received: string }) => x.received === 'no')).toBe(true)
+    const late = docs.filter((x: { received: string }) => x.received === 'no')
+    expect(late.length).toBeGreaterThan(0)
+    expect(late.some((x: { receipts: Array<{ counted: boolean; picked: boolean }> }) => x.receipts.some((e) => !e.counted && !e.picked))).toBe(true)
   }, 60_000)
 
   it('a handler still verifying an ack at the end of the pass is awaited before the result is frozen', async () => {
