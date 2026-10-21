@@ -404,6 +404,94 @@ export interface Measures {
 
 export type ActionResult = 'ok' | 'blocked' | 'crashed'
 
+/**
+ * E15 K2 step 2b.0: the bench's observation seam for the outcome ledger (`buch.ts`). Pure observation: every call hands
+ * out the device's own values (its committed image, the plaintext of a document it built, a document its parser admitted)
+ * and nothing it returns is read; no decision of the device depends on it. Unset (`null`) everywhere but in ledger runs.
+ * Fail-safe (Tor-Review 42 (a)): an exception in a hook is caught at the seam, handed to `failed` and the device goes on
+ * exactly as without an observer.
+ */
+export interface HolderObserver {
+  /** A successful store commit of this device; `image` is what the store now holds (the observer copies what it keeps). */
+  committed(d: HolderDevice, image: DeviceState): void
+  /** A document this device signed and sealed (its own plaintext), with every frame it sealed for it. */
+  produced(d: HolderDevice, p: { digest: string; type: string; issuer: string; recipient: string; payload: Record<string, Json>; frames: Uint8Array[] }): void
+  /** A document delivered to this device that passed its parser's form checks (MV-24), before the fold decides on it. */
+  admitted(d: HolderDevice, a: { digest: string; type: string; issuer: string; address: string; payload: Record<string, unknown> }): void
+  /** A hook above threw; the seam caught it (an exception here is swallowed too). */
+  failed?(d: HolderDevice, hook: 'committed' | 'produced' | 'admitted', error: unknown): void
+}
+
+/**
+ * Is `issuer` the signer the counterpart may show for the recorded key `recorded`? K0/K1a: exactly that key. K2 step 2: a
+ * member of the device set this receiver knows for the root `recorded` from received proofs (without a proof the root
+ * alone; a revoked device never: a known revocation beats). Pure over the receiver's state (`HolderDevice.isPeer`, and the
+ * ticket predicate below).
+ */
+export function peerIn(state: M.HolderState, sets: boolean, issuer: string, recorded: string): boolean {
+  if (!sets) return issuer === recorded
+  const set = M.own(state.sets, recorded)
+  if (!set) return issuer === recorded
+  return M.setView(set).members.some((m) => m.anchor === issuer)
+}
+
+/** The ticket payload as sent (`issue`) and read by the side (8640). */
+export interface TicketPayload {
+  act: string
+  issuedAt: string
+  expiresAt: string
+  own: string
+  voucher: { anchor: string; keyAgreement: string; name: string }
+}
+/** What the ticket check (8640) reads of the receiving device: its state, whether it runs device sets, its time, its channel. */
+export interface TicketReceiver {
+  state: M.HolderState
+  sets: boolean
+  now: string
+  /** 8640.2 channel: the own tuple behind the address (K2: the head of the relationship whose stock key the address is). */
+  tupleAt(address: string): M.Tuple | undefined
+}
+/**
+ * The receiver's state steps between the binding steps of 8640 (the holder on receipt passes them; the outcome ledger's
+ * reference does not: they are state, not binding).
+ */
+export interface TicketStateSteps {
+  /** 8640.4: the act is held already (a repetition: effect, no new act). */
+  repeated(p: TicketPayload): boolean
+  /** 8640.12 (single use as a rule), 8640.6 (key active or aging): false refuses. */
+  usable(own: M.StockKey, p: TicketPayload): boolean
+}
+export type TicketVerdict =
+  | { ok: true; repeated: true }
+  | { ok: true; repeated: false; rel: M.Relationship; own: M.StockKey; p: TicketPayload }
+  | { ok: false; step: '8640.2' | '8640.3' | '8640.5' | '8640.7' | '8640.8' | 'state'; reason: string; p?: TicketPayload }
+
+/**
+ * E15 2b.0 (Tor-Review 43): the side's ticket acceptance predicate (8640, up to the voucher check 8640.8), pure over the
+ * receiver's context; the holder calls it on receipt, the outcome ledger as the reference of P-Commit, so the ledger never
+ * re-implements a ticket rule. Steps in order: 8640.2 channel (an own relationship behind the address) and signer (a
+ * counterpart on that relationship; K2: a member of its device set), 8640.3 times; [8640.4 repetition: state]; 8640.5 the
+ * named key on this relationship (K2: the address is its key agreement); [8640.12, 8640.6: state]; 8640.7 the key outlives
+ * the act; 8640.8 the voucher is no own stock key. It stops before 8640.9 (voucher assignment), 8640.13 (budget) and the
+ * acceptance 8640.14: state, not binding. Tickets have no MV-24 form in 2a (`DOC_SHAPES`; 2b.2 adds it).
+ */
+export function ticketAcceptance(doc: { issuer: string; payload: unknown }, address: string, rx: TicketReceiver, steps?: TicketStateSteps): TicketVerdict {
+  const t = rx.tupleAt(address)
+  if (!t) return { ok: false, step: '8640.2', reason: `no own relationship behind address ${address.slice(-8)}` }
+  const r = M.relOfTuple(rx.state, t.id)!
+  const peer = rx.sets ? r.tuples.some((x) => peerIn(rx.state, true, doc.issuer, x.peer)) : peerIn(rx.state, false, doc.issuer, t.peer)
+  if (!peer) return { ok: false, step: '8640.2', reason: `signer ${doc.issuer.slice(-8)} is no counterpart on this relationship` }
+  const p = doc.payload as TicketPayload
+  if (Date.parse(rx.now) > Date.parse(p.expiresAt) || Date.parse(p.issuedAt) > Date.parse(rx.now) + M.PARAM.actSkewMs) return { ok: false, step: '8640.3', reason: 'outside the act times', p } // 8110
+  if (steps?.repeated(p)) return { ok: true, repeated: true }
+  const own = r.stock.find((k) => k.anchor === p.own && (!rx.sets || k.keyAgreement === address))
+  if (!own) return { ok: false, step: '8640.5', reason: `own ${p.own.slice(-8)} not on this relationship at address ${address.slice(-8)}`, p }
+  if (steps && !steps.usable(own, p)) return { ok: false, step: 'state', reason: `own ${own.anchor.slice(-8)} in state ${own.state}`, p }
+  if (Date.parse(own.expiresAt) < Date.parse(p.expiresAt) + M.PARAM.actSkewMs) return { ok: false, step: '8640.7', reason: `own ${own.anchor.slice(-8)} expires before the act`, p }
+  if (r.stock.some((k) => k.anchor === p.voucher.anchor)) return { ok: false, step: '8640.8', reason: `voucher ${p.voucher.anchor.slice(-8)} is an own stock key`, p }
+  return { ok: true, repeated: false, rel: r, own, p }
+}
+
 export class HolderDevice {
   state: M.HolderState
   readonly zusteller: Zusteller
@@ -417,6 +505,10 @@ export class HolderDevice {
   online = true
   crashAt: CrashPoint | null = null
   readonly crashes: CrashPoint[] = []
+  /** E15 2b.0: observation seam for the outcome ledger (bench only, never read back). */
+  observer: HolderObserver | null = null
+  /** Exceptions observer hooks threw (caught at the seam, never read by the device). */
+  observerFailures = 0
   measures: Measures = { framesOut: 0, bytesOut: 0, ownFramesOut: 0, ownBytesOut: 0, blocked: 0, unboundAcks: 0 }
   private down = false
   private counter = 0
@@ -635,10 +727,7 @@ export class HolderDevice {
    * Nachweisen kennt (ohne Nachweis die Wurzel allein; ein widerrufenes Gerät nie: ein bekannter Widerruf schlägt).
    */
   private async isPeer(issuer: string, recorded: string): Promise<boolean> {
-    if (!this.sets) return issuer === recorded
-    const set = this.setOf(recorded)
-    if (!set) return issuer === recorded
-    return M.setView(set).members.some((m) => m.anchor === issuer)
+    return peerIn(this.state, this.sets, issuer, recorded)
   }
   /** K2: der Kontext eines aufgezeichneten eigenen Ankers (der des Geräts, das ihn erzeugt hat): Tupel, Vorrat, Karte. */
   private recordedCtx(anchor: string): string | undefined {
@@ -693,6 +782,14 @@ export class HolderDevice {
     await this.resumeDuties()
   }
   private readonly resolve = (rkid: string): CryptoKey | undefined => this.privOf.get(rkid)
+  /**
+   * E15 2b.0 (Tor-Review 44, 47): bench only. Every private key agreement this device's resolver hands `receive` (key id →
+   * key), for the outcome ledger's own copy: it opens every frame as this device would, with the same resolver. A read: the
+   * device never reads what the ledger does with it, and nothing here changes the device (a copy of the map).
+   */
+  receiverKeys(): Array<[string, CryptoKey]> {
+    return [...this.privOf]
+  }
   private async keysFor(ctx: string): Promise<Keys> {
     const k = await this.cand.keys.pair(ctx)
     this.privOf.set(k.rkid, k.x.priv)
@@ -835,7 +932,25 @@ export class HolderDevice {
     }
   }
   commit() {
-    this.store?.commit(this.snapshotState())
+    if (!this.store) return
+    const image = this.snapshotState()
+    this.store.commit(image)
+    this.observe('committed', (o) => o.committed(this, image))
+  }
+  /** The fail-safe observation seam: a hook that throws changes nothing in what the device does next (Tor-Review 42 (a)). */
+  private observe(hook: 'committed' | 'produced' | 'admitted', f: (o: HolderObserver) => void): void {
+    const o = this.observer
+    if (!o) return
+    try {
+      f(o)
+    } catch (e) {
+      this.observerFailures++
+      try {
+        o.failed?.(this, hook, e)
+      } catch {
+        // the report of a failed hook may fail too; the device goes on
+      }
+    }
   }
   /** Neuaufbau aus dem Store (#57): alles Flüchtige wird aus dem Abbild ersetzt, nichts bleibt aus dem alten Lauf. */
   async reload(): Promise<void> {
@@ -891,10 +1006,16 @@ export class HolderDevice {
   }
   /** Freigeben (nach dem Commit): beim Enrollment aus der Ablage bis zum Zeugnis nur Verkehr an die eigene Adresse. */
   private release(ds: string[]): void {
+    let out = 0
     for (const d of ds) {
       if (this.catchUp && !this.ownTraffic(this.zusteller.submissions.get(d)?.address)) {
         if (!this.parked.includes(d)) this.parked.push(d)
-      } else this.zusteller.deposit(d)
+      } else {
+        // E15 K2 2b.0: crash point between two releases (both tickets of an issuance): the first is at the carrier, the
+        // rest is committed and goes out after the rebuild (`unreleased`).
+        if (out++ > 0) this.crash('between-sends')
+        this.zusteller.deposit(d)
+      }
     }
   }
   /**
@@ -977,6 +1098,7 @@ export class HolderDevice {
     const digest = await digestBytes(enc.encode(jcs(doc)))
     const kind = type === TYPES.journalSync ? (payload.reply ? 'journal-sync-reply' : 'journal-sync') : (type.split('/').slice(-2)[0] ?? type)
     for (const f of frames) this.produced.set(frameHash(f.frame), kind)
+    this.observe('produced', (o) => o.produced(this, { digest, type, issuer: k.anchor, recipient, payload, frames: frames.map((f) => f.frame) }))
     this.zusteller.record(digest, bytes, address, extra.length ? extra : undefined)
     this.held.push(digest)
     this.expected.set(digest, recipient)
@@ -1243,6 +1365,10 @@ export class HolderDevice {
     if (!ctx) return undefined
     const r = this.state.relationships.find((x) => !x.departed && x.stock.some((k) => k.key === ctx))
     return r ? M.head(r) : undefined
+  }
+  /** The context of the ticket predicate on this device (8640.2 channel: K2 by stock address, K0/K1a by tuple address). */
+  private ticketReceiver(now: string): TicketReceiver {
+    return { state: this.state, sets: this.sets, now, tupleAt: (a) => (this.sets ? this.tupleOfStock(a) : this.tupleOfAddress(a)) }
   }
   /**
    * Arrival of a card under device sets (E1 (a), E3 (a)): the card names the revision of `device-set@1` that carries its
@@ -2232,6 +2358,7 @@ export class HolderDevice {
     const ackBytes = enc.encode(jcs(ackEnv))
     const ackDigest = await digestBytes(enc.encode(jcs(ackDoc)))
     this.produced.set(frameHash(ackBytes), 'delivery-ack')
+    this.observe('produced', (o) => o.produced(this, { digest: ackDigest, type: TYPES.ack, issuer: k.anchor, recipient: doc.issuer, payload: { ref: v.digest!, meaning: 'received' }, frames: [ackBytes] }))
     this.acks.set(v.digest!, { frame: ackBytes, digest: ackDigest, address: doc.replyTo })
     this.zusteller.record(ackDigest, ackBytes, doc.replyTo)
     this.held.push(ackDigest)
@@ -2268,6 +2395,11 @@ export class HolderDevice {
     return undefined
   }
 
+  /** E15 2b.0: a document that passed its form checks, for the outcome ledger (observation only). */
+  private admitted(doc: Doc, address: string, digest: string): void {
+    this.observe('admitted', (o) => o.admitted(this, { digest, type: doc.type, issuer: doc.issuer, address, payload: doc.payload as Record<string, unknown> }))
+  }
+
   /** Fachliche Auswertung je Typ; true = Wirkung (quittieren), false = abgewiesen (keine Quittung). Jeder Zweig bindet das Dokument an den erwarteten Signierer (#55). */
   private async dispatch(doc: Doc, address: string, digest: string): Promise<boolean> {
     const now = this.clock.now()
@@ -2280,6 +2412,7 @@ export class HolderDevice {
       if (!this.state.findings.includes(text)) this.emit({ kind: 'finding', text })
       return false
     }
+    if (doc.type !== TYPES.revision) this.admitted(doc, address, digest) // a revision after its own form rules (below)
     switch (doc.type) {
       case TYPES.revision: {
         // M: 8550/8557/6270, vereinfacht.
@@ -2296,9 +2429,11 @@ export class HolderDevice {
             return false
           }
           if (p.tombstones !== undefined && (p.keys.length !== 0 || M.shapeProblem(p.tombstones, { array: 'ident' }, 'tombstones'))) return false
+          this.admitted(doc, address, digest)
           return this.foldSignerRevision(r, t, { revision: p.revision, keys: p.keys, writer: signerId(doc.issuer), tombstones: p.tombstones })
         }
         if (p.writer !== undefined && M.shapeProblem(p.writer, 'tag', 'writer')) return false // Review 28: Schreiberkennung nach ihrer Grammatik, sonst abgewiesen
+        this.admitted(doc, address, digest)
         if (typeof p.writer === 'string') return this.acceptWriterRevision(r, t, doc.issuer, p as typeof p & { writer: string })
         if (r.view && r.view.scope === t.id && p.revision <= r.view.revision) {
           const same = p.revision === r.view.revision
@@ -2316,29 +2451,27 @@ export class HolderDevice {
       case TYPES.ticket: {
         // Seite: 8640. K2 Schritt 2: das Ticket ist an den benannten Vorrats-Schlüssel versiegelt (nur sein Halter öffnet es);
         // Kanal ist dessen Beziehung, der Signierer ein Mitglied von Ms Menge auf einem ihrer Tupel.
-        const t = this.sets ? this.tupleOfStock(address) : this.tupleOfAddress(address)
-        if (!t) return false
-        const r = M.relOfTuple(this.state, t.id)!
-        const peer = this.sets ? (await Promise.all(r.tuples.map((x) => this.isPeer(doc.issuer, x.peer)))).some(Boolean) : await this.isPeer(doc.issuer, t.peer)
-        if (!peer) return false // 8640.2: Kanal und Signierer (K2: ein Gerät der Gegenperson)
-        const p = doc.payload as unknown as { act: string; issuedAt: string; expiresAt: string; own: string; voucher: { anchor: string; keyAgreement: string; name: string } }
-        if (Date.parse(now) > Date.parse(p.expiresAt) || Date.parse(p.issuedAt) > Date.parse(now) + M.PARAM.actSkewMs) return false // 8640.3 / 8110
-        if (this.state.acts.some((a) => a.id === p.act)) return true // 8640.4: Wiederholung
-        const own = r.stock.find((k) => k.anchor === p.own && (!this.sets || k.keyAgreement === address))
-        if (!own) {
-          this.emit({ kind: 'finding', text: `ticket ${p.act.slice(0, 8)}: own ${p.own.slice(-8)} nicht auf dieser Beziehung (8640.5)` })
+        // E15 2b.0 (Tor-Review 43): 8640.2–8640.8 as one predicate (`ticketAcceptance`), the same the outcome ledger applies
+        // as reference; the state steps 8640.4, 8640.12, 8640.6 come in here, in their place.
+        const v = ticketAcceptance(doc, address, this.ticketReceiver(now), {
+          repeated: (p) => this.state.acts.some((a) => a.id === p.act), // 8640.4: Wiederholung
+          usable: (own, p) => {
+            if (own.state === 'consumed') {
+              // 8640.12 als Regel (MV-6 neu, Anton 20.10.): A hält den Einmalverbrauch. Ein zweiter Akt auf einem verbrauchten
+              // Schlüssel ist abgewiesen, gleich ob der Mediator nach einem Restore aus dem erreichbaren Stand benannt hat
+              // (benannter Preis) oder fehlerhaft ist; kein Akt, keine Quittung. M nimmt danach den nächsten Schlüssel.
+              this.emit({ kind: 'finding', text: `ticket ${p.act.slice(0, 8)}: own ${p.own.slice(-8)} schon verbraucht: abgewiesen nach Regel 8640.12 (Einmalverbrauch bei A; Restore-Artefakt oder Konformitätsfehler des Mediators)` })
+              return false
+            }
+            return own.state === 'active' || own.state === 'aging' // 8640.6
+          },
+        })
+        if (!v.ok) {
+          if (v.step === '8640.5') this.emit({ kind: 'finding', text: `ticket ${v.p!.act.slice(0, 8)}: own ${v.p!.own.slice(-8)} nicht auf dieser Beziehung (8640.5)` })
           return false
         }
-        if (own.state === 'consumed') {
-          // 8640.12 als Regel (MV-6 neu, Anton 20.10.): A hält den Einmalverbrauch. Ein zweiter Akt auf einem verbrauchten
-          // Schlüssel ist abgewiesen, gleich ob der Mediator nach einem Restore aus dem erreichbaren Stand benannt hat
-          // (benannter Preis) oder fehlerhaft ist; kein Akt, keine Quittung. M nimmt danach den nächsten Schlüssel.
-          this.emit({ kind: 'finding', text: `ticket ${p.act.slice(0, 8)}: own ${p.own.slice(-8)} schon verbraucht: abgewiesen nach Regel 8640.12 (Einmalverbrauch bei A; Restore-Artefakt oder Konformitätsfehler des Mediators)` })
-          return false
-        }
-        if (own.state !== 'active' && own.state !== 'aging') return false // 8640.6
-        if (Date.parse(own.expiresAt) < Date.parse(p.expiresAt) + M.PARAM.actSkewMs) return false // 8640.7
-        if (r.stock.some((k) => k.anchor === p.voucher.anchor)) return false // 8640.8
+        if (v.repeated) return true
+        const { rel: r, own, p } = v
         const assigned = this.state.voucherAssigned.find((x) => x.anchor === p.voucher.anchor)
         if (assigned && assigned.act !== p.act) {
           this.emit({ kind: 'finding', text: `ticket ${p.act.slice(0, 8)}: voucher schon einem anderen Akt zugeordnet (8640.9, 8640.12)` })
