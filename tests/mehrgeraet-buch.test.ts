@@ -36,7 +36,7 @@ const rng = vi.hoisted(() => ({
 vi.mock('node:crypto', async (importOriginal) => ({ ...(await importOriginal<typeof import('node:crypto')>()), randomBytes: (n: number) => rng.bytes(n), randomUUID: () => rng.uuid() }))
 
 import { frameHash, TYPES, type HolderDevice } from '../src/lab/mehrgeraet/holder'
-import { ledgerWorld, pairCounter, pCommit, pEinmal, pPaar, pProduktion, type Buch } from '../src/lab/mehrgeraet/buch'
+import { Buch, ledgerWorld, pairCounter, pCommit, pEinmal, pPaar, pProduktion } from '../src/lab/mehrgeraet/buch'
 import { generate, report, runSequence, show, shrink, type GenEvent, type GenWorld, type Mutation } from '../src/lab/mehrgeraet/generator'
 import { k2 } from '../src/candidates/mehrgeraet-k2'
 import * as M from '../src/lab/mehrgeraet/model'
@@ -378,6 +378,37 @@ describe('K2 step 2b.0: union duty counter follows the committed state (Tor-Revi
     // B did not depart and learns nothing without a round → 1.
     expect(A.state.duties.map((d) => d.state)).toEqual(['moot'])
     expect(pairCounter(buch).openDuties).toEqual({ A: 0, B: 1 })
+  }, 60_000)
+})
+
+describe('K2 step 2b.0: the dump is a complete artefact (Tor-Review 42 S1)', () => {
+  const one: GenEvent[] = [{ k: 'introduce' }]
+  const all = (b: Buch) => M.canonical({ checks: [pEinmal(b), pCommit(b), pProduktion(b), pPaar(b)], counter: pairCounter(b), accepted: [...b.acceptedOn()].map(([k, a]) => [k, [...a].sort()]) })
+
+  it('R1. dump → load → re-check: the same checker results and counters; loaded again, the same dump (U0 control, U1, U2: P-Commit still fails after the reload)', async () => {
+    for (const mutation of [undefined, suppressTickets, ticketBeforeCommit]) {
+      const r = await runSequence(cand, one, { seed: 21, reseed, mutation })
+      const dump = r.buch.dump()
+      const loaded = Buch.load(dump)
+      expect(loaded.dump()).toBe(dump)
+      expect(all(loaded)).toBe(all(r.buch))
+    }
+    // Soll after the reload, as in U1 and U2 on the live ledger: U1 P-Commit 1 violation, U2 P-Commit 2 violations.
+    const u1 = Buch.load((await runSequence(cand, one, { seed: 21, reseed, mutation: suppressTickets })).buch.dump())
+    expect(pCommit(u1).violations).toHaveLength(1)
+    const u2 = Buch.load((await runSequence(cand, one, { seed: 21, reseed, mutation: ticketBeforeCommit })).buch.dump())
+    expect(pCommit(u2).violations).toHaveLength(2)
+  }, 120_000)
+
+  it('R2. The production mapping P-Commit reads is in the dump: removing it after a valid issuance changes the dump', async () => {
+    const r = await runSequence(cand, one, { seed: 21, reseed })
+    const dump = r.buch.dump()
+    expect(pCommit(r.buch).ok).toBe(true)
+    ;(r.buch as unknown as { byDigest: Map<string, unknown> }).byDigest.clear()
+    // Soll: P-Commit fails without the mapping (the issuance finds 0 ticket intents of its act), and the dump shows it.
+    expect(pCommit(r.buch).ok).toBe(false)
+    expect(r.buch.dump()).not.toBe(dump)
+    expect(pCommit(Buch.load(r.buch.dump())).ok).toBe(false)
   }, 60_000)
 })
 

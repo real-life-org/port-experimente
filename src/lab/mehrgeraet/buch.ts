@@ -10,6 +10,13 @@
 //   (revisions: listing, tombstones, signer; tickets: act id, signer, named anchor, frame hash, time; receipts, kept apart);
 // - delivery protocol per device: every document delivered to a device that its parser admitted (MV-24), with time.
 //
+// Besides, per device the union duties of its last committed image (the counter follows the committed state, so a duty
+// ended by `depart` as `moot` is not open; Tor-Review 42 B2), and every exception an observer hook threw (the seam catches
+// it, the device and the carrier go on unchanged; Tor-Review 42 (a)).
+//
+// The dump is the complete ledger (Tor-Review 42 S1): `Buch.load(dump)` rebuilds a ledger every checker judges exactly as
+// the live one, the production mapping included.
+//
 // The ledger never parses wire bytes: frames are identified by hash, their content comes from the producer's own plaintext
 // (`HolderObserver.produced`) or from the receiving parser's admitted values (`HolderObserver.admitted`).
 //
@@ -139,10 +146,12 @@ export class Buch implements HolderObserver {
   readonly carrier = { revisions: [] as CarrierRevision[], tickets: [] as CarrierTicket[], receipts: [] as CarrierReceipt[], other: 0, unknown: 0 }
   readonly deliveries: Delivery[] = []
   readonly events: BenchEvent[] = []
+  /** Every document an observed device produced, in order. */
+  readonly productions: Production[] = []
   /** Per device the union duties of its last committed image. */
   readonly duties = new Map<string, DutyImage>()
   readonly errors: ObserverError[] = []
-  /** Productions by frame hash (a frame names its document) and by document digest. */
+  /** Productions by frame hash (a frame names its document) and by document digest (the first production of each). */
   private readonly byFrame = new Map<string, Production>()
   private readonly byDigest = new Map<string, Production>()
   private readonly batches = new Set<string>()
@@ -186,6 +195,7 @@ export class Buch implements HolderObserver {
   }
   produced(d: HolderDevice, p: Parameters<HolderObserver['produced']>[1]): void {
     const rec: Production = { ...this.next(), device: d.name, person: d.person, digest: p.digest, type: p.type, issuer: p.issuer, recipient: p.recipient, payload: structuredClone(p.payload) as Record<string, unknown>, frames: p.frames.map(frameHash) }
+    this.productions.push(rec)
     if (!this.byDigest.has(p.digest)) this.byDigest.set(p.digest, rec)
     for (const h of rec.frames) if (!this.byFrame.has(h)) this.byFrame.set(h, rec)
   }
@@ -220,9 +230,55 @@ export class Buch implements HolderObserver {
   production(digest: string): Production | undefined {
     return this.byDigest.get(digest)
   }
-  /** The whole ledger, canonical (test: a restore changes nothing in it). */
+  /**
+   * The whole ledger, canonical (test: a restore changes nothing in it), complete: `Buch.load` rebuilds from it a ledger the
+   * checkers judge identically (Tor-Review 42 S1). The two production mappings go as indices into `productions`.
+   */
   dump(): string {
-    return M.canonical({ commits: this.commits, marks: this.marks, carrier: this.carrier, deliveries: this.deliveries, events: this.events })
+    const index = new Map(this.productions.map((p, i) => [p, i]))
+    return M.canonical({
+      seq: this.seq,
+      commits: this.commits,
+      marks: this.marks,
+      carrier: this.carrier,
+      deliveries: this.deliveries,
+      events: this.events,
+      productions: this.productions,
+      byDigest: [...this.byDigest].map(([d, p]) => [d, index.get(p)]),
+      byFrame: [...this.byFrame].map(([h, p]) => [h, index.get(p)]),
+      duties: [...this.duties.values()],
+      errors: this.errors,
+    })
+  }
+  /** A ledger from a dump (not attached to a world): for re-checking a run later. */
+  static load(dump: string): Buch {
+    const o = JSON.parse(dump) as {
+      seq: number
+      commits: CommitEntry[]
+      marks: CommitMark[]
+      carrier: Buch['carrier']
+      deliveries: Delivery[]
+      events: BenchEvent[]
+      productions: Production[]
+      byDigest: Array<[string, number]>
+      byFrame: Array<[string, number]>
+      duties: DutyImage[]
+      errors: ObserverError[]
+    }
+    const b = new Buch()
+    b.seq = o.seq
+    b.commits.push(...o.commits)
+    for (const c of o.commits) b.batches.add(`${c.writer}#${c.n}`)
+    b.marks.push(...o.marks)
+    Object.assign(b.carrier, o.carrier)
+    b.deliveries.push(...o.deliveries)
+    b.events.push(...o.events)
+    b.productions.push(...o.productions)
+    for (const [d, i] of o.byDigest) b.byDigest.set(d, b.productions[i]!)
+    for (const [h, i] of o.byFrame) b.byFrame.set(h, b.productions[i]!)
+    for (const x of o.duties) b.duties.set(x.device, x)
+    b.errors.push(...o.errors)
+    return b
   }
   /** Every act id accepted on a stock key (8640.14 at a successful receiver commit), over the whole history. */
   acceptedOn(): Map<string, Set<string>> {
