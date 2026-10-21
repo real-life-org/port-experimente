@@ -8,7 +8,7 @@
 
 import type { CrashPoint } from '../zustellung'
 import type { HolderDevice, MultiDeviceCandidate } from './holder'
-import { ledgerWorld, pCommit, pEinmal, pPaar, pProduktion, pairCounter, PRODUCTION, type Buch, type Check } from './buch'
+import { ledgerWorld, pCommit, pEinmal, pGueltig, pPaar, pProduktion, pairCounter, PRODUCTION, type Buch, type Check } from './buch'
 import type { Welt15 } from './welt'
 
 export type GenEvent =
@@ -220,7 +220,9 @@ export async function runSequence(candidate: () => MultiDeviceCandidate, events:
     }
   }
   for (let i = 0; i < (opts.drain ?? PRODUCTION.rounds + 3); i++) await round()
-  const checks = [pEinmal(buch), await pCommit(buch), await pProduktion(buch), pPaar(buch)]
+  // Issue #83: P-Gueltig first; on an invalid run the four property checkers are not green either, so the generator, G1
+  // and shrinking treat it as a failure (seed and errors printed).
+  const checks = [pGueltig(buch), pEinmal(buch), await pCommit(buch), await pProduktion(buch), pPaar(buch)]
   return { seed, events, checks, counter: pairCounter(buch), buch }
 }
 

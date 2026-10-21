@@ -458,12 +458,28 @@ export function ledgerWorld(candidate: MultiDeviceCandidate, opts: Omit<Welt15Op
 // ── Checkers ──
 
 export interface Check {
-  property: 'P-Einmal' | 'P-Commit' | 'P-Produktion' | 'P-Paar'
+  property: 'P-Gueltig' | 'P-Einmal' | 'P-Commit' | 'P-Produktion' | 'P-Paar'
   ok: boolean
   violations: string[]
   counts: Record<string, number>
+  /** Issue #83: the observation is incomplete (observer errors), so the property is not judged; never green. */
+  invalid?: true
 }
-const check = (property: Check['property'], violations: string[], counts: Record<string, number>): Check => ({ property, ok: violations.length === 0, violations, counts })
+/**
+ * A property result. On a ledger with observer errors the run is invalid (issue #83): the result is never green, marked
+ * `invalid`, its first violation names the errors (the ledger is not a complete observation, whatever it holds).
+ */
+const check = (b: Buch, property: Check['property'], violations: string[], counts: Record<string, number>): Check =>
+  b.errors.length ? { property, ok: false, invalid: true, violations: [`run invalid: ${b.errors.length} observer error(s), first ${b.errors[0]!.hook} on ${b.errors[0]!.device ?? 'carrier'}: ${b.errors[0]!.message}`, ...violations], counts } : { property, ok: violations.length === 0, violations, counts }
+
+/**
+ * P-Gueltig (issue #83): the measurement is valid only if every observation reached the ledger. An exception in an
+ * observer hook (holder or carrier; the seam swallows it so the device goes on unchanged) is a lost observation: each is a
+ * violation, and the property checkers mark the run invalid.
+ */
+export function pGueltig(b: Buch): Check {
+  return { property: 'P-Gueltig', ok: b.errors.length === 0, violations: b.errors.map((e) => `observer error at seq ${e.seq}: ${e.hook} on ${e.device ?? 'carrier'}: ${e.message}`), counts: { errors: b.errors.length } }
+}
 
 /**
  * P-Einmal (draft 2 §5.2 no. 4): per stock key at most one accepted act id over the whole history, across every restore.
@@ -472,7 +488,7 @@ const check = (property: Check['property'], violations: string[], counts: Record
 export function pEinmal(b: Buch): Check {
   const acc = b.acceptedOn()
   const v = [...acc].filter(([, acts]) => acts.size > 1).map(([key, acts]) => `key ${key.slice(-8)}: ${acts.size} accepted acts (${[...acts].map((a) => a.slice(0, 8)).join(', ')})`)
-  return check('P-Einmal', v, { keys: acc.size, accepts: [...acc.values()].reduce((n, s) => n + s.size, 0) })
+  return check(b, 'P-Einmal', v, { keys: acc.size, accepts: [...acc.values()].reduce((n, s) => n + s.size, 0) })
 }
 
 /** The address frame `j` of an intent goes to (the primary frame to `address`, a copy to its own). */
@@ -796,7 +812,7 @@ export async function pCommit(b: Buch): Promise<Check> {
     }
   }
   // Tickets at the carrier: every deposit whose content is a ticket, and every deposit a producer reported as one.
-  return check('P-Commit', v, { tickets: new Set([...deposits.map((d) => d.deposit.seq), ...b.carrier.tickets.map((t) => t.seq)]).size, issuances })
+  return check(b, 'P-Commit', v, { tickets: new Set([...deposits.map((d) => d.deposit.seq), ...b.carrier.tickets.map((t) => t.seq)]).size, issuances })
 }
 
 /** The key agreements a receiver image holds for its counterpart on the live relationship whose stock key is `address`. */
@@ -913,7 +929,7 @@ export async function pProduktion(b: Buch, opts: { rounds?: number; reserveMs?: 
     if (named.size === 2) counts.kept++
     else v.push(`issuance ${act.slice(0, 8)} on ${e.device}: ${named.size} of 2 tickets at the carrier within ${k} rounds`)
   }
-  return check('P-Produktion', v, counts)
+  return check(b, 'P-Produktion', v, counts)
 }
 
 /**
@@ -954,7 +970,7 @@ export function pPaar(b: Buch): Check {
         if (!same) v.push(`act ${act.slice(0, 8)}: ${p} and ${q} connected with different pair contexts`)
       }
   }
-  return check('P-Paar', v, { connectedActs: ctx.size, bothSides: both })
+  return check(b, 'P-Paar', v, { connectedActs: ctx.size, bothSides: both })
 }
 
 /**

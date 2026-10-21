@@ -451,8 +451,23 @@ committed tickets outside issuance batches are judged when they reach the
 carrier (a ticket that never leaves the device has no outcome); the
 reference stays K2-specific (no stock address without device sets).
 
-**Verification 2b.0:** `tests/mehrgeraet-buch.test.ts` 55 passed + 1
-expected fail (D1) in ≈ 75 s after the review 47 fixes (opening every
+**Issue #83: observer errors make the run invalid.** The fail-safe seam
+(review 42 (a)) keeps a device running when an observer hook throws, but
+the lost observation used to count for nothing: with U4's mutation and a
+`committed` hook throwing for A only, 49 errors were recorded and every
+checker was green. Now the measurement's validity is its own check,
+`P-Gueltig` (one violation per recorded observer error). On a ledger
+with errors the four property checkers are never green: `ok: false`,
+`invalid: true`, first violation `run invalid: …`. This also holds on a
+loaded dump, since the errors are part of it. The generator lists
+`P-Gueltig` first; G1 and shrinking treat an invalid run as a failure
+(seed and errors printed). N1 still shows the holder and carrier
+unchanged and now also shows the run invalid. Regression R83: U4 plus
+the throwing A hook → errors = A's commits after the first bench event
+(49), invalid, also after dump → load; the control holds `P-Gueltig`.
+
+**Verification 2b.0:** `tests/mehrgeraet-buch.test.ts` 56 passed + 1
+expected fail (D1) in ≈ 77 s after the review 47 fixes and issue #83 (opening every
 deposit costs ≈ 25 s); typecheck green. No cell changed: the K2,
 K1a, K0 and seed-sweep files give the same 111/111 results on this branch
 as on main a290f7a (test by test; after the review 42 fixes again
