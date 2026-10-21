@@ -466,7 +466,7 @@ async function restoredMediator(seed: number, mutate: boolean): Promise<{ buch: 
     }
   }
   const introduce = async (rel1: string, rel2: string, a1: string[], a2: string[]) => {
-    const detail: Record<string, unknown> = { addrA: a1, addrB: a2, result: null, armed: null, up: true }
+    const detail: Record<string, unknown> = { relA: rel1, relB: rel2, addrA: a1, addrB: a2, result: null, armed: null, up: true }
     buch.note('introduce', Mm.name, detail)
     const r = await Mm.introduce(rel1, rel2)
     detail.result = r

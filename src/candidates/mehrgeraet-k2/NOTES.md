@@ -136,15 +136,22 @@ share headroom (or ageing keys must not reserve once M cannot name them,
 which contradicts in-flight tickets).
 
 **Ledger and generator.** Carrier book of revisions with `for` per key,
-`inc`, `withdraw`, `bury`, `burn`, class. The reference model of
-P-Produktion reads per (writer, inc) the highest durable admitted
-listing at the device with `for` among the device's anchors; withdrawals
-by the listing writer, burials and a class off from the deliveries to
-any device of M (so a journal-first withdrawal never makes a false
-alarm). New checkers: P-Bilanz (`belegt + reserviert ≤ share` per A
+`inc`, `withdraw`, `bury`, `burn`, class. **Rule: the ledger is a
+mirror of the holder; it has no second projection of usability, class
+state or tombstones** (Tor-Review 52). What an M device was allowed to
+name is read from that device's own durable knowledge with the model's
+one computation: P-Produktion takes, at the introduction event,
+`M.usableView` of the device's last committed image with its own
+anchors as `for` (deliveries and journal folded, consumption, 8470,
+class state and tombstones with the revocation exception); P-Aufhebung
+takes, at the issuance commit, `M.evidence` and `M.classOff` of the
+issuing device's committed image (`IssuerImage`, in the dump). New
+checkers: P-Bilanz (`belegt + reserviert ≤ share` per A
 commit, computed by the ledger from the image), P-Recht (accepted
 ticket's signer = `for` of the first binding at the carrier), P-Aufhebung
-(no acceptance after the own withdrawal; no issuance naming a key after a
+(no acceptance after the own withdrawal; no issuance of a key the
+issuer's committed state holds withdrawn, buried or revoked, or under
+the class off), P-Versorgung (at the
 durable admitted withdrawal, burial or class off), P-Versorgung (at the
 end: a free right and a member without a key is a violation; members
 without key while nothing is free are counted, `unsupplied`). Generator
@@ -195,9 +202,15 @@ missing first supply was invisible; now every relationship with the
 class on has a row (P1: Soll 1 violation). B3: P-Aufhebung judged
 burials without the revocation exception; it now calls the model's
 `allocation` (withdrawal by the bound writer, `buried` with "currently
-lists", class off of non-revoked writers) with the revocations any M
-device had admitted (P2: the reviewer's counter-run, Soll 0 violations;
-P3 control: a burial by a non-revoked issuer still fails, Soll 1). S1:
+lists", class off of non-revoked writers) (P2: the reviewer's counter-run, Soll 0
+violations; P3 control: a burial by a non-revoked issuer still fails,
+Soll 1); after Tor-Review 52 through the issuer's committed image instead
+(B1: the union of all M devices' revocations hid a real violation of the
+issuer; R52-B1: Soll 1 mutated, 0 honest). Tor-Review 52 B2: the
+reference of P-Produktion (`allowedKeys`) had its own class and burial
+projection without the revocation exception; removed, replaced by the
+device's `usableView` (R52-B2: suppressed introduction in the B6
+counter-run, Soll obliged 1, 1 violation; honest: kept 1). S1:
 fold findings declared historical diagnostics (above). S2: V2 ported to
 `stock-revision@2` (conflicting bindings, burial by a later revoked
 writer, set revocation; Soll w, y usable); it fails again without the

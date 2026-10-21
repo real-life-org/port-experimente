@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import * as M from '../src/lab/mehrgeraet/model'
 import { signerId, TYPES, type HolderDevice } from '../src/lab/mehrgeraet/holder'
-import { ledgerWorld, pAufhebung, pBilanz, pVersorgung } from '../src/lab/mehrgeraet/buch'
+import { ledgerWorld, pAufhebung, pBilanz, pProduktion, pVersorgung } from '../src/lab/mehrgeraet/buch'
 import { k2 } from '../src/candidates/mehrgeraet-k2'
 
 // E15 K2 step 2b.1 "allocation by A" (rltp/design/port-experimente-e15-k2-schritt-2b-kern-entwurf-4-2026-10-21.md, Fassung 4,
@@ -731,4 +731,80 @@ describe('K2 step 2b.1, part 2: the allocation checkers against counter-runs (To
     // Soll: 1 violation (x named after a burial by a non-revoked issuer that M had folded).
     expect(pAufhebung(s.buch).violations).toHaveLength(1)
   }, 120_000)
+})
+
+describe('K2 step 2b.1, part 2: the ledger reads the issuer\'s own durable knowledge (Tor-Review 52)', () => {
+  /** M1 names `x` whatever its view says (test hook on choice and rights check). */
+  const forceName = (m: HolderDevice, rel: string, x: M.StockKey) => {
+    ;(m as unknown as { nameable: (r: string) => { view: M.UsableView; nameable: M.ViewKey[] } }).nameable = function (this: HolderDevice, relId: string) {
+      const v = M.usableView(this.state, relId, this.clock.now())
+      return { view: v, nameable: M.rel(this.state, relId).id === rel ? [{ n: x.n, anchor: x.anchor, keyAgreement: x.keyAgreement, expiresAt: x.expiresAt, for: x.for }] : v.unconsumed }
+    }
+    ;(m.cand as { authorize?: unknown }).authorize = () => true
+  }
+  it('R52-B1. P-Aufhebung judges by the issuing device\'s committed knowledge, not by its siblings\': A2 buries A1\'s x, M1 knows it, only M2 learns A2\'s revocation; M1 forced to name x → 1 violation; honest M1 refuses → 0', async () => {
+    for (const mutate of [false, true]) {
+      const s = await zw({ a2: true, m2: 'before' })
+      const self = s.w.selfAddresses('A')
+      s.w.carrier.faults.withhold('A1', (f) => self.has(f.address))
+      const x = s.own(s.A, await s.anchorAt(s.Mm), 'active')[0]!
+      await s.A2!.setClass(s.am.x.id, false)
+      await s.w.rounds(3)
+      await s.A2!.setClass(s.am.x.id, true)
+      await s.w.rounds(3)
+      const rel = M.relOfTuple(s.Mm.state, s.am.y.id)!.id
+      expect(M.evidence(s.Mm.state, rel, x.anchor).state).toBe('withdrawn')
+      s.Mm.online = false
+      await s.w.revoke(s.A, s.A2!)
+      await s.w.rounds(4)
+      s.Mm.online = true
+      const root = M.head(M.rel(s.Mm.state, rel)).peer
+      expect([M.setView(s.Mm.setOf(root)).revoked.size, M.setView(s.M2!.setOf(root)).revoked.size]).toEqual([0, 1])
+      if (mutate) forceName(s.Mm, rel, x)
+      else {
+        const allA = new Set(M.rel(s.Mm.state, rel).view!.revs!.flatMap((r) => r.keys.map((k) => k.anchor)))
+        ;(s.Mm.cand as { mayName?: (k: M.ListedKey) => boolean }).mayName = (k) => !allA.has(k.anchor) || k.anchor === x.anchor
+      }
+      const r = await s.Mm.introduce(s.am.y.id, s.bm.y.id)
+      expect('act' in r, `mutate ${mutate}`).toBe(mutate)
+      // Soll: at its issuance commit M1 holds x as buried by A2 (a non-revoked issuer in M1's knowledge) → mutated: 1
+      // violation, 1 issuance; honest: M1 refuses, 0 issuances, 0 violations. M2's revocation is not M1's knowledge.
+      const c = pAufhebung(s.buch)
+      expect(c.violations, `mutate ${mutate}`).toHaveLength(mutate ? 1 : 0)
+      expect(c.counts.issuances).toBe(mutate ? 1 : 0)
+    }
+  }, 240_000)
+
+  it('R52-B2. P-Produktion admits what the issuing device\'s own fold admits (revocation exception included): with the introduction suppressed it is a violation (obliged 1); without the mutation the issuance is kept', async () => {
+    for (const mutate of [false, true]) {
+      const s = await zw({ a2: true })
+      const self = s.w.selfAddresses('A')
+      s.w.carrier.faults.withhold('A1', (f) => self.has(f.address))
+      await s.A2!.setClass(s.am.x.id, false)
+      await s.w.rounds(3)
+      await s.w.revoke(s.A, s.A2!)
+      await s.w.rounds(4)
+      const rel = M.relOfTuple(s.Mm.state, s.am.y.id)!
+      const mA = await s.anchorAt(s.Mm)
+      // Soll: M1 knows the revocation; A2's class off and its burial of A1's keys do not count (B6): A1's 5 keys usable.
+      expect(M.usableView(s.Mm.state, rel.id, s.w.clock.now(), new Set([mA])).unconsumed).toHaveLength(5)
+      const br = M.relOfTuple(s.Mm.state, s.bm.y.id)!
+      const mB = await s.anchorAt(s.Mm, s.bm.y.id)
+      const addr = async (r: M.Relationship) => Promise.all(r.tuples.map(async (t) => (await s.Mm.cand.keys.pair(t.ownKey)).rkid))
+      if (mutate) (s.Mm as unknown as { nameable: (r: string) => { view: M.UsableView; nameable: M.ViewKey[] } }).nameable = function (this: HolderDevice, relId: string) {
+        return { view: M.usableView(this.state, relId, this.clock.now()), nameable: [] }
+      }
+      const d: Record<string, unknown> = { relA: rel.id, relB: br.id, addrA: await addr(rel), addrB: await addr(br), mineA: [mA], mineB: [mB], result: null, armed: null, up: true }
+      s.buch.note('introduce', s.Mm.name, d)
+      d.result = await s.Mm.introduce(s.am.y.id, s.bm.y.id)
+      for (let i = 0; i < 4; i++) {
+        await s.w.rounds(1)
+        s.buch.note('round', undefined, { up: s.w.devices.map((x) => x.name) })
+      }
+      const c = await pProduktion(s.buch)
+      // Soll: obliged 1 (both sides have usable keys in M1's committed fold); mutated: refused → 1 violation; honest: kept 1.
+      expect(c.counts, `mutate ${mutate}`).toMatchObject({ introductions: 1, obliged: 1, noKeys: 0, kept: mutate ? 0 : 1 })
+      expect(c.violations, `mutate ${mutate}`).toHaveLength(mutate ? 1 : 0)
+    }
+  }, 240_000)
 })

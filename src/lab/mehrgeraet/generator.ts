@@ -201,7 +201,7 @@ export async function runSequence(candidate: () => MultiDeviceCandidate, events:
         // Noted before the call: the reference model reads the ledger up to this point, the issuance's commit follows it.
         const sa = await mSide(m, g.ma)
         const sb = await mSide(m, g.mb)
-        const detail: Record<string, unknown> = { addrA: sa.addr, addrB: sb.addr, mineA: sa.mine, mineB: sb.mine, result: null, armed: e.crash ?? null, up }
+        const detail: Record<string, unknown> = { relA: g.ma, relB: g.mb, addrA: sa.addr, addrB: sb.addr, mineA: sa.mine, mineB: sb.mine, result: null, armed: e.crash ?? null, up }
         buch.note('introduce', m.name, detail)
         if (e.crash) m.crashAt = e.crash
         detail.result = up ? await m.introduce(g.ma, g.mb) : { refused: 'down' }
