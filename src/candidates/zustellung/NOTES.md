@@ -268,11 +268,16 @@ logins, same instance, 08:36Z): D-c carried in transport and contract.
 
 **Probe changes after this run (gate review 1, no new live run).** The
 run above used protocol schema `e11b-live/1`. Since `e11b-live/2`:
-each form pass fixes an end of observation; callbacks entering later are
-listed under `events.afterClose` and never counted, callbacks in flight
-are awaited before the sockets close and before the result is frozen.
-Rows and acks list every receipt (relative time, class, socket, verdict,
-counted, picked). Rows carry `tAckReceivedMs` and `tAckVerifiedMs`;
+each form pass fixes an end of observation; callbacks entering after it
+was fixed are listed under `events.afterClose` and never counted.
+Callbacks in flight are awaited before the sockets close and before the
+result is frozen, until none is in flight over a full event-loop turn
+(gate review 2 C1, 9d1adb0). If that wait runs out of time, the run is
+invalid (`settle-timeout`) and callbacks still running change nothing and
+send nothing; their late failures are discarded. Rows and acks list every
+receipt (relative time, class, socket, verdict, counted, picked), built
+from the final event set when the result is frozen (gate review 2 C2,
+9d1adb0). Rows carry `tAckReceivedMs` and `tAckVerifiedMs`;
 `costs.roundTripMs` is document → ack verified, `costs.ackReceivedMs` the
 figure reported above. `costs.sizes` gives min / median / max over all
 sends of a kind. Send and XRFI registers live per form pass (draft 3
