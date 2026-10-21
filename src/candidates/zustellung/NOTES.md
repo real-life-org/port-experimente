@@ -272,12 +272,22 @@ each form pass fixes an end of observation; callbacks entering after it
 was fixed are listed under `events.afterClose` and never counted.
 Callbacks in flight are awaited before the sockets close and before the
 result is frozen, until none is in flight over a full event-loop turn
-(gate review 2 C1, 9d1adb0). If that wait runs out of time, the run is
-invalid (`settle-timeout`) and callbacks still running change nothing and
-send nothing; their late failures are discarded. Rows and acks list every
-receipt (relative time, class, socket, verdict, counted, picked), built
-from the final event set when the result is frozen (gate review 2 C2,
-9d1adb0). Rows carry `tAckReceivedMs` and `tAckVerifiedMs`;
+(gate review 2 C1, 9d1adb0). "In flight" covers the whole processing of
+every inbound frame in a session, not only the TSP handler: the
+library's DIDComm unpack and the status, problem-report and frame-error
+counters it feeds are registered from the moment the frame arrives
+(gate review 3 C1). If that wait runs out of time, the run is invalid
+(`settle-timeout`). From then on a TSP handler still running changes no
+probe state and sends neither an ack nor a pickup ack, and the session
+changes none of its counters (bytes, DIDComm types, problem codes, frame
+errors, consumer failures); decryption already started may still finish,
+without effect. Late failures are discarded. The cancelled pass is still
+evaluated: every probe and document sent so far has its row and every
+ack its resolvable `docRow`; the fresh delete-to-ack session of that pass
+and all later passes are skipped (gate review 3 C2). Rows and acks list
+every receipt (relative time, class, socket, verdict, counted, picked),
+built from the final event set when the result is frozen (gate review 2
+C2, 9d1adb0). Rows carry `tAckReceivedMs` and `tAckVerifiedMs`;
 `costs.roundTripMs` is document → ack verified, `costs.ackReceivedMs` the
 figure reported above. `costs.sizes` gives min / median / max over all
 sends of a kind. Send and XRFI registers live per form pass (draft 3
