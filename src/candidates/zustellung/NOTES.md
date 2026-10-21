@@ -92,7 +92,9 @@ against the promises the port requires, not against the form of 0.79.
   what a mediator additionally learns (connection DID, timings) is in
   `spec/adapter-vti-mediator.md` §9.
 - Routed TSP (an intermediary on the path, `packRouted`) and DIDComm
-  `forward`: only once an intermediary sits in the bench.
+  `forward` in the bench: only once an intermediary sits in the bench.
+  Against the live VTI mediator, routed TSP is measured in "E11b live"
+  below.
 - Giving up and the late receipt are pinned as regressions (dispatcher),
   not as wire scenarios.
 
@@ -134,3 +136,176 @@ unchanged with the defaults.
   relationship keys opens what is sealed to any of them.
 
 Tests: `tests/zustellung-harness.test.ts`.
+
+## E11b live (21 October 2026)
+
+Live probe of Rev 3 routed TSP against the VTI mediator, step 1 of E11b
+(`tests/zustellung-live.test.ts`, code in `src/lab/zustellung-live/`,
+offline tests `tests/zustellung-live-{parser,contract,protocol}.test.ts`).
+The probe shows positively whether a form is carried and measures costs
+and what the mediator sees; it does not explain why a form is not shown.
+Live runs are not part of the report and create no matrix cell.
+
+**Run:** 2026-10-21, 08:37:34Z to 08:59:03Z UTC. Instance
+`did:webvh:QmR5xG…diator` (shortened as in the protocol: first 16, last
+6 characters; the default `MEDIATOR_DID`), document `versionId`
+`2-QmZPSfHt` (number and first 8 hash characters, as in the protocol),
+socket host `mediator.vtc.storm.ws`.
+Libraries: `@openvtc/vti-tsp-js` 0.3.0, `@openvtc/vti-didcomm-js` 0.12.0,
+`@real-life/trust-protocol` 0.3.2, Node 24.21.0. Settings: 3 runs, window
+and ack deadline 20 s, post-observation 30 s, all forms. Protocol JSON:
+`.cache/e11b-live/2026-10-21T08-59-02.896Z.json` (local, gitignored).
+
+Forms (inner sender / outer sender / socket): D-c direct connection /
+– / connection; D-es direct egress / – / egress session; D-e direct
+egress / – / connection; R-cc routed connection / connection /
+connection; R-c routed egress / connection / connection; R-es routed
+egress / egress / egress session; R-ce routed egress / egress /
+connection. Routed: inner layer to the receiver's connection DID, outer
+layer `packRouted` to the mediator DID with `route = [receiver]`, sealed
+to the mediator's first `keyAgreement` (`#key-1`). R-c' was not measured:
+the `TSPTransport` service names a URL, no own VID or key
+(`no-own-target`).
+
+| Form | Stage | Transport | Contract |
+|---|---|---|---|
+| D-c | 0 | carries (12/12 positive) | carries (12/12) |
+| D-es | 0 | carries (12/12) | carries (12/12) |
+| D-e | 0 | not shown (0/12) | not shown (0/12) |
+| R-cc | 0 | carries (12/12) | carries (12/12) |
+| R-c | 0 | carries (12/12) | carries (12/12) |
+| R-es | 0 | carries (12/12) | carries (12/12) |
+| R-ce | 0 | not shown (0/12) | not shown (0/12) |
+
+12 rows = 3 runs × 2 relationships (A–B, A–C) × 2 directions. Transport =
+64-byte probe received, opened, type `direct`, payload byte-equal.
+Contract = sealed delivery document received as `unique` and a signed
+`delivery-ack/0.1` verified at the sender within the deadline (sender
+state `accepted → delivered`). The controls match the binding
+measurement of 17 October (D-c and D-es carried, D-e not shown); no
+baseline deviation.
+
+**Probe outcome:** threshold reached (R-c and R-es carry in transport and
+contract on stage 0). Stage 1 (mediator handshake) was not run: routed
+forms carried on stage 0.
+
+**RT1, observed delivery.** In the carried forms every frame arrived on
+the receiver's connection socket within the window, as the inner TSP
+packet byte for byte (`inner-bytes-equal` in all 72 routed rows, never
+the outer layer). No unassigned frame, no control frame. In D-e and
+R-ce nothing arrived on any socket; the sessions of each of these two
+form passes counted 24 DIDComm problem reports (code class `e.p.*`), as
+many as TSP frames were sent in that pass; no other form pass counted
+any. Which socket received them and what the code says is not recorded
+(fixed lists only). DIDComm status
+messages: 228 over the whole run.
+
+**RT2, inner VID ≠ socket DID.** R-c carries with the inner sender =
+egress identity and the outer sender = connection DID (the socket's
+authenticated DID); R-es carries with both = egress identity on its own
+session. R-ce (outer sender = egress identity on the connection socket)
+was not shown, as D-e was. The receiver opened the inner frame under the
+partner's egress key in R-c and R-es.
+
+**RT6, what the mediator sees (offline fact plus live).** After opening
+the routing layer the mediator reads the inner sender and receiver from
+the inner envelope (`decodeEnvelope`; offline test in
+`zustellung-live-parser.test.ts`). In R-c it therefore sees per
+relationship and side the connection DID (login, socket, outer sender)
+and the egress identity (inner sender); in R-es the egress identity for
+all three plus a second login under the connection DID for pickup.
+Sizes (inner / outer): probe 393 B / 801 B and document 1539 B / 1947 B
+in every send; acks 1560 or 1563 B inner, 1968 or 1971 B outer (1560 /
+1968 B: two acks in R-cc, one in R-c, three in R-es); the routing layer
+adds 408 B to every frame. Alice's two relationships share
+no DID in any form (per-relationship derivation). **RT6-G:** the partner
+opens frames whose sender is the connection DID only in D-c and R-cc; in
+D-es, R-c and R-es it sees only the egress identity.
+
+**RT7, costs.** Logins: 48 attempted, 48 succeeded (estimate 48: 7
+forms × 4 connection identities, 2 forms × 4 egress identities, 3
+delete-to-ack forms × 4 fresh sessions). Sessions per relationship on
+the sending side: one in D-c, D-e, R-cc, R-c, R-ce; two in D-es and R-es.
+Sockets opened 48, at most 8 at once. Bytes over the whole run, per
+direction: out 686 292 B on the socket, of which 309 888 B TSP (binary),
+376 404 B other (DIDComm: live-delivery changes, pickup acks, logins
+excluded since HTTP); in 735 192 B on the socket, of which 279 552 B TSP
+as base64url text (209 664 B logical), 455 640 B other. Per form pass
+(4 identities, 3 runs) the TSP share out: D-c 41 928 B, R-c 56 625 B,
+R-es 56 619 B; the non-TSP share in: D-c 73 752 B, R-c 72 984 B, R-es
+79 840 B (four more sessions). Latency send → receipt (median / max of
+12): D-c 121 / 152 ms, D-es 166 / 215 ms, R-cc 120 / 126 ms, R-c 125 /
+212 ms, R-es 174 / 208 ms. Document sent → ack received at the sender
+(handler entry, before decryption and proof check): D-c 263 / 282 ms,
+D-es 309 / 359 ms, R-cc 262 / 289 ms, R-c 300 / 361 ms, R-es 336 /
+404 ms. Document sent → ack verified was not measured in this run (gate
+review 1 C4); the probe records it from the next run on. Three runs are
+three samples, not a distribution.
+
+**Delete-to-ack (observation only, D-c, R-c, R-es).** After closing all
+sessions, a fresh session per connection identity saw no frame within
+30 s. That is no proof of deletion: the pickup ack is best effort.
+
+**RT8.** Stage 1 not executed (not needed); no XRFI sent, no XRFA/XRFD
+observed. The mediator carried routed frames without a TSP relationship
+handshake in this run.
+
+**Key binding:** confirmed (inner packets opened in every routed form
+that carried); routing key `#key-1`, fingerprint `bc0974f7`.
+
+**Not answered by step 1:** RT3 foreign inner sender, RT4 ack loss and
+trias, RT5 peer change with referral, T1–T12 on the routed wire (step 3,
+intermediary in the bench); causes of any non-delivery (D-e, R-ce);
+whether the mediator checks the inner VID; internal checks, storage,
+analysis in the mediator and network metadata (IP, concurrent logins);
+delivery paths other than the pickup socket; a general handshake duty
+and the receiver handshake of Rev 3 §7.2.2; give-up bound,
+`delivered(late)`, queue deletion; peer-change costs and latency or loss
+distributions.
+
+A second live run was a smoke test before this one (D-c only, 1 run, 8
+logins, same instance, 08:36Z): D-c carried in transport and contract.
+
+**Probe changes after this run (gate review 1, no new live run).** The
+run above used protocol schema `e11b-live/1`. Since `e11b-live/2`:
+each form pass fixes an end of observation; callbacks entering after it
+was fixed are listed under `events.afterClose` and never counted.
+Callbacks in flight are awaited before the sockets close and before the
+result is frozen, until none is in flight over a full event-loop turn
+(gate review 2 C1, 9d1adb0). "In flight" covers, beyond the TSP
+handler, the processing of every inbound frame in a session (the
+library's DIDComm unpack and the status, problem-report and frame-error
+counters it feeds, registered from the moment the frame arrives, gate
+review 3 C1) and every pickup ack, including the ones the library
+starts detached after a delivered DIDComm message, a redelivery or a
+refused frame (gate review 4 C1). If that wait runs out of time, the run
+is invalid (`settle-timeout`). From then on a TSP handler still running
+changes no probe state and sends neither an ack nor a pickup ack, a
+pickup ack still being packed is not sent, and the session changes none
+of its counters (bytes, DIDComm types, problem codes, frame errors,
+consumer failures); decryption or encryption already started may still
+finish, without effect. Late failures are discarded. A pass that ends
+early, by that settle timeout or by an error (send, pack, evaluation),
+takes the same end: it settles, closes and is still evaluated, every
+probe and document registered so far has its row and every ack its
+resolvable `docRow`, the run is invalid with the error's class, and the
+fresh delete-to-ack session of that pass and all later passes, stage 1
+included, are skipped (gate review 3 C2, #78). Rows and acks list
+every receipt (relative time, class, socket, verdict, counted, picked),
+built from the final event set when the result is frozen (gate review 2
+C2, 9d1adb0). Rows carry `tAckReceivedMs` and `tAckVerifiedMs`;
+`costs.roundTripMs` is document → ack verified, `costs.ackReceivedMs` the
+figure reported above. `costs.sizes` gives min / median / max over all
+sends of a kind. Send and XRFI registers live per form pass (draft 3
+§3.2). A second copy of a document or ack is `duplicate-known` and gets
+no ack of its own; the first copy reserves the digest before its ack is
+sent. That is a deliberate probe simplification: Delivery §6.2 would send
+the kept ack again for a duplicate.
+
+**Narrower than draft 3 §15 (deliberate).** Method and service ids are
+shown only as a fragment from a fixed list (`key-N`, `keys-N`, `service`,
+`tsp`, `auth`, `files`, `whois`), otherwise as a local label `m<n>` /
+`s<n>`, where §15 C6 allows any fragment of `[A-Za-z0-9._-]` up to 64
+characters. `versionId` is shown as number plus the first 8 hash
+characters, not in full. Both only drop detail; the run above needed
+none of it.
