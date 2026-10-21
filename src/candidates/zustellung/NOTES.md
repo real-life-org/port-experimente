@@ -272,16 +272,19 @@ each form pass fixes an end of observation; callbacks entering after it
 was fixed are listed under `events.afterClose` and never counted.
 Callbacks in flight are awaited before the sockets close and before the
 result is frozen, until none is in flight over a full event-loop turn
-(gate review 2 C1, 9d1adb0). "In flight" covers the whole processing of
-every inbound frame in a session, not only the TSP handler: the
+(gate review 2 C1, 9d1adb0). "In flight" covers, beyond the TSP
+handler, the processing of every inbound frame in a session (the
 library's DIDComm unpack and the status, problem-report and frame-error
-counters it feeds are registered from the moment the frame arrives
-(gate review 3 C1). If that wait runs out of time, the run is invalid
-(`settle-timeout`). From then on a TSP handler still running changes no
-probe state and sends neither an ack nor a pickup ack, and the session
-changes none of its counters (bytes, DIDComm types, problem codes, frame
-errors, consumer failures); decryption already started may still finish,
-without effect. Late failures are discarded. The cancelled pass is still
+counters it feeds, registered from the moment the frame arrives, gate
+review 3 C1) and every pickup ack, including the ones the library
+starts detached after a delivered DIDComm message, a redelivery or a
+refused frame (gate review 4 C1). If that wait runs out of time, the run
+is invalid (`settle-timeout`). From then on a TSP handler still running
+changes no probe state and sends neither an ack nor a pickup ack, a
+pickup ack still being packed is not sent, and the session changes none
+of its counters (bytes, DIDComm types, problem codes, frame errors,
+consumer failures); decryption or encryption already started may still
+finish, without effect. Late failures are discarded. The cancelled pass is still
 evaluated: every probe and document sent so far has its row and every
 ack its resolvable `docRow`; the fresh delete-to-ack session of that pass
 and all later passes are skipped (gate review 3 C2). Rows and acks list

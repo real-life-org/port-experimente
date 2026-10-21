@@ -422,6 +422,159 @@ describe('E11b session-wide settle (review 3 C1)', () => {
   }, 60_000)
 })
 
+// Review 4 C1: the pickup ack the library starts with `void this._ackReceived(...)` (after a stored
+// mediator reply, a re-ack, or a refused frame) outlives the frame processing. It is registered
+// with the same settle, and after a cancel or the snapshot it has no transport effect. A correctly
+// encrypted stored mediator reply to a Trust Task arrives while a pass settles; a barrier holds the
+// WebCrypto encryption (AES-CBC) of the ack it triggers. Released within the settle: `runProbe()`
+// returns only after the ack was sent. Held past the settle timeout: the run is invalid, and
+// releasing it afterwards sends nothing and changes no counter.
+describe('E11b detached pickup acks (review 4 C1)', () => {
+  const ENVELOPE = 'https://trusttasks.org/binding/didcomm/0.1/envelope'
+  async function ackProbe(timeoutMs: number, release: 'during-settle' | 'after-return') {
+    const keys = mediatorKeys()
+    const { info, counters, port: base } = await livePort('ok')
+    FakeWs.instances = []
+    const frames: Array<{ ws: FakeWs; reply: string }> = []
+    // Every session gets a stored Trust Task reply packed by the mediator to its own client key.
+    const port: MediatorPort = {
+      open: async (...args: Parameters<MediatorPort['open']>) => {
+        const s = await base.open(...args)
+        const id = args[0]
+        const reply = await didcommPack({
+          message: { id: crypto.randomUUID(), thid: crypto.randomUUID(), type: ENVELOPE, from: info.did, to: [id.did], created_time: Math.floor(Date.now() / 1000), body: {} },
+          sender: { kid: `${info.did}#key-1`, privateJwk: jwk.privateJwk('X25519', keys.xSecret, keys.xPublic) },
+          recipient: { kid: id.kid, publicJwk: jwk.publicJwk('X25519', id.xPublic) },
+        })
+        frames.push({ ws: FakeWs.instances.at(-1)!, reply })
+        return s
+      },
+    }
+    // Barrier on the ack's encryption: once armed, every AES-CBC encryption waits for the gate.
+    const gate = deferred()
+    let armed = false
+    let held = 0
+    let encrypted = 0
+    const subtle = crypto.subtle
+    const origEncrypt = subtle.encrypt.bind(subtle)
+    const spy = vi.spyOn(subtle, 'encrypt').mockImplementation(async (alg, key, data) => {
+      if (!armed || (alg as { name?: string }).name !== 'AES-CBC') return origEncrypt(alg, key, data)
+      held++
+      await gate.promise
+      const out = await origEncrypt(alg, key, data)
+      encrypted++
+      return out
+    })
+    let socket: FakeWs | null = null
+    let sentBefore = 0
+    const cfg = parseEnv({ E11B_RUNS: '1', E11B_TIMEOUT_MS: String(timeoutMs), E11B_FORMS: 'D-es' })
+    try {
+      const r = await runProbe(cfg, {
+        info,
+        port,
+        counters,
+        versions: VERSIONS,
+        rand: seededRand(42),
+        observeMs: 50,
+        hooks: {
+          settling: (phase) => {
+            if (phase !== 'pass' || socket) return
+            const last = frames.at(-1)!
+            socket = last.ws
+            sentBefore = socket.sent.length
+            armed = true
+            socket.deliver(last.reply)
+            if (release === 'during-settle') setTimeout(() => gate.resolve(), 30)
+          },
+        },
+      })
+      const ws = socket as FakeWs | null
+      return { r, counters, gate, held: () => held, encrypted: () => encrypted, ackSends: () => (ws ? ws.sent.length - sentBefore : -1), sentAtReturn: ws ? ws.sent.length - sentBefore : -1 }
+    } finally {
+      // Restoring does not touch the invocation already waiting at the barrier.
+      spy.mockRestore()
+    }
+  }
+  const drain = async (done: () => boolean, turns = 10_000) => {
+    for (let i = 0; i < turns && !done(); i++) await new Promise<void>((r) => setImmediate(r))
+    return done()
+  }
+
+  // The socket stays open here, so only the lifecycle check between packing and sending can stop
+  // the send (in `runProbe` the closed socket would hide a missing check).
+  it('open socket: an ack being packed when the probe stops accepting is not sent; the control is', async () => {
+    const keys = mediatorKeys()
+    const { info, port, me } = await livePort('ok')
+    const run = async (stopWhileHeld: boolean) => {
+      FakeWs.instances = []
+      let accepting = true
+      const tracked: Array<Promise<void>> = []
+      const s = await port.open(me, 'ack', async () => {}, { track: (p) => void tracked.push(p), accepting: () => accepting })
+      const ws = FakeWs.instances.at(-1)!
+      const reply = await didcommPack({
+        message: { id: crypto.randomUUID(), thid: crypto.randomUUID(), type: ENVELOPE, from: info.did, to: [me.did], created_time: Math.floor(Date.now() / 1000), body: {} },
+        sender: { kid: `${info.did}#key-1`, privateJwk: jwk.privateJwk('X25519', keys.xSecret, keys.xPublic) },
+        recipient: { kid: me.kid, publicJwk: jwk.publicJwk('X25519', me.xPublic) },
+      })
+      const gate = deferred()
+      let held = 0
+      const subtle = crypto.subtle
+      const origEncrypt = subtle.encrypt.bind(subtle)
+      const spy = vi.spyOn(subtle, 'encrypt').mockImplementation(async (alg, key, data) => {
+        if ((alg as { name?: string }).name === 'AES-CBC') {
+          held++
+          await gate.promise
+        }
+        return origEncrypt(alg, key, data)
+      })
+      try {
+        const before = ws.sent.length
+        ws.deliver(reply)
+        expect(await drain(() => held === 1)).toBe(true)
+        if (stopWhileHeld) accepting = false
+        gate.resolve()
+        // Frame processing and the detached ack are both registered.
+        expect(tracked.length).toBe(2)
+        await Promise.allSettled(tracked)
+        expect(ws.readyState).toBe(1)
+        return ws.sent.length - before
+      } finally {
+        spy.mockRestore()
+        s.close()
+      }
+    }
+    expect(await run(false)).toBe(1)
+    expect(await run(true)).toBe(0)
+  }, 60_000)
+
+  it('ack encryption held across the settle start, released within it: runProbe returns only after the ack was sent', async () => {
+    const { r, held, encrypted, sentAtReturn } = await ackProbe(400, 'during-settle')
+    expect(held()).toBe(1)
+    // No ack in flight at the return: its encryption finished and the packed ack went out.
+    expect(encrypted()).toBe(1)
+    expect(sentAtReturn).toBe(1)
+    expect(r.failures).toEqual([])
+    expect(r.valid).toBe(true)
+    const p = JSON.parse(protocolJson(r.protocol))
+    expect(p.counters.total.didcomm[ENVELOPE]).toBe(1)
+  }, 60_000)
+
+  it('held beyond the settle timeout: run invalid with settle-timeout; released after the return, no send, no counter changes', async () => {
+    const { r, counters, gate, held, encrypted, ackSends } = await ackProbe(100, 'after-return')
+    expect(r.valid).toBe(false)
+    expect(r.failures.map((f) => [f.stage, f.cls])).toContainEqual(['probe', 'settle-timeout'])
+    const at = protocolJson(r.protocol)
+    const total = JSON.stringify(counters.total())
+    expect(await drain(() => held() === 1)).toBe(true)
+    gate.resolve()
+    expect(await drain(() => encrypted() === 1)).toBe(true)
+    await drain(() => false, 50)
+    expect(ackSends()).toBe(0)
+    expect(JSON.stringify(counters.total())).toBe(total)
+    expect(protocolJson(r.protocol)).toBe(at)
+  }, 60_000)
+})
+
 // Review 3 (d): a handler that fails after the cancel with a marker in its error. The failure is
 // discarded: neither the result JSON, nor the debug lines, nor any console or stderr channel, nor
 // an unhandled rejection carries the marker.

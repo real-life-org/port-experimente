@@ -5,10 +5,11 @@
 // says so; unlike the template it neither swallows a consumer exception (it is
 // recorded, the probe fails) nor prints raw error texts. No session keeps the
 // default `onError` (review 3 C6). The injected resolver goes into every login.
-// The whole processing of every inbound frame, DIDComm included, runs under the
-// probe's lifecycle (`SessionLife`, gate review 3 C1).
+// The processing of every inbound frame, DIDComm included, and every pickup ack,
+// including those the library starts detached, run under the probe's lifecycle
+// (`SessionLife`, gate review 3 C1, gate review 4 C1).
 
-import { authenticateToMediator, isTspFrameText, MediatorSession } from '@openvtc/vti-didcomm-js'
+import { authenticateToMediator, buildMessagesReceived, isTspFrameText, jwk, MediatorSession, pack } from '@openvtc/vti-didcomm-js'
 import { E11bError, translate, type ErrorClass } from './errors'
 import type { WireIdentity } from './identities'
 import type { MediatorInfo } from './mediator'
@@ -31,9 +32,9 @@ export interface PortSession {
  * once the probe no longer accepts them.
  */
 export interface SessionLife {
-  /** Registers the whole processing of one inbound frame with the probe's settle. */
+  /** Registers the processing of one inbound frame, or one pickup ack, with the probe's settle. */
   track(p: Promise<void>): void
-  /** False once the probe was cancelled or its snapshot taken: no session counter changes after that. */
+  /** False once the probe was cancelled or its snapshot taken: no session counter change and no ack sent after that. */
   accepting(): boolean
 }
 
@@ -203,6 +204,39 @@ export class ProbeMediatorSession extends MediatorSession {
     } catch (e) {
       if (this.life && !this.life.accepting()) return
       this.failures.push(translate(e, 'consumer').cls)
+    }
+  }
+  /**
+   * Every pickup ack goes through here: the library's own, which it starts detached with
+   * `void this._ackReceived(...)` (after a delivered DIDComm message, a re-ack of a redelivery, a
+   * refused frame), and the probe's TSP acks (`ackTsp`). Each is registered with the probe's
+   * settle (gate review 4 C1). Once the probe no longer accepts, an ack is not started, and one
+   * already being packed is not sent; it is dropped without a counter (a count would itself be a
+   * change after the snapshot).
+   */
+  override _ackReceived(ids: string | string[]): Promise<void> {
+    if (this.life && !this.life.accepting()) return Promise.resolve()
+    const p = this._packAndSendAck(ids)
+    this.life?.track(p)
+    return p
+  }
+  /** `_ackReceived` of vti-didcomm-js 0.12.0, with the lifecycle check between packing and sending. */
+  private async _packAndSendAck(ids: string | string[]): Promise<void> {
+    const messageIds = Array.isArray(ids) ? ids : [ids]
+    if (messageIds.length === 0) return
+    try {
+      if (!this.ws || this.ws.readyState !== 1) return
+      const ack = buildMessagesReceived({ from: this.client.did, mediatorDid: this.mediator.did, messageIds })
+      const packed = await pack({
+        message: ack,
+        sender: { kid: this.client.kid, privateJwk: jwk.privateJwk('X25519', this.client.privateKey, this.client.publicKey) },
+        recipient: { kid: this.mediator.kid, publicJwk: jwk.publicJwk('X25519', this.mediator.x25519Pub) },
+      })
+      if (this.life && !this.life.accepting()) return
+      if (!this.ws || this.ws.readyState !== 1) return
+      this.ws.send(packed)
+    } catch {
+      // Best-effort like the library: an unsent ack means redelivery, not a broken frame.
     }
   }
   ackTsp(ids: string[]) {

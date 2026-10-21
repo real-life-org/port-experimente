@@ -130,13 +130,14 @@ export async function runProbe(cfg: LiveConfig, deps: ProbeDeps): Promise<ProbeR
   let precondition: E11bError | null = null
   const afterCloseEvents: Array<{ group: string; socket: string; session: 'main' | 'fresh'; recordId: string | null; cls: FrameClass; tMs: number }> = []
 
-  // ── callbacks in flight (review 1 C1, review 2 C1, review 3 C1) ──
-  // Every accepted callback is tracked: the TSP handlers, and through `SessionLife` the whole
-  // processing of every inbound frame in the session (DIDComm unpack, status and problem-report
-  // counters, frame errors). A pass closes its sockets and the probe takes its snapshot only after
-  // all of them settled. After the snapshot (`finished`) callbacks do nothing. A settle that runs
-  // out of time cancels the probe: `cancelled` is checked by every TSP callback before each state
-  // change and each transport effect, and by the session before each counter change, so a
+  // ── callbacks in flight (review 1 C1, review 2 C1, review 3 C1, review 4 C1) ──
+  // Every accepted callback is tracked: the TSP handlers, and through `SessionLife` the processing
+  // of every inbound frame in the session (DIDComm unpack, status and problem-report counters,
+  // frame errors) and every pickup ack, also those the library starts detached. A pass closes its
+  // sockets and the probe takes its snapshot only after all of them settled. After the snapshot
+  // (`finished`) callbacks do nothing. A settle that runs out of time cancels the probe:
+  // `cancelled` is checked by every TSP callback before each state change and each transport
+  // effect, and by the session before each counter change and before sending a pickup ack, so a
   // callback still running after the cancel changes nothing and sends nothing; its late failure
   // is discarded (the run is already invalid with `settle-timeout`). The cancelled pass is still
   // evaluated (review 3 C2); no later pass starts.
