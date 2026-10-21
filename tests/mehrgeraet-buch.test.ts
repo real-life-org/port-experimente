@@ -34,6 +34,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 //   R83. Observer errors make a run invalid (issue #83): U4's mutation with a throwing `committed` hook for A only.
 //   R49-B1, R49-B2. An exception in the measurement itself (key export once; the proof check of U10's extra ticket) makes
 //       the run invalid, never a silent "not copied" or "no ticket" (review 49).
+//   R50-B1. Results are judged together against the final error state: an error raised while P-Produktion opens leaves
+//       no earlier P-Commit result green (review 50).
 //   R1, R2. The dump is a complete artefact: dump → load → re-check gives the same results (Tor-Review 42 S1).
 //   N1. The observation seam is fail-safe: a throwing observer changes nothing in holder or carrier (Tor-Review 42 (a)).
 //   S1. Shrinking: a failing generated sequence shrinks to the smallest sequence that still fails the same property.
@@ -72,7 +74,7 @@ vi.mock('@real-life/trust-protocol', async (importOriginal) => {
 import { frameHash, TYPES, type HolderDevice } from '../src/lab/mehrgeraet/holder'
 import { diSign, jcs, seal, type Json } from '@real-life/trust-protocol'
 import { KeyObject } from 'node:crypto'
-import { Buch, bindingGaps, ledgerWorld, openTickets, pairCounter, pCommit, pEinmal, pGueltig, pPaar, pProduktion } from '../src/lab/mehrgeraet/buch'
+import { Buch, bindingGaps, finalize, judge, ledgerWorld, openTickets, pairCounter, pCommit, pEinmal, pGueltig, pPaar, pProduktion } from '../src/lab/mehrgeraet/buch'
 import { generate, report, runSequence, show, shrink, type GenEvent, type GenWorld, type Mutation } from '../src/lab/mehrgeraet/generator'
 import { k2 } from '../src/candidates/mehrgeraet-k2'
 import * as M from '../src/lab/mehrgeraet/model'
@@ -573,7 +575,7 @@ describe('K2 step 2b.0: union duty counter follows the committed state (Tor-Revi
 
 describe('K2 step 2b.0: the dump is a complete artefact (Tor-Review 42 S1)', () => {
   const one: GenEvent[] = [{ k: 'introduce' }]
-  const all = async (b: Buch) => M.canonical({ checks: [pEinmal(b), await pCommit(b), await pProduktion(b), pPaar(b)], counter: pairCounter(b), accepted: [...b.acceptedOn()].map(([k, a]) => [k, [...a].sort()]) })
+  const all = async (b: Buch) => M.canonical({ checks: await judge(b), counter: pairCounter(b), accepted: [...b.acceptedOn()].map(([k, a]) => [k, [...a].sort()]) })
 
   it('R1. dump → load → re-check: the same checker results and counters; loaded again, the same dump (U0 control, U1, U2: P-Commit still fails after the reload)', async () => {
     for (const mutation of [undefined, suppressTickets, ticketBeforeCommit]) {
@@ -1212,5 +1214,32 @@ describe('K2 step 2b.0: an exception in the measurement makes the run invalid (r
     } finally {
       proofHook.throwFor = null
     }
+  }, 60_000)
+})
+
+describe('K2 step 2b.0: results judged against the final error state (review 50)', () => {
+  it('R50-B1. The proof check throws only while P-Produktion opens the ticket to A → after `finalize` P-Commit is invalid too; all five results equal those of the loaded dump', async () => {
+    const r = await runSequence(cand, [{ k: 'introduce' }], { seed: 21, reseed })
+    expect(r.checks.every((c) => c.ok), 'Voraussetzung: der Kontrolllauf hält').toBe(true)
+    const act = r.buch.commits.flatMap((c) => c.ops).find((o): o is M.Op & { kind: 'introduce' } => o.kind === 'introduce')!.act
+    const commit = await pCommit(r.buch)
+    expect(commit.ok, 'Voraussetzung: P-Commit vor dem Fehler grün').toBe(true)
+    proofHook.throwFor = (doc) => doc?.type === TYPES.ticket && (doc.payload as { own?: string } | undefined)?.own === act.a.key
+    let produktion
+    try {
+      produktion = await pProduktion(r.buch)
+    } finally {
+      proofHook.throwFor = null
+    }
+    // Soll: P-Produktion opens the two ticket deposits (U0: each ticket deposited once); the one to A throws in the proof
+    // check → 1 error `measure:proof` (its reader, A's allocator). Judged together against that final error state, all
+    // four results are invalid with the same single line, P-Gueltig has 1 violation; P-Commit, computed before the error,
+    // is no longer green. A loaded dump (the error inside) judged anew gives exactly the same five results.
+    expect(r.buch.errors.map((e) => e.hook)).toEqual(['measure:proof'])
+    const live = finalize(r.buch, [pEinmal(r.buch), commit, produktion, pPaar(r.buch)])
+    expect(live[0]).toMatchObject({ property: 'P-Gueltig', ok: false, counts: { errors: 1 } })
+    for (const c of live.slice(1)) expect(c, c.property).toMatchObject({ ok: false, invalid: true, violations: [expect.stringContaining('run invalid: 1')] })
+    expect(M.canonical(await judge(Buch.load(r.buch.dump())))).toBe(M.canonical(live))
+    expect(M.canonical(await judge(r.buch))).toBe(M.canonical(live))
   }, 60_000)
 })

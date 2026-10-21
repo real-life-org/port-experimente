@@ -474,11 +474,27 @@ export interface Check {
   invalid?: true
 }
 /**
- * A property result. On a ledger with observer errors the run is invalid (issue #83): the result is never green, marked
- * `invalid`, its first violation names the errors (the ledger is not a complete observation, whatever it holds).
+ * A property result on a ledger with errors (issue #83, review 50): the run is invalid, so the property is not judged.
+ * Never green, marked `invalid`, one violation naming the errors, no counts: what a checker found on an incomplete
+ * observation (and when in the check the error arose) says nothing, so the result is the same whenever it is computed
+ * and on the loaded dump.
  */
-const check = (b: Buch, property: Check['property'], violations: string[], counts: Record<string, number>): Check =>
-  b.errors.length ? { property, ok: false, invalid: true, violations: [`run invalid: ${b.errors.length} observer error(s), first ${b.errors[0]!.hook} on ${b.errors[0]!.device ?? 'carrier'}: ${b.errors[0]!.message}`, ...violations], counts } : { property, ok: violations.length === 0, violations, counts }
+const invalidResult = (b: Buch, property: Check['property']): Check => ({ property, ok: false, invalid: true, violations: [`run invalid: ${b.errors.length} observer error(s), first ${b.errors[0]!.hook} on ${b.errors[0]!.device ?? 'carrier'}: ${b.errors[0]!.message}`], counts: {} })
+const check = (b: Buch, property: Check['property'], violations: string[], counts: Record<string, number>): Check => (b.errors.length ? invalidResult(b, property) : { property, ok: violations.length === 0, violations, counts })
+
+/**
+ * The results of one run judged together against the ledger's final error state (review 50): P-Gueltig first, then each
+ * property result as given, or invalid if the ledger holds any error, also one that arose after that result was computed.
+ */
+export function finalize(b: Buch, results: Check[]): Check[] {
+  return [pGueltig(b), ...results.map((c) => (b.errors.length ? invalidResult(b, c.property) : c))]
+}
+/** Every checker of a run, the frame-opening ones first, then judged together (`finalize`): the generator and the tests use it. */
+export async function judge(b: Buch): Promise<Check[]> {
+  const commit = await pCommit(b)
+  const produktion = await pProduktion(b)
+  return finalize(b, [pEinmal(b), commit, produktion, pPaar(b)])
+}
 
 /**
  * P-Gueltig (issue #83): the measurement is valid only if every observation reached the ledger. An exception in an
