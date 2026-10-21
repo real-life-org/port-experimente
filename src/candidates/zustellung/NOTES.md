@@ -147,8 +147,10 @@ and what the mediator sees; it does not explain why a form is not shown.
 Live runs are not part of the report and create no matrix cell.
 
 **Run:** 2026-10-21, 08:37:34Z to 08:59:03Z UTC. Instance
-`did:webvh:QmR5xGk8pkd3ymu7xpfkjr7XZmwDALA5ZJmgG7qcrD2mKA:webvh.storm.ws:mediator`,
-document `versionId` `2-QmZPSfHt…`, socket host `mediator.vtc.storm.ws`.
+`did:webvh:QmR5xG…diator` (shortened as in the protocol: first 16, last
+6 characters; the default `MEDIATOR_DID`), document `versionId`
+`2-QmZPSfHt` (number and first 8 hash characters, as in the protocol),
+socket host `mediator.vtc.storm.ws`.
 Libraries: `@openvtc/vti-tsp-js` 0.3.0, `@openvtc/vti-didcomm-js` 0.12.0,
 `@real-life/trust-protocol` 0.3.2, Node 24.21.0. Settings: 3 runs, window
 and ack deadline 20 s, post-observation 30 s, all forms. Protocol JSON:
@@ -212,8 +214,10 @@ the inner envelope (`decodeEnvelope`; offline test in
 relationship and side the connection DID (login, socket, outer sender)
 and the egress identity (inner sender); in R-es the egress identity for
 all three plus a second login under the connection DID for pickup.
-Sizes: probe 393 B inner / 801 B outer; document 1539 B / 1947 B; ack
-1563 B / 1971 B (routing layer +408 B). Alice's two relationships share
+Sizes (inner / outer): probe 393 B / 801 B and document 1539 B / 1947 B
+in every send; acks 1560 or 1563 B inner, 1968 or 1971 B outer (1560 /
+1968 B: two acks in R-cc, one in R-c, three in R-es); the routing layer
+adds 408 B to every frame. Alice's two relationships share
 no DID in any form (per-relationship derivation). **RT6-G:** the partner
 opens frames whose sender is the connection DID only in D-c and R-cc; in
 D-es, R-c and R-es it sees only the egress identity.
@@ -231,9 +235,12 @@ as base64url text (209 664 B logical), 455 640 B other. Per form pass
 R-es 56 619 B; the non-TSP share in: D-c 73 752 B, R-c 72 984 B, R-es
 79 840 B (four more sessions). Latency send → receipt (median / max of
 12): D-c 121 / 152 ms, D-es 166 / 215 ms, R-cc 120 / 126 ms, R-c 125 /
-212 ms, R-es 174 / 208 ms. Round trip document → ack verified: D-c 263 /
-282 ms, D-es 309 / 359 ms, R-cc 262 / 289 ms, R-c 300 / 361 ms, R-es
-336 / 404 ms. Three runs are three samples, not a distribution.
+212 ms, R-es 174 / 208 ms. Document sent → ack received at the sender
+(handler entry, before decryption and proof check): D-c 263 / 282 ms,
+D-es 309 / 359 ms, R-cc 262 / 289 ms, R-c 300 / 361 ms, R-es 336 /
+404 ms. Document sent → ack verified was not measured in this run (gate
+review 1 C4); the probe records it from the next run on. Three runs are
+three samples, not a distribution.
 
 **Delete-to-ack (observation only, D-c, R-c, R-es).** After closing all
 sessions, a fresh session per connection identity saw no frame within
@@ -258,3 +265,26 @@ distributions.
 
 A second live run was a smoke test before this one (D-c only, 1 run, 8
 logins, same instance, 08:36Z): D-c carried in transport and contract.
+
+**Probe changes after this run (gate review 1, no new live run).** The
+run above used protocol schema `e11b-live/1`. Since `e11b-live/2`:
+each form pass fixes an end of observation; callbacks entering later are
+listed under `events.afterClose` and never counted, callbacks in flight
+are awaited before the sockets close and before the result is frozen.
+Rows and acks list every receipt (relative time, class, socket, verdict,
+counted, picked). Rows carry `tAckReceivedMs` and `tAckVerifiedMs`;
+`costs.roundTripMs` is document → ack verified, `costs.ackReceivedMs` the
+figure reported above. `costs.sizes` gives min / median / max over all
+sends of a kind. Send and XRFI registers live per form pass (draft 3
+§3.2). A second copy of a document or ack is `duplicate-known` and gets
+no ack of its own; the first copy reserves the digest before its ack is
+sent. That is a deliberate probe simplification: Delivery §6.2 would send
+the kept ack again for a duplicate.
+
+**Narrower than draft 3 §15 (deliberate).** Method and service ids are
+shown only as a fragment from a fixed list (`key-N`, `keys-N`, `service`,
+`tsp`, `auth`, `files`, `whois`), otherwise as a local label `m<n>` /
+`s<n>`, where §15 C6 allows any fragment of `[A-Za-z0-9._-]` up to 64
+characters. `versionId` is shown as number plus the first 8 hash
+characters, not in full. Both only drop detail; the run above needed
+none of it.
