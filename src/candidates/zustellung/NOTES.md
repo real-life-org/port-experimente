@@ -191,9 +191,11 @@ forms carried on stage 0.
 the receiver's connection socket within the window, as the inner TSP
 packet byte for byte (`inner-bytes-equal` in all 72 routed rows, never
 the outer layer). No unassigned frame, no control frame. In D-e and
-R-ce nothing arrived on any socket; the receiving side's scopes counted
-24 DIDComm problem reports each (code class `e.p.*`), as many as frames
-were sent in those forms; none in the other forms. DIDComm status
+R-ce nothing arrived on any socket; the sessions of each of these two
+form passes counted 24 DIDComm problem reports (code class `e.p.*`), as
+many as TSP frames were sent in that pass; no other form pass counted
+any. Which socket received them and what the code says is not recorded
+(fixed lists only). DIDComm status
 messages: 228 over the whole run.
 
 **RT2, inner VID ≠ socket DID.** R-c carries with the inner sender =
