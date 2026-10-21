@@ -2,6 +2,10 @@
 // C6), env release one by one, the mediator document summary (C2/C5), and the
 // byte balance base64url vs binary (C4).
 
+import { execFile } from 'node:child_process'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
+import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { multibase } from '@openvtc/vti-didcomm-js'
 import { pack } from '@openvtc/vti-tsp-js'
@@ -332,4 +336,52 @@ describe('E11b byte balance (review 3 C4)', () => {
     sink.outbound('{"a":1}')
     expect(c.bytes.out).toEqual({ socket: frame.length + 7, tspSocket: frame.length, tspLogical: frame.length })
   })
+})
+
+// Review 1 C5: the real reporter path. A throwaway Vitest run in a subprocess fails on purpose
+// with a translated error built from an exception full of the marker; stdout and stderr of the
+// reporter must not contain it. A second failing test throws the raw exception as a positive
+// control (the capture does see a marker when one is printed). The marker reaches the
+// subprocess only through the environment, so no code frame can show it from the source.
+// Takes a few seconds (one Vitest start).
+describe('E11b test reporter (review 1 C5)', () => {
+  it('a failing test with a translated error prints no marker; the untranslated control does', async () => {
+    const root = resolve('.cache', `e11b-reporter-${process.pid}-${Date.now()}`)
+    mkdirSync(root, { recursive: true })
+    try {
+      const lib = resolve('src/lab/zustellung-live')
+      writeFileSync(join(root, 'vitest.config.mts'), "export default { test: { include: ['*.test.ts'] } }\n")
+      writeFileSync(
+        join(root, 'marker.test.ts'),
+        [
+          "import { it } from 'vitest'",
+          `import { translate } from ${JSON.stringify(lib)}`,
+          'const m = process.env.E11B_REPORTER_MARKER!',
+          'const c = process.env.E11B_REPORTER_CONTROL!',
+          'const raw = () => Object.assign(new Error(`boom ${m}`), { body: m, cause: new Error(m), status: 503 })',
+          "it('translated', () => { throw translate(raw(), 'login') })",
+          "it('translated async', async () => { await Promise.reject(translate(raw(), 'probe')) })",
+          "it('control', () => { throw new Error(`control ${c}`) })",
+          '',
+        ].join('\n'),
+      )
+      const bin = resolve('node_modules/vitest/vitest.mjs')
+      const control = 'CTL_r4P9_VIS'
+      const out = await promisify(execFile)(process.execPath, [bin, 'run', '--root', root, '--config', join(root, 'vitest.config.mts')], {
+        env: { ...process.env, E11B_REPORTER_MARKER: MARKER, E11B_REPORTER_CONTROL: control, NO_COLOR: '1', CI: '1' },
+        maxBuffer: 1 << 24,
+      }).then(
+        (r) => ({ code: 0, text: `${r.stdout}\n${r.stderr}` }),
+        (e: { code?: number; stdout?: string; stderr?: string }) => ({ code: e.code ?? -1, text: `${e.stdout ?? ''}\n${e.stderr ?? ''}` }),
+      )
+      expect(out.code).not.toBe(0)
+      expect(out.text).toContain('3 failed')
+      expect(out.text).toContain('e11b login: http-5xx')
+      expect(out.text).toContain('e11b probe: http-5xx')
+      expect(out.text).toContain(control)
+      assertClean(out.text)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 60_000)
 })
