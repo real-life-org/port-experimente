@@ -121,8 +121,17 @@ export interface ObserverError {
   device: string | null
   message: string
 }
+/** A device's union duties (6845) as its last successful store commit holds them. */
+export interface DutyImage {
+  seq: number
+  device: string
+  person: string
+  duties: Array<{ pair: [string, string]; state: M.PairDuty['state'] }>
+}
 
 const b64hash = (b64: string) => frameHash(Buffer.from(b64, 'base64'))
+/** Union duty states that end the duty (6845.3 `united`, 6845.7 `moot`): not open. */
+const TERMINAL: ReadonlySet<M.PairDuty['state']> = new Set(['united', 'moot'])
 
 export class Buch implements HolderObserver {
   readonly commits: CommitEntry[] = []
@@ -130,6 +139,8 @@ export class Buch implements HolderObserver {
   readonly carrier = { revisions: [] as CarrierRevision[], tickets: [] as CarrierTicket[], receipts: [] as CarrierReceipt[], other: 0, unknown: 0 }
   readonly deliveries: Delivery[] = []
   readonly events: BenchEvent[] = []
+  /** Per device the union duties of its last committed image. */
+  readonly duties = new Map<string, DutyImage>()
   readonly errors: ObserverError[] = []
   /** Productions by frame hash (a frame names its document) and by document digest. */
   private readonly byFrame = new Map<string, Production>()
@@ -155,6 +166,7 @@ export class Buch implements HolderObserver {
   committed(d: HolderDevice, image: DeviceState): void {
     const t = this.next()
     this.marks.push({ ...t, device: d.name })
+    this.duties.set(d.name, { seq: t.seq, device: d.name, person: d.person, duties: image.holder.duties.map((x) => ({ pair: [x.pair[0], x.pair[1]], state: x.state })) })
     const batches = (image.candidate as { batches?: Array<{ writer: string; n: number; ops: M.Op[]; intents: Array<{ digest: string; kind: string; expected: string; address: string; bytes: string; copies?: Array<{ bytes: string }> }> }> } | null)?.batches ?? []
     for (const b of batches) {
       if (b.writer.split('@')[0] !== d.name) continue // a sibling's batch folded here is the sibling's commit, not this one
@@ -404,12 +416,14 @@ export function pPaar(b: Buch): Check {
 
 /**
  * Counter, not an assertion (draft 3 §7.1, §12 D1): tuples per person pair (every tuple a person ever opened, by the person
- * behind its peer anchor) and open union duties per person (last committed state of each duty not `united`).
+ * behind its peer anchor) and open union duties per person. Duties follow the committed holder state, not the `duty` ops
+ * (Tor-Review 42 B2: `depart` ends duties as `moot` without a `duty` op): per device its last committed image; a pair is
+ * open for the person if one of the person's devices holds it in a non-terminal state and none holds it ended (`united`,
+ * `moot`; a sibling that has not folded the end yet does not reopen it).
  */
 export function pairCounter(b: Buch): { tuples: Record<string, number>; openDuties: Record<string, number> } {
   const ownAnchor = new Map<string, string>() // anchor → person (from that person's own commits)
   const tuples = new Map<string, Map<string, string>>() // person → tuple id → peer anchor
-  const duties = new Map<string, Map<string, string>>()
   for (const c of b.commits)
     for (const op of c.ops) {
       const tuple = op.kind === 'open-tuple' || op.kind === 'connect' ? op.tuple : null
@@ -419,10 +433,6 @@ export function pairCounter(b: Buch): { tuples: Record<string, number>; openDuti
         tuples.get(c.person)!.set(tuple.id, tuple.peer)
       }
       if (op.kind === 'produce') ownAnchor.set(op.card.anchor, c.person)
-      if (op.kind === 'duty') {
-        if (!duties.has(c.person)) duties.set(c.person, new Map())
-        duties.get(c.person)!.set(op.pair.join('+'), op.state)
-      }
     }
   const out: Record<string, number> = {}
   for (const [person, ts] of tuples)
@@ -430,7 +440,19 @@ export function pairCounter(b: Buch): { tuples: Record<string, number>; openDuti
       const key = `${person}→${ownAnchor.get(peer) ?? '?'}`
       out[key] = (out[key] ?? 0) + 1
     }
+  const duties = new Map<string, Map<string, { ended: boolean; open: boolean }>>() // person → pair → over the person's devices
+  for (const img of b.duties.values()) {
+    if (!duties.has(img.person)) duties.set(img.person, new Map())
+    const per = duties.get(img.person)!
+    for (const d of img.duties) {
+      const key = d.pair.join('+')
+      const x = per.get(key) ?? { ended: false, open: false }
+      if (TERMINAL.has(d.state)) x.ended = true
+      else x.open = true
+      per.set(key, x)
+    }
+  }
   const open: Record<string, number> = {}
-  for (const [person, ds] of duties) open[person] = [...ds.values()].filter((s) => s !== 'united').length
+  for (const [person, ds] of duties) open[person] = [...ds.values()].filter((x) => x.open && !x.ended).length
   return { tuples: out, openDuties: open }
 }

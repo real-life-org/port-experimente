@@ -36,7 +36,7 @@ const rng = vi.hoisted(() => ({
 vi.mock('node:crypto', async (importOriginal) => ({ ...(await importOriginal<typeof import('node:crypto')>()), randomBytes: (n: number) => rng.bytes(n), randomUUID: () => rng.uuid() }))
 
 import { frameHash, TYPES, type HolderDevice } from '../src/lab/mehrgeraet/holder'
-import { ledgerWorld, pCommit, pEinmal, pPaar, pProduktion, type Buch } from '../src/lab/mehrgeraet/buch'
+import { ledgerWorld, pairCounter, pCommit, pEinmal, pPaar, pProduktion, type Buch } from '../src/lab/mehrgeraet/buch'
 import { generate, report, runSequence, show, shrink, type GenEvent, type GenWorld, type Mutation } from '../src/lab/mehrgeraet/generator'
 import { k2 } from '../src/candidates/mehrgeraet-k2'
 import * as M from '../src/lab/mehrgeraet/model'
@@ -355,6 +355,30 @@ describe('K2 step 2b.0: D1 (design review 1, Astra) as a fixed test', () => {
     // accepted α, its rebuilt incarnation accepts β → 2.
     expect([...(buch.acceptedOn().get(x) ?? [])].length, `accepted on x: ${[...(buch.acceptedOn().get(x) ?? [])].join(', ')}`).toBe(1)
   }, 120_000)
+})
+
+describe('K2 step 2b.0: union duty counter follows the committed state (Tor-Review 42 B2)', () => {
+  it('U7. Two encounters A–B, receipts lost: A\'s duty stays `sent` (1 open); A departs the relationship → its duty is `moot`, 0 open for A (B, not departed, keeps 1)', async () => {
+    reseed(71)
+    const { w, buch } = ledgerWorld(k2())
+    const A = await w.person('A', 'A1')
+    const B = await w.person('B', 'B1')
+    w.carrier.faults.drop((f) => w.frameOrigin(f.bytes)?.kind === 'delivery-ack')
+    await w.encounter(A, B)
+    await w.rounds(2)
+    await w.encounter(A, B)
+    await w.rounds(3)
+    // Soll before: the second encounter opens a second tuple of the same relationship on each side → one union duty per
+    // side (6845); its mapping is accepted by the carrier (`sent`), the receipt is dropped → never `united` → 1 open each.
+    const duty = A.state.duties.find((d) => d.state === 'sent')
+    expect(duty, 'Voraussetzung: As Pflicht ist gesendet').toBeDefined()
+    expect(pairCounter(buch).openDuties).toEqual({ A: 1, B: 1 })
+    expect(await A.depart(M.relOfTuple(A.state, duty!.pair[0])!.id)).toBe('ok')
+    // Soll after: `depart` ends A's duties of that relationship as `moot` (6845.7) in the committed state → 0 open for A;
+    // B did not depart and learns nothing without a round → 1.
+    expect(A.state.duties.map((d) => d.state)).toEqual(['moot'])
+    expect(pairCounter(buch).openDuties).toEqual({ A: 0, B: 1 })
+  }, 60_000)
 })
 
 describe('K2 step 2b.0: the observation seam is fail-safe (Tor-Review 42 (a))', () => {
