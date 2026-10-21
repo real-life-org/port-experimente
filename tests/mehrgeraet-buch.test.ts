@@ -8,6 +8,10 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 //   G1. Generator, fixed seeds: every property holds on the step-2a code (failure: seed + shrunk sequence printed).
 //   U1–U4. Mutations (test-only hooks on the devices, never flags in the code): each checker is shown failing.
 //   U5. The reference model's negative side: no admissible key, no obligation, no false alarm.
+//   U6. Wrongly bound tickets (voucher = own key in both) → P-Commit fails (Tor-Review 42 B1, MV-30 / draft 2 §2.3).
+//   U7. Union duties ended by `depart` (`moot`) are not open (Tor-Review 42 B2).
+//   R1, R2. The dump is a complete artefact: dump → load → re-check gives the same results (Tor-Review 42 S1).
+//   N1. The observation seam is fail-safe: a throwing observer changes nothing in holder or carrier (Tor-Review 42 (a)).
 //   S1. Shrinking: a failing generated sequence shrinks to the smallest sequence that still fails the same property.
 //   D1. Astra's D1 sequence (design review 1): Soll 1 accepted act id on x; red on 2a (expected-fail, closes in 2b.3).
 //
@@ -186,7 +190,8 @@ describe('K2 step 2b.0: mutations show each checker failing', () => {
   it('U0. Control: the same sequence without a mutation keeps every property (1 issuance, 2 tickets, 1 obligation kept)', async () => {
     const r = await runSequence(cand, one, { seed: 21, reseed })
     for (const c of r.checks) expect(c.violations, c.property).toEqual([])
-    // Soll: one issuance (M has 5 keys of each side, 8485 refill-to), its two tickets at the carrier, one obligation kept.
+    // Soll: one issuance (M holds 6 keys of each side: two devices per side, each lists its share ceil(5/2) = 3 of 8485
+    // refill-to 5, `stockShare`), its two tickets at the carrier, one obligation kept.
     expect(prop(r, 'P-Commit').counts).toEqual({ tickets: 2, issuances: 1 })
     expect(prop(r, 'P-Produktion').counts).toMatchObject({ introductions: 1, obliged: 1, kept: 1 })
   }, 60_000)
@@ -194,7 +199,7 @@ describe('K2 step 2b.0: mutations show each checker failing', () => {
   it('U1. Suppressed tickets → P-Commit and P-Produktion fail', async () => {
     const r = await runSequence(cand, one, { seed: 21, reseed, mutation: suppressTickets })
     // Soll P-Commit: the issuance batch holds the consumption and 0 ticket intents → 1 violation (existence); no ticket at
-    // the carrier → no "ticket without commit" violation. Soll P-Produktion: 1 obligation (reference: 5 + 5 admissible keys),
+    // the carrier → no "ticket without commit" violation. Soll P-Produktion: 1 obligation (reference: 6 + 6 admissible keys),
     // 0 of 2 tickets within k rounds → 1 violation. P-Einmal, P-Paar unaffected.
     expect(prop(r, 'P-Commit').violations).toHaveLength(1)
     expect(prop(r, 'P-Commit').counts).toEqual({ tickets: 0, issuances: 1 })
@@ -216,6 +221,10 @@ describe('K2 step 2b.0: mutations show each checker failing', () => {
   it('U3. Without 8640.12 at A → P-Einmal fails: M restored from an image before α names x again for β (A–C, a fresh C key); the control run refuses β', async () => {
     // Soll with 8640.12 (control): accepted act ids on x = 1 (α; A refuses β by 8640.12, the voucher check 8640.9 does not
     // catch it because β's voucher is C's fresh key). Soll without 8640.12: 2 (α and β) → P-Einmal 1 violation.
+    // The bench logs both introductions and every round (as the generator does), so P-Produktion is checked on them, not on
+    // an empty set (Tor-Review 42 (d)). Soll P-Produktion in both runs: 2 introductions, both obliged (the reference admits
+    // A keys besides x, consumed by α in the ledger, and B's resp. C's listed keys), both kept (each issuance's two tickets
+    // leave at its commit, at least three logged rounds with M up follow each), 0 violations; P-Commit and P-Paar hold.
     const control = await restoredMediator(31, false)
     expect(control.preconditions, 'Voraussetzungen').toEqual({ sameKey: true, cAccepted: true })
     expect(control.onX).toBe(1)
@@ -224,6 +233,11 @@ describe('K2 step 2b.0: mutations show each checker failing', () => {
     expect(mutated.preconditions, 'Voraussetzungen').toEqual({ sameKey: true, cAccepted: true })
     expect(mutated.onX).toBe(2)
     expect(pEinmal(mutated.buch).violations).toHaveLength(1)
+    for (const r of [control, mutated]) {
+      expect(pProduktion(r.buch).counts).toMatchObject({ introductions: 2, obliged: 2, kept: 2, noKeys: 0, open: 0 })
+      expect(pProduktion(r.buch).violations).toEqual([])
+      expect(pCommit(r.buch).ok && pPaar(r.buch).ok).toBe(true)
+    }
   }, 120_000)
 
   it('U4. A connects under another pair context → P-Paar fails (control holds)', async () => {
@@ -264,7 +278,7 @@ describe('K2 step 2b.0: mutations show each checker failing', () => {
     // Soll P-Commit: the one issuance batch holds two ticket intents, each naming its own side's key as `own` (so the
     // `own` check alone passes) but also as voucher, not the key acquired for the other side (MV-30, 8605) → 1 violation
     // (one per issuance). Its bytes were committed before they left → no "ticket without commit" violation. Tickets at the
-    // carrier: A and B refuse a ticket whose voucher is not the other side (8640.9), no receipt, so the deliverer repeats
+    // carrier: A and B refuse a ticket whose voucher is one of their own stock keys (8640.8), no receipt, so the deliverer repeats
     // each after ackWait = 3 rounds; the drain has k + 3 = 6 rounds → each ticket deposited at the commit, after round 3
     // and after round 6 → 3 × 2 = 6. P-Produktion: both tickets at the carrier in time → 1 obligation kept. P-Einmal: no
     // acceptance (0 keys, 0 accepts). P-Paar: nothing connected.
@@ -334,17 +348,37 @@ async function restoredMediator(seed: number, mutate: boolean): Promise<{ buch: 
   await w.enrol(A, 'A2')
   await w.rounds(2)
   if (mutate) for (const d of w.of('A')) without8640_12(d)
+  // Logged like the generator does (P-Produktion reads introductions and rounds from the ledger): M's addresses per side.
+  const addr = async (rel: string) => Promise.all((Mm.state.relationships.find((x) => x.id === rel || x.tuples.some((t) => t.id === rel))?.tuples ?? []).map(async (t) => (await Mm.cand.keys.pair(t.ownKey)).rkid))
+  const [addrA, addrB, addrC] = [await addr(am.y.id), await addr(bm.y.id), await addr(cm.y.id)]
+  const round = async () => {
+    await w.rounds(1)
+    buch.note('round', undefined, { up: w.devices.filter((d) => d.online).map((d) => d.name) })
+  }
+  const until = async (pred: () => boolean, max: number) => {
+    for (let i = 0; i < max; i++) {
+      await round()
+      if (pred()) return
+    }
+  }
+  const introduce = async (rel1: string, rel2: string, a1: string[], a2: string[]) => {
+    const detail: Record<string, unknown> = { addrA: a1, addrB: a2, result: null, armed: null, up: true }
+    buch.note('introduce', Mm.name, detail)
+    const r = await Mm.introduce(rel1, rel2)
+    detail.result = r
+    return r
+  }
   const image = w.stores.get('M1')!.snapshot()
-  const ra = await Mm.introduce(am.y.id, bm.y.id)
+  const ra = await introduce(am.y.id, bm.y.id, addrA, addrB)
   const alpha = Mm.state.mediatorActs.find((a) => a.id === (ra as { act: string }).act)!
-  await w.until(() => w.of('A').some((d) => d.state.acts.some((a) => a.id === alpha.id)) && B.state.acts.some((a) => a.id === alpha.id), 10)
+  await until(() => w.of('A').some((d) => d.state.acts.some((a) => a.id === alpha.id)) && B.state.acts.some((a) => a.id === alpha.id), 10)
   w.stores.get('M1')!.restore(image)
   await Mm.reload()
   buch.note('restore', 'M1')
-  const rb = await Mm.introduce(am.y.id, cm.y.id)
+  const rb = await introduce(am.y.id, cm.y.id, addrA, addrC)
   const beta = 'act' in rb ? Mm.state.mediatorActs.find((a) => a.id === rb.act) : undefined
-  await w.until(() => !!beta && C.state.acts.some((a) => a.id === beta.id), 10)
-  await w.rounds(4)
+  await until(() => !!beta && C.state.acts.some((a) => a.id === beta.id), 10)
+  for (let i = 0; i < 4; i++) await round()
   return { buch, onX: buch.acceptedOn().get(alpha.a.key)?.size ?? 0, preconditions: { sameKey: beta?.a.key === alpha.a.key, cAccepted: !!beta && C.state.acts.some((a) => a.id === beta.id) } }
 }
 

@@ -61,7 +61,10 @@ check, a revision after its own form rules). The carrier reports every
 taken frame (`Carrier.observe`). The world wires the observer into every
 device from its first commit (`Welt15Options.observer`, `ledgerWorld`).
 All hooks are `null` outside ledger runs; no K0, K1a or K2 cell reads
-them. One new crash point, `between-sends` (after the first of several
+them. The seam is fail-safe: an exception in a hook is caught where it is
+called, reported to the observer (`failed`, recorded in the ledger's
+`errors`) and the device or the carrier goes on exactly as without an
+observer (test N1). One new crash point, `between-sends` (after the first of several
 released submissions reached the carrier, i.e. between the two tickets
 of an issuance), fires only when the bench arms it.
 
@@ -75,7 +78,12 @@ of an issuance), fires only when the bench arms it.
   commit of the same device holding the same bytes and, in that batch,
   the `introduce` that consumes both keys (MV-30); every issuance batch
   holds exactly two complete ticket intents bound to its act, one per
-  named key (existence).
+  named key (existence), mirror-bound (MV-30, draft 2 §2.3, 8605,
+  8570.1): the ticket to side X names X's acquired key as `own` and the
+  key acquired for the other side as voucher (anchor and key agreement),
+  carries the act's times, expects its receipt from X's key, is addressed
+  to X's key agreement (K2, 6o.2) and holds exactly the frames sealed for
+  its document.
 - *P-Produktion* (no. 7): if the M device had admissible keys for both
   sides, was up and online, and the act's remaining time exceeds the
   delivery reserve (bench: 8155 consent reserve, one day), both tickets
@@ -95,9 +103,12 @@ of an issuance), fires only when the bench arms it.
   anchor = peer card anchor and back, and each side's peer key agreement
   is the other side's card key agreement). Across acts nothing is
   asserted: `pairCounter` counts tuples per person pair (by the person
-  behind the peer anchor) and open union duties (last committed state not
-  `united`), the measure of draft 3 §12 D1 (one side lost the tuple: 0
-  duties expected, not healed).
+  behind the peer anchor) and open union duties, the measure of draft 3 §12 D1 (one side lost the tuple: 0
+  duties expected, not healed). Open duties follow the committed holder
+  state, not the `duty` ops: per device the duties of its last committed
+  image; a pair is open for a person if one of its devices holds it in a
+  non-terminal state and none holds it ended (`united`, `moot`; `depart`
+  ends duties as `moot` without a `duty` op, 6845.7).
 
 **Generator** (draft 2 §5.3, minimal). World: A and B with two devices,
 M one device (`bench.singleDevice: ['M']`; the generator refuses a
@@ -128,12 +139,17 @@ derived by hand in the test before the run, draft 3 §7.2):
 | L1 | ledger survives a restore of A1 from an image before α | dump unchanged; 1 accepted act on x (α) | ✓ |
 | G0 | replay of seed 3 | same commits, acceptances, tickets | ✓ |
 | G1 | 20 seeds × 40 events on the 2a code | 0 violations of P-Einmal, P-Commit, P-Produktion, P-Paar | ✓ 20/20 |
-| U0 | control: one introduction | 1 issuance, 2 tickets, 1 obligation kept | ✓ |
+| U0 | control: one introduction (6 keys per side at M: two devices × ceil(5/2) = 3) | 1 issuance, 2 tickets, 1 obligation kept | ✓ |
 | U1 | mutation: M suppresses its tickets | P-Commit 1 violation (0 intents in the batch), P-Produktion 1 violation (0 of 2 tickets) | ✓ both fail |
 | U2 | mutation: ticket to the carrier before the commit | P-Commit 2 violations (both tickets), P-Produktion holds | ✓ fails |
-| U3 | mutation: A without 8640.12; M rebuilt names x for β (A–C, fresh C key) | control: 1 act on x; mutated: 2, P-Einmal 1 violation | ✓ fails |
+| U3 | mutation: A without 8640.12; M rebuilt names x for β (A–C, fresh C key) | control: 1 act on x; mutated: 2, P-Einmal 1 violation; both runs: P-Produktion 2 introductions, 2 obliged, 2 kept | ✓ fails |
 | U4 | mutation: A connects under another key agreement | control 0; mutated 1 P-Paar violation (1 act connected on both sides) | ✓ fails |
 | U5 | reference model, negative side: 12 introductions against budget 10 | 10 obliged and kept, 2 without admissible A key (M refuses), 0 violations, 10 acceptances at A | ✓ |
+| U6 | mutation: M binds each voucher to the ticket's own side | P-Commit 1 violation (the issuance), 6 deposits (no receipt, repeats after 3 and 6 rounds); other checkers unchanged; expected signer, address, swapped frames each alone: 1 violation | ✓ fails |
+| U7 | two encounters A–B, receipts lost, then A departs | open duties {A: 1, B: 1} before, {A: 0, B: 1} after (`moot`) | ✓ |
+| R1 | dump → `Buch.load` → re-check (control, U1, U2) | identical checker results and counters, same dump again; P-Commit still 1 resp. 2 violations | ✓ |
+| R2 | `byDigest` cleared after a valid issuance | dump changes, P-Commit fails (also after reload) | ✓ |
+| N1 | observers throwing in every hook (U4's sequence) | devices, dispositions, carried frames identical to a run without observers; errors of all four hooks recorded | ✓ |
 | S1 | shrinking a 16-event sequence failing P-Commit under U1's mutation | 1 event: an introduction that commits | ✓ |
 | D1 | design review 1 D1 (below) | 1 accepted act id on x | ✗ 2 (expected-fail) |
 
@@ -154,10 +170,26 @@ the test is `it.fails`. A broken precondition returns early, which makes
 green with the incarnation rule of 2b.3 (draft 3 §8), and loses `.fails`
 there. This is the class gate review 40 B3 named as a price of 2a.
 
-**Verification 2b.0:** `tests/mehrgeraet-buch.test.ts` 29 passed + 1
-expected fail (D1) in ≈ 45 s; typecheck green. No cell changed: the K2,
+**Review 42 fixes** (Tor-Review 42,
+`rltp/design/port-experimente-e15-codex-review42-2026-10-21.md`):
+B1, P-Commit checks the mirror binding of both tickets of an issuance
+(voucher, act times, expected receipt signer, address, sealed frames),
+fixed mutation U6; B2, the open duty counter follows the committed holder
+state (duty images per device), so `moot` after `depart` is not open,
+fixed test U7; S1, the dump is complete (every production, both
+production mappings as indices, duty images, observer errors, sequence
+counter) and `Buch.load` rebuilds a ledger from it, round trip R1 and
+mapping test R2; S2, the derivations of U0/U1 say six keys per side (two
+devices × ceil(5/2) = 3, `stockShare`), expected values unchanged; (d),
+U3 logs its introductions and rounds so P-Produktion is checked on two
+introductions, not on an empty set; (a), the observation seam is
+fail-safe (N1).
+
+**Verification 2b.0:** `tests/mehrgeraet-buch.test.ts` 34 passed + 1
+expected fail (D1) in ≈ 35 s; typecheck green. No cell changed: the K2,
 K1a, K0 and seed-sweep files give the same 111/111 results on this branch
-as on main a290f7a (test by test; K2 file ≈ 12–14 min); also green:
+as on main a290f7a (test by test; after the review 42 fixes again
+111/111, identical test by test, the four files ≈ 11 min); also green:
 gegenlauf, zustellung, träger, zustellung-harness, modell, engine,
 K1a-service, matrix, harness. Report not re-run (no cell can change).
 
