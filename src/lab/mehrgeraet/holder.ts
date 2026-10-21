@@ -1473,7 +1473,8 @@ export class HolderDevice {
    *   (decision 9.1 (a)).
    *   A revision goes out when something changed, or when the class is on again and the own last revision was off.
    */
-  private async supply(r: M.Relationship): Promise<void> {
+  private async supply(rel: M.Relationship): Promise<void> {
+    let r = rel
     if (!r.classOn || r.departed) return
     const now = this.clock.now()
     const me = this.me
@@ -1482,7 +1483,12 @@ export class HolderDevice {
     const view = set ? M.setView(set) : null
     const members = (view ? view.members.map((m) => m.anchor) : [h.peer]).sort()
     const drop = r.stock.filter((k) => k.by === me && (k.state === 'active' || k.state === 'aging') && k.for !== undefined && view?.revoked.has(k.for)).map((k) => k.anchor)
-    if (drop.length) this.emit({ kind: 'withdraw', rel: r.id, anchors: drop })
+    if (drop.length) {
+      this.emit({ kind: 'withdraw', rel: r.id, anchors: drop })
+      // Tor-Review 46 B1: `apply` folds on a clone; the plan is computed from the relationship after the withdrawal, so the
+      // successors go in the same batch (draft 2 §3.7).
+      r = M.rel(this.state, r.id)
+    }
     const share = this.cand.acceptanceShare ?? 0
     const occupied = this.cand.occupied?.(r.id, this.state, now) ?? 0
     const reserved = r.stock.filter((k) => k.by === me && (k.state === 'active' || k.state === 'aging') && Date.parse(now) <= Date.parse(k.expiresAt)).length

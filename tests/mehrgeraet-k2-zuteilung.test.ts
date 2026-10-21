@@ -484,24 +484,33 @@ describe('K2 step 2b.1, part 2: balance and supply (§2.1, §2.3)', () => {
     expect(bal.counts.max).toBe(5)
   }, 120_000)
 
-  it('B4. Revocation of an M device: A withdraws every live key assigned to it and lists the successors in the same batch; M names the rest', async () => {
-    const s = await zw({ m2: 'before' })
-    const m1 = await s.anchorAt(s.Mm)
-    const m2 = await s.anchorAt(s.M2!)
-    const gone = s.own(s.A, m2).map((k) => k.anchor)
-    expect(gone).toHaveLength(2)
-    await s.w.revoke(s.Mm, s.M2!)
-    await s.w.rounds(4)
-    // Soll: withdraw m2's 2 keys (reserviert 2 → frei 3), members {m1}, to_am 5, m1 has 2 → 3 new for m1; one batch holds
-    // the withdrawal, the allocation and the revision.
-    expect(s.own(s.A, m2, 'withdrawn').map((k) => k.anchor).sort()).toEqual([...gone].sort())
-    expect(s.own(s.A, m1, 'active')).toHaveLength(5)
-    const batch = (s.A.cand as unknown as { journal(): Array<{ ops: M.Op[] }> }).journal().find((b) => b.ops.some((o) => o.kind === 'withdraw' && gone.every((a) => o.anchors.includes(a))))!
-    expect(batch.ops.map((o) => o.kind)).toEqual(expect.arrayContaining(['withdraw', 'allocate', 'revision']))
-    expect(s.nameable(s.Mm)).toBe(5)
-    const rel = M.relOfTuple(s.Mm.state, s.am.y.id)!.id
-    for (const a of gone) expect(M.evidence(s.Mm.state, rel, a).state).toBe('withdrawn')
-  }, 120_000)
+  it('B4. Revocation of an M device: A withdraws every live key assigned to it and lists the successors in the same batch; M names the rest (Tor-Review 46 B1: batch content and numbers)', async () => {
+    for (const o of [{ budget: undefined, gone: 2, add: 3, listed: 5 }, { budget: 4, gone: 1, add: 1, listed: 2 }] as const) {
+      // Soll, share 5 (default): supply at class on with |M| = 2: 1 + 1, then to_am ⌊5/2⌋ = 2 → 2 + 2, frei 1. Revocation of
+      // M2: withdraw its 2 keys → reserviert 2, frei 3, members {m1}, to_am 5, m1 has 2 → allocate 3; the revision lists 5.
+      // Soll, share 2 (budget 4): 1 + 1 (to_am ⌊2/2⌋ = 1), frei 0. Revocation: withdraw 1 → frei 1, to_am 2 → allocate 1;
+      // the revision lists 2. Both in the one batch of the revocation step (draft 2 §3.7).
+      const s = await zw({ m2: 'before', ...(o.budget ? { budget: o.budget } : {}) })
+      const m1 = await s.anchorAt(s.Mm)
+      const m2 = await s.anchorAt(s.M2!)
+      const gone = s.own(s.A, m2).map((k) => k.anchor)
+      expect(gone, `share ${o.budget ?? 10}`).toHaveLength(o.gone)
+      await s.w.revoke(s.Mm, s.M2!)
+      await s.w.rounds(4)
+      expect(s.own(s.A, m2, 'withdrawn').map((k) => k.anchor).sort()).toEqual([...gone].sort())
+      expect(s.own(s.A, m1, 'active')).toHaveLength(o.listed)
+      const batch = (s.A.cand as unknown as { journal(): Array<{ ops: M.Op[] }> }).journal().find((b) => b.ops.some((x) => x.kind === 'withdraw' && gone.every((a) => x.anchors.includes(a))))!
+      const kinds = batch.ops.map((x) => x.kind)
+      expect(kinds.filter((k) => k === 'withdraw' || k === 'allocate' || k === 'revision')).toEqual(['withdraw', 'allocate', 'revision'])
+      const alloc = batch.ops.find((x): x is M.Op & { kind: 'allocate' } => x.kind === 'allocate')!
+      expect(alloc.keys.map((k) => k.for)).toEqual(Array(o.add).fill(m1))
+      const rev = batch.ops.find((x): x is M.Op & { kind: 'revision' } => x.kind === 'revision')!
+      expect(rev.keys.map((k) => k.anchor).sort()).toEqual(s.own(s.A, m1, 'active').map((k) => k.anchor).sort())
+      expect(s.nameable(s.Mm)).toBe(o.listed)
+      const rel = M.relOfTuple(s.Mm.state, s.am.y.id)!.id
+      for (const a of gone) expect(M.evidence(s.Mm.state, rel, a).state).toBe('withdrawn')
+    }
+  }, 240_000)
 })
 
 describe('K2 step 2b.1, part 2: what A knows of M\'s device set (draft 2 §3.4, E3)', () => {

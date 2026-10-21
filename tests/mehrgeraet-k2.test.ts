@@ -1047,51 +1047,62 @@ describe('K2 Schritt 2: Review 35, Klasse aus ist Sache der Person (B6)', () => 
 })
 
 /**
- * Review 36: the model fixture of V2: M's states for two sides (e1: a person with writers root, d2, d3; e2: B), the
- * conflicting listings, tombstones, a set with an admission and a revocation, and the M candidate (K2, step 2a: one device).
+ * Review 36, ported to `stock-revision@2` (K2 2b.1, Tor-Review 46 S2): M's states for two sides (e1: a person with writers
+ * root, d2, d3; e2: B), conflicting bindings of one anchor, a burial by a writer that is revoked later, a set with an
+ * admission and a revocation, and the M candidate (one device; every key assigned to it). `mAnchor` is the candidate's own
+ * anchor for the tuple context, so `authorize` and `stockAt` read the same `for`.
  */
-function viewFixture() {
+async function viewFixture() {
   const t0 = '2026-10-17T08:00:00.000Z'
   const exp = '2027-04-15T08:00:00.000Z'
   const [root, d2, d3, broot] = ['m-root', 'm-d2', 'm-d3', 'b-root']
+  const dir = new DeviceDirectory()
+  const cand = new K2Device('M', 'M1', new Uint8Array(32).fill(1), 0, 2, M.PARAM.budget, dir)
+  const mAnchor = (await cand.keys.pair('k/M:e1')).anchor
+  const mAnchorB = (await cand.keys.pair('k/M:e2')).anchor
   let seq = 0
-  const op = (body: Record<string, unknown>) => ({ id: { writer: 'w', n: ++seq }, at: t0, ...body }) as unknown as M.Op
-  const lk = (anchor: string, n: number) => ({ n, anchor, keyAgreement: `r${anchor}`, expiresAt: exp })
-  const view = (rel: string, signer: string, revision: number, keys: M.ListedKey[], tombstones?: string[]) => op({ kind: 'view', rel, scope: rel, revision, keys, writer: signerId(signer), standing: 'person', ...(tombstones ? { tombstones } : {}) })
+  const op = (body: Record<string, unknown>) => ({ id: { writer: 'w@1', n: ++seq }, at: t0, ...body }) as unknown as M.Op
+  const N = Buffer.alloc(32, 1).toString('base64')
+  const key = (anchor: string, n: number, forM = mAnchor): M.RevKey => ({ n, nonce: N, anchor, signing: 'A'.repeat(43), keyAgreement: `r${anchor}`, expiresAt: exp, for: forM, proof: 'A'.repeat(86) })
+  const rev = (rel: string, signer: string, r: number, keys: M.RevKey[], o: { bury?: string[]; classOff?: true } = {}) =>
+    op({ kind: 'stock-revision', rel, scope: rel, revision: { writer: signerId(signer), inc: 'inc0inc0inc0inc0', rev: r, keys: [...keys].sort((a, b) => M.byCode(a.anchor, b.anchor)), withdraw: [], bury: [...(o.bury ?? [])].sort(M.byCode), burn: [], ...(o.classOff ? { classOff: true } : {}) } })
   const proof = { type: 't', cryptosuite: 'c', created: t0, verificationMethod: 'v', proofPurpose: 'p', proofValue: 'x' }
   const cert = (kind: 'admit' | 'revoke', anchor: string): M.SetCert => ({ root, kind, anchor, keyAgreement: kind === 'admit' ? `r${anchor}` : null, by: root, proof })
   const set = (certs: M.SetCert[]) => op({ kind: 'device-set', root, rootKeyAgreement: `r${root}`, certs })
-  const tuple = (id: string, peer: string): M.Tuple => ({ id, own: `own-${id}`, ownKey: `k/${id}`, peer, peerKeyAgreement: `r${peer}`, record: `${id}:own`, openedAt: t0, candidates: [], deactivated: false })
+  const tuple = (id: string, own: string, peer: string): M.Tuple => ({ id, own, ownKey: `k/${id}`, peer, peerKeyAgreement: `r${peer}`, record: `${id}:own`, openedAt: t0, candidates: [], deactivated: false })
   const ops = [
-    view('M:e1', root, 1, [lk('x', 2), lk('y', 4)]),
-    view('M:e1', d2, 1, [lk('x', 3), lk('z', 1)]), // same anchor x, another value (B7)
-    view('M:e1', d3, 1, [lk('w', 6), lk('x', 7)]),
-    view('M:e1', d2, 2, [], ['y', 'w']), // d2 buries y and w before its revocation
+    rev('M:e1', root, 1, [key('x', 2), key('y', 4)]),
+    rev('M:e1', d2, 1, [key('x', 3), key('z', 1)]), // x bound by a second and (below) a third writer: conflict mark
+    rev('M:e1', d3, 1, [key('w', 6), key('x', 7)]),
+    rev('M:e1', d2, 2, [], { classOff: true, bury: ['y', 'w'] }), // d2 turns the class off and buries y, w before its revocation
     set([cert('admit', d2), cert('admit', d3)]),
     set([cert('revoke', d2)]),
   ]
   const base = () => {
     const s = M.emptyState('M')
-    M.apply(s, op({ kind: 'open-tuple', rel: null, tuple: tuple('M:e1', root), provenance: 'encounter', vouchedBy: null, act: null }))
-    M.apply(s, op({ kind: 'open-tuple', rel: null, tuple: tuple('M:e2', broot), provenance: 'encounter', vouchedBy: null, act: null }))
-    M.apply(s, view('M:e2', broot, 1, Array.from({ length: 8 }, (_, i) => lk(`b${i}`, i))))
+    M.apply(s, op({ kind: 'open-tuple', rel: null, tuple: tuple('M:e1', mAnchor, root), provenance: 'encounter', vouchedBy: null, act: null }))
+    M.apply(s, op({ kind: 'open-tuple', rel: null, tuple: tuple('M:e2', mAnchorB, broot), provenance: 'encounter', vouchedBy: null, act: null }))
+    for (const [a, ka] of [[mAnchor, 'k/M:e1'], [mAnchorB, 'k/M:e2']] as const) M.apply(s, op({ kind: 'device-set', root: a, rootKeyAgreement: `r${ka}`, certs: [], local: M.table([[a, 'M1']]) }))
+    M.apply(s, rev('M:e2', broot, 1, Array.from({ length: 8 }, (_, i) => key(`b${i}`, i, mAnchorB))))
     return s
   }
-  const dir = new DeviceDirectory()
-  const cands = [new K2Device('M', 'M1', new Uint8Array(32).fill(1), 0, 2, M.PARAM.budget, dir)]
-  return { t0, exp, root, d2, d3, broot, op, lk, view, cert, set, tuple, ops, base, cands }
+  return { t0, exp, op, ops, base, cands: [cand] }
 }
 
 describe('K2 Schritt 2: Review 36, eine Rechnung für Ms Sicht (B7)', () => {
-  it('V2. Eigenschaft: in zufälligen Empfangsreihenfolgen (fester Seed, mit Duplikaten) von widersprüchlichen Listungen, Grabsteinen und Widerruf ist Ms Sicht dieselbe, und jeder Verbraucher liest aus ihr: Rechteprüfung der Vorstellung, Vorratszählung (`stockAt`), Wahl (Schritt 2a: M ist ein Gerät, keine Teilung)', () => {
-    const { t0, exp, op, ops, base, cands } = viewFixture()
+  it('V2. Eigenschaft: in zufälligen Empfangsreihenfolgen (fester Seed, mit Duplikaten) von widersprüchlichen Bindungen, Grabsteinen und Widerruf ist Ms Sicht dieselbe, und jeder Verbraucher liest aus ihr: Rechteprüfung der Vorstellung, Vorratszählung (`stockAt`), Wahl (K2 2b.1: `stock-revision@2`, `for`)', async () => {
+    const { t0, exp, op, ops, base, cands } = await viewFixture()
     let rnd = 36
     const next = () => ((rnd = (rnd * 1103515245 + 12345) % 2 ** 31) / 2 ** 31)
-    const want = ['w:6', 'x:2', 'y:4']
+    // Soll (§3.3, §4): x bound by root, d2, d3 → conflict mark, unusable; z only in d2's lower listing, d2's current rev 2 is
+    // empty, and d2 is revoked → withdrawn; y buried by d2, but d2 is revoked and root currently lists y → revocation
+    // exception, usable; w buried by d2 (revoked), d3 currently lists w → usable; d2's class off does not count (revoked).
+    const want = ['w:6', 'y:4']
     for (let run = 0; run < 200; run++) {
       const order = ops.map((o) => ({ o, k: next() })).sort((a, b) => a.k - b.k).map((x) => x.o)
-      const dups = order.filter(() => next() < 0.3).map((o, i) => ({ ...o, id: { writer: 'w', n: 20_000 + run * 100 + i } }) as M.Op)
+      const dups = order.filter(() => next() < 0.3).map((o, i) => ({ ...o, id: { writer: 'w@2', n: 20_000 + run * 100 + i } }) as M.Op)
       const s = base()
+      for (const o of [...order, ...dups]) expect(M.opProblem(o), 'every op passes the journal form').toBe(null)
       for (const o of [...order, ...dups]) M.apply(s, o)
       const uv = M.usableView(s, 'M:e1', t0)
       const what = `run ${run}`
@@ -1103,6 +1114,7 @@ describe('K2 Schritt 2: Review 36, eine Rechnung für Ms Sicht (B7)', () => {
           expect(c.authorize(intro, s), `${what} ${c.name} ${k.anchor}`).toBe(true)
         }
         const h = new HolderDevice(c.name, 'M', c, new Carrier(), new VirtualClock(t0), undefined, s)
+        await h.listen('k/M:e1')
         expect(h.stockAt('M:e1'), `${what} ${c.name}`).toEqual({ listed: uv.listed.length, usable: uv.usable.length, unconsumed: uv.unconsumed.length, nameable: uv.unconsumed.length })
       }
     }

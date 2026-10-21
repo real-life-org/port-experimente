@@ -64,7 +64,13 @@ device's own anchors in that relationship, class on. An unknown `for`
 is folded and usable for nobody until the set brings the member (Z11).
 Evidence state per anchor: `unknown` / `listed` / `unlisted` /
 `withdrawn` plus a conflict flag, a function of the set, not a latch
-(Z10). Tests Z1–Z17: every row in forward and reverse order, with
+(Z10). The findings of the fold (`conflict:…`, `doppelte-bindung`,
+`fremder-anker`, `equivocation:…`) are historical diagnostics: appended
+when a fold shows them, never removed, so they can depend on the arrival
+order (Tor-Review 46 S1: `w lists x → w′ withdraws x → w′ binds x`
+leaves a `fremder-anker` finding, the reverse order none); no decision
+and no oracle reads them, only usability and evidence are asserted
+order-free. Tests Z1–Z17: every row in forward and reverse order, with
 duplicates (fresh op ids, as from a sibling's journal) and six seeded
 shuffles; W3 runs the same through the journal (M2 gets A's revisions
 only from M1's journal; equal usability and evidence; the late direct

@@ -1062,7 +1062,12 @@ export function allocFold(revs: readonly StockRevision[]): AllocFold {
   return { bound, conflicts, doubles, nonceConflicts, equivocated, current, withdrawn, foreign: [...foreign.values()], tombs, burned }
 }
 
-/** The findings of the fold, one per mark (monotone in the set, so every order reaches the same list). */
+/**
+ * The findings of the fold, one per mark. Historical diagnostics (Tor-Review 46 S1): the holder appends them when a fold
+ * shows them and never removes one, so the list can depend on the arrival order (a `fremder-anker` can vanish from the set
+ * computation when the anchor later binds to the withdrawing writer too). No decision and no oracle reads them; usability
+ * and evidence (`allocation`, `evidence`) are the order-independent functions of the set.
+ */
 export function allocFindings(f: AllocFold): string[] {
   const out: string[] = []
   for (const a of f.conflicts) out.push(`conflict:assignment:${a}`)
@@ -1295,7 +1300,7 @@ function applyBody(s: HolderState, op: Op): void {
       const c = canonical(op.revision)
       const revs = v.revs!.some((x) => canonical(x) === c) ? v.revs! : [...v.revs!, op.revision].sort((a, b) => (canonical(a) < canonical(b) ? -1 : 1))
       r.view = { scope: op.scope, revision: Math.max(0, ...revs.map((x) => x.rev)), keys: [], revs }
-      for (const f of allocFindings(allocFold(revs))) if (!s.findings.includes(f)) s.findings.push(f)
+      for (const f of allocFindings(allocFold(revs))) if (!s.findings.includes(f)) s.findings.push(f) // diagnostics only, see `allocFindings`
       return
     }
     case 'view': {
