@@ -432,14 +432,170 @@ test). Not covered by the predicate, as before: the ticket has no MV-24
 form yet (2b.2), and the reference is K2-specific (without device sets the
 image holds no stock address, so a K0/K1a ledger run fails (b)).
 
-**Verification 2b.0:** `tests/mehrgeraet-buch.test.ts` 36 passed + 1
-expected fail (D1) in ≈ 47 s; typecheck green. No cell changed: the K2,
+**Review 44 fixes: the ledger opens frames as the receiver** (Tor-Review
+44, `rltp/design/port-experimente-e15-codex-review44-2026-10-21.md`).
+B1: the key a ticket is actually sealed to was never observed. The seam
+hands the ledger frame bytes, the ledger kept their hashes and compared
+them with the commit, so "frame hash + committed address" stood in for
+"sealed to the key at that address". Counter-run: both tickets sealed to
+the other side's stock key, intent and submission addresses then set to
+the side's own key agreement; the receivers report `failed(malformed)`
+(they never reach the predicate), all checkers were green and
+P-Produktion counted the duty kept. B2: the comparison of the receiver's
+own key agreement with the committed act side had dropped out with the
+receiver predicate (a regression against 2877fc2): with `act.a.keyAgreement`
+set to B's, both sides accepted and every checker was green.
+Three reviews in a row found the binding check incomplete; the reviewer
+places the class at two transitions, sealing → observation → submission
+and committed act side → actually bound stock key. Both are now checked
+by construction, not by a list of observed hashes:
+
+- **The ledger opens every committed ticket frame with the key its
+  address names.** The commit protocol keeps the committed bytes of each
+  ticket intent (`CommitIntent.sealed`, with `replyTo`). At the issuance
+  commit the ledger records, per ticket address, the receiver image of
+  the device that allocated the stock key at that address
+  (`ReceiverImage`, now keyed by address, not by the named key) and its
+  own copy of that device's private key agreement for the address
+  (`xPriv`, PKCS#8, read through `HolderDevice.receiverKey`, kept only if
+  its public part is the address; checked again before use). P-Commit
+  opens each committed frame as that receiver would, but with only that
+  key (`openTickets`: `receive` with a one-key resolver, then the issuer's
+  proof). A frame that key does not open is `sealed-to-other-key`. Only
+  the opened plaintext goes on: the receiver predicate
+  (`ticketAcceptance`) runs on it at that address, and the binding table
+  compares it. The producer's plaintext no longer decides anything about
+  a ticket; it is left for the row `production` (the committed frames
+  are the frames the producer sealed for this document), the hash
+  identity of carrier and commit stays the second condition (P-Commit
+  (1), `committedSubmission`). P-Produktion counts a deposit only if it
+  is the committed submission *and* its committed frame opens at its
+  address. The ledger stays an observer: it reads the seam, the
+  committed images and one private key per ticket address, and writes
+  nothing into a holder. The checkers that open (`pCommit`,
+  `pProduktion`) are async; the dump carries the key copies, so a loaded
+  dump is re-opened, not trusted.
+- **The binding table** (`TICKET_BINDINGS` in `buch.ts`) is the single
+  list of what binds an opened ticket to the committed act side, the act
+  and the commit intent: `address` (the key that opened it is the intent
+  address), `own`, `own.anchor` and `own.keyAgreement` (the receiver's
+  stock key at the address against the committed side: B2), the voucher
+  anchor and key agreement against the other side, act id and times, the
+  `mediator` relationship (the signer is the committing device's own
+  anchor on the side's relationship), the receipt signer (`expected`),
+  `recipient`, `replyTo`, `digest`, `kind`, `frames` (committed bytes hash
+  to the committed frames), `production`, `copies` (every copy opens at
+  its address to the same digest). `UNBOUND` lists, with the reason, what
+  is not bound (document id and signing time, the proof, which is checked
+  before the table, and the voucher's display name). `bindingGaps`
+  reflects over the keys of the act, each act side, the intent and the
+  opened ticket; T1 asserts no gap on a real issuance and that a field
+  added anywhere without a row is exactly one gap.
+
+Fixed tests: B1 (the reviewer's counter-run: exactly one P-Commit
+violation naming `sealed-to-other-key` twice, P-Produktion 0 kept, six
+deposits), B2 (one P-Commit violation with the single row
+`own.keyAgreement`, two acceptances), T1 (the table covers every field),
+T2 (the reviewer's nine binding cases of review 44 (b) as a parametrised
+test with the counts measured there, 1/1/6/1/1/1/1/2/1, each derived in
+the test; "own set to the other side" is now refused by 8640.5 at the
+receiver its address names, before by 8640.2 at the receiver of the named
+key). U6, U8, U9, U1–U3, R1, R2 unchanged in their counts; the U6 single
+breaks keep 1/2/3 (the moved address is now `sealed-to-other-key`, the
+swapped frame hashes fail `frames` and `production`). Edits of the
+producer's plaintext in a dump no longer change P-Commit (the ticket is
+read from the opened bytes); an edit of the committed act side's key
+agreement, which review 44 measured green, now fails (`own.keyAgreement`
+and `voucher.keyAgreement`).
+
+Addendum before review 45 (on 3efda64): **carrier frames without a
+producer report** and **`replyTo`**. Every carrier frame the producers did
+not report as a ticket, deposited at the key agreement of a stock key an
+observed device holds (in the last committed images), is kept as a probe
+with the ledger's copy of that device's key for the address
+(`carrier.probes`, `CarrierProbe`). P-Commit opens it with that key; if
+it opens to a ticket, it needs an earlier commit of its signer (an
+issuance batch whose mediator context holds the signer) holding these
+bytes for this address, otherwise `ticket-without-commit`, whether or not
+a producer reported it. Frames that do not open or are no ticket stay
+uncounted as before (`unknown`, `other`). `replyTo` is now bound twice:
+to the intent (`replyTo`) and to the mediator on the relationship
+(`replyTo.counterpart`: a key agreement the receiver's committed image
+holds for its counterpart there, `peerKeyAgreement` of its tuples and,
+under device sets, the counterpart's set members). The mediator's own
+committed state cannot give it: it holds only the context name of its
+own key, not the key agreement. Fixed test U10: a validly sealed ticket
+deposited at an A stock key address with no producer report gives
+exactly one P-Commit violation `ticket-without-commit` (A accepts it on a
+third key: P-Einmal 3 keys, 3 accepts, holds); the control holds.
+
+**Review 45 fixes: one path for every opened ticket frame** (Tor-Review
+45, `rltp/design/port-experimente-e15-codex-review45-2026-10-21.md`). B1:
+the addendum's probe check was a second, weaker path (an earlier commit
+with the signer, frame hash and address), and the full check still reached
+only intents whose `kind` was `ticket`. Counter-run: a third, correctly
+sealed ticket of a new act in the issuance batch, reported and committed
+as `card`, no `introduce` of its act: three acceptances, every checker
+green; signed in the other M relationship, the holder refuses (8640.2) and
+the ledger stayed green. Now neither the producer's report nor the
+intent's `kind` decides anything:
+
+- **At the carrier, one path** (`ticketDeposits`): every deposit at a
+  stock key address is a probe, reported or not. Opened with the key
+  its address names, its content decides whether it is a ticket. A ticket
+  needs an earlier commit holding these bytes for this address
+  (`ticket-without-commit`) whose batch holds the `introduce` of *this*
+  ticket's act on the key it names (`ticket-without-introduce`). The
+  receiver predicate and the binding table then judge the same committed
+  bytes in that issuance. A reported ticket that the key at its deposit
+  address does not open (its receiver cannot read it) still must be the
+  committed submission (U9). P-Produktion counts through the same path.
+  `tickets` in the counts is the number of deposits that are tickets by
+  content or by report.
+- **In the commit protocol** every intent with a frame at a stock key
+  address keeps its bytes and gets a receiver image, whatever its kind.
+  Each batch's frames are opened, and its tickets are found by content.
+  A ticket of an act the batch does not introduce is
+  `ticket-without-introduce`, with the receiver's verdict (8640.x) on it,
+  also in a batch without any `introduce`. The two tickets of the
+  introduced act go through the predicate and the table as before. A
+  frame at a stock key address that does not open is
+  `sealed-to-other-key`.
+- **S1, closed for addresses that become known:** a deposit at an address
+  no committed image knows yet is held (live only) and drawn in as a probe,
+  with its own seq and time, at the first commit that makes the address a
+  stock key address.
+
+Fixed tests: R45-B1a (2 violations `ticket-without-introduce`: the
+issuance and the one deposit; tickets 3, accepts 3), R45-B1b (4: the
+issuance with 8640.2 and three deposits, the third ticket refused and
+repeated; tickets 5, accepts 2), R45-S1 (the reviewer's case: 1
+`ticket-without-commit`), U10 still 1 (its `tickets` count is now 3: by
+content). All earlier counts unchanged.
+
+What stays measured only: the receiver state steps (8640.4, 8640.12,
+8640.6, 8640.9, 8640.13) are not part of the reference, so a key that is
+`consumed` or `withdrawn` in the receiver image still passes P-Commit
+(review 44 (c)); the receiver image and the opening time are those of the
+issuance commit, not of the later receipt; a frame at an address that
+never becomes a stock key address in an observed committed image is not
+opened (`unknown`: the ledger has no key for it, and no observed receiver
+reads tickets there); held deposits are live state, not in the dump (once
+drawn in they are); the reference stays K2-specific (no stock address
+without device sets).
+
+**Verification 2b.0:** `tests/mehrgeraet-buch.test.ts` 52 passed + 1
+expected fail (D1) in ≈ 47 s after the review 45 fixes (before: 36 + 1,
+≈ 47 s); typecheck green. No cell changed: the K2,
 K1a, K0 and seed-sweep files give the same 111/111 results on this branch
 as on main a290f7a (test by test; after the review 42 fixes again
 111/111, identical test by test, the four files ≈ 11 min; after the
 review 43 fixes, with the holder's ticket check now `ticketAcceptance`,
-again 111/111, identical test by test, ≈ 16 min under load); also green
-(again after review 43, 9 files, 114 tests):
+again 111/111, identical test by test, ≈ 16 min under load; after the
+review 44 fixes again 111/111, identical test by test, ≈ 11 min; after the
+review 45 fixes: see the PR comment); also green
+(again after review 43, 9 files, 114 tests; not re-run for review 44,
+which changes the ledger and adds one read-only holder accessor):
 gegenlauf, zustellung, träger, zustellung-harness, modell, engine,
 K1a-service, matrix, harness. Report not re-run (no cell can change).
 
@@ -1659,8 +1815,8 @@ throwaway script, numbers from one run; the frame counts are asserted in
 ```sh
 export PATH=/home/fritz/.n/n/versions/node/24.21.0/bin:$PATH
 pnpm vitest run tests/mehrgeraet-k2.test.ts
-pnpm vitest run tests/mehrgeraet-buch.test.ts   # 2b.0 + 2b.1: ledger, checkers, generator G1/G2 (20 seeds each; GEN_SEEDS=<n>), mutations, D1 expected-fail
-pnpm vitest run tests/mehrgeraet-k2-zuteilung.test.ts   # 2b.1: fold rows Z1–Z19, poison vectors F1, world tests W, B, E, K
+pnpm vitest run tests/mehrgeraet-buch.test.ts   # 2b.0 + 2b.1: ledger, checkers, generator G1/G2 (20 seeds each; GEN_SEEDS=<n>), mutations, review-44/45 opening, binding table and ticket path, D1 expected-fail
+pnpm vitest run tests/mehrgeraet-k2-zuteilung.test.ts   # 2b.1: fold rows Z1–Z19, poison vectors F1, world tests W, B, E, K, checker counter-runs P1–P3
 SEEDS=all pnpm vitest run tests/mehrgeraet-seeds.test.ts   # 20 seeds × K2-strict, K1a (default: seed 1)
 REPORT=1 pnpm vitest run report   # column k2-device-keys in the multi-device port
 ```

@@ -14,6 +14,19 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 //       (Tor-Review 43 B1).
 //   U9. Carrier submission addresses swapped after the commit (intent and sealed bytes unchanged) → P-Commit fails, and
 //       P-Produktion does not count the duty kept (Tor-Review 43 B2).
+//   B1, B2 (Tor-Review 44). The ledger opens every committed ticket frame with the key its address names, as that receiver
+//       would: tickets sealed to the other side's key under the "right" addresses → P-Commit `sealed-to-other-key`,
+//       P-Produktion not kept (B1); the committed act side's key agreement set to the other side's → P-Commit names
+//       `own.keyAgreement` (B2).
+//   T1. The binding table covers every field of the committed act side, the act, the intent and the opened ticket.
+//   T2. The reviewer's nine binding cases of review 44 (b), parametrised, with their violation counts.
+//   U10. A ticket frame deposited at the carrier directly, no producer report, validly sealed to an A stock key →
+//       P-Commit `ticket-without-commit` (addendum to review 44, before review 45).
+//   R45-B1a, R45-B1b. A third, correctly sealed ticket of a new act in the issuance batch, reported and committed as a
+//       `card`, without an `introduce` of its act (b: signed in the other M relationship) → P-Commit
+//       `ticket-without-introduce` (b: and 8640.2); every opened ticket frame takes the same path (Tor-Review 45 B1).
+//   R45-S1. An unreported ticket at a stock key address before the first commit that makes it known → drawn in at that
+//       commit, P-Commit `ticket-without-commit`.
 //   R1, R2. The dump is a complete artefact: dump → load → re-check gives the same results (Tor-Review 42 S1).
 //   N1. The observation seam is fail-safe: a throwing observer changes nothing in holder or carrier (Tor-Review 42 (a)).
 //   S1. Shrinking: a failing generated sequence shrinks to the smallest sequence that still fails the same property.
@@ -44,7 +57,8 @@ const rng = vi.hoisted(() => ({
 vi.mock('node:crypto', async (importOriginal) => ({ ...(await importOriginal<typeof import('node:crypto')>()), randomBytes: (n: number) => rng.bytes(n), randomUUID: () => rng.uuid() }))
 
 import { frameHash, TYPES, type HolderDevice } from '../src/lab/mehrgeraet/holder'
-import { Buch, ledgerWorld, pairCounter, pCommit, pEinmal, pPaar, pProduktion } from '../src/lab/mehrgeraet/buch'
+import { diSign, jcs, seal, type Json } from '@real-life/trust-protocol'
+import { Buch, bindingGaps, ledgerWorld, openTickets, pairCounter, pCommit, pEinmal, pPaar, pProduktion } from '../src/lab/mehrgeraet/buch'
 import { generate, report, runSequence, show, shrink, type GenEvent, type GenWorld, type Mutation } from '../src/lab/mehrgeraet/generator'
 import { k2 } from '../src/candidates/mehrgeraet-k2'
 import * as M from '../src/lab/mehrgeraet/model'
@@ -264,9 +278,9 @@ describe('K2 step 2b.0: mutations show each checker failing', () => {
     expect(mutated.onX).toBe(2)
     expect(pEinmal(mutated.buch).violations).toHaveLength(1)
     for (const r of [control, mutated]) {
-      expect(pProduktion(r.buch).counts).toMatchObject({ introductions: 2, obliged: 2, kept: 2, noKeys: 0, open: 0 })
-      expect(pProduktion(r.buch).violations).toEqual([])
-      expect(pCommit(r.buch).ok && pPaar(r.buch).ok).toBe(true)
+      expect((await pProduktion(r.buch)).counts).toMatchObject({ introductions: 2, obliged: 2, kept: 2, noKeys: 0, open: 0 })
+      expect((await pProduktion(r.buch)).violations).toEqual([])
+      expect((await pCommit(r.buch)).ok && pPaar(r.buch).ok).toBe(true)
     }
   }, 120_000)
 
@@ -324,10 +338,12 @@ describe('K2 step 2b.0: mutations show each checker failing', () => {
     // its commit holds for that frame):
     // - expected receipt signer of one intent → 1 (the issuance; the carrier check is unchanged);
     // - address of one intent set to the other's → 2: that ticket's deposit is no longer the committed submission (1), and
-    //   the receiver predicate refuses the ticket at the other side's key agreement (no own relationship behind it, 8640.2) (1);
-    // - frames of the two intents swapped, addresses kept → 3: each deposit's frame is now committed for the other address
-    //   (2), and the issuance's committed frames are not the sealed frames of its documents (1).
-    const broken = (f: (i: Buch['commits'][number]['intents']) => void) => {
+    //   the ledger, opening the committed bytes with the key the new address names (the other side's), cannot open them:
+    //   sealed to another key (Tor-Review 44) (1, the issuance);
+    // - frame hashes of the two intents swapped, addresses and committed bytes kept → 3: each deposit's frame is now
+    //   committed for the other address (2), and in the issuance the committed bytes no longer hash to the committed
+    //   frames and the committed frames are not the sealed frames of its documents (1).
+    const broken = async (f: (i: Buch['commits'][number]['intents']) => void) => {
       const b = Buch.load(control.buch.dump())
       const c = b.commits.find((x) => x.ops.some((o) => o.kind === 'introduce'))!
       f(c.intents.filter((i) => i.kind === TYPES.ticket))
@@ -340,7 +356,7 @@ describe('K2 step 2b.0: mutations show each checker failing', () => {
       ['address', (is: Buch['commits'][number]['intents']) => void (is[0]!.address = is[1]!.address), 2],
       ['frames', (is: Buch['commits'][number]['intents']) => void ([is[0]!.frames, is[1]!.frames] = [is[1]!.frames, is[0]!.frames]), 3],
     ] as const) {
-      const c = broken(f)
+      const c = await broken(f)
       expect(c.violations, what).toHaveLength(n)
       expect(c.violations.filter((v) => v.startsWith('issuance')), what).toHaveLength(1)
       expect(c.violations.find((v) => v.startsWith('issuance')), what).toContain(what)
@@ -542,7 +558,7 @@ describe('K2 step 2b.0: union duty counter follows the committed state (Tor-Revi
 
 describe('K2 step 2b.0: the dump is a complete artefact (Tor-Review 42 S1)', () => {
   const one: GenEvent[] = [{ k: 'introduce' }]
-  const all = (b: Buch) => M.canonical({ checks: [pEinmal(b), pCommit(b), pProduktion(b), pPaar(b)], counter: pairCounter(b), accepted: [...b.acceptedOn()].map(([k, a]) => [k, [...a].sort()]) })
+  const all = async (b: Buch) => M.canonical({ checks: [pEinmal(b), await pCommit(b), await pProduktion(b), pPaar(b)], counter: pairCounter(b), accepted: [...b.acceptedOn()].map(([k, a]) => [k, [...a].sort()]) })
 
   it('R1. dump → load → re-check: the same checker results and counters; loaded again, the same dump (U0 control, U1, U2: P-Commit still fails after the reload)', async () => {
     for (const mutation of [undefined, suppressTickets, ticketBeforeCommit]) {
@@ -550,24 +566,25 @@ describe('K2 step 2b.0: the dump is a complete artefact (Tor-Review 42 S1)', () 
       const dump = r.buch.dump()
       const loaded = Buch.load(dump)
       expect(loaded.dump()).toBe(dump)
-      expect(all(loaded)).toBe(all(r.buch))
+      expect(await all(loaded)).toBe(await all(r.buch))
     }
     // Soll after the reload, as in U1 and U2 on the live ledger: U1 P-Commit 1 violation, U2 P-Commit 2 violations.
     const u1 = Buch.load((await runSequence(cand, one, { seed: 21, reseed, mutation: suppressTickets })).buch.dump())
-    expect(pCommit(u1).violations).toHaveLength(1)
+    expect((await pCommit(u1)).violations).toHaveLength(1)
     const u2 = Buch.load((await runSequence(cand, one, { seed: 21, reseed, mutation: ticketBeforeCommit })).buch.dump())
-    expect(pCommit(u2).violations).toHaveLength(2)
+    expect((await pCommit(u2)).violations).toHaveLength(2)
   }, 120_000)
 
   it('R2. The production mapping P-Commit reads is in the dump: removing it after a valid issuance changes the dump', async () => {
     const r = await runSequence(cand, one, { seed: 21, reseed })
     const dump = r.buch.dump()
-    expect(pCommit(r.buch).ok).toBe(true)
+    expect((await pCommit(r.buch)).ok).toBe(true)
     ;(r.buch as unknown as { byDigest: Map<string, unknown> }).byDigest.clear()
-    // Soll: P-Commit fails without the mapping (the issuance finds 0 ticket intents of its act), and the dump shows it.
-    expect(pCommit(r.buch).ok).toBe(false)
+    // Soll: P-Commit fails without the mapping (the binding row `production`, the second condition next to the opened
+    // bytes, finds no sealed frames of the document), and the dump shows it.
+    expect((await pCommit(r.buch)).ok).toBe(false)
     expect(r.buch.dump()).not.toBe(dump)
-    expect(pCommit(Buch.load(r.buch.dump())).ok).toBe(false)
+    expect((await pCommit(Buch.load(r.buch.dump()))).ok).toBe(false)
   }, 60_000)
 })
 
@@ -662,4 +679,363 @@ describe('K2 step 2b.1: mutations show the allocation checkers failing', () => {
     // Soll mutated: A1 frei 1 (the withdrawal), M2 without a key of A1 → 1 violation.
     expect(prop(mutated, 'P-Versorgung').violations).toHaveLength(1)
   }, 120_000)
+})
+
+// ── Tor-Review 44: the ledger opens frames as the receiver ──
+
+/**
+ * Tor-Review 44 B1 (the reviewer's counter-run): M seals each ticket to the other side's stock key (the voucher's key
+ * agreement), then sets the submission address and the intent address to the side's own key agreement before the commit.
+ */
+const sealedToOther: Mutation = (g) => {
+  const d = priv(g.Mm)
+  const orig = d.sendDoc.bind(g.Mm)
+  d.sendDoc = async (type, ...rest) => {
+    if (type !== TYPES.ticket) return orig(type, ...rest)
+    const address = rest[2] as string // sendDoc(type, issuerCtx, recipient, toRkid, …)
+    const p = rest[4] as { voucher: { anchor: string; keyAgreement: string } }
+    rest[5] = [{ anchor: p.voucher.anchor, rkid: p.voucher.keyAgreement }] // the fan: the key the frame is sealed to
+    const r = await orig(type, ...rest)
+    if (r) {
+      ;(g.Mm.zusteller.submissions.get(r.digest) as { address: string }).address = address
+      ;((g.Mm as unknown as { intents: Map<string, { address: string }> }).intents.get(r.digest)!).address = address
+    }
+    return r
+  }
+}
+/**
+ * Tor-Review 44 B2 (the reviewer's counter-run): the committed act's side a names B's key agreement; A's ticket is still
+ * sealed and addressed to A's actual key agreement, so the counter-ticket to B carries the wrong key agreement as voucher.
+ */
+const actSideAgreement: Mutation = (g) => {
+  const mm = g.Mm as unknown as { emit: (body: { kind: string; act?: M.MediatorAct }) => unknown; sendDoc: (type: string, ...rest: unknown[]) => Promise<unknown> }
+  const emit = mm.emit.bind(g.Mm)
+  const send = mm.sendDoc.bind(g.Mm)
+  let changed = ''
+  let real = ''
+  mm.emit = (body) => {
+    if (body.kind === 'introduce' && body.act) {
+      changed = body.act.a.key
+      real = body.act.a.keyAgreement
+      body.act.a.keyAgreement = body.act.b.keyAgreement
+    }
+    return emit(body)
+  }
+  mm.sendDoc = async (type, ...rest) => {
+    if (type === TYPES.ticket && (rest[4] as { own: string }).own === changed) {
+      rest[2] = real
+      rest[5] = [{ anchor: changed, rkid: real }]
+    }
+    return send(type, ...rest)
+  }
+}
+/** M's ticket payload changed before signing (the bytes are sealed and committed as M built them). */
+const ticketPayload =
+  (f: (p: { own: string; issuedAt: string; voucher: { anchor: string } }) => void): Mutation =>
+  (g) => {
+    const d = priv(g.Mm)
+    const orig = d.sendDoc.bind(g.Mm)
+    d.sendDoc = async (type, ...rest) => {
+      if (type === TYPES.ticket) f(rest[4] as { own: string; issuedAt: string; voucher: { anchor: string } })
+      return orig(type, ...rest)
+    }
+  }
+/** The named key's allocator commits a shorter life for it while M builds the ticket (before the issuance commit). */
+const shortKey: Mutation = (g) => {
+  const d = priv(g.Mm)
+  const orig = d.sendDoc.bind(g.Mm)
+  d.sendDoc = async (type, ...rest) => {
+    if (type === TYPES.ticket) {
+      const own = (rest[4] as { own: string }).own
+      const allocator = g.w.devices.find((x) => x.state.relationships.some((r) => r.stock.some((k) => k.anchor === own && k.by === x.name)))!
+      allocator.state.relationships.flatMap((r) => r.stock).find((k) => k.anchor === own)!.expiresAt = '2026-10-18T08:00:00.000Z'
+      allocator.commit()
+    }
+    return orig(type, ...rest)
+  }
+}
+
+describe('K2 step 2b.0: the ledger opens frames as the receiver (Tor-Review 44)', () => {
+  const one: GenEvent[] = [{ k: 'introduce' }]
+
+  it('B1. Tickets sealed to the other side\'s stock key, intent and submission addresses set to the side\'s own key agreement → exactly P-Commit fails with `sealed-to-other-key`; P-Produktion does not count the duty kept', async () => {
+    const r = await runSequence(cand, one, { seed: 21, reseed, mutation: sealedToOther })
+    // Soll P-Commit: the issuance batch holds two ticket intents at A's resp. B's key agreement whose bytes are sealed to
+    // the other side's key. The ledger opens each committed frame with the key its address names: neither opens →
+    // `sealed-to-other-key` twice, and no opened ticket names either side → 1 violation (the issuance). Every deposit is
+    // the committed submission (bytes and address as committed) → no carrier violation. At the carrier: the device at
+    // each address cannot open its ticket, no receipt, the deliverer repeats after 3 and 6 rounds → 3 × 2 = 6 deposits.
+    // P-Produktion: 1 obligation; a deposit counts only if its committed frame opens at its address → 0 of 2 → 1
+    // violation, 0 kept. P-Einmal: no acceptance. P-Paar: nothing connected.
+    expect(prop(r, 'P-Commit').violations).toHaveLength(1)
+    expect(prop(r, 'P-Commit').violations[0]!.match(/sealed-to-other-key/g)).toHaveLength(2)
+    expect(prop(r, 'P-Commit').counts).toEqual({ tickets: 6, issuances: 1 })
+    expect(prop(r, 'P-Produktion').violations).toHaveLength(1)
+    expect(prop(r, 'P-Produktion').counts).toMatchObject({ introductions: 1, obliged: 1, kept: 0 })
+    expect(prop(r, 'P-Einmal')).toMatchObject({ ok: true, counts: { keys: 0, accepts: 0 } })
+    expect(prop(r, 'P-Paar')).toMatchObject({ ok: true, counts: { connectedActs: 0, bothSides: 0 } })
+  }, 60_000)
+
+  it('B2. The committed act side a names B\'s key agreement, A\'s ticket sealed and addressed correctly → exactly P-Commit fails, naming `own.keyAgreement`', async () => {
+    const r = await runSequence(cand, one, { seed: 21, reseed, mutation: actSideAgreement })
+    // Soll P-Commit: both tickets open at their addresses and pass the receiver predicate (B's voucher check 8640.8 sees
+    // A's anchor, not an own key). The binding table: A's ticket opens with the key at A's actual key agreement, which
+    // is not the committed `act.a.keyAgreement` (B's) → `own.keyAgreement`; B's voucher carries the committed (wrong)
+    // key agreement, equal to the committed side, so `voucher.keyAgreement` holds; nothing else differs → 1 violation
+    // (the issuance) with exactly one row. Both sides accept and receipt at once → 2 deposits, both committed
+    // submissions. P-Einmal: 2 keys, 2 accepts, no violation. P-Produktion: 1 kept. P-Paar: nothing connected.
+    expect(prop(r, 'P-Commit').violations).toHaveLength(1)
+    expect(prop(r, 'P-Commit').violations[0]).toContain('own.keyAgreement')
+    expect(prop(r, 'P-Commit').violations[0]!.split('; ')).toHaveLength(1)
+    expect(prop(r, 'P-Commit').counts).toEqual({ tickets: 2, issuances: 1 })
+    expect(prop(r, 'P-Einmal')).toMatchObject({ ok: true, counts: { keys: 2, accepts: 2 } })
+    expect(prop(r, 'P-Produktion')).toMatchObject({ ok: true, counts: { obliged: 1, kept: 1 } })
+    expect(prop(r, 'P-Paar').ok).toBe(true)
+  }, 60_000)
+
+  it('T1. The binding table covers every field of the committed act side, the act, the commit intent and the opened ticket; a field added anywhere without a row is a gap', async () => {
+    const r = await runSequence(cand, one, { seed: 21, reseed })
+    const c = r.buch.commits.find((x) => x.ops.some((o) => o.kind === 'introduce'))!
+    const op = c.ops.find((o): o is M.Op & { kind: 'introduce' } => o.kind === 'introduce')!
+    const i = c.intents.find((x) => x.kind === TYPES.ticket)!
+    const opened = (await openTickets(r.buch)).get(`${c.seq}|${i.digest}|0`)
+    expect(opened?.ok, 'Voraussetzung: das Ticket öffnet an seiner Adresse').toBe(true)
+    const doc = (opened as { doc: Record<string, unknown> }).doc
+    const fields = (extra: { act?: object; side?: object; intent?: object; payload?: object }) => ({
+      act: { ...op.act, ...extra.act },
+      sides: [{ ...op.act.a, ...extra.side }, op.act.b],
+      intent: { ...i, ...extra.intent },
+      doc: { ...doc, payload: { ...(doc.payload as object), ...extra.payload } },
+    })
+    // Soll: no gap on the real objects; each added field is exactly one gap, named by its path.
+    expect(bindingGaps(fields({}))).toEqual([])
+    expect(bindingGaps(fields({ side: { extra: 1 } }))).toEqual(['side.extra'])
+    expect(bindingGaps(fields({ act: { extra: 1 } }))).toEqual(['act.extra'])
+    expect(bindingGaps(fields({ intent: { extra: 1 } }))).toEqual(['intent.extra'])
+    expect(bindingGaps(fields({ payload: { extra: 1 } }))).toEqual(['doc.payload.extra'])
+  }, 60_000)
+
+  // Review 44 (b), the reviewer's nine binding cases, each from seed 21 and one introduction (U0's control), with the
+  // violation counts they measured; each derived here by hand:
+  // 1. voucher = own (U6): both tickets open and are refused by 8640.8 at their receivers; one issuance → 1; the six
+  //    deposits (refused, repeated after 3 and 6 rounds) are committed submissions.
+  // 2. signer of the other M relationship (U8): 8640.2 twice (and the `mediator` row twice), one issuance → 1.
+  // 3. submission addresses swapped after `sendDoc` (U9): the issuance is unchanged; each of the six deposits is at an
+  //    address its commit does not hold for that frame → 6.
+  // 4. issuance time in the future (2030): 8640.3 and `issuedAt` on both tickets, one issuance → 1.
+  // 5. `own` set to the other side (ticket to A names B's key, sealed and addressed to A): each ticket opens at its address,
+  //    the one naming A's key sits at B's address (8640.5, `own.anchor`, `own.keyAgreement`), one issuance → 1.
+  // 6. the named key ends before the act (its allocator commits the shorter life before the issuance): 8640.7 on both,
+  //    one issuance → 1.
+  // 7. one wrong `expected` in the control dump: row `expected` on one ticket → 1.
+  // 8. both tickets at the carrier before their commit (U2): 2 deposits without an earlier commit → 2; the deposits after
+  //    the commit are committed submissions, the issuance holds.
+  // 9. an extra carrier entry with the other ticket's frame at the first ticket's address: that frame is committed for
+  //    the other address → 1.
+  const nine: Array<[string, { mutation?: Mutation; edit?: (b: Buch) => Buch }, number, string]> = [
+    ['voucher = own', { mutation: wrongVoucher }, 1, '8640.8'],
+    ['signer of the other M relationship', { mutation: wrongSigner }, 1, '8640.2'],
+    ['submission addresses swapped', { mutation: swappedAddress }, 6, 'not the committed submission'],
+    ['issuance time in the future', { mutation: ticketPayload((p) => void (p.issuedAt = '2030-01-01T00:00:00.000Z')) }, 1, '8640.3'],
+    ['own set to the other side', { mutation: ticketPayload((p) => void (p.own = p.voucher.anchor)) }, 1, '8640.5'],
+    ['named key ends before the act', { mutation: shortKey }, 1, '8640.7'],
+    [
+      'one wrong expected in the control dump',
+      {
+        edit: (b) => {
+          const x = Buch.load(b.dump())
+          const is = x.commits.find((c) => c.ops.some((o) => o.kind === 'introduce'))!.intents.filter((i) => i.kind === TYPES.ticket)
+          is[0]!.expected = is[1]!.expected
+          return x
+        },
+      },
+      1,
+      'expected',
+    ],
+    ['both tickets before their commit', { mutation: ticketBeforeCommit }, 2, 'without an earlier commit'],
+    [
+      'extra carrier entry with the other ticket frame',
+      {
+        edit: (b) => {
+          const ps = b.productions.filter((p) => p.type === TYPES.ticket)
+          b.carrier.tickets.push({ ...b.carrier.tickets[0]!, seq: 1_000_000, frame: ps.find((p) => p.digest !== b.carrier.tickets[0]!.digest)!.frames[0]! })
+          return b
+        },
+      },
+      1,
+      'not the committed submission',
+    ],
+  ]
+  for (const [label, how, n, word] of nine)
+    it(`T2. ${label} → ${n} P-Commit violation(s)`, async () => {
+      const r = await runSequence(cand, one, { seed: 21, reseed, mutation: how.mutation })
+      const c = await pCommit(how.edit ? how.edit(r.buch) : r.buch)
+      expect(c.violations, c.violations.join('\n')).toHaveLength(n)
+      for (const v of c.violations) expect(v).toContain(word)
+    }, 60_000)
+})
+
+/**
+ * After M's real issuance, a ticket M never produced is handed to the carrier directly: signed with M's key on M–A, naming an
+ * unused A stock key and an unused B key, sealed to that A key and deposited at its key agreement. No producer reports it.
+ */
+const unreportedTicket: Mutation = (g) => {
+  const orig = g.Mm.introduce.bind(g.Mm)
+  g.Mm.introduce = async (...args: Parameters<HolderDevice['introduce']>) => {
+    const r = await orig(...args)
+    const act = g.Mm.state.mediatorActs[0]!
+    const unused = (person: string) =>
+      g.w
+        .of(person)
+        .flatMap((d) => d.state.relationships.flatMap((x) => x.stock.filter((k) => k.by === d.name && k.state === 'active')))
+        .find((k) => k.anchor !== act.a.key && k.anchor !== act.b.key)!
+    const own = unused('A')
+    const voucher = unused('B')
+    const m = await g.Mm.cand.keys.pair(M.head(M.rel(g.Mm.state, g.ma)).ownKey)
+    const now = g.w.clock.now()
+    const payload = { act: crypto.randomUUID(), issuedAt: now, expiresAt: new Date(Date.parse(now) + M.PARAM.actLifetimeMs).toISOString(), own: own.anchor, voucher: { anchor: voucher.anchor, keyAgreement: voucher.keyAgreement, name: 'B' } }
+    const doc = await diSign({ anchor: m.anchor, ed: { priv: m.ed.priv } }, { id: crypto.randomUUID(), type: TYPES.ticket, issuer: m.anchor, recipient: own.anchor, replyTo: m.rkid, issuedAt: now, payload }, now)
+    g.w.carrier.deposit(own.keyAgreement, new TextEncoder().encode(jcs(await seal(doc as unknown as Json, own.keyAgreement))))
+    return r
+  }
+}
+
+describe('K2 step 2b.0: ticket frames without a producer report (addendum to Tor-Review 44)', () => {
+  it('U10. A validly sealed ticket deposited at an A stock key address with no producer report → exactly P-Commit fails with `ticket-without-commit`; control holds', async () => {
+    const one: GenEvent[] = [{ k: 'introduce' }]
+    const control = await runSequence(cand, one, { seed: 21, reseed })
+    for (const c of control.checks) expect(c.violations, c.property).toEqual([])
+    const r = await runSequence(cand, one, { seed: 21, reseed, mutation: unreportedTicket })
+    // Soll P-Commit: the real issuance as in U0 (2 tickets, 1 issuance, bound). The extra frame is at a stock key address
+    // of an observed device (A's allocator), no producer reported it, so the ledger opens it with that key: it opens to a
+    // ticket, and no earlier commit of the signing device (M) holds these bytes → 1 violation `ticket-without-commit`.
+    // Tickets at the carrier count by content (Tor-Review 45): the two reported ones and this one → 3. The other checkers: A accepts the extra ticket on a third, unused
+    // key (8640 passes: M's signer, own key at the address, voucher not A's) → P-Einmal 3 keys, 3 accepts, no violation;
+    // P-Produktion reads the one logged introduction, kept; P-Paar: nothing connected.
+    expect(prop(r, 'P-Commit').violations).toHaveLength(1)
+    expect(prop(r, 'P-Commit').violations[0]).toContain('ticket-without-commit')
+    expect(prop(r, 'P-Commit').counts).toEqual({ tickets: 3, issuances: 1 })
+    expect(prop(r, 'P-Einmal')).toMatchObject({ ok: true, counts: { keys: 3, accepts: 3 } })
+    expect(prop(r, 'P-Produktion')).toMatchObject({ ok: true, counts: { obliged: 1, kept: 1 } })
+    expect(prop(r, 'P-Paar').ok).toBe(true)
+  }, 60_000)
+})
+
+/** An unused active stock key of `person` (allocated by the device holding it), other than the keys of M's first act. */
+const unusedKey = (g: GenWorld, person: string) => {
+  const act = g.Mm.state.mediatorActs[0]
+  return g.w
+    .of(person)
+    .flatMap((d) => d.state.relationships.flatMap((x) => x.stock.filter((k) => k.by === d.name && k.state === 'active')))
+    .find((k) => k.anchor !== act?.a.key && k.anchor !== act?.b.key)!
+}
+/**
+ * Tor-Review 45 B1: while building the second regular ticket, M also builds a third ticket of a new act (an unused A key,
+ * an unused B key) in the same action, so in the same issuance batch; its production report and its intent call it a
+ * `card`, its bytes are a ticket. `rel`: the M relationship whose key signs it (`ma` correct, `mb` the other one).
+ */
+const disguisedTicket =
+  (rel: 'ma' | 'mb'): Mutation =>
+  (g) => {
+    const d = priv(g.Mm)
+    const send = d.sendDoc.bind(g.Mm)
+    const produced = g.buch.produced.bind(g.buch)
+    let disguise = false
+    let n = 0
+    g.buch.produced = (dev, p) => produced(dev, disguise ? { ...p, type: TYPES.card } : p)
+    d.sendDoc = async (type, ...rest) => {
+      const r = await send(type, ...rest)
+      if (type === TYPES.ticket && ++n === 2) {
+        const a = unusedKey(g, 'A')
+        const b = unusedKey(g, 'B')
+        const signer = M.head(M.rel(g.Mm.state, g[rel])).ownKey
+        const replyTo = (await g.Mm.cand.keys.pair(M.head(M.rel(g.Mm.state, g.ma)).ownKey)).rkid
+        const now = g.w.clock.now()
+        disguise = true
+        const extra = await send(TYPES.ticket, signer, a.anchor, a.keyAgreement, replyTo, { act: crypto.randomUUID(), issuedAt: now, expiresAt: new Date(Date.parse(now) + M.PARAM.actLifetimeMs).toISOString(), own: a.anchor, voucher: { anchor: b.anchor, keyAgreement: b.keyAgreement, name: 'B' } }, [{ anchor: a.anchor, rkid: a.keyAgreement }])
+        disguise = false
+        ;((g.Mm as unknown as { intents: Map<string, { kind: string }> }).intents.get(extra!.digest)!).kind = TYPES.card
+      }
+      return r
+    }
+  }
+/** A ticket M never produced, signed with M's key on M–A, sealed to `own` and deposited at its key agreement. */
+async function forgeTicket(g: GenWorld, own: M.StockKey, voucher: M.StockKey): Promise<void> {
+  const m = await g.Mm.cand.keys.pair(M.head(M.rel(g.Mm.state, g.ma)).ownKey)
+  const now = g.w.clock.now()
+  const payload = { act: crypto.randomUUID(), issuedAt: now, expiresAt: new Date(Date.parse(now) + M.PARAM.actLifetimeMs).toISOString(), own: own.anchor, voucher: { anchor: voucher.anchor, keyAgreement: voucher.keyAgreement, name: 'B' } }
+  const doc = await diSign({ anchor: m.anchor, ed: { priv: m.ed.priv } }, { id: crypto.randomUUID(), type: TYPES.ticket, issuer: m.anchor, recipient: own.anchor, replyTo: m.rkid, issuedAt: now, payload }, now)
+  g.w.carrier.deposit(own.keyAgreement, new TextEncoder().encode(jcs(await seal(doc as unknown as Json, own.keyAgreement))))
+}
+
+describe('K2 step 2b.0: one path for every opened ticket frame (Tor-Review 45)', () => {
+  const one: GenEvent[] = [{ k: 'introduce' }]
+
+  it('R45-B1a. A third ticket of a new act in the issuance batch, reported and committed as `card`, no `introduce` of its act → exactly P-Commit fails with `ticket-without-introduce`', async () => {
+    const r = await runSequence(cand, one, { seed: 21, reseed, mutation: disguisedTicket('ma') })
+    // Soll P-Commit: the batch holds three intents at stock key addresses; opened, all three are tickets (the kind
+    // decides nothing). The two of the introduced act are bound as in U0. The third names an act the batch does not
+    // introduce → in the issuance's violation `ticket-without-introduce` (A's predicate accepts it: no refusal) → 1. At
+    // the carrier: A and B accept and receipt each regular ticket at once (2 deposits, committed submissions); A accepts
+    // the third (M's signer on M–A, its own key at the address, B's voucher) and receipts → 1 deposit, opened a ticket,
+    // its bytes committed but no `introduce` of its act → `ticket-without-introduce` → 1. Total 2. Tickets at the
+    // carrier by content: 3; issuances: 1. P-Einmal: 3 keys, 3 accepts, no violation. P-Produktion: kept. P-Paar: nothing.
+    expect(prop(r, 'P-Commit').violations).toHaveLength(2)
+    for (const v of prop(r, 'P-Commit').violations) expect(v).toContain('ticket-without-introduce')
+    expect(prop(r, 'P-Commit').violations.filter((v) => v.startsWith('issuance'))).toHaveLength(1)
+    expect(prop(r, 'P-Commit').counts).toEqual({ tickets: 3, issuances: 1 })
+    expect(prop(r, 'P-Einmal')).toMatchObject({ ok: true, counts: { keys: 3, accepts: 3 } })
+    expect(prop(r, 'P-Produktion')).toMatchObject({ ok: true, counts: { obliged: 1, kept: 1 } })
+    expect(prop(r, 'P-Paar').ok).toBe(true)
+  }, 60_000)
+
+  it('R45-B1b. The same third ticket signed in the other M relationship → exactly P-Commit fails, `ticket-without-introduce` and 8640.2', async () => {
+    const r = await runSequence(cand, one, { seed: 21, reseed, mutation: disguisedTicket('mb') })
+    // Soll P-Commit: the issuance's violation names the third ticket `ticket-without-introduce` with A's refusal by 8640.2
+    // (the signer is no counterpart on A's relationship) → 1. At the carrier: the regular tickets as in U0 (2 deposits);
+    // A refuses the third, no receipt, the deliverer repeats it after 3 and 6 rounds → 3 deposits, each a ticket by
+    // content without an `introduce` of its act → 3. Total 4; tickets by content 2 + 3 = 5, issuances 1. P-Einmal: 2 keys,
+    // 2 accepts. P-Produktion: kept. P-Paar: nothing.
+    expect(prop(r, 'P-Commit').violations).toHaveLength(4)
+    for (const v of prop(r, 'P-Commit').violations) expect(v).toContain('ticket-without-introduce')
+    const issuance = prop(r, 'P-Commit').violations.filter((v) => v.startsWith('issuance'))
+    expect(issuance).toHaveLength(1)
+    expect(issuance[0]).toContain('8640.2')
+    expect(prop(r, 'P-Commit').counts).toEqual({ tickets: 5, issuances: 1 })
+    expect(prop(r, 'P-Einmal')).toMatchObject({ ok: true, counts: { keys: 2, accepts: 2 } })
+    expect(prop(r, 'P-Produktion')).toMatchObject({ ok: true, counts: { obliged: 1, kept: 1 } })
+    expect(prop(r, 'P-Paar').ok).toBe(true)
+  }, 60_000)
+
+  it('R45-S1. An unreported ticket at a new stock key address before the commit that allocates it → drawn in at that commit, exactly P-Commit fails with `ticket-without-commit`', async () => {
+    let g!: GenWorld
+    const r = await runSequence(cand, one, { seed: 21, reseed, mutation: (x) => void (g = x) })
+    expect((await pCommit(r.buch)).ok, 'Voraussetzung: der Kontrolllauf hält').toBe(true)
+    const rel = g.A.state.relationships.find((x) => x.stock.some((k) => k.by === g.A.name))!
+    await g.A.setClass(rel.id, false)
+    const d = priv(g.A)
+    const send = d.sendDoc.bind(g.A)
+    let address = ''
+    let known = true
+    d.sendDoc = async (type, ...rest) => {
+      const x = await send(type, ...rest)
+      if (type === TYPES.revision && !address) {
+        const own = g.A.state.relationships.flatMap((y) => y.stock).find((k) => k.state === 'active' && k.by === g.A.name)!
+        address = own.keyAgreement
+        known = [...(r.buch as unknown as { lastImage: Map<string, { state: M.HolderState }> }).lastImage.values()].some((y) => y.state.relationships.some((z) => z.stock.some((k) => k.keyAgreement === address)))
+        await forgeTicket(g, own, unusedKey(g, 'B'))
+      }
+      return x
+    }
+    await g.A.setClass(rel.id, true)
+    await g.w.rounds(1)
+    // Soll: class on again allocates fresh A keys and sends the revision inside the action, before its commit; the forged
+    // ticket reaches the first fresh key's address then, when no committed image knows that address. The ledger holds the
+    // deposit and draws it in at A's commit; opened with that key it is a ticket no commit holds → 1 violation
+    // `ticket-without-commit`, nothing else (the issuance of U0 stays bound).
+    expect(known, 'Voraussetzung: die Adresse ist beim Einliefern unbekannt').toBe(false)
+    const c = await pCommit(r.buch)
+    expect(c.violations, c.violations.join('\n')).toHaveLength(1)
+    expect(c.violations[0]).toContain('ticket-without-commit')
+  }, 60_000)
 })
