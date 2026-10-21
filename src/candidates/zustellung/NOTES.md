@@ -334,17 +334,25 @@ in the sender.
   sender without a session of its own (adapter spec §5a.10).
 
 **Sessions.** The bench carrier knows registrations (device, address); a
-session is the registration of an identity. `SessionCarrier`
-(`src/lab/zustellung-sessions.ts`, a subclass; the shared core
-`src/lab/zustellung.ts` is unchanged) adds the rule the live mediator
-showed: a frame is forwarded only if its envelope sender holds a session
-at the carrier, otherwise it is dropped silently. The bench has no socket
-per deposit, so the rule reads "the envelope sender holds a session here";
-for the forms modelled here that equals "the envelope sender is the
-socket's identity" (a sender either sends on its own session or has
-none). T9, T10 and Z1 to Z5 run on the default carrier (no rule), as for
-every wire; the session rule runs as its own cells: one document from
-Alice to Bob and Bob's receipt back, both under the rule.
+session is the registration of an identity by a device (its socket for
+that identity). `SessionCarrier` (`src/lab/zustellung-sessions.ts`, a
+subclass; the shared core `src/lab/zustellung.ts` is unchanged) forwards
+a frame only if the device that deposits it holds a session for the
+frame's envelope sender, i.e. the sender is the identity of the socket
+the frame comes in on; otherwise the frame is dropped silently. The core
+deposits by address without naming the device, so each device is bound
+to a view of the carrier whose deposits name it (`viewFor`, bound by
+`pairWithSessions`). Sessions of the same identities held by other
+devices do not carry a frame (test: the spec form stays dropped when two
+foreign devices hold sessions for both egress identities). A deposit
+that names no device (a test depositing at the carrier directly, as a
+third party) keeps the weaker rule "some device holds a session for the
+sender". The rule reproduces the outcome of D-e in the live run (egress
+sender over the connection socket: nothing delivered), not a mechanism:
+the live section leaves the causes of the non-delivery open. T9, T10 and
+Z1 to Z5 run on the default carrier (no rule), as for every wire; the
+session rule runs as its own cells: one document from Alice to Bob and
+Bob's receipt back, both under the rule.
 
 | Form | Sessions per relationship | Bytes per document (20 seeds) | Z1: sender's account in the frame | T9, T10, Z1–Z5 | Under the session rule |
 |---|---|---|---|---|---|
@@ -357,13 +365,16 @@ Bytes: the document frame in Z1 (payload `geheim-drei`); in the session
 cells the document frame is 1485–1488 B and the receipt 1560–1563 B for
 all three wires (the sealed document varies by a few bytes through
 base58 proof values). For identical payloads of 1000, 1001 and 1002 bytes
-all three wires produce the same frame size: the forms cost no bytes,
-only sessions.
+all three wires produce the same frame size (not the same bytes: the
+frames are encrypted): the forms cost no bytes, only sessions. All
+sizes in this paragraph and the table are checked over the seed sweep
+(per seed and as min/max over the 20 seeds).
 
 What it shows:
 
 1. **The two forms are equal at the dispatcher and the receiver.** T9,
-   T10, Z1 to Z5 pass on both, with the same bytes; Z4 (foreign sender) and
+   T10, Z1 to Z5 pass on both, with the same frame size for the same
+   payload; Z4 (foreign sender) and
    Z5 (wrong recipient key) are rejected at the wire, as on `tsp` (outer
    signature against the expected sender key, own key per relationship).
 2. **Z1, what the partner opens.** In (b) the sender of every frame is the
@@ -386,13 +397,29 @@ What it shows:
    non-empty payload; a control frame (`packInvite`), an empty `direct` and
    frames under the genuine partner's key that name another sender or
    receiver are rejected at the wire and counted as `failed(malformed): tsp:
-   …`, never passed to `receive`.
+   …`, never passed to `receive`. A frame declaring Rev 2 (version
+   marker patched) is already refused by the library (vti-tsp-js 0.3.0
+   opens Rev 2 only with the sender's X25519 key, which the wire does not
+   pass); the wire's own revision check (`admitDirect`) therefore cannot
+   trigger through `unpack` today and is tested on its own, against a
+   message reported as another revision. It stays for a library change.
 6. **Branches and seeds.** The wires make no random decision (no
    `CoinBranches`); chance enters only through keys, nonces, UUIDs and HPKE.
-   The seed sweep runs every cell of the table above under 20 fixed seeds
-   (generator of `tests/mehrgeraet-seeds.test.ts`); all 20 give the table.
+   The seed sweep runs under 20 fixed seeds (generator of
+   `tests/mehrgeraet-seeds.test.ts`) and checks, per seed: T9, T10, Z1
+   to Z5 on all three wires with the Z1 and Z4/Z5 findings; the session
+   cells of `tsp`, (b), (a) and the spec form (delivered or dropped,
+   report, sessions); the Z1 document, session-cell document and receipt
+   sizes against the ranges above; the same frame size on all three
+   wires for identical payloads. A last test checks min and max of the
+   sizes over the seeds. All 20 give the table.
 
-Not modelled: a socket per deposit (the rule is per sender, not per
-socket), the mediator's login and its handshake, what the mediator links
-across the two sessions of (a) (live: "E11b live", RT6), routed forms
-(step 3).
+Not modelled: sockets as objects (a device deposits on its session for
+the sender if it holds one; a device that does not stands for a deposit
+on another of its sockets, as the spec form on the connection socket),
+the mediator's login and its handshake, what the mediator links across
+the two sessions of (a) (live: "E11b live", RT6), routed forms (step 3). `sessions()` counts the registrations opened so far
+(cumulative), not the sessions open at a moment. `Device.rebind()`
+(carrier switch, Z2) registers only the connection address, not the
+egress session of (a): a carrier switch with egress sessions is not
+modelled (Z2 runs on the default carrier, without the rule).

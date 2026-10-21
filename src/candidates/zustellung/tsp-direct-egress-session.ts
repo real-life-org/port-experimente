@@ -7,7 +7,7 @@ export function tspDirectEgressSessionWire(): SessionWire {
 
 /**
  * Control, not a registered wire: the spec form (adapter spec §5a.10), the egress identity as the sender without a
- * session of its own. Under `SessionCarrier` it is dropped silently, as the live mediator does (D-e); under the default
+ * session of its own. Under `SessionCarrier` it is dropped silently (the outcome of D-e live); under the default
  * carrier it would pass, so it is not part of `wires`.
  */
 export function tspDirectEgressSpecWire(): SessionWire {

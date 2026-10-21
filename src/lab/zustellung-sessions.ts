@@ -1,11 +1,15 @@
 // E11b step 2: sessions at the carrier. The bench `Carrier` routes by address and knows registrations (device,
-// address); a "session" is the registration of an identity at the carrier. `SessionCarrier` adds the rule the live
-// VTI mediator showed on 17 and 21 October: it forwards a frame only if the frame's envelope sender holds a session
-// there; otherwise the frame is dropped silently (the sender's socket send succeeds, nothing is delivered). The bench
-// has no socket per deposit (the dispatcher deposits by address), so the rule reads "the envelope sender holds a
-// session at this carrier"; for every form modelled here that is the same as "the envelope sender is the socket's
-// identity" (a sender either sends on its own session or has none). Subclass only: the shared core
-// (`src/lab/zustellung.ts`, also the E15 foundation) is unchanged, its default carrier has no such rule.
+// address); a "session" is the registration of an identity at the carrier by a device (its socket for that identity).
+// `SessionCarrier` reproduces the outcome the live VTI mediator showed on 17 and 21 October (D-e: egress sender over
+// the connection socket, nothing delivered; the cause is not established): it forwards a frame only if the
+// device that deposits it holds a session for the frame's envelope sender, i.e. the sender is the identity of the
+// socket the frame comes in on; otherwise the frame is dropped silently (the sender's socket send succeeds, nothing is
+// delivered). A device with several sessions deposits on the one whose identity is the sender, if it holds one; a
+// device without it could only use another socket, and then sender and socket differ. The core deposits by address
+// without naming the device, so the depositing device comes from a per-device view of the carrier (`viewFor`), which
+// `pairWithSessions` binds each device to. A deposit that names no device (tests depositing at `w.carrier` directly,
+// as a third party would) keeps the weaker rule "some device holds a session for the sender". Subclass only: the
+// shared core (`src/lab/zustellung.ts`, also the E15 foundation) is unchanged, its default carrier has no such rule.
 
 import { decodeEnvelope } from '@openvtc/vti-tsp-js'
 import { Carrier, Welt, party, type Device, type Endpoint, type Party, type Wire } from './zustellung'
@@ -35,24 +39,46 @@ export class SessionCarrier extends Carrier {
     return this.held.size
   }
   override deposit(address: string, bytes: Uint8Array) {
+    this.depositFrom(undefined, address, bytes)
+  }
+  /** A deposit by `device` (on its socket for the envelope sender); `undefined`: by no known device (weaker rule, see top). */
+  depositFrom(device: string | undefined, address: string, bytes: Uint8Array) {
     if (!this.unreachable) {
       const sender = this.senderOf(bytes)
-      if (sender === undefined || this.registeredAt(sender).length === 0) {
+      const holders = sender === undefined ? [] : this.registeredAt(sender)
+      if (device === undefined ? holders.length === 0 : !holders.includes(device)) {
         this.refused.push({ address, sender: sender ?? '?', bytes: bytes.length })
         return
       }
     }
     super.deposit(address, bytes)
   }
+  /** This carrier as `device` uses it: everything shared, but its deposits name the device. */
+  viewFor(device: string): Carrier {
+    return new Proxy(this, {
+      get: (t, k) => {
+        if (k === 'deposit') return (address: string, bytes: Uint8Array) => t.depositFrom(device, address, bytes)
+        const v: unknown = Reflect.get(t, k, t)
+        return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(t) : v
+      },
+    })
+  }
 }
 
 /** An endpoint that names the identities its side holds a session for (address first). Plain endpoints: the address only. */
 export const sessionsOf = (e: Endpoint): readonly string[] => (e as Endpoint & { sessions?: readonly string[] }).sessions ?? [e.address]
 
-/** `Welt.pair`, then every device opens a session for each identity its own endpoint names (the address is already registered). */
+/**
+ * `Welt.pair`, then every device opens a session for each identity its own endpoint names (the address is already
+ * registered); under a `SessionCarrier` each device is bound to its view, so its deposits name it.
+ */
 export async function pairWithSessions(w: Welt, a: Party, b: Party, extraB: string[] = []): Promise<{ A: Device; B: Device; more: Device[] }> {
   const out = await w.pair(a, b, extraB)
-  for (const d of [out.A, out.B, ...out.more]) for (const s of sessionsOf(d.endpoint)) w.carrier.register(d.name, s)
+  const carrier = w.carrier
+  for (const d of [out.A, out.B, ...out.more]) {
+    for (const s of sessionsOf(d.endpoint)) carrier.register(d.name, s)
+    if (carrier instanceof SessionCarrier) d.rebind(carrier.viewFor(d.name))
+  }
   return out
 }
 
@@ -72,11 +98,13 @@ export interface SessionCellResult {
   receiverSaw: string[]
 }
 
-export async function sessionCell(wire: Wire, rounds = 20): Promise<SessionCellResult> {
+/** `setup` runs after pairing, before the document is sent (e.g. foreign devices opening sessions). */
+export async function sessionCell(wire: Wire, rounds = 20, setup?: (carrier: SessionCarrier, A: Device, B: Device) => void): Promise<SessionCellResult> {
   const w = new Welt(wire)
   const carrier = new SessionCarrier(tspSender)
   w.carrier = carrier
   const { A, B } = await pairWithSessions(w, await party('alice'), await party('bob'))
+  setup?.(carrier, A, B)
   const d = await A.send({ note: 'session' })
   await w.until(() => A.zusteller.report(d)?.state === 'delivered', rounds)
   const r = A.zusteller.report(d)

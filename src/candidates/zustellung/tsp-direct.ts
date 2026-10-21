@@ -10,7 +10,7 @@ import { gatedWireIdentity, type WireIdentity } from '../../lab/zustellung-live/
 //   (b) `connection`: the sender is the connection DID; one session per side.
 //   (a) `egress-session`: the sender is the egress identity, which holds a session of its own; two per side.
 //   spec form (control, not a registered wire): sender egress identity without a session of its own (adapter spec
-//   §5a.10); the live mediator drops it silently, modelled by `SessionCarrier` (src/lab/zustellung-sessions.ts).
+//   §5a.10); `SessionCarrier` (src/lab/zustellung-sessions.ts) drops it silently, reproducing the outcome of D-e live.
 
 /** The carrier DID the bench identities are scoped to (the bench has one carrier; Z2's second carrier keeps them, as the binding keeps its identities across sockets). */
 export const BENCH_CARRIER = 'did:example:e11b-bench-carrier'
@@ -53,6 +53,29 @@ const sessionsOf = (form: DirectForm, s: SideIdentities) => (form === 'egress-se
 /** Rejected at the wire: the frame is not a Rev 3 `direct` with a payload from the expected pair (parser rule, #95, MV-24). */
 class WireReject extends Error {}
 
+/** What the wire reads from an unpacked message. */
+export interface UnpackedDirect {
+  revision: string
+  sender: string
+  receiver: string
+  messageType: string
+  payload: Uint8Array
+}
+
+/**
+ * The parser rule (#95, MV-24) on the message the library constructed: revision, sender, receiver, type `direct`, a
+ * payload; the payload is returned only if all hold. The revision check is our own guard: vti-tsp-js 0.3.0 already
+ * refuses a frame declaring Rev 2 when no `senderEncryptionKey` is passed (as here), so through `unpack` it cannot
+ * trigger today; it stays so that a library change (Rev 2 opened, a new revision) cannot reach `receive()` unnoticed.
+ */
+export function admitDirect(m: UnpackedDirect, sender: string, receiver: string): Uint8Array {
+  if (m.revision !== 'rev3') throw new WireReject(`tsp: revision ${m.revision}`)
+  if (m.sender !== sender || m.receiver !== receiver) throw new WireReject('tsp: sender or receiver mismatch')
+  if (m.messageType !== 'direct') throw new WireReject(`tsp: type ${m.messageType}`)
+  if (m.payload.length === 0) throw new WireReject('tsp: empty direct')
+  return new Uint8Array(m.payload)
+}
+
 export function tspDirectWire(form: DirectForm, id: string, title: string): SessionWire {
   return {
     id,
@@ -77,11 +100,7 @@ export function tspDirectWire(form: DirectForm, id: string, title: string): Sess
             // passed on: revision, sender, receiver, type `direct`, a payload. Everything else is rejected and counted
             // by the device as a wire rejection, never reinterpreted as a payload.
             const m = await unpack(frame, { receiverDecryptionKey: self.conn.xSecret, senderSigningKey: from.edPublic })
-            if (m.revision !== 'rev3') throw new WireReject(`tsp: revision ${m.revision}`)
-            if (m.sender !== from.did || m.receiver !== self.conn.did) throw new WireReject('tsp: sender or receiver mismatch')
-            if (m.messageType !== 'direct') throw new WireReject(`tsp: type ${m.messageType}`)
-            if (m.payload.length === 0) throw new WireReject('tsp: empty direct')
-            return new Uint8Array(m.payload)
+            return admitDirect(m, from.did, self.conn.did)
           },
           async forge(payload, sender) {
             // A third party with its own identities for a relationship with me, to my unchanged key and address.

@@ -4,7 +4,7 @@ import { HORIZON, Welt, party, runDelivery, type Wire } from '../src/lab/zustell
 import { sessionCell } from '../src/lab/zustellung-sessions'
 import { wires } from '../src/candidates/zustellung'
 import { tspWire } from '../src/candidates/zustellung/tsp'
-import { relationshipIdentities, type SessionEndpoint } from '../src/candidates/zustellung/tsp-direct'
+import { admitDirect, relationshipIdentities, type SessionEndpoint } from '../src/candidates/zustellung/tsp-direct'
 import { tspDirectConnectionWire } from '../src/candidates/zustellung/tsp-direct-connection'
 import { tspDirectEgressSessionWire, tspDirectEgressSpecWire } from '../src/candidates/zustellung/tsp-direct-egress-session'
 
@@ -123,13 +123,40 @@ describe('E11b step 2: parser rule (#95, MV-24): only `direct` with a payload re
       expect(B.received.length).toBe(1)
     }, 60_000)
   }
+
+  it('own guard (H1): a message the library reports as another revision is rejected, before sender, type or payload are looked at', () => {
+    const ok = { revision: 'rev3', sender: 'did:s', receiver: 'did:r', messageType: 'direct', payload: new Uint8Array([1]) }
+    expect(Array.from(admitDirect(ok, 'did:s', 'did:r'))).toEqual([1])
+    expect(() => admitDirect({ ...ok, revision: 'rev2' }, 'did:s', 'did:r')).toThrow('tsp: revision rev2')
+    expect(() => admitDirect({ ...ok, revision: 'rev4' }, 'did:s', 'did:r')).toThrow('tsp: revision rev4')
+  })
+
+  it('a frame declaring Rev 2 (version marker patched) is rejected at the wire, never passed on', async () => {
+    const w = new Welt(tspDirectConnectionWire())
+    const alice = await party('alice')
+    const bob = await party('bob')
+    const { B } = await w.pair(alice, bob)
+    const sa = (await relationshipIdentities(alice, bob)).conn
+    const rb = (await relationshipIdentities(bob, alice)).conn
+    const f = (await pack(enc.encode('x'), sa.did, rb.did, { senderSigningKey: sa.edSecret, receiverEncryptionKey: rb.xPublic })).bytes.slice()
+    // Version marker: `-E` count code (3 bytes short, 6 long), the 3-byte YTSP genus, then a triplet whose low 12 bits are MINOR.
+    const at = (f[0] === 0xfb ? 6 : 3) + 3
+    const word = ((f[at]! << 16) | (f[at + 1]! << 8) | f[at + 2]!) & ~0xfff
+    const rev2 = word | 1
+    f.set([(rev2 >>> 16) & 255, (rev2 >>> 8) & 255, rev2 & 255], at)
+    expect(decodeEnvelope(f).revision).toBe('rev2')
+    w.carrier.deposit(B.endpoint.address, f)
+    await w.rounds(2)
+    expect(B.received.length).toBe(0)
+    expect(B.dispositions.length).toBe(1)
+    expect(B.dispositions[0]).toMatch(/^failed\(malformed\): tsp: .*Rev 2/)
+  }, 60_000)
 })
 
 /**
- * Sessions at the carrier: a carrier that forwards a frame only if its envelope sender holds a session there (the live
- * situation of 17 and 21 October: the VTI mediator drops the spec form, egress over the connection socket, silently).
- * The bench carrier has no socket per deposit; the rule "the envelope sender holds a session at this carrier" is the
- * same for every form modelled here (a sender either sends on its own session or has none).
+ * Sessions at the carrier: a carrier that forwards a frame only if the depositing device holds a session for its
+ * envelope sender, i.e. the sender is the identity of the socket it comes in on (the live situation of 17 and 21
+ * October: the VTI mediator drops the spec form, egress over the connection socket, silently).
  */
 describe('E11b step 2: sessions per relationship under the session rule', () => {
   const run = sessionCell
@@ -156,6 +183,17 @@ describe('E11b step 2: sessions per relationship under the session rule', () => 
     expect(r.sessions).toBe(2)
     expect(r.refused).toBeGreaterThanOrEqual(2) // first deposit and at least one repetition
     expect(r.receiverSaw).toEqual([]) // nothing reached Bob: the drop is at the carrier, not at the wire
+  }, 60_000)
+
+  it('control (C1): sessions of the egress identities held by foreign devices do not carry the spec form; the depositing device must hold the sender', async () => {
+    const r = await run(tspDirectEgressSpecWire(), HORIZON.giveUp + 2, (carrier, A, B) => {
+      carrier.register('fremd-1', (A.endpoint as SessionEndpoint).sender)
+      carrier.register('fremd-2', (B.endpoint as SessionEndpoint).sender)
+    })
+    expect(r.delivered).toBe(false)
+    expect(r.report).toBe('failed(expired-by-adapter-policy)')
+    expect(r.refused).toBeGreaterThanOrEqual(2)
+    expect(r.receiverSaw).toEqual([])
   }, 60_000)
 
   it('without the rule (default carrier) the spec form would pass: the rule is what the control measures', async () => {
