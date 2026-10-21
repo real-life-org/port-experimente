@@ -799,12 +799,12 @@ export class HolderDevice {
   }
   private readonly resolve = (rkid: string): CryptoKey | undefined => this.privOf.get(rkid)
   /**
-   * E15 2b.0 (Tor-Review 44): bench only. The private key agreement this device opens frames at `address` with, for the
-   * outcome ledger's own copy of the receiver material (it opens committed tickets as this receiver would). A read: the
-   * device never reads what the ledger does with it, and nothing here changes the device.
+   * E15 2b.0 (Tor-Review 44, 47): bench only. Every private key agreement this device's resolver hands `receive` (key id →
+   * key), for the outcome ledger's own copy: it opens every frame as this device would, with the same resolver. A read: the
+   * device never reads what the ledger does with it, and nothing here changes the device (a copy of the map).
    */
-  receiverKey(address: string): CryptoKey | undefined {
-    return this.privOf.get(address)
+  receiverKeys(): Array<[string, CryptoKey]> {
+    return [...this.privOf]
   }
   private async keysFor(ctx: string): Promise<Keys> {
     const k = await this.cand.keys.pair(ctx)

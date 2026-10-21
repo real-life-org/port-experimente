@@ -25,8 +25,12 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 //   R45-B1a, R45-B1b. A third, correctly sealed ticket of a new act in the issuance batch, reported and committed as a
 //       `card`, without an `introduce` of its act (b: signed in the other M relationship) → P-Commit
 //       `ticket-without-introduce` (b: and 8640.2); every opened ticket frame takes the same path (Tor-Review 45 B1).
-//   R45-S1. An unreported ticket at a stock key address before the first commit that makes it known → drawn in at that
-//       commit, P-Commit `ticket-without-commit`.
+//   R45-S1. An unreported ticket at a new stock key address before the first commit that makes it known → P-Commit
+//       `ticket-without-commit`.
+//   R47-B1, R47-B1b, R47-B2, R47-S1 (Tor-Review 47: the ledger is an exact mirror of the holder): an unreported ticket
+//       naming key X, sealed to Y of the same device, deposited at X (b: the same bytes then at Y); a ticket copy under a
+//       card primary frame signed in the other M relationship; the dump round trip with a deposit before its address is
+//       in any committed image.
 //   R1, R2. The dump is a complete artefact: dump → load → re-check gives the same results (Tor-Review 42 S1).
 //   N1. The observation seam is fail-safe: a throwing observer changes nothing in holder or carrier (Tor-Review 42 (a)).
 //   S1. Shrinking: a failing generated sequence shrinks to the smallest sequence that still fails the same property.
@@ -382,15 +386,16 @@ describe('K2 step 2b.0: mutations show each checker failing', () => {
     expect(prop(r, 'P-Paar')).toMatchObject({ ok: true, counts: { connectedActs: 0, bothSides: 0 } })
   }, 60_000)
 
-  it('U9. Submission addresses swapped after sendDoc (intent and sealed bytes unchanged) → P-Commit fails per deposit; P-Produktion does not count the duty kept (Tor-Review 43 B2)', async () => {
+  it('U9. Submission addresses swapped after sendDoc (intent and sealed bytes unchanged) → P-Produktion does not count the duty kept (Tor-Review 43 B2); the deposits are unreadable where they land, so P-Commit holds (Tor-Review 47)', async () => {
     const r = await runSequence(cand, one, { seed: 21, reseed, mutation: swappedAddress })
-    // Soll P-Commit: the issuance batch is unchanged and passes the receiver predicate. Each ticket is deposited at the
-    // other side's key agreement: the device there cannot open it (sealed to the named key), no receipt, the deliverer
-    // repeats after 3 and 6 rounds → 3 × 2 = 6 deposits, none of them the committed submission (frame committed for
-    // another address) → 6 violations, counts 6 tickets, 1 issuance. P-Produktion: 1 obligation; 0 of 2 committed
-    // submissions reach the carrier within k rounds → 1 violation, 0 kept. P-Einmal: no acceptance. P-Paar: nothing.
-    expect(prop(r, 'P-Commit').violations).toHaveLength(6)
-    for (const v of prop(r, 'P-Commit').violations) expect(v).toContain('address')
+    // Soll P-Commit (changed with Tor-Review 47, before 6): the issuance batch is unchanged and passes the receiver
+    // predicate. Each ticket is deposited at the other side's key agreement: no device there holds a key that opens it
+    // (the holder reports failed(malformed)), so as the ledger mirrors the holder exactly it is no ticket at the carrier
+    // and no P-Commit violation: nothing a receiver could read left without its commit. No receipt; the deliverer
+    // repeats after 3 and 6 rounds → 3 × 2 = 6 reported deposits (counted as tickets by report), 1 issuance.
+    // P-Produktion carries the breach: 1 obligation; 0 of 2 tickets that open at their address within k rounds → 1
+    // violation, 0 kept. P-Einmal: no acceptance. P-Paar: nothing.
+    expect(prop(r, 'P-Commit').violations).toEqual([])
     expect(prop(r, 'P-Commit').counts).toEqual({ tickets: 6, issuances: 1 })
     expect(prop(r, 'P-Produktion').violations).toHaveLength(1)
     expect(prop(r, 'P-Produktion').counts).toMatchObject({ introductions: 1, obliged: 1, kept: 0 })
@@ -820,8 +825,9 @@ describe('K2 step 2b.0: the ledger opens frames as the receiver (Tor-Review 44)'
   // 1. voucher = own (U6): both tickets open and are refused by 8640.8 at their receivers; one issuance → 1; the six
   //    deposits (refused, repeated after 3 and 6 rounds) are committed submissions.
   // 2. signer of the other M relationship (U8): 8640.2 twice (and the `mediator` row twice), one issuance → 1.
-  // 3. submission addresses swapped after `sendDoc` (U9): the issuance is unchanged; each of the six deposits is at an
-  //    address its commit does not hold for that frame → 6.
+  // 3. submission addresses swapped after `sendDoc` (U9): the issuance is unchanged; each of the six deposits lands where
+  //    no device can open it (review 44 measured 6; since Tor-Review 47 the ledger mirrors the holder exactly, an
+  //    unreadable frame is no ticket at the carrier) → 0; P-Produktion fails (U9).
   // 4. issuance time in the future (2030): 8640.3 and `issuedAt` on both tickets, one issuance → 1.
   // 5. `own` set to the other side (ticket to A names B's key, sealed and addressed to A): each ticket opens at its address,
   //    the one naming A's key sits at B's address (8640.5, `own.anchor`, `own.keyAgreement`), one issuance → 1.
@@ -830,12 +836,13 @@ describe('K2 step 2b.0: the ledger opens frames as the receiver (Tor-Review 44)'
   // 7. one wrong `expected` in the control dump: row `expected` on one ticket → 1.
   // 8. both tickets at the carrier before their commit (U2): 2 deposits without an earlier commit → 2; the deposits after
   //    the commit are committed submissions, the issuance holds.
-  // 9. an extra carrier entry with the other ticket's frame at the first ticket's address: that frame is committed for
-  //    the other address → 1.
+  // 9. an extra deposit of the other ticket's frame at the first ticket's address (review 44 measured 1 on an edited row of
+  //    the producer-reported carrier book): sealed to the other side's key, no device at that address opens it, so it is
+  //    no ticket at the carrier → 0.
   const nine: Array<[string, { mutation?: Mutation; edit?: (b: Buch) => Buch }, number, string]> = [
     ['voucher = own', { mutation: wrongVoucher }, 1, '8640.8'],
     ['signer of the other M relationship', { mutation: wrongSigner }, 1, '8640.2'],
-    ['submission addresses swapped', { mutation: swappedAddress }, 6, 'not the committed submission'],
+    ['submission addresses swapped', { mutation: swappedAddress }, 0, ''],
     ['issuance time in the future', { mutation: ticketPayload((p) => void (p.issuedAt = '2030-01-01T00:00:00.000Z')) }, 1, '8640.3'],
     ['own set to the other side', { mutation: ticketPayload((p) => void (p.own = p.voucher.anchor)) }, 1, '8640.5'],
     ['named key ends before the act', { mutation: shortKey }, 1, '8640.7'],
@@ -854,16 +861,16 @@ describe('K2 step 2b.0: the ledger opens frames as the receiver (Tor-Review 44)'
     ],
     ['both tickets before their commit', { mutation: ticketBeforeCommit }, 2, 'without an earlier commit'],
     [
-      'extra carrier entry with the other ticket frame',
+      'extra deposit of the other ticket frame',
       {
         edit: (b) => {
-          const ps = b.productions.filter((p) => p.type === TYPES.ticket)
-          b.carrier.tickets.push({ ...b.carrier.tickets[0]!, seq: 1_000_000, frame: ps.find((p) => p.digest !== b.carrier.tickets[0]!.digest)!.frames[0]! })
+          const is = b.commits.find((c) => c.ops.some((o) => o.kind === 'introduce'))!.intents.filter((i) => i.kind === TYPES.ticket)
+          b.carrier.deposits.push({ seq: 1_000_000, at: b.carrier.deposits[0]!.at, frame: is[1]!.frames[0]!, address: is[0]!.address, bytes: is[1]!.sealed![0]! })
           return b
         },
       },
-      1,
-      'not the committed submission',
+      0,
+      '',
     ],
   ]
   for (const [label, how, n, word] of nine)
@@ -960,12 +967,14 @@ const disguisedTicket =
     }
   }
 /** A ticket M never produced, signed with M's key on M–A, sealed to `own` and deposited at its key agreement. */
-async function forgeTicket(g: GenWorld, own: M.StockKey, voucher: M.StockKey): Promise<void> {
+async function forgeTicket(g: GenWorld, own: M.StockKey, voucher: M.StockKey, sealTo = own.keyAgreement, at = own.keyAgreement): Promise<Uint8Array> {
   const m = await g.Mm.cand.keys.pair(M.head(M.rel(g.Mm.state, g.ma)).ownKey)
   const now = g.w.clock.now()
   const payload = { act: crypto.randomUUID(), issuedAt: now, expiresAt: new Date(Date.parse(now) + M.PARAM.actLifetimeMs).toISOString(), own: own.anchor, voucher: { anchor: voucher.anchor, keyAgreement: voucher.keyAgreement, name: 'B' } }
   const doc = await diSign({ anchor: m.anchor, ed: { priv: m.ed.priv } }, { id: crypto.randomUUID(), type: TYPES.ticket, issuer: m.anchor, recipient: own.anchor, replyTo: m.rkid, issuedAt: now, payload }, now)
-  g.w.carrier.deposit(own.keyAgreement, new TextEncoder().encode(jcs(await seal(doc as unknown as Json, own.keyAgreement))))
+  const bytes = new TextEncoder().encode(jcs(await seal(doc as unknown as Json, sealTo)))
+  g.w.carrier.deposit(at, bytes)
+  return bytes
 }
 
 describe('K2 step 2b.0: one path for every opened ticket frame (Tor-Review 45)', () => {
@@ -1037,5 +1046,120 @@ describe('K2 step 2b.0: one path for every opened ticket frame (Tor-Review 45)',
     const c = await pCommit(r.buch)
     expect(c.violations, c.violations.join('\n')).toHaveLength(1)
     expect(c.violations[0]).toContain('ticket-without-commit')
+  }, 60_000)
+})
+
+describe('K2 step 2b.0: the ledger is an exact mirror of the holder (Tor-Review 47)', () => {
+  const one: GenEvent[] = [{ k: 'introduce' }]
+  /** Two unused active A stock keys of the same device (the device that allocated both). */
+  const twoKeys = (g: GenWorld) => {
+    const act = g.Mm.state.mediatorActs[0]!
+    for (const d of g.w.of('A')) {
+      const ks = d.state.relationships.flatMap((x) => x.stock.filter((k) => k.by === d.name && k.state === 'active' && k.anchor !== act.a.key))
+      if (ks.length >= 2) return [ks[0]!, ks[1]!] as const
+    }
+    throw new Error('no device with two unused keys')
+  }
+
+  it('R47-B1. An unreported ticket naming key X, sealed to Y of the same device, deposited at X → exactly P-Commit fails (`ticket-without-commit`, `sealed-to-other-address`); R47-B1b: the same bytes at Y → one more `ticket-without-commit`', async () => {
+    let g!: GenWorld
+    const r = await runSequence(cand, one, { seed: 21, reseed, mutation: (x) => void (g = x) })
+    expect((await pCommit(r.buch)).ok, 'Voraussetzung: der Kontrolllauf hält').toBe(true)
+    const [x, y] = twoKeys(g)
+    const bytes = await forgeTicket(g, x, unusedKey(g, 'B'), y.keyAgreement, x.keyAgreement)
+    await g.w.rounds(1)
+    // Soll B1: the device at X resolves over all its keys (as the holder does) and reads the ticket sealed to Y; 8640
+    // passes at X (own X at X's key agreement, M's signer, B's voucher) → A accepts: 3 keys, 3 accepts. The ledger opens
+    // the deposit with the same resolver: a ticket, no earlier commit holds these bytes, and its envelope names Y, not the
+    // address X it was routed to → 1 violation with both reasons. Nothing else changes.
+    const c1 = await pCommit(r.buch)
+    expect(c1.violations, c1.violations.join('\n')).toHaveLength(1)
+    expect(c1.violations[0]).toContain('ticket-without-commit')
+    expect(c1.violations[0]).toContain('sealed-to-other-address')
+    expect(pEinmal(r.buch)).toMatchObject({ ok: true, counts: { keys: 3, accepts: 3 } })
+    g.w.carrier.deposit(y.keyAgreement, bytes)
+    await g.w.rounds(1)
+    // Soll B1b: the same bytes at Y: the holder knows the digest (duplicate-known), no new acceptance (still 3); the ledger
+    // reads a ticket without commit, sealed to the address it is routed to → 1 more violation, `ticket-without-commit`
+    // only → 2.
+    const c2 = await pCommit(r.buch)
+    expect(c2.violations, c2.violations.join('\n')).toHaveLength(2)
+    expect(c2.violations[1]).toContain('ticket-without-commit')
+    expect(c2.violations[1]).not.toContain('sealed-to-other-address')
+    expect(pEinmal(r.buch)).toMatchObject({ ok: true, counts: { keys: 3, accepts: 3 } })
+  }, 60_000)
+
+  it('R47-B2. A card intent in the issuance batch with a ticket copy (the introduced act, A\'s key, signed in the M–B relationship) → exactly P-Commit fails, 8640.2 on the copy', async () => {
+    const copyUnderCard: Mutation = (g) => {
+      const send = priv(g.Mm).sendDoc.bind(g.Mm)
+      let n = 0
+      priv(g.Mm).sendDoc = async (type, ...rest) => {
+        const out = await send(type, ...rest)
+        if (type === TYPES.ticket && ++n === 2) {
+          const act = g.Mm.state.mediatorActs[0]!
+          const own = g.w.of('A').flatMap((d) => d.state.relationships.flatMap((x) => x.stock)).find((k) => k.anchor === act.a.key)!
+          const v = unusedKey(g, 'B')
+          const mb = await g.Mm.cand.keys.pair(M.head(M.rel(g.Mm.state, g.mb)).ownKey)
+          const now = g.w.clock.now()
+          const forged = await diSign({ anchor: mb.anchor, ed: { priv: mb.ed.priv } }, { id: crypto.randomUUID(), type: TYPES.ticket, issuer: mb.anchor, recipient: own.anchor, replyTo: mb.rkid, issuedAt: now, payload: { act: act.id, issuedAt: now, expiresAt: act.expiresAt, own: own.anchor, voucher: { anchor: v.anchor, keyAgreement: v.keyAgreement, name: 'B' } } }, now)
+          const frame = new TextEncoder().encode(jcs(await seal(forged as unknown as Json, own.keyAgreement)))
+          const signer = M.head(M.rel(g.Mm.state, g.ma)).ownKey
+          const m = await g.Mm.cand.keys.pair(signer)
+          const extra = await send(TYPES.card, signer, own.anchor, own.keyAgreement, m.rkid, { act: act.id, expiresAt: act.expiresAt, from: v.anchor, to: own.anchor, card: { anchor: m.anchor, keyAgreement: m.rkid } }, [{ anchor: own.anchor, rkid: own.keyAgreement }])
+          ;((g.Mm as unknown as { intents: Map<string, { copies?: unknown }> }).intents.get(extra!.digest)!).copies = [{ address: own.keyAgreement, bytes: Buffer.from(frame).toString('base64') }]
+          ;(g.Mm.zusteller.submissions.get(extra!.digest) as unknown as { extra: unknown }).extra = [{ address: own.keyAgreement, frame }]
+        }
+        return out
+      }
+    }
+    const r = await runSequence(cand, one, { seed: 21, reseed, mutation: copyUnderCard })
+    // Soll P-Commit: the batch's frames, each opened on its own: the two regular tickets, the card's primary frame (a card,
+    // no ticket) and its copy, a ticket of the introduced act naming A's key. A's side then has two ticket frames
+    // (existence), and the copy fails the receiver predicate by 8640.2 (M–B's signer is no counterpart on A's
+    // relationship) and the table (digest, kind, mediator, voucher, copies): all in the one issuance violation → 1. At the
+    // carrier the copy is a ticket whose bytes are committed at its address in the batch that introduces its act on the
+    // key it names, sealed to that address → no deposit violation (its binding is the issuance's); A refuses it, the
+    // deliverer repeats it. Regular tickets accepted: P-Einmal 2 keys, 2 accepts; P-Produktion kept.
+    const c = prop(r, 'P-Commit')
+    expect(c.violations, c.violations.join('\n')).toHaveLength(1)
+    expect(c.violations[0]).toContain('8640.2')
+    expect(c.violations[0]).toContain('2 opened tickets of the act name it')
+    expect(prop(r, 'P-Einmal')).toMatchObject({ ok: true, counts: { keys: 2, accepts: 2 } })
+    expect(prop(r, 'P-Produktion')).toMatchObject({ ok: true, counts: { obliged: 1, kept: 1 } })
+  }, 60_000)
+
+  it('R47-S1. Dump round trip with a deposit before its address is in any committed image: the dump holds its bytes and the keys, loaded and live P-Commit agree, before and after the commit', async () => {
+    let g!: GenWorld
+    const r = await runSequence(cand, one, { seed: 21, reseed, mutation: (x) => void (g = x) })
+    const rel = g.A.state.relationships.find((x) => x.stock.some((k) => k.by === g.A.name))!
+    await g.A.setClass(rel.id, false)
+    const d = priv(g.A)
+    const send = d.sendDoc.bind(g.A)
+    let at: { dump: string; bytes: string; live: string[]; loaded: string[]; again: string } | undefined
+    d.sendDoc = async (type, ...rest) => {
+      const x = await send(type, ...rest)
+      if (type === TYPES.revision && !at) {
+        const own = g.A.state.relationships.flatMap((y) => y.stock).find((k) => k.state === 'active' && k.by === g.A.name)!
+        const bytes = await forgeTicket(g, own, unusedKey(g, 'B'))
+        const dump = r.buch.dump()
+        at = { dump, bytes: Buffer.from(bytes).toString('base64'), live: (await pCommit(r.buch)).violations, loaded: (await pCommit(Buch.load(dump))).violations, again: Buch.load(dump).dump() }
+      }
+      return x
+    }
+    await g.A.setClass(rel.id, true)
+    await g.w.rounds(1)
+    // Soll at the deposit (before A's commit): the deposit and its bytes are in the dump, the keyring holds A's fresh key
+    // (copied at the deposit; A listens before it sends the revision), so live and loaded P-Commit both read the ticket:
+    // 1 violation `ticket-without-commit` each, the same; the loaded dump dumps to itself.
+    expect(at, 'Voraussetzung: die Einlieferung fand statt').toBeDefined()
+    expect(at!.dump).toContain(at!.bytes)
+    expect(at!.live).toHaveLength(1)
+    expect(at!.live[0]).toContain('ticket-without-commit')
+    expect(at!.loaded).toEqual(at!.live)
+    expect(at!.again).toBe(at!.dump)
+    // Soll after the commit and a round: unchanged, 1 violation, live and loaded alike.
+    const live = await pCommit(r.buch)
+    expect(live.violations).toHaveLength(1)
+    expect((await pCommit(Buch.load(r.buch.dump()))).violations).toEqual(live.violations)
   }, 60_000)
 })

@@ -586,7 +586,8 @@ intent's `kind` decides anything:
 - **S1, closed for addresses that become known:** a deposit at an address
   no committed image knows yet is held (live only) and drawn in as a probe,
   with its own seq and time, at the first commit that makes the address a
-  stock key address.
+  stock key address. (Replaced by review 47: every deposit is kept, every
+  resolver copied; see below.)
 
 Fixed tests: R45-B1a (2 violations `ticket-without-introduce`: the
 issuance and the one deposit; tickets 3, accepts 3), R45-B1b (4: the
@@ -595,27 +596,87 @@ repeated; tickets 5, accepts 2), R45-S1 (the reviewer's case: 1
 `ticket-without-commit`), U10 still 1 (its `tickets` count is now 3: by
 content). All earlier counts unchanged.
 
+**Review 47 fixes: the ledger is an exact mirror of the holder**
+(Tor-Review 47, `rltp/design/port-experimente-e15-codex-review47-2026-10-21.md`).
+Rule: **the ledger opens with the same function, the same resolver and
+every frame.** B1: the holder hands `receive` its whole resolver (every
+key it holds), the ledger opened only with the key of the deposit address
+and skipped what that key did not open. A ticket naming key X, sealed to
+Y of the same device and deposited at X was accepted by A; every checker
+stayed green. B2: the issuance check classified an intent by its primary
+frame only, so a ticket copy under a card primary frame was opened and
+matched to its commit but reached neither predicate nor table. S1: held
+deposits were not in the dump. Now:
+
+- **The keyring** (`Buch.keyring`, in the dump): the ledger's copy of
+  every device's resolver (`HolderDevice.receiverKeys`, a read of
+  `privOf`; the map only grows), copied at every commit and every
+  deposit. A frame at an address reaches the devices whose resolver holds
+  that address's key (they listen there). The `Opener` opens it as
+  `handle` does: `receive` with that device's whole resolver, then the
+  issuer's proof.
+- **Every deposit is kept** with its bytes (`carrier.deposits`, in the
+  dump; `pending` is gone): what reaches the carrier is what the ledger
+  judges. `ticketDeposits` is the only carrier path. A deposit that opens
+  at its address to a ticket needs an earlier commit holding these bytes
+  for this address (`ticket-without-commit`) whose batch introduces its
+  act on the key it names (`ticket-without-introduce`). Its envelope must
+  name the address it was routed to (`sealed-to-other-address`, also
+  where the holder accepts). The special path for reported tickets that
+  the address key cannot read is gone: no device at that address reads
+  them, so they are no ticket at the carrier.
+- **Every frame of every intent of an issuance batch** (primary and each
+  copy) keeps its bytes and is opened and classified on its own. Every
+  ticket frame of the introduced act goes through the predicate and the
+  whole table at its own address, not only the first. The row
+  `sealed-to-other-address` (envelope key id = routing address) replaces
+  `address`; `copies` requires every frame of the intent to carry the
+  same document.
+
+Changed counts, on purpose: U9 and T2 case 3 (submission addresses
+swapped) give 0 P-Commit violations instead of 6. The deposits land where
+no device can open them (the holder reports `failed(malformed)`), so
+nothing a receiver could read is without its commit; P-Produktion still
+fails (0 kept). T2 case 9 is now a real deposit of the other ticket's frame
+at the first ticket's address: unreadable there, 0. It used to be an
+edited row of the producer-reported carrier book, 1. All other counts are
+unchanged. Fixed tests: R47-B1 (1 violation, `ticket-without-commit` and
+`sealed-to-other-address`; A accepts, 3 acceptances), R47-B1b (the same
+bytes at Y: one more `ticket-without-commit`, no new acceptance), R47-B2
+(1 violation, the copy refused by 8640.2 inside the issuance, two ticket
+frames on A's side), R47-S1 (dump round trip at the deposit, before A's
+commit, and after it: the bytes and the key are in the dump, live and
+loaded agree).
+
+Spec follow-up: the holder reads a frame sealed to any of its keys,
+whatever address it was routed to (`handle` resolves the envelope's key
+id over the whole resolver). The ledger flags the mismatch
+(`sealed-to-other-address`); whether the receiver should refuse it is a
+spec question (Delivery stage 2 binds the key id, not the routing
+address).
+
 What stays measured only: the receiver state steps (8640.4, 8640.12,
 8640.6, 8640.9, 8640.13) are not part of the reference, so a key that is
 `consumed` or `withdrawn` in the receiver image still passes P-Commit
-(review 44 (c)); the receiver image and the opening time are those of the
-issuance commit, not of the later receipt; a frame at an address that
-never becomes a stock key address in an observed committed image is not
-opened (`unknown`: the ledger has no key for it, and no observed receiver
-reads tickets there); held deposits are live state, not in the dump (once
-drawn in they are); the reference stays K2-specific (no stock address
-without device sets).
+(review 44 (c)); the receiver image is that of the issuance commit; the
+ledger opens with every key a device ever held, a superset of its
+resolver at the moment of delivery (it may flag a frame the device could
+not yet read, never miss one it could); frames at addresses whose key no
+observed device holds are not opened (no observed receiver reads them);
+committed tickets outside issuance batches are judged when they reach the
+carrier (a ticket that never leaves the device has no outcome); the
+reference stays K2-specific (no stock address without device sets).
 
-**Verification 2b.0:** `tests/mehrgeraet-buch.test.ts` 52 passed + 1
-expected fail (D1) in ≈ 47 s after the review 45 fixes (before: 36 + 1,
-≈ 47 s); typecheck green. No cell changed: the K2,
+**Verification 2b.0:** `tests/mehrgeraet-buch.test.ts` 55 passed + 1
+expected fail (D1) in ≈ 75 s after the review 47 fixes (opening every
+deposit costs ≈ 25 s); typecheck green. No cell changed: the K2,
 K1a, K0 and seed-sweep files give the same 111/111 results on this branch
 as on main a290f7a (test by test; after the review 42 fixes again
 111/111, identical test by test, the four files ≈ 11 min; after the
 review 43 fixes, with the holder's ticket check now `ticketAcceptance`,
 again 111/111, identical test by test, ≈ 16 min under load; after the
 review 44 fixes again 111/111, identical test by test, ≈ 11 min; after the
-review 45 fixes: see the PR comment); also green
+review 45 and 47 fixes: see the PR comments); also green
 (again after review 43, 9 files, 114 tests; not re-run for review 44,
 which changes the ledger and adds one read-only holder accessor):
 gegenlauf, zustellung, träger, zustellung-harness, modell, engine,
@@ -1837,7 +1898,7 @@ throwaway script, numbers from one run; the frame counts are asserted in
 ```sh
 export PATH=/home/fritz/.n/n/versions/node/24.21.0/bin:$PATH
 pnpm vitest run tests/mehrgeraet-k2.test.ts
-pnpm vitest run tests/mehrgeraet-buch.test.ts   # 2b.0 + 2b.1: ledger, checkers, generator G1/G2 (20 seeds each; GEN_SEEDS=<n>), mutations, review-44/45 opening, binding table and ticket path, D1 expected-fail
+pnpm vitest run tests/mehrgeraet-buch.test.ts   # 2b.0 + 2b.1: ledger, checkers, generator G1/G2 (20 seeds each; GEN_SEEDS=<n>), mutations, review-44/45/47 opening, binding table and ticket path, D1 expected-fail
 pnpm vitest run tests/mehrgeraet-k2-zuteilung.test.ts   # 2b.1: fold rows Z1–Z19, poison vectors F1, world tests W, B, E, K, checker counter-runs P1–P3
 SEEDS=all pnpm vitest run tests/mehrgeraet-seeds.test.ts   # 20 seeds × K2-strict, K1a (default: seed 1)
 REPORT=1 pnpm vitest run report   # column k2-device-keys in the multi-device port
