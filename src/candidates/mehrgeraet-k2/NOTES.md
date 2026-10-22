@@ -241,6 +241,14 @@ finding when two authors produce it, role rules as fold rules) is issue #86.
 - MV-38 second half (issue #86); `device-set.local` as display only, revocation targets from the authenticated
   anchor → device assignment (R4/K4).
 
+Verify after Opus-Review 59 (69bf1dd): typecheck green; `mehrgeraet-k2-automat`, `-buch`, `-k2-zuteilung` 213 + 1 expected
+fail (D1); `mehrgeraet-k2`, `-k0`, `-k1a`, `-k1a-dienst`, `-seeds` (standard) 138/138; cell dump against main 0a4061c: K0,
+K1a, K1a at the service byte-identical, K2 both variants 17/2/1, no cell changed. Against eec72ca the K2 details moved
+in X11, X12, X14, X17 and X21 (rounds to converge ±1, the forced branch of X21, journal sizes): the same classes as before.
+Three variants of the H1 change (with or without the `device` field, the own pool read by author or by `me`) each
+moved them differently, and none trips the new parser rule in an honest run (checked on X12 and X21). I did not trace which
+bench path is sensitive to the exact op form. `SEEDS=all` 40/40 in ≈ 13 min.
+
 ### After Opus-Review 57 (22 October 2026)
 
 Review `rltp/design/port-experimente-e15-opus-review57-2026-10-22.md` ("trägt mit Bedingungen", no blocker). **S1** the
