@@ -343,7 +343,20 @@ export interface MediatorAct {
   b: { rel: string; key: Anchor; keyAgreement: string }
   issuedAt: string
   expiresAt: string
+  /**
+   * K2 step 2b.2 (core draft 4 §5.1, draft 3 §1.1 (3a), decision 11): acceptance knowledge per side, the digest of the
+   * side's receipt for its ticket; set only by `ticket-ack@1` (written by the issuer, folded by its siblings). Absent = unknown.
+   */
+  known?: { a?: string; b?: string }
 }
+
+/**
+ * MV-38 (Anton, 22.10., after Opus-Review 58): no journal op names its author in its payload; the fold takes the author
+ * of every op from `op.id.writer`, which the journal parser has bound to the authenticated signer of the batch. The
+ * device part of the writer (`<device>@<incarnation>`) is the author of device-bound state: own revision counters, the
+ * allocating device of a stock key (`by`), the issuer of an act (for `ticket-ack@1`).
+ */
+export const authorOf = (op: { id: OpId }): string => op.id.writer.split('@')[0]!
 
 /** 6845: eigene Mapping-Pflicht je Tupelpaar. */
 export interface PairDuty {
@@ -435,13 +448,14 @@ export type Op = { id: OpId; at: string } & (
   | { kind: 'view'; rel: string; scope: string; revision: number; keys: ListedKey[]; writer?: string; clears?: Record<string, number> } // M: 8557/6270, je Schreiber (Schritt 4)
   | { kind: 'stock-revision'; rel: string; scope: string; revision: StockRevision } // M, K2 2b.1: a form-checked `stock-revision@2` (core draft 4 §3)
   | { kind: 'introduce'; act: MediatorAct } // M: 8605, 8570.2
+  | { kind: 'ticket-ack'; act: string; side: 'a' | 'b'; receiptDigest: string } // M, K2 2b.2: `ticket-ack@1`, the side's receipt for its ticket (acceptance knowledge)
   | { kind: 'ticket-accept'; act: Act } // 8640.14
   | { kind: 'ticket-refuse-budget'; rel: string; own: Anchor } // 8640.13
   | { kind: 'finding'; text: string }
   | { kind: 'consent'; act: string; card: Card | null; cardKey: string | null } // 8325.A4; K2 Schritt 2: ohne Karte auf einem Gerät, das den Vorrats-Schlüssel nicht zugeteilt hat (E2 (iv))
   | { kind: 'produce'; act: string; card: Card; cardKey: string; v: string } // K2 Schritt 2: das zuteilende Gerät erzeugt die eine Karte (8727, E2 (iv))
   | { kind: 'device-set'; root: string; rootKeyAgreement: string; certs: SetCert[]; local?: Record<string, string>; rev?: { signer: string; n: number; digest: string | null; covered?: string[] }; seen?: string; deps?: string[] } // K2 Schritt 2: device-set@1; `deps` die signierten Vorgänger einer empfangenen Revision (Review 33 B2)
-  | { kind: 'pool'; device: string; keys: Array<{ i: number; for: string; anchor: Anchor; keyAgreement: string }> } // K2 Schritt 2
+  | { kind: 'pool'; device?: string; keys: Array<{ i: number; for: string; anchor: Anchor; keyAgreement: string }> } // K2 Schritt 2; MV-38 (Opus-Review 59 H1): `device` only for another device's pool (enrolment), the own pool's device is the author
   | { kind: 'pool-use'; device: string; i: number; root: string; ctx: string } // K2 Schritt 2: Schlüssel `i` des Vorrats von `device` ist dessen Schlüssel für den Kontext `ctx` der Wurzel `root`
   | { kind: 'decline'; act: string } // 8325.A3
   | { kind: 'hand-over'; act: string; o: HandOver; digest?: string } // 8326
@@ -565,7 +579,7 @@ const handOver: Shape = { enum: ['none', 'intent', 'handed', 'taken', 'delivered
 export const SHAPES = {
   tuple: { object: { id, own: id, ownKey: id, peer: id, peerKeyAgreement: id, record: id, openedAt: 'time', candidates: { array: id }, deactivated: 'boolean' } },
   stockKey: {
-    object: { n: 'nat', nonce: 'base64', anchor: id, keyAgreement: id, key: id, expiresAt: 'time', state: { enum: ['allocated', 'registered', 'active', 'aging', 'consumed', 'withdrawn', 'tombstoned'] satisfies StockState[] }, by: { optional: id }, for: { optional: id }, inc: { optional: 'tag' } },
+    object: { n: 'nat', nonce: 'base64', anchor: id, keyAgreement: id, key: id, expiresAt: 'time', state: { enum: ['allocated', 'registered', 'active', 'aging', 'consumed', 'withdrawn', 'tombstoned'] satisfies StockState[] }, for: { optional: id }, inc: { optional: 'tag' } }, // MV-38: `by` is the op's author, set by the fold
   },
   listedKey: { object: { n: 'nat', anchor: id, keyAgreement: id, expiresAt: 'time' } },
   revKey: { object: { n: 'nat', nonce: 'base64', anchor: id, signing: { b64u: 32 }, keyAgreement: id, expiresAt: 'time', for: id, proof: { b64u: 64 } } },
@@ -629,6 +643,8 @@ export const DOC_SHAPES = {
   revision: { object: { revision: 'nat', keys: { array: SHAPES.listedKey }, writer: { optional: 'tag' }, clears: { optional: { record: 'nat', key: 'tag' } } } },
   stockRevision: SHAPES.stockRevision,
   card: { object: { act: id, expiresAt: 'time', from: id, fromKeyAgreement: { optional: id }, to: id, card: SHAPES.card, set: { optional: str } } },
+  /** K2 step 2b.2 (MV-24): the ticket as `introduce` sends it (`TicketPayload` in the holder). */
+  ticket: { object: { act: id, issuedAt: 'time', expiresAt: 'time', own: id, voucher: { object: { anchor: id, keyAgreement: id, name: str } } } },
 } satisfies Record<string, Shape>
 /** Je Art die Felder neben `id`, `at`, `kind` (Review 26 B2: bekannte Art; Review 27 B2a: jedes Feld bis in die Elemente; Review 28: Kennungen). */
 const OP_FIELDS: { [K in Op['kind']]: { [field: string]: Shape } } = {
@@ -643,13 +659,14 @@ const OP_FIELDS: { [K in Op['kind']]: { [field: string]: Shape } } = {
   view: { rel: id, scope: id, revision: 'nat', keys: { array: SHAPES.listedKey }, writer: { optional: 'tag' }, clears: { optional: { record: 'nat', key: 'tag' } } },
   'stock-revision': { rel: id, scope: id, revision: SHAPES.stockRevision },
   introduce: { act: SHAPES.mediatorAct },
+  'ticket-ack': { act: id, side: { enum: ['a', 'b'] }, receiptDigest: 'digest' },
   'ticket-accept': { act: SHAPES.act },
   'ticket-refuse-budget': { rel: id, own: id },
   finding: { text: str },
   consent: { act: id, card: { nullable: SHAPES.card }, cardKey: { nullable: id } },
   produce: { act: id, card: SHAPES.card, cardKey: id, v: str },
   'device-set': { root: id, rootKeyAgreement: id, certs: { array: SHAPES.cert }, local: { optional: { record: id } }, rev: { optional: { object: { signer: 'tag', n: 'nat', digest: { nullable: 'digest' }, covered: { optional: { array: str } } } } }, seen: { optional: 'digest' }, deps: { optional: { array: 'digest' } } },
-  pool: { device: id, keys: { array: { object: { i: 'nat', for: id, anchor: id, keyAgreement: id } } } },
+  pool: { device: { optional: id }, keys: { array: { object: { i: 'nat', for: id, anchor: id, keyAgreement: id } } } },
   'pool-use': { device: id, i: 'nat', root: id, ctx: id },
   decline: { act: id },
   'hand-over': { act: id, o: handOver, digest: { optional: 'digest' } },
@@ -1122,7 +1139,7 @@ export function allocation(revs: readonly StockRevision[], ctx: AllocContext) {
       if (!ctx.members.has(key.for) || (mine && !mine.has(key.for))) continue
       out.push({ n: key.n, anchor: a, keyAgreement: key.keyAgreement, expiresAt: key.expiresAt, for: key.for })
     }
-    return out.sort((x, y) => x.anchor.localeCompare(y.anchor))
+    return out.sort((x, y) => byCode(x.anchor, y.anchor)) // K2 2b.2 decision 16: one order, code units
   }
   return { fold, classOff, evidence, usable, buried }
 }
@@ -1183,6 +1200,33 @@ export function usableView(s: HolderState, relId: string, now: string, mine?: Re
   }
   const fresh = listed.filter((k) => usable(k.expiresAt, now))
   return { listed, usable: fresh, unconsumed: fresh.filter((k) => !s.consumed.includes(k.anchor)) }
+}
+
+/**
+ * K2 step 2b.2 (core draft 4 §5.1, §1.4; decisions 2, 9, 10, 13): may the issuing M device submit (or resubmit) its ticket
+ * intent for side `side` of act `actId` now? The one computation the holder's release, its resumption and the outcome
+ * ledger's P-Produktion share (no second projection). In this order:
+ *   `accepted`  the side's receipt is known (decision 13: omitted, saves transport, 8640.4);
+ *   `deadline`  `now > expiresAt − consent-reserve` (8155, equality still admissible; decision 9);
+ *   `departed`  the addressee relationship departed, or the other one departed while the other ticket was not submitted
+ *               (8232.1: before either is submitted both are cancelled; after the other one, the one on the departed);
+ *   `withdrawn` the named key's evidence is `withdrawn` (withdrawn, buried, burnt, revoked writer: §3.3; decision 10).
+ * `null` = admissible. `otherSubmitted` / `selfSubmitted`: the device knows the other ticket / this one at the carrier.
+ * Order (Opus-Review 54 S3): `deadline` before `accepted`.
+ */
+export type TicketGate = 'accepted' | 'deadline' | 'departed' | 'withdrawn' | 'unknown-act'
+export function ticketGate(s: HolderState, actId: string, side: 'a' | 'b', now: string, otherSubmitted: boolean, selfSubmitted = false): TicketGate | null {
+  const a = s.mediatorActs.find((x) => x.id === actId)
+  if (!a) return 'unknown-act'
+  // Opus-Review 54 S3: the deadline first, so `TB` always ends a submission (also one with the receipt known).
+  if (Date.parse(now) > Date.parse(a.expiresAt) - PARAM.consentReserveMs) return 'deadline'
+  if (a.known?.[side]) return 'accepted'
+  const other = side === 'a' ? 'b' : 'a'
+  const gone = (x: MediatorAct['a']) => findRel(s, x.rel)?.departed !== false
+  // Opus-Review 54 S1 (8232.0/8232.1): a submitted ticket is out and is never cancelled; the gate applies to unsubmitted ones.
+  if (!selfSubmitted && (gone(a[side]) || (gone(a[other]) && !otherSubmitted))) return 'departed'
+  if (evidence(s, a[side].rel, a[side].key).state === 'withdrawn') return 'withdrawn'
+  return null
 }
 
 /** Review 21 B1: gleicher Anker, anderer Schlüsselwert; einmal je Anker als Befund festgehalten (reihenfolgeunabhängig). */
@@ -1253,7 +1297,8 @@ function applyBody(s: HolderState, op: Op): void {
           }
           continue
         }
-        r.stock.push({ ...k, nonce: k.nonce ?? op.nonce, state: 'active' }) // Vorbereitung sofort bestätigt (Prüfstand); 8475.S3 mit der Revision
+        // MV-38: a stock key assigned to an M device (`for`, K2 2b.1) belongs to the device that allocated it, the op's author.
+        r.stock.push({ ...k, nonce: k.nonce ?? op.nonce, state: 'active', ...(k.for !== undefined ? { by: authorOf(op) } : {}) }) // Vorbereitung sofort bestätigt (Prüfstand); 8475.S3 mit der Revision
         r.nextN = Math.max(r.nextN, k.n + 1)
       }
       return
@@ -1261,14 +1306,15 @@ function applyBody(s: HolderState, op: Op): void {
     case 'revision': {
       const r = rel(s, op.rel)
       r.revision = Math.max(r.revision, op.revision) // 8500: Nummern bleiben verbraucht
-      if (op.writer) {
+      if (op.writer || op.classOff !== undefined) {
         // Schritt 4: 8500 je Schreiber; die höchste Revision des Schreibers zählt, gleich in welcher Reihenfolge gefaltet.
         // K2 2b.1 (`stock-revision@2`): je (Schreiber, Inkarnation); `empty` hält dort den Klassenwert der Revision (`classOff`).
-        const key = op.inc ? `${op.writer}.${op.inc}` : op.writer
+        // MV-38: the K2 form names no writer; the counter belongs to the op's author incarnation (`op.id.writer`).
+        const key = op.writer === undefined ? op.id.writer : op.inc ? `${op.writer}.${op.inc}` : op.writer
         const w = own(r.writers, key)
         if (!w || op.revision > w.revision) {
           const ws = tableOf(r.writers)
-          put(ws, key, { revision: op.revision, empty: op.inc ? op.classOff === true : op.keys.length === 0 })
+          put(ws, key, { revision: op.revision, empty: op.classOff !== undefined ? op.classOff === true : op.keys.length === 0 })
           r.writers = ws
         }
         effect(s, op, `revision:${r.id}:${key}:${op.revision}`)
@@ -1323,6 +1369,23 @@ function applyBody(s: HolderState, op: Op): void {
         }
       }
       r.view = { scope: op.scope, revision: op.revision, keys }
+      return
+    }
+    case 'ticket-ack': {
+      // K2 2b.2: acceptance knowledge, `unknown → accepted` the only transition (draft 3 §1.1); the first receipt stays.
+      const a = s.mediatorActs.find((x) => x.id === op.act)
+      if (!a) throw new Missing('act', op.act, s.person)
+      // Opus-Review 54 B1, MV-38: only the issuing device writes acceptance knowledge. The issuer is the author of the
+      // `introduce` op (its effect holds the op id); a `ticket-ack` of any other author is a finding, never state.
+      const writer = authorOf(op)
+      const issuer = s.effects.find((e) => e.id === `ticket:${a.id}:${a.a.key}`)?.op.split('@')[0]
+      if (writer !== issuer) {
+        const text = `ticket-ack:foreign-writer:${op.act}:${op.side}: ${writer} is not the issuer ${issuer ?? '?'}`
+        if (!s.findings.includes(text)) s.findings.push(text)
+        return
+      }
+      a.known ??= {}
+      a.known[op.side] ??= op.receiptDigest
       return
     }
     case 'introduce': {
@@ -1447,10 +1510,11 @@ function applyBody(s: HolderState, op: Op): void {
     }
     case 'pool': {
       const pools = tableOf(s.pools)
-      const held = [...(own(pools, op.device) ?? [])]
+      const device = op.device ?? authorOf(op) // MV-38: the own pool belongs to the op's author
+      const held = [...(own(pools, device) ?? [])]
       for (const k of op.keys) if (!held.some((x) => x.i === k.i)) held.push({ ...k, used: null })
       held.sort((x, y) => x.i - y.i)
-      put(pools, op.device, held)
+      put(pools, device, held)
       s.pools = pools
       return
     }

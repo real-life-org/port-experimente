@@ -50,6 +50,8 @@ export class VirtualClock implements Clock {
 export interface Store<S> {
   commit(state: S): void
   load(): S | undefined
+  /** E15 K2 2b.2: was an image loaded and not committed over since (bench marker, `MemoryStore.takeRestored`)? */
+  takeRestored?(): boolean
 }
 
 export class MemoryStore<S> implements Store<S> {
@@ -59,6 +61,7 @@ export class MemoryStore<S> implements Store<S> {
   commit(state: S) {
     this.state = structuredClone(state)
     this.commits++
+    this.restored = false
   }
   load(): S | undefined {
     return this.state === undefined ? undefined : structuredClone(this.state)
@@ -70,6 +73,17 @@ export class MemoryStore<S> implements Store<S> {
   /** Ein alter Stand zurückgespielt (X6, X19). */
   restore(state: S | undefined) {
     this.state = state === undefined ? undefined : structuredClone(state)
+    this.restored = true
+  }
+  /**
+   * E15 K2 step 2b.2 (core draft 4 §5.3, Q1, Q9): the bench marker "an image was loaded into this store" (restore from an
+   * old image, a stolen copy), as against a restart on the device's own last commit. It holds until the device commits
+   * again: a rebuild before that commit (a crash right after the restore) still starts from the loaded image, not from an
+   * own commit, so it is fresh again.
+   */
+  private restored = false
+  takeRestored(): boolean {
+    return this.restored
   }
 }
 
@@ -124,6 +138,8 @@ export interface Frame {
   id: number
   address: string
   bytes: Uint8Array
+  /** E15 K2 2b.2 (Opus-Review 54 B2, P-Eigen): the device whose deliverer deposited it (bench observation; absent for direct deposits). */
+  from?: string
 }
 
 export class WireUnreachable extends Error {}
@@ -270,9 +286,9 @@ export class Carrier {
   pending(address: string): number {
     return this.queues.get(address)?.length ?? 0
   }
-  deposit(address: string, bytes: Uint8Array) {
+  deposit(address: string, bytes: Uint8Array, from?: string) {
     if (this.unreachable) throw new WireUnreachable('Träger unerreichbar')
-    const f: Frame = { id: ++this.seq, address, bytes }
+    const f: Frame = { id: ++this.seq, address, bytes, ...(from ? { from } : {}) }
     this.carried.push(f)
     if (this.observe) {
       try {
@@ -388,7 +404,14 @@ export type Report =
   | { state: 'awaiting-transport'; reason: 'offline' | 'transport-unreachable' }
   | { state: 'accepted' }
   | { state: 'delivered'; late: boolean }
-  | { state: 'failed'; reason: 'expired-by-adapter-policy' }
+  | { state: 'failed'; reason: 'expired-by-adapter-policy' | ExpireReason }
+
+/**
+ * E15 K2 step 2b.2 (core draft 4 §5.1, §5.2): why the holder's tick stops a submission. The deliverer has no clock; the
+ * holder calls `expire` at the act-end boundaries (`consent-reserve` for tickets, `act-ended` = 8110.5 for cards) and when
+ * the named key is known `withdrawn` (decision 15). Only the K2 automaton calls it; K0/K1a never.
+ */
+export type ExpireReason = 'consent-reserve' | 'act-ended' | 'withdrawn'
 
 /** Horizonte in Runden: Bericht spätestens nach einer Runde; erneut senden nach ACK_WAIT; aufgeben nach GIVE_UP. */
 export const HORIZON = { status: 1, ackWait: 3, giveUp: 12 } as const
@@ -411,6 +434,8 @@ export interface Submission {
    * Geräte schließt die Submission (wie bei einer gemeinsamen Adresse unter einem Seed). Ohne Feld: ein Rahmen.
    */
   extra?: Array<{ address: string; frame: Uint8Array }>
+  /** E15 K2 2b.2: stopped by `expire` after the carrier accepted it: no repetition any more, a late receipt still counts. */
+  stopped?: ExpireReason
 }
 
 export class Zusteller {
@@ -466,8 +491,8 @@ export class Zusteller {
       return
     }
     try {
-      this.carrier().deposit(s.address, s.frame)
-      for (const x of s.extra ?? []) this.carrier().deposit(x.address, x.frame)
+      this.carrier().deposit(s.address, s.frame, this.device)
+      for (const x of s.extra ?? []) this.carrier().deposit(x.address, x.frame, this.device)
       s.transport = 'ok'
       s.deposits++
       s.sinceDeposit = 0
@@ -490,6 +515,7 @@ export class Zusteller {
     for (const s of this.submissions.values()) {
       if (s.report === null) continue // vorgemerkt, nicht freigegeben: liegt vor der Commit-Grenze des Geräts (#56)
       if (this.gate?.(s)) continue // zurückgehalten bis zum Nachholen (B1a): keine Einlieferung, keine Frist
+      if (s.stopped) continue // E15 K2 2b.2 (CodeRabbit): a stopped submission keeps its counters; after `resume` it retries, not fails
       s.rounds++
       s.sinceDeposit++
       if (s.sinceAccepted !== null) s.sinceAccepted++
@@ -527,6 +553,35 @@ export class Zusteller {
     if (s.report !== null && s.report.state !== 'awaiting-transport') return false
     this.submissions.delete(digest)
     return true
+  }
+  /**
+   * E15 K2 step 2b.2 (core draft 4 §5.2; decision 3): the act-end stop, driven by the holder's tick. Before the first carrier
+   * acceptance the submission is given up (`failed` with the reason; never deposited); after it nothing is withdrawn (what
+   * is out stays out), the report stays `accepted` (handed) and the deliverer stops repeating; a late receipt still makes it
+   * `delivered`. Returns the effect: `given-up`, `stopped` or `none` (unknown, already delivered, failed or stopped).
+   */
+  expire(digest: string, reason: ExpireReason): 'given-up' | 'stopped' | 'none' {
+    const s = this.submissions.get(digest)
+    // CodeRabbit: a delivered or failed submission is complete, whatever stop it had: nothing to expire.
+    if (!s || s.report?.state === 'delivered' || s.report?.state === 'failed') return 'none'
+    // Opus-Review 55 S5 (b): a stop for `withdrawn` takes the later boundary's reason (the stop itself stays).
+    if (s.stopped === 'withdrawn' && reason !== 'withdrawn') {
+      s.stopped = reason
+      return 'stopped'
+    }
+    if (s.stopped) return 'none'
+    if (s.deposits === 0) {
+      s.report = { state: 'failed', reason }
+      this.notes.push(`${s.digest.slice(0, 8)} aufgegeben vor der Trägerannahme (${reason})`)
+      return 'given-up'
+    }
+    s.stopped = reason
+    return 'stopped'
+  }
+  /** Opus-Review 54 S2: a stop for `withdrawn` is no latch; when the evidence returns (revocation exception) the repetition resumes. */
+  resume(digest: string): void {
+    const s = this.submissions.get(digest)
+    if (s?.stopped === 'withdrawn') delete s.stopped
   }
   transport(digest: string) {
     return this.submissions.get(digest)?.transport

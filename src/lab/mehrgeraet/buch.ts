@@ -122,6 +122,17 @@ export interface CarrierDeposit {
   frame: string
   address: string
   bytes: string
+  /** Opus-Review 54 B2: the device whose deliverer deposited it (`Frame.from`; absent for a direct deposit). */
+  from?: string
+}
+/** K2 2b.2 (Opus-Review 54 S6): a ticket arrival at a side device and its outcome (8640 step), from the holder's seam. */
+export interface TicketOutcome {
+  seq: number
+  at: string
+  device: string
+  act: string
+  own: string
+  outcome: string
 }
 /**
  * The ledger's copy of one entry of a device's resolver (key id → private key agreement, PKCS#8 base64), taken at the
@@ -170,6 +181,32 @@ export interface IssuerImage {
   person: string
   act: string
   keys: Array<{ rel: string; key: string; evidence: M.Evidence; classOff: boolean }>
+}
+/**
+ * K2 step 2b.2 (core draft 4 §1.4; decisions 2, 6): at a store commit of the issuing M device, the release gate of each of
+ * its own ticket intents by the model's one computation (`M.ticketGate` on the committed image): `null` = submission
+ * admissible. Recorded when it changes, so "the gate at round r" is the last row at or before r.
+ */
+export interface GateRow {
+  seq: number
+  at: string
+  device: string
+  act: string
+  side: 'a' | 'b'
+  digest: string
+  gate: M.TicketGate | null
+}
+/**
+ * K2 step 2b.2 (core draft 4 §1.3, review 5 D1): a side device's committed image projects an act `declined` although the
+ * same image knows the decisive consent with a submitted card or the connection (MV-15 rule 2): a P-Paar violation.
+ */
+export interface DeclinedRow {
+  seq: number
+  device: string
+  person: string
+  act: string
+  o: string
+  opened: boolean
 }
 export interface BalanceRow {
   seq: number
@@ -269,6 +306,12 @@ export class Buch implements HolderObserver {
   readonly balances: BalanceRow[] = []
   /** K2 step 2b.1: the issuer's knowledge of the named keys at each issuance commit (`IssuerImage`). */
   readonly issuers: IssuerImage[] = []
+  /** K2 step 2b.2: the release gate of each own ticket intent per commit of the issuing device (`GateRow`, on change). */
+  readonly gates: GateRow[] = []
+  /** K2 step 2b.2: `declined` projections that know the decisive consent (`DeclinedRow`, P-Paar). */
+  readonly declined: DeclinedRow[] = []
+  /** K2 step 2b.2 (Opus-Review 54 S6): every ticket arrival with its outcome (`TicketOutcome`), in the dump. */
+  readonly ticketOutcomes: TicketOutcome[] = []
   /** The ledger's copy of every device resolver (Tor-Review 47), in the dump. */
   readonly keyring: KeyCopy[] = []
   private readonly copied = new Set<string>()
@@ -347,7 +390,23 @@ export class Buch implements HolderObserver {
       for (const op of b.ops) if (op.kind === 'introduce') this.issuers.push({ ...t, device: d.name, person: d.person, act: op.act.id, keys: [op.act.a, op.act.b].map((x) => ({ rel: x.rel, key: x.key, evidence: M.evidence(image.holder, x.rel, x.key), classOff: M.classOff(image.holder, x.rel) })) })
       if (intro.length) for (const i of b.intents) for (const a of [i.address, ...(i.copies ?? []).map((c) => c.address)]) this.receiverAt(t.seq, intro[0]!.act.id, a)
     }
+    this.gatesAt(t, d, image)
+    for (const a of image.holder.acts)
+      if (a.state === 'declined' && (M.SUBMITTED.has(a.o) || a.opened !== null) && !this.declined.some((x) => x.device === d.name && x.act === a.id)) this.declined.push({ seq: t.seq, device: d.name, person: d.person, act: a.id, o: a.o, opened: a.opened !== null })
     this.lastImage.set(d.name, { person: d.person, sets: !!d.cand.deviceSets, state: image.holder })
+  }
+  /** `GateRow`s of one commit: every own ticket intent of the image (act and side known), gate by `M.ticketGate`. */
+  private gatesAt(t: { seq: number; at: string }, d: HolderDevice, image: DeviceState): void {
+    const tickets = image.intents.map(([, i]) => i).filter((i) => i.kind === TYPES.ticket && i.act && i.side && i.device === d.name)
+    for (const i of tickets) {
+      const other = tickets.find((x) => x.act === i.act && x.side !== i.side)
+      const os = other ? image.submissions.find((x) => x.digest === other.digest) : undefined
+      const self = image.submissions.find((x) => x.digest === i.digest)
+      // Opus-Review 55 B1: the same inputs as the holder's gate (`ticketGateOf`), both submission facts from the image.
+      const gate = M.ticketGate(image.holder, i.act!, i.side!, t.at, !!os && os.deposits > 0, !!self && self.deposits > 0)
+      const last = [...this.gates].reverse().find((x) => x.device === d.name && x.digest === i.digest)
+      if (!last || last.gate !== gate) this.gates.push({ ...t, device: d.name, act: i.act!, side: i.side!, digest: i.digest, gate })
+    }
   }
   /** Copy every resolver entry of every device not copied yet (the world's devices; live only). */
   private copyKeys(seq: number): void {
@@ -411,6 +470,9 @@ export class Buch implements HolderObserver {
     if (!this.byDigest.has(p.digest)) this.byDigest.set(p.digest, rec)
     for (const h of rec.frames) if (!this.byFrame.has(h)) this.byFrame.set(h, rec)
   }
+  ticket(d: HolderDevice, x: { act: string; own: string; at: string; outcome: string }): void {
+    this.ticketOutcomes.push({ seq: this.next().seq, at: x.at, device: d.name, act: x.act, own: x.own, outcome: x.outcome })
+  }
   admitted(d: HolderDevice, a: Parameters<HolderObserver['admitted']>[1]): void {
     this.deliveries.push({ ...this.next(), device: d.name, person: d.person, type: a.type, issuer: a.issuer, digest: a.digest, address: a.address, payload: structuredClone(a.payload) })
   }
@@ -420,7 +482,7 @@ export class Buch implements HolderObserver {
     const p = this.byFrame.get(h)
     // Tor-Review 47: every deposit is kept with its bytes, and every resolver as it stands now; the content decides.
     this.copyKeys(t.seq)
-    this.carrier.deposits.push({ ...t, frame: h, address: f.address, bytes: Buffer.from(f.bytes).toString('base64') })
+    this.carrier.deposits.push({ ...t, frame: h, address: f.address, bytes: Buffer.from(f.bytes).toString('base64'), ...(f.from ? { from: f.from } : {}) })
     if (!p) {
       this.carrier.unknown++ // not produced by an observed device
       return
@@ -476,6 +538,9 @@ export class Buch implements HolderObserver {
       balances: this.balances,
       issuers: this.issuers,
       keyring: this.keyring,
+      gates: this.gates,
+      declined: this.declined,
+      ticketOutcomes: this.ticketOutcomes,
     })
   }
   /** A ledger from a dump (not attached to a world): for re-checking a run later. */
@@ -496,6 +561,9 @@ export class Buch implements HolderObserver {
       balances?: BalanceRow[]
       issuers?: IssuerImage[]
       keyring: KeyCopy[]
+      gates?: GateRow[]
+      declined?: DeclinedRow[]
+      ticketOutcomes?: TicketOutcome[]
     }
     const b = new Buch()
     b.seq = o.seq
@@ -516,6 +584,9 @@ export class Buch implements HolderObserver {
     b.issuers.push(...(o.issuers ?? []))
     b.keyring.push(...o.keyring)
     for (const k of o.keyring) b.copied.add(`${k.device}|${k.rkid}`)
+    b.gates.push(...(o.gates ?? []))
+    b.declined.push(...(o.declined ?? []))
+    b.ticketOutcomes.push(...(o.ticketOutcomes ?? []))
     return b
   }
   /** Every act id accepted on a stock key (8640.14 at a successful receiver commit), over the whole history. */
@@ -542,7 +613,7 @@ export function ledgerWorld(candidate: MultiDeviceCandidate, opts: Omit<Welt15Op
 // ── Checkers ──
 
 export interface Check {
-  property: 'P-Gueltig' | 'P-Einmal' | 'P-Commit' | 'P-Produktion' | 'P-Paar' | 'P-Bilanz' | 'P-Recht' | 'P-Aufhebung' | 'P-Versorgung'
+  property: 'P-Gueltig' | 'P-Einmal' | 'P-Commit' | 'P-Produktion' | 'P-Paar' | 'P-Bilanz' | 'P-Recht' | 'P-Aufhebung' | 'P-Versorgung' | 'P-Eigen'
   ok: boolean
   violations: string[]
   counts: Record<string, number>
@@ -573,7 +644,8 @@ export function finalize(b: Buch, results: Check[]): Check[] {
 export async function judge(b: Buch, opts: { share?: number } = {}): Promise<Check[]> {
   const commit = await pCommit(b)
   const produktion = await pProduktion(b)
-  const allocation = opts.share === undefined ? [] : [pBilanz(b, opts.share), pRecht(b), pAufhebung(b), pVersorgung(b, opts.share)]
+  // Opus-Review 54 B2: P-Eigen with the K2 rows (a run judged with the allocating devices' share).
+  const allocation = opts.share === undefined ? [] : [pBilanz(b, opts.share), pRecht(b), await pAufhebung(b), pVersorgung(b, opts.share), await pEigen(b)]
   return finalize(b, [pEinmal(b), commit, produktion, pPaar(b), ...allocation])
 }
 
@@ -972,54 +1044,118 @@ export async function pProduktion(b: Buch, opts: { rounds?: number; reserveMs?: 
   const k = opts.rounds ?? PRODUCTION.rounds
   const reserve = opts.reserveMs ?? PRODUCTION.reserveMs
   const v: string[] = []
-  const counts = { introductions: 0, obliged: 0, kept: 0, noKeys: 0, crashedBeforeCommit: 0, down: 0, open: 0 }
+  const counts: Record<string, number> = { introductions: 0, obliged: 0, kept: 0, noKeys: 0, crashedBeforeCommit: 0, down: 0, open: 0, 'omitted:rueckzug': 0, 'omitted:abgang': 0, 'omitted:accepted': 0 }
   for (const e of b.events) {
     if (e.kind !== 'introduce' || !e.device) continue
-    counts.introductions++
+    counts.introductions!++
     const d = e.detail as { allowedA?: string[]; allowedB?: string[]; result: { act?: string; refused?: string }; armed: string | null; up: boolean }
     if (!d.up) {
-      counts.down++
+      counts.down!++
       continue
     }
     if (d.result.refused === 'crashed' && d.armed === 'before-commit') {
-      counts.crashedBeforeCommit++
+      counts.crashedBeforeCommit!++
       continue
     }
     const ka = d.allowedA ?? []
     const kb = d.allowedB ?? []
     if (!ka.length || !kb.length) {
-      counts.noKeys++
+      counts.noKeys!++
       continue
     }
-    counts.obliged++
     const next = b.events.find((x) => x.seq > e.seq)?.seq ?? Infinity
     const act = d.result.act ?? b.commits.find((c) => c.device === e.device && c.seq > e.seq && c.seq < next && c.ops.some((op) => op.kind === 'introduce'))?.ops.find((op): op is M.Op & { kind: 'introduce' } => op.kind === 'introduce')?.act.id
     if (!act) {
+      counts.obliged!++
       v.push(`introduce at seq ${e.seq} on ${e.device}: refused (${d.result.refused ?? '?'}) although the reference admits ${ka.length} and ${kb.length} keys`)
       continue
     }
     const issued = b.commits.flatMap((c) => c.ops).find((op): op is M.Op & { kind: 'introduce' } => op.kind === 'introduce' && op.act.id === act)
-    if (issued && Date.parse(issued.act.expiresAt) - Date.parse(e.at) <= reserve) {
-      counts.obliged--
-      continue
-    }
+    if (issued && Date.parse(issued.act.expiresAt) - Date.parse(e.at) <= reserve) continue
     const upRounds = b.events.filter((x) => x.kind === 'round' && x.seq > e.seq && ((x.detail?.up as string[] | undefined) ?? []).includes(e.device!))
-    const deadline = upRounds[k - 1]?.seq
-    if (deadline === undefined) {
-      counts.open++
+    const depositsOf = (side: 'a' | 'b') => deposits.filter((x) => !x.reasons.length && x.commit!.device === e.device && x.opened.doc.payload?.act === act && String(x.opened.doc.payload.own) === issued?.act[side].key).map((x) => x.deposit.seq)
+    const rowsOf = (side: 'a' | 'b') => b.gates.filter((g) => g.device === e.device && g.act === act && g.side === side)
+    if (!rowsOf('a').length && !rowsOf('b').length) {
+      // Opus-Review 54 S4 (c): without gate rows (no automaton: K0, K1a, the 2b.1 path) the 2b.0 duty exactly: both
+      // tickets by the k-th up round, `open` while it does not exist.
+      counts.obliged!++
+      const deadline = upRounds[k - 1]?.seq
+      if (deadline === undefined) {
+        counts.open!++
+        continue
+      }
+      const named = new Set<string>()
+      for (const x of deposits) if (!x.reasons.length && x.deposit.seq < deadline && x.commit!.device === e.device && x.opened.doc.payload?.act === act) named.add(String(x.opened.doc.payload.own))
+      if (named.size === 2) counts.kept!++
+      else v.push(`issuance ${act.slice(0, 8)} on ${e.device}: ${named.size} of 2 tickets at the carrier within ${k} rounds`)
       continue
     }
-    // Tor-Review 43 B2: only committed submissions count (a ticket deposited at another address does not keep the duty);
-    // Tor-Review 44 B1: and only if its committed frame opens with the key its address names (the side named is the one
-    // the opened ticket names).
-    // Tor-Review 45: the same single path as P-Commit (`ticketDeposits`): a deposit counts if its content is a ticket of
-    // this act, it opens with the key its address names, and it is the committed submission of this device's issuance.
-    const named = new Set<string>()
-    for (const d of deposits) if (!d.reasons.length && d.deposit.seq < deadline && d.commit!.device === e.device && d.opened.doc.payload?.act === act) named.add(String(d.opened.doc.payload.own))
-    if (named.size === 2) counts.kept++
-    else v.push(`issuance ${act.slice(0, 8)} on ${e.device}: ${named.size} of 2 tickets at the carrier within ${k} rounds`)
+    // K2 2b.2 (core draft 4 §1.4; decisions 2, 6; Opus-Review 54 B1, S4): per ticket the k-round window runs over the up rounds
+    // in which submission was admissible by the device's committed knowledge at that round (`GateRow` = `M.ticketGate` on
+    // the committed image), restarting where it was not. `accepted` excuses only with a receipt of the expected signer for
+    // this ticket at the carrier before that row (otherwise the round counts as admissible). An unsubmitted ticket is an
+    // omission by the reason that held at its end (the last row before the deadline); admissible at the end: `open`; only
+    // the deadline: `down`.
+    const results: Array<'kept' | 'violation' | 'down' | 'open' | 'omitted:rueckzug' | 'omitted:abgang' | 'omitted:accepted'> = []
+    for (const side of ['a', 'b'] as const) {
+      const rows = rowsOf(side)
+      const digest = rows[0]?.digest
+      const expected = issued?.act[side].key
+      const receipt = (seq: number) => b.carrier.receipts.some((r) => r.ref === digest && r.signer === expected && r.seq < seq)
+      const valid = (g: GateRow | undefined): M.TicketGate | null => (!g || g.gate === null ? null : g.gate === 'accepted' && !receipt(g.seq) ? null : g.gate)
+      const gateAt = (seq: number) => valid([...rows].reverse().find((g) => g.seq <= seq))
+      const deps = depositsOf(side)
+      const first = Math.min(Infinity, ...deps)
+      let run = 0
+      let result: (typeof results)[number] | null = null
+      for (const r of upRounds) {
+        if (first < r.seq) {
+          result = 'kept'
+          break
+        }
+        run = gateAt(r.seq) === null ? run + 1 : 0
+        if (run >= k) {
+          result = 'violation'
+          break
+        }
+      }
+      if (!result) {
+        if (first < Infinity) result = 'kept'
+        else {
+          const cut = rows.findIndex((g) => g.gate === 'deadline')
+          const end = cut < 0 ? rows[rows.length - 1] : rows[cut - 1]
+          const reason = valid(end)
+          result = reason === 'withdrawn' ? 'omitted:rueckzug' : reason === 'departed' ? 'omitted:abgang' : reason === 'accepted' ? 'omitted:accepted' : cut >= 0 ? 'down' : 'open'
+        }
+      }
+      results.push(result)
+    }
+    if (results.every((x) => x === 'down')) {
+      counts.down!++ // decision 2: no round in which submission was admissible
+      continue
+    }
+    counts.obliged!++
+    if (results.includes('violation')) v.push(`issuance ${act.slice(0, 8)} on ${e.device}: ${results.filter((x) => x === 'kept').length} of 2 tickets at the carrier within ${k} admissible rounds (${results.join(', ')})`)
+    else if (results.every((x) => x === 'kept')) counts.kept!++
+    else if (results.includes('open')) counts.open!++
+    for (const x of results) if (x.startsWith('omitted:')) counts[x]!++
   }
   return check(b, 'P-Produktion', v, counts)
+}
+
+/**
+ * P-Eigen (MV-8; Opus-Review 54 B2): a ticket at the carrier is deposited only by the deliverer of the device whose
+ * issuance commit holds it (the intent's `device`); a sibling resuming it is a violation, one per deposit.
+ */
+export async function pEigen(b: Buch): Promise<Check> {
+  const v: string[] = []
+  let judged = 0
+  for (const x of await ticketDeposits(b)) {
+    if (!x.commit || !x.deposit.from) continue
+    judged++
+    if (x.deposit.from !== x.commit.device) v.push(`ticket of act ${String(x.opened.doc.payload?.act).slice(0, 8)} committed by ${x.commit.device} deposited by ${x.deposit.from} at seq ${x.deposit.seq}`)
+  }
+  return check(b, 'P-Eigen', v, { judged })
 }
 
 /**
@@ -1060,7 +1196,77 @@ export function pPaar(b: Buch): Check {
         if (!same) v.push(`act ${act.slice(0, 8)}: ${p} and ${q} connected with different pair contexts`)
       }
   }
+  // K2 2b.2 (core draft 4 §1.3, review 5 D1): a reconstructed `declined` is a violation only where the same image knows
+  // the decisive consent with a submitted card or the connection (MV-15 rule 2); before the journal reconciliation a
+  // sibling's `declined` is a valid intermediate state.
+  for (const x of b.declined) v.push(`act ${x.act.slice(0, 8)}: ${x.device} projects declined although its image holds the own card ${x.opened ? 'connected' : x.o}`)
   return check(b, 'P-Paar', v, { connectedActs: ctx.size, bothSides: both })
+}
+
+/**
+ * K2 2b.2 (core draft 4 §1.3): one-sided connections, counted per cause, never a violation (8400). An act connected by one
+ * person only is `late-card` when a card of the act reached a device of the other person after its acceptance end
+ * (8110.5, from the delivery protocol), otherwise `other` (departure, restore, no card).
+ */
+export function oneSided(b: Buch): Record<string, number> {
+  const out: Record<string, number> = { 'late-card': 0, other: 0 }
+  const acts = new Map<string, M.MediatorAct>()
+  for (const c of b.commits) for (const op of c.ops) if (op.kind === 'introduce') acts.set(op.act.id, op.act)
+  const persons = new Map<string, Set<string>>()
+  for (const c of b.commits) for (const op of c.ops) if (op.kind === 'connect') (persons.get(op.act) ?? persons.set(op.act, new Set()).get(op.act)!).add(c.person)
+  for (const [act, ps] of persons) {
+    if (ps.size !== 1) continue
+    const a = acts.get(act)
+    const end = a ? Date.parse(a.expiresAt) + M.PARAM.actSkewMs : Infinity
+    const late = b.deliveries.some((x) => x.type === TYPES.card && x.payload.act === act && !ps.has(x.person) && Date.parse(x.at) > end)
+    out[late ? 'late-card' : 'other']!++
+  }
+  return out
+}
+
+/**
+ * K2 2b.2 (core draft 4 §1; decision 4): dead acts per cause, a counter, never a property. Per issued act: both sides
+ * accepted, one of them after `TB` → `spaetes-ticket`; otherwise the first side without acceptance names the cause, from
+ * its allocator's ticket log (8640 step: withdrawn/buried → `zurueckgezogen`, `fremde-zuteilung`, 8640.3 →
+ * `spaet-zugestellt`, 8640.10/8640.13 → `budget`, consumed → `doppelbenennung`) or, if the ticket never arrived, from the
+ * issuer's release gate (`withdrawn` → `zurueckgezogen`, `departed` → `abgang`). `deadAccepted` = acceptances in dead acts.
+ * Reads the ticket outcomes the side devices reported through the seam (`TicketOutcome`, in the dump; Opus-Review 54 S6),
+ * so a loaded dump gives the same counts. The world argument is accepted for the older call sites and not read.
+ */
+export function deadTickets(b: Buch, _w?: Welt15): { causes: Record<string, number>; deadAccepted: number } {
+  const causes: Record<string, number> = { zurueckgezogen: 0, 'fremde-zuteilung': 0, 'spaetes-ticket': 0, 'spaet-zugestellt': 0, abgang: 0, budget: 0, doppelbenennung: 0, unknown: 0 }
+  let deadAccepted = 0
+  const accepts = b.commits.flatMap((c) => c.ops.filter((op): op is M.Op & { kind: 'ticket-accept' } => op.kind === 'ticket-accept'))
+  for (const c of b.commits)
+    for (const op of c.ops) {
+      if (op.kind !== 'introduce') continue
+      const act = op.act
+      const acc = (side: 'a' | 'b') => accepts.filter((x) => x.act.id === act.id && x.act.own === act[side].key)
+      const tb = Date.parse(act.expiresAt) - M.PARAM.consentReserveMs
+      const n = acc('a').length + acc('b').length
+      let cause: string | null = null
+      if (acc('a').length && acc('b').length) {
+        if ([...acc('a'), ...acc('b')].some((x) => Date.parse(x.at) > tb)) cause = 'spaetes-ticket'
+      } else {
+        const side = acc('a').length ? 'b' : 'a'
+        const key = act[side].key
+        const log = b.ticketOutcomes.filter((x) => x.act === act.id && x.own === key).map((x) => x.outcome)
+        const refused = b.commits.some((x) => x.ops.some((o) => o.kind === 'ticket-refuse-budget' && o.own === key))
+        const gate = [...b.gates].reverse().find((g) => g.act === act.id && g.side === side && g.gate !== null && g.gate !== 'deadline')?.gate
+        if (refused || log.some((o) => o === '8640.13' || o === '8640.10')) cause = 'budget'
+        else if (log.includes('fremde-zuteilung')) cause = 'fremde-zuteilung'
+        else if (log.some((o) => o === 'state:withdrawn' || o === 'state:tombstoned')) cause = 'zurueckgezogen'
+        else if (log.includes('state:consumed')) cause = 'doppelbenennung'
+        else if (log.includes('8640.3')) cause = 'spaet-zugestellt'
+        else if (!log.length && gate === 'withdrawn') cause = 'zurueckgezogen'
+        else if (!log.length && gate === 'departed') cause = 'abgang'
+        else if (log.length || n) cause = 'unknown'
+      }
+      if (!cause) continue
+      causes[cause]!++
+      deadAccepted += n
+    }
+  return { causes, deadAccepted }
 }
 
 /**
@@ -1150,7 +1356,7 @@ export function pRecht(b: Buch): Check {
  * highest revision of its (writer, inc). Future anchors are not locked: that the reference admits fresh anchors after the
  * class is on again is P-Produktion's side.
  */
-export function pAufhebung(b: Buch): Check {
+export async function pAufhebung(b: Buch): Promise<Check> {
   const v: string[] = []
   let accepts = 0
   let issuances = 0
@@ -1164,11 +1370,34 @@ export function pAufhebung(b: Buch): Check {
     }
   // M side (Tor-Review 52 B1): the issuer's own committed knowledge at the issuance commit decides (`IssuerImage`, the
   // model's `evidence` and `classOff`): a named key withdrawn, buried or of a revoked writer there, or the class off there.
+  const flagged = new Set<string>() // a ticket whose issuance is already a violation is not counted again at its submission
   for (const x of b.issuers) {
     issuances++
+    x.keys.forEach((k, i) => {
+      if (k.evidence.state === 'withdrawn' || k.classOff) flagged.add(`${x.device}|${x.act}|${i === 0 ? 'a' : 'b'}`)
+    })
     for (const k of x.keys) if (k.evidence.state === 'withdrawn' || k.classOff) v.push(`${x.device} named ${k.key.slice(-8)} in act ${x.act.slice(0, 8)} although its committed state held it ${k.classOff ? 'under the class off' : 'withdrawn, buried or revoked'}`)
   }
-  return check(b, 'P-Aufhebung', v, { accepts, issuances })
+  // Opus-Review 54 B1 (iii): every later submission too (resumption, repetition): a deposit of an own ticket while the
+  // issuer's committed knowledge at that moment (its last `GateRow`, `M.ticketGate` on the committed image) says
+  // `withdrawn`, `departed` or past `TB` is a violation, once per ticket.
+  const acts = new Map<string, M.MediatorAct>()
+  for (const c of b.commits) for (const op of c.ops) if (op.kind === 'introduce') acts.set(op.act.id, op.act)
+  let submissions = 0
+  for (const x of await ticketDeposits(b)) {
+    if (!x.commit) continue
+    const act = acts.get(String(x.opened.doc.payload?.act))
+    if (!act) continue
+    submissions++
+    const side = act.a.key === String(x.opened.doc.payload?.own) ? 'a' : 'b'
+    const row = [...b.gates].reverse().find((g) => g.device === x.commit!.device && g.act === act.id && g.side === side && g.seq <= x.deposit.seq)
+    const id = `${x.commit.device}|${act.id}|${side}`
+    if (row && (row.gate === 'withdrawn' || row.gate === 'departed' || row.gate === 'deadline') && !flagged.has(id)) {
+      flagged.add(id)
+      v.push(`${x.commit.device} submitted its ticket for side ${side} of act ${act.id.slice(0, 8)} at seq ${x.deposit.seq} although its committed state said ${row.gate}`)
+    }
+  }
+  return check(b, 'P-Aufhebung', v, { accepts, issuances, submissions })
 }
 
 /**
