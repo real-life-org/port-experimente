@@ -9,8 +9,8 @@
 import { describe, expect, it } from 'vitest'
 import { diSign, jcs, receive, seal } from '@real-life/trust-protocol'
 import type { Json } from '@real-life/trust-protocol'
-import { MemoryStore } from '../src/lab/zustellung'
-import { k2 } from '../src/candidates/mehrgeraet-k2'
+import { Carrier, MemoryStore, Zusteller } from '../src/lab/zustellung'
+import { issuanceProblem, k2 } from '../src/candidates/mehrgeraet-k2'
 import { Buch, deadTickets, judge, ledgerWorld, oneSided, pairCounter, type Check } from '../src/lab/mehrgeraet/buch'
 import { frameHash, TYPES, type HolderDevice } from '../src/lab/mehrgeraet/holder'
 import * as M from '../src/lab/mehrgeraet/model'
@@ -1229,4 +1229,64 @@ describe('Opus-Review 55: one gate for holder and ledger, fixed tests for the fi
     expect(prop(cs, 'P-Produktion').counts['omitted:accepted']).toBe(0)
     carrier.deposit = deposit
   }, 400_000)
+})
+
+// ── Opus-Review 56 (rltp/design/port-experimente-e15-opus-review56-2026-10-22.md) ──
+
+describe('Opus-Review 56: fixed tests for 8850.5 with a foreign anchor and for review 55 S5 (a), (b)', () => {
+  for (const automaton of [true, false]) {
+    it(`R56-S1${automaton ? '' : ' control'}. B's card redirected (test hook) to A1's tuple address, no stock key (P56): ${automaton ? '`8850.5-not-held`, no receipt' : '`buffered`, receipt (2b.1 path)'}`, async () => {
+      const s = await world({ automaton })
+      const { act } = await introduce(s, s.M1)
+      await s.round(3)
+      const t = M.findRel(s.A1.state, s.am.x)!.tuples[0]!
+      const foreign = await s.A1.cand.keys.pair(t.ownKey)
+      expect(s.A1.state.relationships.flatMap((r) => r.stock).some((k) => k.anchor === foreign.anchor)).toBe(false)
+      const b = s.B1 as unknown as { sendDoc: (type: unknown, ctx: unknown, recipient: unknown, toRkid: unknown, replyTo: unknown, payload: Record<string, unknown>, ...rest: unknown[]) => Promise<unknown> }
+      const orig = b.sendDoc.bind(s.B1)
+      b.sendDoc = (type: unknown, ctx: unknown, recipient: unknown, toRkid: unknown, replyTo: unknown, payload: Record<string, unknown>, ...rest: unknown[]) =>
+        type === TYPES.card ? orig(type, ctx, foreign.anchor, foreign.rkid, replyTo, { ...payload, to: foreign.anchor }, ...rest) : orig(type, ctx, recipient, toRkid, replyTo, payload, ...rest)
+      await s.B1.consent(act)
+      await s.round(4)
+      // Soll (derived): the set check concerns the card's root (B's set), not the receiving address. The first arrival
+      // comes before A1 has seen B's set revision for the card root and is deferred (`Missing`, no log entry, no receipt);
+      // B repeats after 3 rounds, that copy reaches the card branch: no act on this anchor, no stock key → 8850.5.
+      const log = s.A1.cardLog.filter((x) => x.act === act).map((x) => x.outcome)
+      expect(s.A1.deferredCards).toBe(1)
+      const report = s.B1.zusteller.report(M.act(s.B1.state, act).ownCardDigest!)
+      if (automaton) {
+        expect(log).toEqual(['8850.5-not-held'])
+        expect(report?.state).toBe('accepted')
+      } else {
+        expect(log).toEqual(['buffered'])
+        expect(report?.state).toBe('delivered')
+      }
+    }, 240_000)
+  }
+
+  it('R56-S2a. `issuanceProblem`: `act.by` must be the writer of the issuance batch (review 55 S5 (a))', () => {
+    const act = { id: 'act1', a: { rel: 'ra', key: 'ka', keyAgreement: 'xa' }, b: { rel: 'rb', key: 'kb', keyAgreement: 'xb' }, issuedAt: '2026-10-17T08:00:00.000Z', expiresAt: '2026-10-24T08:00:00.000Z' }
+    const batch = (by: string) => ({
+      writer: 'M1@inc1',
+      ops: [{ id: { writer: 'M1@inc1', n: 1 }, at: act.issuedAt, kind: 'introduce', act: { ...act, by } } as unknown as M.Op],
+      intents: (['a', 'b'] as const).map((side) => ({ kind: TYPES.ticket, act: 'act1', side, device: 'M1', address: act[side].keyAgreement })),
+    })
+    expect(issuanceProblem(batch('M1'))).toBeNull()
+    expect(issuanceProblem(batch('M2'))).toBe('batch.ops(introduce.act.by is not the writer)')
+  })
+
+  it('R56-S2b. A stop for `withdrawn` takes the reason of the later boundary (`consent-reserve` at TB), and stays a stop (review 55 S5 (b))', () => {
+    const carrier = new Carrier()
+    const z = new Zusteller('M1', () => carrier, () => true)
+    z.record('d1', new Uint8Array([1]), 'addr')
+    z.deposit('d1')
+    expect(z.report('d1')?.state).toBe('accepted')
+    expect(z.expire('d1', 'withdrawn')).toBe('stopped')
+    expect(z.submissions.get('d1')?.stopped).toBe('withdrawn')
+    expect(z.expire('d1', 'consent-reserve')).toBe('stopped')
+    expect(z.submissions.get('d1')?.stopped).toBe('consent-reserve')
+    z.resume('d1') // no longer a `withdrawn` stop: nothing resumes
+    expect(z.submissions.get('d1')?.stopped).toBe('consent-reserve')
+    expect(z.report('d1')?.state).toBe('accepted') // handed (decision 3)
+  })
 })

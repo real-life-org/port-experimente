@@ -161,6 +161,17 @@ Verify after Opus-Review 54: typecheck green; `mehrgeraet-k2-automat` 68/68; `me
 (≈ 4 min). Cell dump (seeded `runX15`) against main 0a4061c: K0, K1a, K1a at the service byte-identical; K2 both
 variants no cell changed, details and measures exactly as on c77e09a (the list above). `SEEDS=all`: 40/40 in ≈ 27 min.
 
+### After Opus-Review 56 (22 October 2026)
+
+Review `rltp/design/port-experimente-e15-opus-review56-2026-10-22.md` ("trägt mit Bedingungen", no blocker). **S1**: the
+first reason given for S8 was wrong. `cardSetProblem` checks the set proof of the card's root (the sender's set), not the
+receiving address; every registered own address (tuple, card, self context) can be reached. R56-S1 is the reviewer's P56:
+a test hook redirects B1's card to A1's tuple address (no stock key); the first arrival comes before A1 saw B's set
+revision and is deferred, the repetition reaches the card branch: under the automaton `8850.5-not-held` without receipt,
+on the 2b.1 path `buffered` with receipt. An honest sender addresses only the voucher, so without the hook the case does
+not arise in the bench. **S2**: fixed tests for review 55 S5 (a) (R56-S2a, `issuanceProblem` with `by` ≠ batch writer)
+and (b) (R56-S2b, the stop reason changes from `withdrawn` to `consent-reserve`, the stop stays, `resume` no longer applies).
+
 ### After Opus-Review 55 (22 October 2026)
 
 Review `rltp/design/port-experimente-e15-opus-review55-2026-10-22.md` ("trägt mit Bedingungen"; B1–B3 of review 54
@@ -175,11 +186,7 @@ closed). Tests: the `Opus-Review 55` block of `tests/mehrgeraet-k2-automat.test.
   revocation exception makes the key listed again, and the repetition resumes); S3 (R55-S3, the pure gate: at `TB` with the
   receipt known `accepted`, one second later `deadline`); the `unconsumed` check of `authorize(introduce)` (R55-S1
   authorize: a test hook brings the consumed key back into the choice; under the automaton the right refuses,
-  `blocked`; on the 2b.1 path the key is named again). S8 (8850.5 for a foreign anchor) has no fixed test: under device sets a
-  card reaches the card branch only through the set check (`cardSetProblem`), whose proof the bench issues only for the
-  card of an act at the voucher's stock key; a card at an own address that is no stock key would need a forged set
-  reference and is deferred (`Missing`) before 8850.5 is reached. The branch is there for a counterpart that is not the
-  bench; the `not held` case of decision 8 is tested (D8).
+  `blocked`; on the 2b.1 path the key is named again). S8 (8850.5 for a foreign anchor): see "After Opus-Review 56" (the reason given here first was wrong).
 - **S2** a second test for review 54 B1 (ii) alone (R55-S2b, the reviewer's Q5: the fold rule bypassed by clearing `by`,
   the forged acks are folded, knowledge `accepted/accepted`, yet P-Produktion 1 violation and `omitted:accepted` 0
   because no receipt of the expected signer is at the carrier).
