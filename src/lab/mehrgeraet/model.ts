@@ -1323,8 +1323,7 @@ function applyBody(s: HolderState, op: Op): void {
     }
     case 'withdraw': {
       const r = rel(s, op.rel)
-      // MV-38 (role rule): a key that belongs to a device (`by`) is withdrawn only by that device.
-      for (const k of r.stock) if (op.anchors.includes(k.anchor) && (k.by === undefined || k.by === authorOf(op)) && (k.state === 'active' || k.state === 'aging' || k.state === 'allocated' || k.state === 'registered')) k.state = 'withdrawn'
+      for (const k of r.stock) if (op.anchors.includes(k.anchor) && (k.state === 'active' || k.state === 'aging' || k.state === 'allocated' || k.state === 'registered')) k.state = 'withdrawn'
       return
     }
     case 'age': {
@@ -1336,7 +1335,7 @@ function applyBody(s: HolderState, op: Op): void {
       // K2 2b.1, 8475.S8: a key past `expiresAt + key-retention` ends as tombstone at its allocator (no longer a reservation,
       // which already ended at `expiresAt`, core draft 4 §2.1).
       const r = rel(s, op.rel)
-      for (const k of r.stock) if (op.anchors.includes(k.anchor) && (k.by === undefined || k.by === authorOf(op)) && (k.state === 'active' || k.state === 'aging')) k.state = 'tombstoned' // MV-38 role rule
+      for (const k of r.stock) if (op.anchors.includes(k.anchor) && (k.state === 'active' || k.state === 'aging')) k.state = 'tombstoned'
       return
     }
     case 'stock-revision': {

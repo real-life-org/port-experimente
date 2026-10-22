@@ -984,7 +984,19 @@ export const x15: Array<{ id: string; title: string; run: (c: MultiDeviceCandida
       const mAgree = s.w.agree('M')
       // Schritt 4: As Schreiber (Kennung → höchste Revision im Zustand) gegen das, was Ms Sicht je Schreiber hält.
       const aWriters = new Map<string, number>()
-      for (const d of s.w.of('A')) for (const [t, x] of Object.entries(M.rel(d.state, s.am).writers ?? {})) aWriters.set(t, Math.max(aWriters.get(t) ?? 0, x.revision))
+      for (const d of s.w.of('A')) {
+        const r = M.rel(d.state, s.am)
+        if (d.cand.allocationByA && d.cand.incTag) {
+          // MV-38 (K2): A keys its own counter by its author incarnation; M knows the writer as (signer id, inc) of the
+          // `stock-revision@2` document. The measurement translates the device's own counter into M's name for it.
+          const own = M.own(r.writers, d.cand.writer)
+          if (!own) continue
+          const t = `${M.signerId((await d.cand.keys.pair(M.head(r).ownKey)).anchor)}.${d.cand.incTag(r.id)}`
+          aWriters.set(t, Math.max(aWriters.get(t) ?? 0, own.revision))
+          continue
+        }
+        for (const [t, x] of Object.entries(r.writers ?? {})) aWriters.set(t, Math.max(aWriters.get(t) ?? 0, x.revision))
+      }
       const mViews = s.w.of('M').map((d) => M.rel(d.state, s.ma).view)
       // K2 2b.1: with `stock-revision@2` a writer is (writer, inc) (`<tag>.<inc>` at A) and M keeps every folded revision.
       const holds = (v: M.StockView | null | undefined, t: string, rev: number) => (v?.revs ? v.revs.some((x) => `${x.writer}.${x.inc}` === t && x.rev === rev) : v?.writers?.[t]?.revision === rev)

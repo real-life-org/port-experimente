@@ -181,10 +181,10 @@ of the batch** (to go into the core draft and the contract).
   device of a stock key (`by`) is the author of the `allocate` op, set by the fold (`by` is no op field). The issuer of an
   act is the author of its `introduce` op (from the act's effect), and `ticket-ack@1` folds only from that author; the
   act has no `by` field, and `known` is no op field either (it would carry acceptance knowledge into the fold).
-- **Role rules from the author (R58-H1).** In the fold: `withdraw` and `retire` touch a device-bound key only for its own
-  device (`by` = author). At the input (`roleProblem`, with the receiver's state; the batch's deps bring the allocation
-  first): `produce` only by the allocating device (not in the counter-run without the producer rule), `ticket-accept` and
-  `ticket-refuse-budget` only by the key's allocator (`batch:role-mismatch`).
+- **Role rules from the author (R58-H1).** At the input (`roleProblem`, with the receiver's state; the batch's deps bring
+  the allocation first): `produce` only by the allocating device (not in the counter-run without the producer rule), `ticket-accept` and
+  `ticket-refuse-budget` only by the key's allocator (`batch:role-mismatch`). `withdraw` and `retire` stay person-level (a class
+  off withdraws the person's keys on every device, 8475.S6; a role rule there changed X16's measures and was not taken).
 - **`device-set.local` decides nothing.** It names the members' devices for display and measurement only.
 - **Fields that rightly name another device or party stay** (they name a subject, not the author, and nothing derives a
   right from them): `pool.device`/`pool-use.device` (the sibling whose pool key is assigned), `device-set.rev.signer` (the
