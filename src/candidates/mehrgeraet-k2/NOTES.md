@@ -252,7 +252,7 @@ first divergence in X9: the thief (`welt.steal`, the stolen image of A2 run unde
 its own. `refillPools` read the own pool by the author name, the thief's author name is not the stolen device's, so it
 found no pool and derived four new pool keys. That drew randomness, and the bench's seeded randomness runs on across the
 scenarios of one candidate (reset per candidate, not per scenario). Every later scenario therefore ran on other random
-values; the X11–X21 shifts are that, not a rule change in an honest run. Fix (fda… below): `refillPools` reads the own
+values; the X11–X21 shifts are that, not a rule change in an honest run. Fix (b3ea652): `refillPools` reads the own
 pool by `me` again. For every member of the set `me` is the author, so the MV-38 keying of the fold holds; a copy outside
 the set keeps its old behaviour. After the fix the dump differs from eec72ca only in sizes (X11 and X21 journal −14 B, the
 dropped `device` field), every round count, branch and detail of course is identical.
