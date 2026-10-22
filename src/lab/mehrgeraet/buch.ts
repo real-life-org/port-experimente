@@ -889,7 +889,6 @@ export const UNBOUND: Readonly<Record<string, string>> = {
   'doc.issuedAt': 'the signing time; the receiver checks the act times (8640.3), not this',
   'doc.proof': "checked before the table: the issuer's Data Integrity proof (the receiver's proof check)",
   'doc.payload.voucher.name': 'the display name the mediator gives the other side; not part of the committed act',
-  'act.by': 'K2 2b.2: the issuing device; it binds who may write `ticket-ack@1` for the act (the fold), not the ticket',
 }
 /**
  * The fields of a committed act (`act.*` without its sides), of each committed act side (`side.*`), of a commit intent

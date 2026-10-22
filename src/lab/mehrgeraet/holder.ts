@@ -1611,10 +1611,11 @@ export class HolderDevice {
     if (plan.length) {
       const nonce = this.cand.stockNonce!(r.id)
       const inc = this.cand.incTag!(r.id)
-      for (let i = 0; i < plan.length; i++) keys.push(await this.stockKey(r, r.nextN + i, nonce, { by: me, for: plan[i]!, inc }))
+      // MV-38: the allocating device (`by`) is the op's author; the fold sets it, the payload does not name it.
+      for (let i = 0; i < plan.length; i++) keys.push(await this.stockKey(r, r.nextN + i, nonce, { for: plan[i]!, inc }))
       this.emit({ kind: 'allocate', rel: r.id, nonce, keys })
     }
-    const last = M.own(r.writers, `${await this.writerOf(r.id)}.${this.cand.incTag!(r.id)}`)
+    const last = M.own(r.writers, this.cand.writer) // MV-38: the own counter belongs to the author incarnation
     if (drop.length || keys.length || last?.empty) await this.sendRevision(r.id)
   }
   private async refillAll(): Promise<void> {
@@ -1636,7 +1637,7 @@ export class HolderDevice {
       if (r.classOn || r.departed) continue
       const live = r.stock.filter((k) => (k.state === 'active' || k.state === 'aging' || k.state === 'allocated' || k.state === 'registered') && (!this.cand.allocationByA || k.by === this.me)).map((k) => k.anchor)
       const tag = await this.writerOf(r.id)
-      const own = this.cand.allocationByA ? M.own(r.writers, `${tag}.${this.cand.incTag!(r.id)}`) : M.own(r.writers, tag!)
+      const own = this.cand.allocationByA ? M.own(r.writers, this.cand.writer) : M.own(r.writers, tag!)
       const owed = this.cand.allocationByA ? !!live.length || (!!own && !own.empty) : !!own && !own.empty
       if (!live.length && !owed) continue
       await this.guarded(async () => {
@@ -1677,7 +1678,7 @@ export class HolderDevice {
   private async sendStockRevision(r: M.Relationship, writer: string): Promise<void> {
     const h = M.head(r)
     const inc = this.cand.incTag!(r.id)
-    const rev = (M.own(r.writers, `${writer}.${inc}`)?.revision ?? 0) + 1
+    const rev = (M.own(r.writers, this.cand.writer)?.revision ?? 0) + 1 // MV-38: counter of the author incarnation
     const now = this.clock.now()
     const own = r.stock.filter((k) => k.by === this.me)
     const listed = r.classOn ? own.filter((k) => k.state === 'active' && k.inc === inc).sort((a, b) => M.byCode(a.anchor, b.anchor)) : []
@@ -1691,7 +1692,7 @@ export class HolderDevice {
     const withdraw = [...new Set(own.filter((k) => k.state === 'withdrawn' && Date.parse(now) <= Date.parse(k.expiresAt)).map((k) => k.anchor))].sort().slice(0, M.REVISION_LIMITS.withdraw)
     const bury = r.classOn ? [] : [...new Set(r.stock.filter((k) => k.state !== 'consumed').map((k) => k.anchor))].sort().slice(0, M.REVISION_LIMITS.bury)
     const payload: M.StockRevision = { writer, inc, rev, keys, withdraw, bury, burn: [], ...(r.classOn ? {} : { classOff: true as const }) }
-    this.emit({ kind: 'revision', rel: r.id, revision: rev, keys: listed.map((k) => ({ n: k.n, anchor: k.anchor, keyAgreement: k.keyAgreement, expiresAt: k.expiresAt })), writer, inc, classOff: !r.classOn })
+    this.emit({ kind: 'revision', rel: r.id, revision: rev, keys: listed.map((k) => ({ n: k.n, anchor: k.anchor, keyAgreement: k.keyAgreement, expiresAt: k.expiresAt })), classOff: !r.classOn }) // MV-38: no writer in the op
     await this.sendDoc(TYPES.stockRevision, h.ownKey, h.peer, h.peerKeyAgreement, (await this.keysFor(h.ownKey)).rkid, payload as unknown as Record<string, Json>)
   }
   /** K2 step 2b.1, user action (core draft 4 §2.3): the allocating device withdraws own keys; the revision carries `withdraw`. */
@@ -1742,7 +1743,7 @@ export class HolderDevice {
     const ka = pick(relA)
     const kb = pick(relB)
     if (!ka || !kb) return { refused: `kein benennbarer Schlüssel (${ka ? '' : relA} ${kb ? '' : relB})`.trim() }
-    const act: M.MediatorAct = { id: crypto.randomUUID(), a: { rel: M.resolveId(this.state, relA), key: ka.anchor, keyAgreement: ka.keyAgreement }, b: { rel: M.resolveId(this.state, relB), key: kb.anchor, keyAgreement: kb.keyAgreement }, issuedAt: now, expiresAt: new Date(Date.parse(now) + M.PARAM.actLifetimeMs).toISOString(), ...(this.automaton ? { by: this.name } : {}) }
+    const act: M.MediatorAct = { id: crypto.randomUUID(), a: { rel: M.resolveId(this.state, relA), key: ka.anchor, keyAgreement: ka.keyAgreement }, b: { rel: M.resolveId(this.state, relB), key: kb.anchor, keyAgreement: kb.keyAgreement }, issuedAt: now, expiresAt: new Date(Date.parse(now) + M.PARAM.actLifetimeMs).toISOString() }
     // MV-30 (Anton 20.10.): beide Schlüssel gegen denselben Zustand geprüft und erworben; Verbrauch (`introduce`) und beide
     // vollständigen Ticketbytes (Absichten) sind ein Schritt: ein Journalbatch, lokal committet (`flush`), bevor ein Ticket
     // das Gerät verlässt (HSC-110, 8570.2, 8605). Kein Warten auf eine Schwester (MV-34): nach einem Restore aus einem alten

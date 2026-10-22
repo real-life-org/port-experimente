@@ -161,6 +161,44 @@ Verify after Opus-Review 54: typecheck green; `mehrgeraet-k2-automat` 68/68; `me
 (≈ 4 min). Cell dump (seeded `runX15`) against main 0a4061c: K0, K1a, K1a at the service byte-identical; K2 both
 variants no cell changed, details and measures exactly as on c77e09a (the list above). `SEEDS=all`: 40/40 in ≈ 27 min.
 
+### MV-38: author from op.id.writer (22 October 2026, after Opus-Review 58)
+
+Review `rltp/design/port-experimente-e15-opus-review58-2026-10-22.md` ("trägt mit Bedingungen", no blocker) found the
+fourth finding of one class in a row (review 54 B1, loop review B1, review 57 S1, now R58-S1): state that belongs to a
+device was keyed by an identifier in the payload instead of the authenticated origin, and each fix bound one more field;
+the last one leaned on `device-set.local`, itself unbound (A1 omits or forges A2's entry, then its forged revision for
+A2's counter passes). Anton's decision (22.10.): fix it now with one rule, not a fourth field binding. **MV-38: no journal
+op names its author in its payload; the fold takes the author of every op from `op.id.writer`, the authenticated signer
+of the batch** (to go into the core draft and the contract).
+
+- **One rule at the input.** `K2Device.writerProblem` is now only: every op's `op.id.writer` is the batch writer, and no
+  op names an author (`revision` with `writer`/`inc` is refused). Signature check, then this rule, then nothing of a
+  failing batch is folded (`batch:writer-mismatch`). Intents' `device` and `writer` are set from the batch's author when
+  the batch is parsed (they are needed by other readers: resumption, ledger), never read from the payload.
+- **Device-bound state keyed by the author.** Own revision counters (`r.writers`) of the K2 form are keyed by the author
+  incarnation `op.id.writer`; the K2 `revision` op carries no `writer`/`inc` any more (the `stock-revision@2` document to
+  M keeps its `writer`/`inc`, signed by the stock key and checked there against its signer, as before). The allocating
+  device of a stock key (`by`) is the author of the `allocate` op, set by the fold (`by` is no op field). The issuer of an
+  act is the author of its `introduce` op (from the act's effect), and `ticket-ack@1` folds only from that author; the
+  act has no `by` field, and `known` is no op field either (it would carry acceptance knowledge into the fold).
+- **Role rules from the author (R58-H1).** In the fold: `withdraw` and `retire` touch a device-bound key only for its own
+  device (`by` = author). At the input (`roleProblem`, with the receiver's state; the batch's deps bring the allocation
+  first): `produce` only by the allocating device (not in the counter-run without the producer rule), `ticket-accept` and
+  `ticket-refuse-budget` only by the key's allocator (`batch:role-mismatch`).
+- **`device-set.local` decides nothing.** It names the members' devices for display and measurement only.
+- **Fields that rightly name another device or party stay** (they name a subject, not the author, and nothing derives a
+  right from them): `pool.device`/`pool-use.device` (the sibling whose pool key is assigned), `device-set.rev.signer` (the
+  signer of a received set revision), `deps` (heads of other writers), `stock-revision.writer`/`view.writer` (the
+  counterpart's writer whose revision M folds, bound to that document's signer).
+- **Wire form.** K2's journal ops changed (no `by` in allocated keys and acts, no `writer`/`inc` in `revision`); K0 and
+  K1a are unchanged (their `revision` keeps its writer tag; K1a has no per-device signer).
+- **Tests.** R58-S1 (the reviewer's P58, `omit` and `forge`: refused, A2's counter unchanged) and R58-H1 (a `produce` by
+  the non-allocating A device: `batch:role-mismatch`, no card), both red without the rule. R57-B1b now runs over the
+  signed path (Opus-Review 58 H2) in four variants with a marker op in the same batch (op-id claim, author in a revision op,
+  issuer in an act, allocating device in a stock key); the revision variant is red without the rule, the act and key
+  variants are refused by the op shapes. R56-S2a and R57-S4 test the issuer as the author (no `by` field), R55-S2b
+  bypasses the fold rule through the act's effect. Evidence of the input: R57-B1; of the cases: R57-B1b.
+
 ### After Opus-Review 57 (22 October 2026)
 
 Review `rltp/design/port-experimente-e15-opus-review57-2026-10-22.md` ("trägt mit Bedingungen", no blocker). **S1** the
@@ -189,10 +227,8 @@ service byte-identical, K2 both variants 17/2/1, the dump identical to the one a
   issuer of an act (`introduce.act.by`) and, since Opus-Review 57 S1, the writer of an own `revision` op (its `writer` is
   the signer id of the writing device's key in that relationship; the own device sets' `local` map says whose it is; an
   unknown one gets no verdict, its `inc` cannot be checked by a sibling and only matters together with the writer).
-  Deliberate exceptions, fields that rightly name another device or party: `pool.device` and `pool-use.device` (the
-  sibling whose pool key is assigned), `device-set.rev.signer` and `device-set.local` (the signer of a received set
-  revision, the members' names), `view.writer` and `stock-revision.writer` (the counterpart's writer whose revision M
-  folds), `deps` (the heads of other writers the batch builds on). A mismatch makes the whole batch a form error (`batch:writer-mismatch: …`, corrupt-frame
+  Superseded by MV-38 (above): the field-by-field binding and its exception list were replaced by one rule; the
+  remaining exceptions are listed there (`device-set.local` is no longer one of them, it decides nothing). A mismatch makes the whole batch a form error (`batch:writer-mismatch: …`, corrupt-frame
   finding, nothing folded, no receipt). Revisions (`stock-revision`) carry the counterpart's writer, which is the
   revision signer's, not the batch writer's, and are not affected. This holds for K2 with and without the automaton (a
   journal authentication rule, not a step of 2b.2); honest batches always satisfy it (ops are emitted with the batch's

@@ -348,9 +348,15 @@ export interface MediatorAct {
    * side's receipt for its ticket; set only by `ticket-ack@1` (written by the issuer, folded by its siblings). Absent = unknown.
    */
   known?: { a?: string; b?: string }
-  /** K2 step 2b.2 (Opus-Review 54 B1): the issuing M device (its name), set by the issuer under the automaton; only it may write `ticket-ack`. */
-  by?: string
 }
+
+/**
+ * MV-38 (Anton, 22.10., after Opus-Review 58): no journal op names its author in its payload; the fold takes the author
+ * of every op from `op.id.writer`, which the journal parser has bound to the authenticated signer of the batch. The
+ * device part of the writer (`<device>@<incarnation>`) is the author of device-bound state: own revision counters, the
+ * allocating device of a stock key (`by`), the issuer of an act (for `ticket-ack@1`).
+ */
+export const authorOf = (op: { id: OpId }): string => op.id.writer.split('@')[0]!
 
 /** 6845: eigene Mapping-Pflicht je Tupelpaar. */
 export interface PairDuty {
@@ -573,7 +579,7 @@ const handOver: Shape = { enum: ['none', 'intent', 'handed', 'taken', 'delivered
 export const SHAPES = {
   tuple: { object: { id, own: id, ownKey: id, peer: id, peerKeyAgreement: id, record: id, openedAt: 'time', candidates: { array: id }, deactivated: 'boolean' } },
   stockKey: {
-    object: { n: 'nat', nonce: 'base64', anchor: id, keyAgreement: id, key: id, expiresAt: 'time', state: { enum: ['allocated', 'registered', 'active', 'aging', 'consumed', 'withdrawn', 'tombstoned'] satisfies StockState[] }, by: { optional: id }, for: { optional: id }, inc: { optional: 'tag' } },
+    object: { n: 'nat', nonce: 'base64', anchor: id, keyAgreement: id, key: id, expiresAt: 'time', state: { enum: ['allocated', 'registered', 'active', 'aging', 'consumed', 'withdrawn', 'tombstoned'] satisfies StockState[] }, for: { optional: id }, inc: { optional: 'tag' } }, // MV-38: `by` is the op's author, set by the fold
   },
   listedKey: { object: { n: 'nat', anchor: id, keyAgreement: id, expiresAt: 'time' } },
   revKey: { object: { n: 'nat', nonce: 'base64', anchor: id, signing: { b64u: 32 }, keyAgreement: id, expiresAt: 'time', for: id, proof: { b64u: 64 } } },
@@ -624,7 +630,7 @@ export const SHAPES = {
     },
   },
   mediatorAct: {
-    object: { id, a: { object: { rel: id, key: id, keyAgreement: id } }, b: { object: { rel: id, key: id, keyAgreement: id } }, issuedAt: 'time', expiresAt: 'time', known: { optional: { object: { a: { optional: 'digest' }, b: { optional: 'digest' } } } }, by: { optional: id } },
+    object: { id, a: { object: { rel: id, key: id, keyAgreement: id } }, b: { object: { rel: id, key: id, keyAgreement: id } }, issuedAt: 'time', expiresAt: 'time' },
   },
 } satisfies Record<string, Shape>
 /**
@@ -1291,7 +1297,8 @@ function applyBody(s: HolderState, op: Op): void {
           }
           continue
         }
-        r.stock.push({ ...k, nonce: k.nonce ?? op.nonce, state: 'active' }) // Vorbereitung sofort bestätigt (Prüfstand); 8475.S3 mit der Revision
+        // MV-38: a stock key assigned to an M device (`for`, K2 2b.1) belongs to the device that allocated it, the op's author.
+        r.stock.push({ ...k, nonce: k.nonce ?? op.nonce, state: 'active', ...(k.for !== undefined ? { by: authorOf(op) } : {}) }) // Vorbereitung sofort bestätigt (Prüfstand); 8475.S3 mit der Revision
         r.nextN = Math.max(r.nextN, k.n + 1)
       }
       return
@@ -1299,14 +1306,15 @@ function applyBody(s: HolderState, op: Op): void {
     case 'revision': {
       const r = rel(s, op.rel)
       r.revision = Math.max(r.revision, op.revision) // 8500: Nummern bleiben verbraucht
-      if (op.writer) {
+      if (op.writer || op.classOff !== undefined) {
         // Schritt 4: 8500 je Schreiber; die höchste Revision des Schreibers zählt, gleich in welcher Reihenfolge gefaltet.
         // K2 2b.1 (`stock-revision@2`): je (Schreiber, Inkarnation); `empty` hält dort den Klassenwert der Revision (`classOff`).
-        const key = op.inc ? `${op.writer}.${op.inc}` : op.writer
+        // MV-38: the K2 form names no writer; the counter belongs to the op's author incarnation (`op.id.writer`).
+        const key = op.writer === undefined ? op.id.writer : op.inc ? `${op.writer}.${op.inc}` : op.writer
         const w = own(r.writers, key)
         if (!w || op.revision > w.revision) {
           const ws = tableOf(r.writers)
-          put(ws, key, { revision: op.revision, empty: op.inc ? op.classOff === true : op.keys.length === 0 })
+          put(ws, key, { revision: op.revision, empty: op.classOff !== undefined ? op.classOff === true : op.keys.length === 0 })
           r.writers = ws
         }
         effect(s, op, `revision:${r.id}:${key}:${op.revision}`)
@@ -1315,7 +1323,8 @@ function applyBody(s: HolderState, op: Op): void {
     }
     case 'withdraw': {
       const r = rel(s, op.rel)
-      for (const k of r.stock) if (op.anchors.includes(k.anchor) && (k.state === 'active' || k.state === 'aging' || k.state === 'allocated' || k.state === 'registered')) k.state = 'withdrawn'
+      // MV-38 (role rule): a key that belongs to a device (`by`) is withdrawn only by that device.
+      for (const k of r.stock) if (op.anchors.includes(k.anchor) && (k.by === undefined || k.by === authorOf(op)) && (k.state === 'active' || k.state === 'aging' || k.state === 'allocated' || k.state === 'registered')) k.state = 'withdrawn'
       return
     }
     case 'age': {
@@ -1327,7 +1336,7 @@ function applyBody(s: HolderState, op: Op): void {
       // K2 2b.1, 8475.S8: a key past `expiresAt + key-retention` ends as tombstone at its allocator (no longer a reservation,
       // which already ended at `expiresAt`, core draft 4 §2.1).
       const r = rel(s, op.rel)
-      for (const k of r.stock) if (op.anchors.includes(k.anchor) && (k.state === 'active' || k.state === 'aging')) k.state = 'tombstoned'
+      for (const k of r.stock) if (op.anchors.includes(k.anchor) && (k.by === undefined || k.by === authorOf(op)) && (k.state === 'active' || k.state === 'aging')) k.state = 'tombstoned' // MV-38 role rule
       return
     }
     case 'stock-revision': {
@@ -1367,11 +1376,12 @@ function applyBody(s: HolderState, op: Op): void {
       // K2 2b.2: acceptance knowledge, `unknown → accepted` the only transition (draft 3 §1.1); the first receipt stays.
       const a = s.mediatorActs.find((x) => x.id === op.act)
       if (!a) throw new Missing('act', op.act, s.person)
-      // Opus-Review 54 B1 (decision 11 as a rule of the fold): only the issuing device writes acceptance knowledge; a
-      // `ticket-ack` of any other writer is a finding, never state.
-      const writer = op.id.writer.split('@')[0]!
-      if (a.by !== undefined && writer !== a.by) {
-        const text = `ticket-ack:foreign-writer:${op.act}:${op.side}: ${writer} is not the issuer ${a.by}`
+      // Opus-Review 54 B1, MV-38: only the issuing device writes acceptance knowledge. The issuer is the author of the
+      // `introduce` op (its effect holds the op id); a `ticket-ack` of any other author is a finding, never state.
+      const writer = authorOf(op)
+      const issuer = s.effects.find((e) => e.id === `ticket:${a.id}:${a.a.key}`)?.op.split('@')[0]
+      if (writer !== issuer) {
+        const text = `ticket-ack:foreign-writer:${op.act}:${op.side}: ${writer} is not the issuer ${issuer ?? '?'}`
         if (!s.findings.includes(text)) s.findings.push(text)
         return
       }

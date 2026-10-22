@@ -1200,7 +1200,7 @@ describe('Opus-Review 55: one gate for holder and ledger, fixed tests for the fi
     }, 240_000)
   }
 
-  it('R55-S2b. Review 54 B1 (ii) alone: with the fold rule bypassed (`by` cleared) forged acks are folded, the receipt check still makes it a violation (Q5)', async () => {
+  it('R55-S2b. Review 54 B1 (ii) alone: with the fold rule bypassed (the issuer\'s introduce effect rewritten to M2, test hook) forged acks are folded, the receipt check still makes it a violation (Q5)', async () => {
     const s = await world()
     const carrier = s.w.carrier
     const deposit = carrier.deposit.bind(carrier)
@@ -1214,7 +1214,7 @@ describe('Opus-Review 55: one gate for holder and ledger, fixed tests for the fi
     const { act } = await introduce(s, s.M1)
     const { a, tA, tB } = issued(s.M1, act)
     await s.round(1)
-    delete (s.M1.state.mediatorActs.find((x) => x.id === act) as { by?: string }).by
+    for (const e of s.M1.state.effects) if (e.id.startsWith(`ticket:${act}:`)) e.op = e.op.replace(/^M1@/, 'M2@') // MV-38 fold rule bypassed
     const m2 = inner(s.M2!)
     await m2.guarded(async () => {
       m2.emit({ kind: 'ticket-ack', act, side: 'a', receiptDigest: tA.digest })
@@ -1264,19 +1264,15 @@ describe('Opus-Review 56: fixed tests for 8850.5 with a foreign anchor and for r
     }, 240_000)
   }
 
-  it('R56-S2a. `issuanceProblem`: `act.by` must be the writer of the issuance batch (review 55 S5 (a))', () => {
+  it('R56-S2a. MV-38: an introduce act carries no issuer field; `by` in the payload is a form error (MV-24), the issuance shape is the rest', () => {
     const act = { id: 'act1', a: { rel: 'ra', key: 'ka', keyAgreement: 'xa' }, b: { rel: 'rb', key: 'kb', keyAgreement: 'xb' }, issuedAt: '2026-10-17T08:00:00.000Z', expiresAt: '2026-10-24T08:00:00.000Z' }
-    const batch = (by: string) => ({
-      writer: 'M1@inc1',
-      ops: [{ id: { writer: 'M1@inc1', n: 1 }, at: act.issuedAt, kind: 'introduce', act: { ...act, by } } as unknown as M.Op],
-      intents: (['a', 'b'] as const).map((side) => ({ kind: TYPES.ticket, act: 'act1', side, device: 'M1', address: act[side].keyAgreement })),
-    })
-    expect(issuanceProblem(batch('M1'))).toBeNull()
-    expect(issuanceProblem(batch('M2'))).toBe('batch.ops(introduce.act.by is not the writer)')
-    // CodeRabbit (missing `by`): under the automaton the issuer is required.
-    const missing = batch('M1')
-    delete (missing.ops[0] as unknown as { act: { by?: string } }).act.by
-    expect(issuanceProblem(missing)).toBe('batch.ops(introduce.act.by missing)')
+    const op = (extra: Record<string, unknown>) => ({ id: { writer: 'M1@inc1', n: 1 }, at: act.issuedAt, kind: 'introduce', act: { ...act, ...extra } }) as unknown as M.Op
+    expect(M.opProblem(op({}))).toBeNull()
+    expect(M.opProblem(op({ by: 'M1' }))).not.toBeNull()
+    expect(M.opProblem(op({ known: { a: 'x' } }))).not.toBeNull() // acceptance knowledge never comes with the act
+    const batch = { ops: [op({})], intents: (['a', 'b'] as const).map((side) => ({ kind: TYPES.ticket, act: 'act1', side, address: act[side].keyAgreement })) }
+    expect(issuanceProblem(batch)).toBeNull()
+    expect(issuanceProblem({ ...batch, intents: [batch.intents[0]!, { ...batch.intents[1]!, address: 'xa' }] })).toBe('batch.intents(ticket address is not the named key)')
   })
 
   it('R56-S2b. A stop for `withdrawn` takes the reason of the later boundary (`consent-reserve` at TB), and stays a stop (review 55 S5 (b))', () => {
@@ -1330,15 +1326,37 @@ describe('Loop review on 60a6674: the writer of every op is the authenticated si
     }, 300_000)
   }
 
-  it('R57-B1b. The parser binds op ids, intents, allocated keys and the act issuer to the signer (pure)', () => {
-    const probe = (b: Parameters<K2Device['writerProblem']>[0]) => K2Device.prototype.writerProblem.call(undefined as never, b)
-    const op = (writer: string, extra: Record<string, unknown> = {}) => ({ id: { writer, n: 1 }, at: '2026-10-17T08:00:00.000Z', kind: 'finding', text: 'x', ...extra }) as unknown as M.Op
-    expect(probe({ writer: 'M2@i', ops: [op('M2@i')], intents: [{ writer: 'M2@i', device: 'M2' }] })).toBeNull()
-    expect(probe({ writer: 'M2@i', ops: [op('M1@i')], intents: [] })).toContain('claims writer M1@i')
-    expect(probe({ writer: 'M2@i', ops: [], intents: [{ writer: 'M2@i', device: 'M1' }] })).toContain('intent claims')
-    expect(probe({ writer: 'A2@i', ops: [{ ...op('A2@i'), kind: 'allocate', rel: 'r', nonce: 'n', keys: [{ by: 'A1' }] } as unknown as M.Op], intents: [] })).toBe('allocate claims another allocating device')
-    expect(probe({ writer: 'M2@i', ops: [{ ...op('M2@i'), kind: 'introduce', act: { by: 'M1' } } as unknown as M.Op], intents: [] })).toBe('introduce claims another issuer')
-  })
+  for (const variant of ['op-id', 'revision-author', 'introduce-by', 'stock-by'] as const) {
+    it(`R57-B1b (${variant}). MV-38 over the signed path (Opus-Review 58 H2): M2 signs a batch that ${variant === 'op-id' ? 'claims writer M1 in an op id' : variant === 'revision-author' ? 'names an author in a revision op' : variant === 'introduce-by' ? 'names an issuer in an introduce act' : 'names an allocating device for a stock key'}: the receiver refuses the whole batch`, async () => {
+      const s = await world()
+      const m2 = s.M2! as unknown as { guarded(f: () => Promise<void>): Promise<boolean>; pending: { ops: M.Op[] } | null; commit(): void }
+      const me = s.M2!.cand.writer
+      const at = s.w.clock.now()
+      const m1Tag = await (s.M1 as unknown as { writerOf(r: string): Promise<string> }).writerOf(s.am.y)
+      const ops: Record<typeof variant, M.Op> = {
+        'op-id': { id: { writer: s.M1.cand.writer, n: 9_999 }, at, kind: 'finding', text: 'forged' } as unknown as M.Op,
+        // a well-formed tag (M1's own writer tag and inc in that relationship), so only the MV-38 rule can refuse it
+        'revision-author': { id: { writer: me, n: 9_999 }, at, kind: 'revision', rel: s.am.y, revision: 7, keys: [], writer: m1Tag, inc: s.M1.cand.incTag!(s.am.y), classOff: false } as unknown as M.Op,
+        'introduce-by': { id: { writer: me, n: 9_999 }, at, kind: 'introduce', act: { id: 'forged-act', a: { rel: s.am.y, key: 'k1', keyAgreement: 'x1' }, b: { rel: s.bm.y, key: 'k2', keyAgreement: 'x2' }, issuedAt: at, expiresAt: at, by: 'M1' } } as unknown as M.Op,
+        'stock-by': { id: { writer: me, n: 9_999 }, at, kind: 'finding', text: 'marker' } as unknown as M.Op,
+      }
+      await m2.guarded(async () => {
+        if (variant === 'stock-by') {
+          const n = Buffer.alloc(32, 7).toString('base64')
+          m2.pending!.ops.push({ id: { writer: me, n: 9_998 }, at, kind: 'allocate', rel: s.am.y, nonce: n, keys: [{ n: 0, nonce: n, anchor: 'forged-anchor', keyAgreement: 'forged-ka', key: 'ctx', expiresAt: at, state: 'active', by: 'M1' }] } as unknown as M.Op)
+        }
+        m2.pending!.ops.push(ops[variant])
+        // A harmless marker in the same batch: if anything of the batch were folded, M1 would hold it.
+        m2.pending!.ops.push({ id: { writer: me, n: 10_000 }, at, kind: 'finding', text: 'batch-marker' } as unknown as M.Op)
+      })
+      m2.commit()
+      await s.round(2)
+      // Soll: a form error at M1 (op id: `batch:writer-mismatch`; author fields: the MV-38 rule or the op shape), nothing of the batch folded.
+      expect(s.M1.dispositions.some((d) => d.startsWith('failed(journal-corrupt)') || d.includes('batch:writer-mismatch'))).toBe(true)
+      expect(s.M1.state.findings.includes('forged') || s.M1.state.findings.includes('marker') || s.M1.state.findings.includes('batch-marker')).toBe(false)
+      expect(s.M1.state.mediatorActs.some((a) => a.id === 'forged-act')).toBe(false)
+    }, 240_000)
+  }
 })
 
 describe('CodeRabbit on #84: deliverer stop and completion', () => {
@@ -1375,8 +1393,8 @@ describe('Opus-Review 57: revision writers bound to the signer; missing `by` ove
       const s = await world({ a2: true })
       const r0 = M.rel(s.A1.state, s.am.x)
       const incA1 = s.A1.cand.incTag!(s.am.x)
-      const own = Object.keys(r0.writers ?? {}).find((k) => k.endsWith('.' + incA1))!
-      const tagA1 = own.slice(0, -(incA1.length + 1))
+      const tagA1 = await (s.A1 as unknown as { writerOf(r: string): Promise<string> }).writerOf(s.am.x)
+      const own = s.A1.cand.writer // MV-38: the own counter belongs to the author incarnation
       const before = M.own(r0.writers, own)!.revision
       expect(before).toBe(1)
       const a2 = s.A2! as unknown as { guarded(f: () => Promise<void>): Promise<boolean>; pending: { ops: M.Op[] } | null; commit(): void }
@@ -1385,7 +1403,8 @@ describe('Opus-Review 57: revision writers bound to the signer; missing `by` ove
       })
       a2.commit()
       await s.round(2)
-      // Soll: the batch is a form error at A1 (the own set maps the writer's anchor to A1, the signer is A2): nothing folded.
+      // Soll (MV-38): a revision op naming an author is a form error at A1, nothing folded; and even without the field it would
+      // count for A2's own incarnation, never for A1's.
       expect(s.A1.dispositions.some((d) => d.includes('batch:writer-mismatch'))).toBe(true)
       expect(M.own(M.rel(s.A1.state, s.am.x).writers, own)!.revision).toBe(before)
       if (big) {
@@ -1399,19 +1418,69 @@ describe('Opus-Review 57: revision writers bound to the signer; missing `by` ove
     }, 300_000)
   }
 
-  it('R57-S4. M1 signs an issuance batch without `act.by` (P8, test hook on the commit): M2 refuses the batch, the act is not folded there', async () => {
+  it('R57-S4. MV-38: the issuer of an act is the author of the introduce op; a `ticket-ack` written by M2 for M1\'s act is not folded anywhere (no issuer field to forge)', async () => {
     const s = await world()
-    const cand = s.M1.cand as unknown as { commit(tx: { ops: M.Op[]; intents: unknown[] }): void }
-    const orig = cand.commit.bind(cand)
-    cand.commit = (tx) => {
-      const t = structuredClone(tx)
-      for (const op of t.ops) if (op.kind === 'introduce') delete (op.act as { by?: string }).by
-      orig(t)
-    }
     const { act } = await introduce(s, s.M1)
-    cand.commit = orig
+    const { tA } = issued(s.M1, act)
+    await s.round(1)
+    const m2 = inner(s.M2!)
+    await m2.guarded(async () => void m2.emit({ kind: 'ticket-ack', act, side: 'a', receiptDigest: tA.digest }))
+    m2.commit()
     await s.round(2)
-    expect(s.M2!.state.mediatorActs.some((a) => a.id === act)).toBe(false)
-    expect(s.M2!.dispositions.some((d) => d.includes('batch.ops(introduce.act.by missing)'))).toBe(true)
+    expect(s.M2!.state.findings.some((f) => f.startsWith(`ticket-ack:foreign-writer:${act}:a`))).toBe(true) // at its own fold
+    expect(s.M1.state.findings.some((f) => f.startsWith(`ticket-ack:foreign-writer:${act}:a`))).toBe(true)
   }, 240_000)
+})
+
+// ── Opus-Review 58 (rltp/design/port-experimente-e15-opus-review58-2026-10-22.md): MV-38 ──
+
+describe('Opus-Review 58: MV-38, the author of every op is op.id.writer', () => {
+  for (const mode of ['omit', 'forge'] as const) {
+    it(`R58-S1 (${mode}). A1 writes A2's \`local\` entry wrongly (${mode}), then signs a revision op for A2's counter (P58): refused, A2's counter unchanged; device-set.local decides nothing`, async () => {
+      const s = await world({ a2: true })
+      // The reviewer's hook: A1 rewrites `local` entries of A2 in its next device-set ops (omit / forge to A1).
+      const a1e = s.A1 as unknown as { emit(b: Record<string, unknown>): unknown }
+      const origEmit = a1e.emit.bind(a1e)
+      a1e.emit = (b) => {
+        if (b.kind === 'device-set' && b.local) {
+          const l = { ...(b.local as Record<string, string>) }
+          for (const k of Object.keys(l)) if (l[k] === 'A2') { if (mode === 'omit') delete l[k]; else l[k] = 'A1' }
+          b = { ...b, local: l }
+        }
+        return origEmit(b)
+      }
+      const A2 = s.A2!
+      const before = M.own(M.rel(A2.state, s.am.x).writers, A2.cand.writer)?.revision ?? 0
+      const tagA2 = await (A2 as unknown as { writerOf(r: string): Promise<string> }).writerOf(s.am.x)
+      const a1 = s.A1 as unknown as { guarded(f: () => Promise<void>): Promise<boolean>; pending: { ops: M.Op[] } | null; commit(): void }
+      // (a) the old form naming A2's writer; (b) the MV-38 form, which can only count for A1's own incarnation.
+      await a1.guarded(async () => {
+        a1.pending!.ops.push({ id: { writer: s.A1.cand.writer, n: 9_999 }, at: s.w.clock.now(), kind: 'revision', rel: s.am.x, revision: Number.MAX_SAFE_INTEGER - 1, keys: [], writer: tagA2, inc: A2.cand.incTag!(s.am.x), classOff: true } as unknown as M.Op)
+      })
+      a1.commit()
+      await s.round(2)
+      expect(A2.dispositions.some((d) => d.includes('batch:writer-mismatch'))).toBe(true)
+      expect(M.own(M.rel(A2.state, s.am.x).writers, A2.cand.writer)?.revision ?? 0).toBe(before)
+      a1e.emit = origEmit
+    }, 300_000)
+  }
+
+  it('R58-H1. Role rule from op.id.writer: the non-allocating A device signs a `produce` for the allocator\'s act: `batch:role-mismatch`, the card is not taken over', async () => {
+    const s = await world({ a2: true })
+    const { act } = await introduce(s, s.M1)
+    const { a } = issued(s.M1, act)
+    await s.round(3)
+    const by = M.rel(s.A1.state, s.am.x).stock.find((k) => k.anchor === a.a.key)!.by
+    const Ax = by === 'A1' ? s.A1 : s.A2!
+    const Ay = by === 'A1' ? s.A2! : s.A1
+    expect(sideState(Ay, act)).toBe('offered')
+    const ay = Ay as unknown as { guarded(f: () => Promise<void>): Promise<boolean>; pending: { ops: M.Op[] } | null; commit(): void }
+    await ay.guarded(async () => {
+      ay.pending!.ops.push({ id: { writer: Ay.cand.writer, n: 9_999 }, at: s.w.clock.now(), kind: 'produce', act, card: { anchor: 'forged-card', keyAgreement: 'forged-ka' }, cardKey: 'card/forged', v: 'v' } as unknown as M.Op)
+    })
+    ay.commit()
+    await s.round(2)
+    expect(Ax.dispositions.some((d) => d.includes('batch:role-mismatch'))).toBe(true)
+    expect(M.act(Ax.state, act).ownCard).toBeNull()
+  }, 300_000)
 })

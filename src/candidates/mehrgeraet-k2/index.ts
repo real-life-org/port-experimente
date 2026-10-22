@@ -147,7 +147,7 @@ export class DeviceDirectory {
  * batch with an `introduce` holds exactly one, and exactly two ticket intents of that act, one per side; a ticket intent
  * outside an issuance batch, or of another act, is a form error. `null` = fine.
  */
-export function issuanceProblem(b: { writer?: string; ops: M.Op[]; intents: Array<{ kind: string; act?: string; side?: string; device?: string; address?: string }> }): string | null {
+export function issuanceProblem(b: { ops: M.Op[]; intents: Array<{ kind: string; act?: string; side?: string; address?: string }> }): string | null {
   const intro = b.ops.filter((op) => op.kind === 'introduce')
   const tickets = b.intents.filter((i) => i.kind === TYPES.ticket)
   if (!intro.length) return tickets.length ? 'batch.intents(ticket without introduce)' : null
@@ -156,13 +156,8 @@ export function issuanceProblem(b: { writer?: string; ops: M.Op[]; intents: Arra
   if (tickets.length !== 2) return `batch.intents(${tickets.length} tickets, MV-30 wants 2)`
   if (tickets.some((t) => t.act !== act)) return 'batch.intents(ticket of another act)'
   if (new Set(tickets.map((t) => t.side)).size !== 2 || tickets.some((t) => t.side !== 'a' && t.side !== 'b')) return 'batch.intents(ticket sides)'
-  // Opus-Review 54 S9: the issuing device is the batch writer, each ticket goes to the key agreement of the key it names.
-  const issuer = b.writer?.split('@')[0]
-  if (issuer !== undefined && tickets.some((t) => t.device !== issuer)) return 'batch.intents(ticket device is not the writer)'
+  // Opus-Review 54 S9: each ticket goes to the key agreement of the key it names. The issuer is the batch's author (MV-38).
   const named = (intro[0] as M.Op & { kind: 'introduce' }).act
-  // Opus-Review 55 S5 (a), CodeRabbit (missing `by`): under the automaton `by` (who may write `ticket-ack@1`) is required
-  // and is the writer of the issuance batch; a batch without it would leave the act open to acknowledgements of any writer.
-  if (issuer !== undefined && named.by !== issuer) return named.by === undefined ? 'batch.ops(introduce.act.by missing)' : 'batch.ops(introduce.act.by is not the writer)'
   if (tickets.some((t) => t.address !== named[t.side as 'a' | 'b'].keyAgreement)) return 'batch.intents(ticket address is not the named key)'
   return null
 }
@@ -311,25 +306,36 @@ export class K2Device extends K1aDevice {
    * every allocated stock key (`by`) and the issuer of an act (`by`) name the authenticated signer of the batch. One place,
    * the parser, before anything is learnt or folded. `null` = bound.
    */
-  writerProblem(b: { writer: string; ops: M.Op[]; intents: Array<{ writer?: string; device?: string }> }, state?: M.HolderState): string | null {
-    const device = b.writer.split('@')[0]!
-    // Opus-Review 57 S1: an own `revision` op names its writer as the signer id of the writing device's key in that
-    // relationship; the own device sets (`local`: member anchor → device) say whose it is. A writer that belongs to another
-    // device of the person is a claim; an unknown one gets no verdict here (the set may not be known yet).
-    const ownerOf = (writer: string): string | undefined => {
-      for (const set of Object.values(state?.sets ?? {})) for (const [anchor, dev] of Object.entries(set.local ?? {})) if (M.signerId(anchor) === writer) return dev
-      return undefined
-    }
+  writerProblem(b: { writer: string; ops: M.Op[] }): string | null {
+    // MV-38 (Anton, 22.10., Opus-Review 58): the author of every op is `op.id.writer`, and it is the authenticated signer of
+    // the batch; no op names its author in its payload (the K2 `revision` op carries no `writer`/`inc`). Everything the
+    // fold keys by device (own revision counters, `by` of stock keys, the issuer of an act) it takes from `op.id.writer`.
     for (const op of b.ops) {
       if (op.id.writer !== b.writer) return `op ${op.kind} claims writer ${op.id.writer}`
-      if (op.kind === 'revision' && op.writer !== undefined) {
-        const owner = ownerOf(op.writer)
-        if (owner !== undefined && owner !== device) return `revision claims the writer of ${owner}`
-      }
-      if (op.kind === 'allocate' && op.keys.some((k) => k.by !== undefined && k.by !== device)) return 'allocate claims another allocating device'
-      if (op.kind === 'introduce' && op.act.by !== undefined && op.act.by !== device) return 'introduce claims another issuer'
+      if (op.kind === 'revision' && (op.writer !== undefined || op.inc !== undefined)) return 'revision names an author in its payload (MV-38)'
     }
-    for (const i of b.intents) if ((i.writer !== undefined && i.writer !== b.writer) || (i.device !== undefined && i.device !== device)) return `intent claims writer ${i.writer} on ${i.device}`
+    return null
+  }
+  /**
+   * MV-38, role rules (Opus-Review 58 H1): ops only the device a stock key belongs to may write. `produce` (E2 (iv): the
+   * allocating device produces the one card; not under the counter-run without the producer rule), `ticket-accept` and
+   * `ticket-refuse-budget` (only the allocator holds the private part and accepts). The owner is the `by` of the key in
+   * this device's state, itself the author of the `allocate` op; a key not known yet gives no verdict (the batch's deps
+   * bring the allocation first).
+   */
+  roleProblem(b: { writer: string; ops: M.Op[] }, state?: M.HolderState): string | null {
+    if (!state) return null
+    const device = b.writer.split('@')[0]!
+    const owner = (rel: string, anchor: string) => M.findRel(state, rel)?.stock.find((k) => k.anchor === anchor)?.by
+    for (const op of b.ops) {
+      let by: string | undefined
+      if (op.kind === 'produce' && this.producerRule) {
+        const a = state.acts.find((x) => x.id === op.act)
+        by = a ? owner(a.mediator, a.own) : undefined
+      } else if (op.kind === 'ticket-accept') by = owner(op.act.mediator, op.act.own)
+      else if (op.kind === 'ticket-refuse-budget') by = owner(op.rel, op.own)
+      if (by !== undefined && by !== device) return `${op.kind} by ${device} on a key of ${by}`
+    }
     return null
   }
   override receiveOwnFrame(body: Uint8Array, state?: M.HolderState) {
@@ -343,10 +349,14 @@ export class K2Device extends K1aDevice {
     const pub = this.dir.journalPub(this.person, device)
     if (!pub) throw new UnknownWriter(`writer ${rest.writer} is not in the device set of ${this.person}`)
     if (!verify(null, signedBytes(rest), pub, Buffer.from(sig, 'base64'))) throw new UnknownWriter(`batch ${rest.writer}#${rest.n} not signed by ${device}`)
-    // Loop review on 60a6674 (writer binding, MV-24): the signature authenticates `rest.writer`; no field inside the batch
-    // may name another writer. Otherwise the whole batch is a form error, nothing of it is folded.
-    const mismatch = this.writerProblem(rest, state)
+    // MV-38 (loop review on 60a6674, Opus-Review 58): the signature authenticates `rest.writer`, every op's author is that
+    // writer, and no op names an author in its payload. Otherwise the whole batch is a form error, nothing of it is folded.
+    const mismatch = this.writerProblem(rest)
     if (mismatch) throw new MalformedBatch(`batch:writer-mismatch: ${mismatch}`)
+    const role = this.roleProblem(rest, state)
+    if (role) throw new MalformedBatch(`batch:role-mismatch: ${role}`)
+    // MV-38: an intent's device and writer are the batch's author, not what the payload says.
+    rest.intents = rest.intents.map((i) => ({ ...i, device, writer: rest.writer }))
     if (this.issuanceAutomaton) {
       const bad = issuanceProblem(rest)
       if (bad) throw new MalformedBatch(bad)
