@@ -194,6 +194,8 @@ closed). Tests: the `Opus-Review 55` block of `tests/mehrgeraet-k2-automat.test.
 
 Verify after Opus-Review 55: typecheck green; full suite (`vitest run`, 43 files, keyhive-ark with the Subduction server):
 691 passed + 1 expected fail (D1) + 2 skipped in ≈ 17 min (06:23–06:40).
+Cell dump (seeded `runX15`) against main 0a4061c: K0, K1a, K1a at the service byte-identical; K2 both variants 17/2/1,
+no cell changed, dump identical to the one after review 54. `SEEDS=all`: 40/40 in ≈ 17 min.
 
 ## Step 2b.1 (21 October 2026): allocation per M device by A
 
