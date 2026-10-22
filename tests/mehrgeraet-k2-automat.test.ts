@@ -969,7 +969,10 @@ describe('Opus-Review 54: the derived rows of the sheet that were not built (B2)
       const { act } = await introduce(s, s.M1, 'before-send')
       const { a } = issued(s.M1, act)
       await reload(s, s.M1)
-      await s.round(2)
+      await s.round(1)
+      // Soll (sheet K1m, Opus-Review 55 S5 (c)): both deposits by M2 in M2's round 1 (it folds M1's batch in that round).
+      expect((await checks(s)).find((c) => c.property === 'P-Eigen')!.violations).toHaveLength(mutated ? 2 : 0)
+      await s.round(1)
       const cs = await checks(s)
       expect(prop(cs, 'P-Eigen').violations).toHaveLength(mutated ? 2 : 0)
       expect([acceptances(s, act, a.a.key), acceptances(s, act, a.b.key)]).toEqual([1, 1])
@@ -1087,4 +1090,143 @@ describe('Opus-Review 54: smaller findings', () => {
     expect(acceptances(s, act, a.a.key)).toBe(1)
     expect(sideState(s.A1, act)).toBe('expired')
   }, 240_000)
+})
+
+// ── Opus-Review 55 (rltp/design/port-experimente-e15-opus-review55-2026-10-22.md) ──
+
+describe('Opus-Review 55: one gate for holder and ledger, fixed tests for the fixes of review 54', () => {
+  for (const mutated of [false, true]) {
+    it(`R55-B1${mutated ? ' (mutation)' : ''}. M1 departs from B after tB is at the carrier (Q1): ${mutated ? 'a never submitted ticket deposited after the departure → 1 P-Aufhebung violation' : 'the deliverer repeats tB (6845.7), the holder\'s gate and the ledger\'s rows say admissible: 0 violations'}`, async () => {
+      const s = await world()
+      if (!mutated) {
+        s.w.carrier.faults.withhold('B1', (f) => kind(s, f) === 'introduction-ticket')
+        const { act } = await introduce(s, s.M1)
+        const { a, tB } = issued(s.M1, act)
+        await s.round(2)
+        expect(deposits(s, tB)).toBe(1)
+        await s.M1.depart(s.bm.y)
+        await s.round(8)
+        expect(inner(s.M1).ticketGateOf(tB.digest)).toBeNull() // S1: a submitted ticket is never `departed`
+        expect(deposits(s, tB)).toBeGreaterThan(1) // repeated after the departure
+        expect(s.buch.gates.filter((g) => g.act === act && g.side === 'b').map((g) => g.gate)).not.toContain('departed')
+        s.w.carrier.faults.reset()
+        await s.round(2)
+        expect(acceptances(s, act, a.b.key)).toBe(1)
+        await drain(s, a)
+        const cs = await checks(s)
+        expect(allOk(cs)).toEqual([])
+        expect(prop(cs, 'P-Produktion').counts.kept).toBe(1)
+      } else {
+        // K8c, then the release ignores `departed`: tA, never submitted before the departure, goes out.
+        const carrier = s.w.carrier
+        const deposit = carrier.deposit.bind(carrier)
+        let ka = ''
+        carrier.deposit = (address: string, bytes: Uint8Array, from?: string) => {
+          if (address === ka) throw new WireUnreachable('bench fault')
+          return deposit(address, bytes, from)
+        }
+        ka = M.usableView(s.M1.state, s.am.y, s.w.clock.now(), new Set(await mine(s.M1, s.am.y))).unconsumed.sort((x, y) => M.byCode(x.anchor, y.anchor))[0]!.keyAgreement
+        const { act } = await introduce(s, s.M1)
+        const { a, tA } = issued(s.M1, act)
+        await s.M1.depart(s.am.y)
+        const m = inner(s.M1)
+        const orig = m.ticketGateOf.bind(m)
+        m.ticketGateOf = (d: string) => {
+          const g = orig(d)
+          return g === 'departed' ? null : g
+        }
+        carrier.deposit = deposit
+        await s.round(2)
+        expect(deposits(s, tA)).toBe(1)
+        await drain(s, a)
+        const cs = await checks(s)
+        expect(prop(cs, 'P-Aufhebung').violations).toHaveLength(1)
+      }
+    }, 400_000)
+  }
+
+  it('R55-S2. Review 54 S2: the stop for `withdrawn` is no latch; when the evidence returns (revocation exception) the repetition resumes', async () => {
+    const s = await world({ a2: true })
+    const { act } = await introduce(s, s.M1)
+    const { a, tA } = issued(s.M1, act)
+    const by = M.rel(s.A1.state, s.am.x).stock.find((k) => k.anchor === a.a.key)!.by
+    const Ax = by === 'A1' ? s.A1 : s.A2!
+    const Ay = by === 'A1' ? s.A2! : s.A1
+    const selves = s.w.selfAddresses('A')
+    s.w.carrier.faults.withhold(Ax.name, (f) => selves.has(f.address) || kind(s, f) === 'introduction-ticket')
+    await Ay.setClass(s.am.x, false)
+    await s.round(2)
+    expect(evidence(s.M1, a.a)).toBe('withdrawn')
+    expect(s.M1.zusteller.submissions.get(tA.digest)?.stopped).toBe('withdrawn')
+    const before = deposits(s, tA)
+    await s.w.revoke(Ax, Ay)
+    await s.round(1)
+    expect(evidence(s.M1, a.a)).toBe('listed')
+    expect(s.M1.zusteller.submissions.get(tA.digest)?.stopped).toBeUndefined() // resumed
+    await s.round(3)
+    expect(deposits(s, tA)).toBeGreaterThan(before) // repeated again within ackWait rounds
+    s.w.carrier.faults.reset()
+    await s.round(2)
+    expect(acceptances(s, act, a.a.key)).toBe(1)
+  }, 400_000)
+
+  it('R55-S3. Review 54 S3: the deadline comes before `accepted` (the pure gate)', () => {
+    const s = M.emptyState('M')
+    const act: M.MediatorAct = { id: 'act1', a: { rel: 'r', key: 'k', keyAgreement: 'x' }, b: { rel: 'r', key: 'k2', keyAgreement: 'y' }, issuedAt: '2026-10-17T08:00:00.000Z', expiresAt: '2026-10-24T08:00:00.000Z', known: { a: 'd' } }
+    s.mediatorActs.push(act)
+    expect(M.ticketGate(s, 'act1', 'a', '2026-10-23T08:00:00.000Z', false)).toBe('accepted') // at TB: admissible time, receipt known
+    expect(M.ticketGate(s, 'act1', 'a', '2026-10-23T08:00:01.000Z', false)).toBe('deadline') // after TB: the deadline wins
+  })
+
+  for (const automaton of [true, false]) {
+    it(`R55-S1 (authorize${automaton ? '' : ', control'}). A choice that names a consumed key (test hook) is ${automaton ? 'refused by `authorize(introduce)` (`unconsumed`)' : 'issued on the 2b.1 path (`listed`)'}`, async () => {
+      const s = await world({ automaton })
+      const first = await introduce(s, s.M1)
+      const a1 = issued(s.M1, first.act).a
+      const m = s.M1 as unknown as { nameable(rel: string): { view: M.UsableView; nameable: M.ViewKey[] } }
+      const orig = m.nameable.bind(s.M1)
+      m.nameable = (rel: string) => {
+        const r = orig(rel)
+        return { ...r, nameable: r.view.usable } // the consumed key comes back into the choice
+      }
+      const r = await s.M1.introduce(s.am.y, s.bm.y)
+      if (automaton) {
+        expect(r).toEqual({ refused: 'blocked' })
+        expect(s.M1.state.mediatorActs).toHaveLength(1)
+      } else {
+        expect('act' in r).toBe(true)
+        expect(s.M1.state.mediatorActs.at(-1)!.a.key).toBe(a1.a.key) // named again
+      }
+    }, 240_000)
+  }
+
+  it('R55-S2b. Review 54 B1 (ii) alone: with the fold rule bypassed (`by` cleared) forged acks are folded, the receipt check still makes it a violation (Q5)', async () => {
+    const s = await world()
+    const carrier = s.w.carrier
+    const deposit = carrier.deposit.bind(carrier)
+    const blocked = new Set<string>()
+    carrier.deposit = (address: string, bytes: Uint8Array, from?: string) => {
+      if (blocked.has(address)) throw new WireUnreachable('probe fault')
+      return deposit(address, bytes, from)
+    }
+    const view = (rel: string) => M.usableView(s.M1.state, rel, s.w.clock.now()).unconsumed.map((k) => k.keyAgreement)
+    for (const a of [...view(s.am.y), ...view(s.bm.y)]) blocked.add(a)
+    const { act } = await introduce(s, s.M1)
+    const { a, tA, tB } = issued(s.M1, act)
+    await s.round(1)
+    delete (s.M1.state.mediatorActs.find((x) => x.id === act) as { by?: string }).by
+    const m2 = inner(s.M2!)
+    await m2.guarded(async () => {
+      m2.emit({ kind: 'ticket-ack', act, side: 'a', receiptDigest: tA.digest })
+      m2.emit({ kind: 'ticket-ack', act, side: 'b', receiptDigest: tB.digest })
+    })
+    m2.commit()
+    await s.round(2)
+    expect(knowledge(s.M1, act)).toEqual(['accepted', 'accepted'])
+    await drain(s, a)
+    const cs = await checks(s)
+    expect(prop(cs, 'P-Produktion').violations).toHaveLength(1)
+    expect(prop(cs, 'P-Produktion').counts['omitted:accepted']).toBe(0)
+    carrier.deposit = deposit
+  }, 400_000)
 })

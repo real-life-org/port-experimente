@@ -160,6 +160,8 @@ export function issuanceProblem(b: { writer?: string; ops: M.Op[]; intents: Arra
   const issuer = b.writer?.split('@')[0]
   if (issuer !== undefined && tickets.some((t) => t.device !== issuer)) return 'batch.intents(ticket device is not the writer)'
   const named = (intro[0] as M.Op & { kind: 'introduce' }).act
+  // Opus-Review 55 S5 (a): `by` (who may write `ticket-ack@1`) is the writer of the issuance batch.
+  if (issuer !== undefined && named.by !== undefined && named.by !== issuer) return 'batch.ops(introduce.act.by is not the writer)'
   if (tickets.some((t) => t.address !== named[t.side as 'a' | 'b'].keyAgreement)) return 'batch.intents(ticket address is not the named key)'
   return null
 }

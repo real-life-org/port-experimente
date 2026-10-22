@@ -562,6 +562,11 @@ export class Zusteller {
    */
   expire(digest: string, reason: ExpireReason): 'given-up' | 'stopped' | 'none' {
     const s = this.submissions.get(digest)
+    // Opus-Review 55 S5 (b): a stop for `withdrawn` takes the later boundary's reason (the stop itself stays).
+    if (s?.stopped === 'withdrawn' && reason !== 'withdrawn') {
+      s.stopped = reason
+      return 'stopped'
+    }
     if (!s || s.report?.state === 'delivered' || s.report?.state === 'failed' || s.stopped) return 'none'
     if (s.deposits === 0) {
       s.report = { state: 'failed', reason }

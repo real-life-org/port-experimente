@@ -401,7 +401,9 @@ export class Buch implements HolderObserver {
     for (const i of tickets) {
       const other = tickets.find((x) => x.act === i.act && x.side !== i.side)
       const os = other ? image.submissions.find((x) => x.digest === other.digest) : undefined
-      const gate = M.ticketGate(image.holder, i.act!, i.side!, t.at, !!os && os.deposits > 0)
+      const self = image.submissions.find((x) => x.digest === i.digest)
+      // Opus-Review 55 B1: the same inputs as the holder's gate (`ticketGateOf`), both submission facts from the image.
+      const gate = M.ticketGate(image.holder, i.act!, i.side!, t.at, !!os && os.deposits > 0, !!self && self.deposits > 0)
       const last = [...this.gates].reverse().find((x) => x.device === d.name && x.digest === i.digest)
       if (!last || last.gate !== gate) this.gates.push({ ...t, device: d.name, act: i.act!, side: i.side!, digest: i.digest, gate })
     }

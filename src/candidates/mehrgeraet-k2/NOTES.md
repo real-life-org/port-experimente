@@ -161,6 +161,40 @@ Verify after Opus-Review 54: typecheck green; `mehrgeraet-k2-automat` 68/68; `me
 (≈ 4 min). Cell dump (seeded `runX15`) against main 0a4061c: K0, K1a, K1a at the service byte-identical; K2 both
 variants no cell changed, details and measures exactly as on c77e09a (the list above). `SEEDS=all`: 40/40 in ≈ 27 min.
 
+### After Opus-Review 55 (22 October 2026)
+
+Review `rltp/design/port-experimente-e15-opus-review55-2026-10-22.md` ("trägt mit Bedingungen"; B1–B3 of review 54
+closed). Tests: the `Opus-Review 55` block of `tests/mehrgeraet-k2-automat.test.ts`.
+
+- **B1** the ledger's gate rows now call `M.ticketGate` with the same inputs as the holder's gate, `selfSubmitted`
+  included (from the image's submissions): a submitted ticket is never `departed` in either computation. R55-B1 is the
+  reviewer's Q1 (M1 departs from B after `tB` is at the carrier, the deliverer repeats `tB`, 6845.7): 0 violations, the
+  holder's gate `null`, no `departed` row, P-Produktion `kept 1`; red on d8a5819 (1 P-Aufhebung violation). Its mutation
+  (K8c, then the release ignores `departed`, so `tA` goes out after the departure): 1 violation.
+- **S1** fixed tests for the fixes of review 54: S1 in R55-B1; S2 (R55-S2: the stop for `withdrawn` is lifted when the
+  revocation exception makes the key listed again, and the repetition resumes); S3 (R55-S3, the pure gate: at `TB` with the
+  receipt known `accepted`, one second later `deadline`); the `unconsumed` check of `authorize(introduce)` (R55-S1
+  authorize: a test hook brings the consumed key back into the choice; under the automaton the right refuses,
+  `blocked`; on the 2b.1 path the key is named again). S8 (8850.5 for a foreign anchor) has no fixed test: under device sets a
+  card reaches the card branch only through the set check (`cardSetProblem`), whose proof the bench issues only for the
+  card of an act at the voucher's stock key; a card at an own address that is no stock key would need a forged set
+  reference and is deferred (`Missing`) before 8850.5 is reached. The branch is there for a counterpart that is not the
+  bench; the `not held` case of decision 8 is tested (D8).
+- **S2** a second test for review 54 B1 (ii) alone (R55-S2b, the reviewer's Q5: the fold rule bypassed by clearing `by`,
+  the forged acks are folded, knowledge `accepted/accepted`, yet P-Produktion 1 violation and `omitted:accepted` 0
+  because no receipt of the expected signer is at the carrier).
+- **S3** pre-existing on main, not in this PR: P-Commit flags every issuance by a sister M device (the mediator context
+  uses the tuples' `own` anchors, a sister device signs under its own device anchor). Issue #85.
+- **S4** limit of the serialization: serialized are `action` (every user action), `introduce`, `round` and `reload`.
+  Outside the chain are the world's set-up and revocation calls: `deviceRevoked` (commits directly), `relisten` (with
+  `resumeDuties`), `openEncounter` (registers keys before its action), `enrolMember`/`revokeInSets` (several steps one after
+  another). The bench calls them sequentially; their serialization is a later step (2c or after).
+- **S5** (a) `issuanceProblem` binds `act.by` to the writer of the issuance batch; (b) a stop for `withdrawn` takes the
+  later boundary's reason (`consent-reserve` at `TB`); (c) K1m asserts both deposits by M2 in M2's round 1.
+
+Verify after Opus-Review 55: typecheck green; full suite (`vitest run`, 43 files, keyhive-ark with the Subduction server):
+691 passed + 1 expected fail (D1) + 2 skipped in ≈ 17 min (06:23–06:40).
+
 ## Step 2b.1 (21 October 2026): allocation per M device by A
 
 Design: `rltp/design/port-experimente-e15-k2-schritt-2b-kern-entwurf-4-2026-10-21.md`
