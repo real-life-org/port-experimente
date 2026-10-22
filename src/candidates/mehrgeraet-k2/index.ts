@@ -311,17 +311,28 @@ export class K2Device extends K1aDevice {
    * every allocated stock key (`by`) and the issuer of an act (`by`) name the authenticated signer of the batch. One place,
    * the parser, before anything is learnt or folded. `null` = bound.
    */
-  writerProblem(b: { writer: string; ops: M.Op[]; intents: Array<{ writer?: string; device?: string }> }): string | null {
+  writerProblem(b: { writer: string; ops: M.Op[]; intents: Array<{ writer?: string; device?: string }> }, state?: M.HolderState): string | null {
     const device = b.writer.split('@')[0]!
+    // Opus-Review 57 S1: an own `revision` op names its writer as the signer id of the writing device's key in that
+    // relationship; the own device sets (`local`: member anchor → device) say whose it is. A writer that belongs to another
+    // device of the person is a claim; an unknown one gets no verdict here (the set may not be known yet).
+    const ownerOf = (writer: string): string | undefined => {
+      for (const set of Object.values(state?.sets ?? {})) for (const [anchor, dev] of Object.entries(set.local ?? {})) if (M.signerId(anchor) === writer) return dev
+      return undefined
+    }
     for (const op of b.ops) {
       if (op.id.writer !== b.writer) return `op ${op.kind} claims writer ${op.id.writer}`
+      if (op.kind === 'revision' && op.writer !== undefined) {
+        const owner = ownerOf(op.writer)
+        if (owner !== undefined && owner !== device) return `revision claims the writer of ${owner}`
+      }
       if (op.kind === 'allocate' && op.keys.some((k) => k.by !== undefined && k.by !== device)) return 'allocate claims another allocating device'
       if (op.kind === 'introduce' && op.act.by !== undefined && op.act.by !== device) return 'introduce claims another issuer'
     }
     for (const i of b.intents) if ((i.writer !== undefined && i.writer !== b.writer) || (i.device !== undefined && i.device !== device)) return `intent claims writer ${i.writer} on ${i.device}`
     return null
   }
-  override receiveOwnFrame(body: Uint8Array) {
+  override receiveOwnFrame(body: Uint8Array, state?: M.HolderState) {
     const raw: unknown = JSON.parse(dec.decode(body))
     if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw new MalformedBatch('batch')
     const { sig, ...rest } = raw as SignedBatch
@@ -334,7 +345,7 @@ export class K2Device extends K1aDevice {
     if (!verify(null, signedBytes(rest), pub, Buffer.from(sig, 'base64'))) throw new UnknownWriter(`batch ${rest.writer}#${rest.n} not signed by ${device}`)
     // Loop review on 60a6674 (writer binding, MV-24): the signature authenticates `rest.writer`; no field inside the batch
     // may name another writer. Otherwise the whole batch is a form error, nothing of it is folded.
-    const mismatch = this.writerProblem(rest)
+    const mismatch = this.writerProblem(rest, state)
     if (mismatch) throw new MalformedBatch(`batch:writer-mismatch: ${mismatch}`)
     if (this.issuanceAutomaton) {
       const bad = issuanceProblem(rest)

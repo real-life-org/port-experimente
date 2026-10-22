@@ -1366,3 +1366,52 @@ describe('CodeRabbit on #84: deliverer stop and completion', () => {
     expect(z.report('d1')).toEqual({ state: 'delivered', late: false })
   })
 })
+
+// ── Opus-Review 57 (rltp/design/port-experimente-e15-opus-review57-2026-10-22.md) ──
+
+describe('Opus-Review 57: revision writers bound to the signer; missing `by` over the signed path', () => {
+  for (const big of [false, true]) {
+    it(`R57-S1${big ? 'b' : ''}. A2 signs a batch whose \`revision\` op names A1's writer and inc${big ? ' with revision MAX_SAFE − 1 (P7b)' : ' (P7)'}: \`batch:writer-mismatch\`, A1's counter stays${big ? ', A1 still sends its stock revision' : ' at 1'}`, async () => {
+      const s = await world({ a2: true })
+      const r0 = M.rel(s.A1.state, s.am.x)
+      const incA1 = s.A1.cand.incTag!(s.am.x)
+      const own = Object.keys(r0.writers ?? {}).find((k) => k.endsWith('.' + incA1))!
+      const tagA1 = own.slice(0, -(incA1.length + 1))
+      const before = M.own(r0.writers, own)!.revision
+      expect(before).toBe(1)
+      const a2 = s.A2! as unknown as { guarded(f: () => Promise<void>): Promise<boolean>; pending: { ops: M.Op[] } | null; commit(): void }
+      await a2.guarded(async () => {
+        a2.pending!.ops.push({ id: { writer: s.A2!.cand.writer, n: 9_999 }, at: s.w.clock.now(), kind: 'revision', rel: s.am.x, revision: big ? Number.MAX_SAFE_INTEGER - 1 : 999, keys: [], writer: tagA1, inc: incA1, classOff: true } as unknown as M.Op)
+      })
+      a2.commit()
+      await s.round(2)
+      // Soll: the batch is a form error at A1 (the own set maps the writer's anchor to A1, the signer is A2): nothing folded.
+      expect(s.A1.dispositions.some((d) => d.includes('batch:writer-mismatch'))).toBe(true)
+      expect(M.own(M.rel(s.A1.state, s.am.x).writers, own)!.revision).toBe(before)
+      if (big) {
+        const k = M.rel(s.A1.state, s.am.x).stock.find((x) => x.by === 'A1' && x.state === 'active')!
+        const out = s.w.carrier.carried.length
+        await s.A1.withdrawStock(s.am.x, [k.anchor]) // sends a revision under A1's own (writer, inc)
+        expect(s.A1.dispositions.filter((d) => d.startsWith('failed(invalid-input)'))).toEqual([])
+        expect(s.w.carrier.carried.slice(out).some((f) => kind(s, f) === 'stock-revision' && s.w.frameOrigin(f.bytes)?.device === 'A1')).toBe(true)
+        expect(M.own(M.rel(s.A1.state, s.am.x).writers, own)!.revision).toBe(before + 1)
+      }
+    }, 300_000)
+  }
+
+  it('R57-S4. M1 signs an issuance batch without `act.by` (P8, test hook on the commit): M2 refuses the batch, the act is not folded there', async () => {
+    const s = await world()
+    const cand = s.M1.cand as unknown as { commit(tx: { ops: M.Op[]; intents: unknown[] }): void }
+    const orig = cand.commit.bind(cand)
+    cand.commit = (tx) => {
+      const t = structuredClone(tx)
+      for (const op of t.ops) if (op.kind === 'introduce') delete (op.act as { by?: string }).by
+      orig(t)
+    }
+    const { act } = await introduce(s, s.M1)
+    cand.commit = orig
+    await s.round(2)
+    expect(s.M2!.state.mediatorActs.some((a) => a.id === act)).toBe(false)
+    expect(s.M2!.dispositions.some((d) => d.includes('batch.ops(introduce.act.by missing)'))).toBe(true)
+  }, 240_000)
+})

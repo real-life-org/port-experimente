@@ -161,14 +161,32 @@ Verify after Opus-Review 54: typecheck green; `mehrgeraet-k2-automat` 68/68; `me
 (≈ 4 min). Cell dump (seeded `runX15`) against main 0a4061c: K0, K1a, K1a at the service byte-identical; K2 both
 variants no cell changed, details and measures exactly as on c77e09a (the list above). `SEEDS=all`: 40/40 in ≈ 27 min.
 
+### After Opus-Review 57 (22 October 2026)
+
+Review `rltp/design/port-experimente-e15-opus-review57-2026-10-22.md` ("trägt mit Bedingungen", no blocker). **S1** the
+own `revision` op was not bound: A2 could sign a batch naming A1's (writer, inc) and push A1's revision counter to 1000 or
+to MAX_SAFE − 1 (then A1 could not send a stock revision in that relationship any more; the class of review 31 B1 on the
+journal path, pre-existing on main). Bound in the same place (above); tests R57-S1 (P7: `batch:writer-mismatch`, counter
+stays 1) and R57-S1b (P7b: no blockade, A1's next revision goes out with counter 2); both red without the binding.
+**S2** the exceptions are listed above. **S3** the sheet's give-up row counts only unstopped rounds (CR-1). **S4** P8 as
+R57-S4: an issuance batch signed by M1 without `act.by` is refused by M2 (`batch.ops(introduce.act.by missing)`), the act
+is not folded there. CodeRabbit's nitpick (one `Opener` for P-Commit, P-Aufhebung, P-Eigen) is declined: a cost of the
+test harness only, while separate openers keep each checker independent of the others' measurement errors (review 50).
+
 ### After loop review (writer binding) and CodeRabbit (22 October 2026)
 
 - **B1, writer binding (MV-24).** A sister device could sign a valid batch whose ops claim another writer
   (`op.id.writer = M1`), and the `ticket-ack@1` rule compared the issuer against that claim: M1 took over acceptance
   knowledge without any receipt. Now the K2 parser (`K2Device.writerProblem`, in `receiveOwnFrame` right after the
-  signature check, before anything is learnt or folded) binds every field that names a writer to the authenticated
-  signer of the batch: every op id, every intent (`writer`, `device`), every allocated stock key (`by`) and the issuer of
-  an act (`introduce.act.by`). A mismatch makes the whole batch a form error (`batch:writer-mismatch: …`, corrupt-frame
+  signature check, before anything is learnt or folded) binds every field that names **the writing device itself** to the
+  authenticated signer of the batch: every op id, every intent (`writer`, `device`), every allocated stock key (`by`), the
+  issuer of an act (`introduce.act.by`) and, since Opus-Review 57 S1, the writer of an own `revision` op (its `writer` is
+  the signer id of the writing device's key in that relationship; the own device sets' `local` map says whose it is; an
+  unknown one gets no verdict, its `inc` cannot be checked by a sibling and only matters together with the writer).
+  Deliberate exceptions, fields that rightly name another device or party: `pool.device` and `pool-use.device` (the
+  sibling whose pool key is assigned), `device-set.rev.signer` and `device-set.local` (the signer of a received set
+  revision, the members' names), `view.writer` and `stock-revision.writer` (the counterpart's writer whose revision M
+  folds), `deps` (the heads of other writers the batch builds on). A mismatch makes the whole batch a form error (`batch:writer-mismatch: …`, corrupt-frame
   finding, nothing folded, no receipt). Revisions (`stock-revision`) carry the counterpart's writer, which is the
   revision signer's, not the batch writer's, and are not affected. This holds for K2 with and without the automaton (a
   journal authentication rule, not a step of 2b.2); honest batches always satisfy it (ops are emitted with the batch's

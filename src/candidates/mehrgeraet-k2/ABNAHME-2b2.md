@@ -32,7 +32,7 @@ to be added in 2b.2) or the holder/ledger read the test asserts directly.
 | budget window | 28 d | `PARAM.budgetWindowMs` |
 | 8470 usable | `now + 7 d + 1 h ≤ key.expiresAt` | `M.usable` |
 | deliverer repeat | after `HORIZON.ackWait` = 3 rounds without receipt | `Zusteller.advance` |
-| deliverer give-up | 12 rounds after carrier acceptance | `HORIZON.giveUp` |
+| deliverer give-up | 12 unstopped rounds after carrier acceptance (rounds under an `expire` stop do not count, CR-1) | `HORIZON.giveUp` |
 | P-Produktion window | k = 3 rounds in which the device is up | `PRODUCTION.rounds` |
 | supply target `to_am` | max(1, min(⌊(share − belegt) / \|M\|⌋, 5, ⌊64 / \|M\|⌋)) | `HolderDevice.supply` |
 

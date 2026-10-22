@@ -220,7 +220,7 @@ export interface CandidateDevice {
   /** Rahmen an die eigenen Geräte (Journal), an die eigene Adresse der Person (Plan Runde 3). */
   takeOwnFrames(): OwnFrame[]
   /** Ein Rahmen eines eigenen Geräts: liefert den Schritt, den das Gerät anwenden soll. Rein: nur dekodieren; ein fehlender Vorgänger ist `M.Missing` (das Gerät stellt den Rahmen zurück). */
-  receiveOwnFrame(body: Uint8Array): Transaction
+  receiveOwnFrame(body: Uint8Array, state?: M.HolderState): Transaction
   /** Der Schritt aus diesem Rahmen ist angewandt: der Kandidat merkt ihn sich (Dedupe, Vorgänger). Nach dem Gelingen gerufen. */
   applied?(body: Uint8Array): void
   /** Nachholen (HSC-440, X21): die bekannten Köpfe je Schreiber, und die Rahmen, die ein Gerät mit diesen Köpfen noch nicht hat. Ohne Methoden gibt es kein Nachholen. */
@@ -2272,7 +2272,7 @@ export class HolderDevice {
     const body = new Uint8Array(Buffer.from(b, 'base64'))
     let tx: Transaction
     try {
-      tx = this.cand.receiveOwnFrame(body)
+      tx = this.cand.receiveOwnFrame(body, this.state) // Opus-Review 57 S1: the parser binds revision writers against the own device sets
     } catch (e) {
       if (e instanceof M.Missing) throw e // zurückgestellt (guarded, defer)
       if (e instanceof UnknownWriter) throw new CorruptFrame(`frame: ${e.message}`, undefined, 'unknown-writer') // K2 Schritt 1
