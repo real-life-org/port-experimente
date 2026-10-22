@@ -198,6 +198,13 @@ of the batch** (to go into the core draft and the contract).
   issuer in an act, allocating device in a stock key); the revision variant is red without the rule, the act and key
   variants are refused by the op shapes. R56-S2a and R57-S4 test the issuer as the author (no `by` field), R55-S2b
   bypasses the fold rule through the act's effect. Evidence of the input: R57-B1; of the cases: R57-B1b.
+- **Measurement.** X17 compared A's writer keys with M's view by the old `<tag>.<inc>` key; it now translates the
+  device's own counter (keyed by its author incarnation) into M's name for it (signer id of the head key, `incTag`).
+  Without that, X17's `writersAcceptedByM` read 0 and the cell flipped; the behaviour did not change.
+- **Verify (88a0c6a).** Typecheck green; full suite (`vitest run`, 43 files): 709 passed + 1 expected fail (D1) + 2 skipped
+  in ≈ 15 min; cell dump against main 0a4061c: K0, K1a, K1a at the service byte-identical; K2 both variants 17/2/1, no cell
+  changed; against the dump after review 57 only sizes changed (X8 state copy −44 B, X11 and X21 journal −206 B: the K2
+  ops carry no author fields); `SEEDS=all` 40/40 in ≈ 14 min.
 
 ### After Opus-Review 57 (22 October 2026)
 
