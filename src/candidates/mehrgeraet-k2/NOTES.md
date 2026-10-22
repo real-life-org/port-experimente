@@ -155,6 +155,12 @@ the instrument did not check it). The reviewer's counter-runs are fixed tests (`
   `k2({ automaton: false })` is the 2b.1 path except the code-unit key order (decision 16) and the ledger's new rows;
   8110.7 has its own test (S9: one round, the ticket handled, then A7).
 
+Verify after Opus-Review 54: typecheck green; `mehrgeraet-k2-automat` 68/68; `mehrgeraet-k2`, `-k2-zuteilung`, `-buch`
+173 + R50-B1 after moving P-Eigen into the K2 rows of `judge` (175 with 1 expected fail, D1), ≈ 20 min; `mehrgeraet-k0`,
+`-k1a`, `-k1a-dienst`, `-gegenlauf`, `-modell`, `-engine`, `zustellung`, `zustellung-harness`, `traeger`, `matrix`: 162/162
+(≈ 4 min). Cell dump (seeded `runX15`) against main 0a4061c: K0, K1a, K1a at the service byte-identical; K2 both
+variants no cell changed, details and measures exactly as on c77e09a (the list above). `SEEDS=all`: 40/40 in ≈ 27 min.
+
 ## Step 2b.1 (21 October 2026): allocation per M device by A
 
 Design: `rltp/design/port-experimente-e15-k2-schritt-2b-kern-entwurf-4-2026-10-21.md`
