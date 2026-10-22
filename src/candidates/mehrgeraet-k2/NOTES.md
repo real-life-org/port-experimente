@@ -173,6 +173,12 @@ R57-S4: an issuance batch signed by M1 without `act.by` is refused by M2 (`batch
 is not folded there. CodeRabbit's nitpick (one `Opener` for P-Commit, P-Aufhebung, P-Eigen) is declined: a cost of the
 test harness only, while separate openers keep each checker independent of the others' measurement errors (review 50).
 
+Verify after the loop review and Opus-Review 57 (on c485f40): typecheck green; `mehrgeraet-k2-automat`, `-buch`,
+`-k2-zuteilung` 206 + 1 expected fail (D1); `mehrgeraet-k2`, `-k0`, `-k1a`, `-k1a-dienst`, `-gegenlauf`, `-seeds`
+(standard), `zustellung`, `zustellung-harness`, `traeger` 178/178; cell dump against main 0a4061c: K0, K1a, K1a at the
+service byte-identical, K2 both variants 17/2/1, the dump identical to the one after review 55; `SEEDS=all` 40/40 in
+≈ 15 min (run once for both parser changes, the writer binding of the loop review and the revision binding of review 57).
+
 ### After loop review (writer binding) and CodeRabbit (22 October 2026)
 
 - **B1, writer binding (MV-24).** A sister device could sign a valid batch whose ops claim another writer
