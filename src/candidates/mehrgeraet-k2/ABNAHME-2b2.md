@@ -454,6 +454,18 @@ resolved by the decisions below: K3 and T2 transport `handed`, K5b `down`).
   store's marker (test-only).
 - R4 (measured): the burn makes `xA` `withdrawn` at M1, `tA` is not resubmitted, 0 acceptances.
 
+## 7b. Corrections after Opus-Review 54
+
+- N4: only "≥ 1 MV-3 conflict" is derivable; whether later batch numbers collide depends on whether their bytes happen to
+  be equal (same op ids from the image, same clock), so "exactly 1" came from a run and is withdrawn.
+- N1: the next batch is exactly `k + 1` (asserted right after the issuance).
+- T4: no round runs before the time step, so `tB` also arrives at `AE + d`: B accepts at −1 s and 0, refuses at +1 s, as A.
+- K1: receipt documents 1 / 1, cards 0, `n` continues at `k`; K3: P-Bilanz max at A1 4, at B1 5 (asserted per device).
+- New rows: R54-B1a (forged `ticket-ack`: not folded, 2 findings, P-Produktion 1 violation), R54-B1b (release past
+  `withdrawn`: P-Aufhebung 1 violation, control 0), K1m (P-Eigen 2), K9m (P-Paar 1), D8 (2 refusals without receipt;
+  control `buffered`), R54-B3a/b/c (2 issuances on 2 key pairs; a third refused; round and issuance concurrent), S7 (4a: 1
+  acceptance, then `withdrawn` at M), S9 (8110.7: accepted and expired in one round).
+
 ## 8. Current code against the design (for the build)
 
 - The deliverer has no clock and no `expire`; before the first carrier

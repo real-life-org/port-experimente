@@ -348,6 +348,8 @@ export interface MediatorAct {
    * side's receipt for its ticket; set only by `ticket-ack@1` (written by the issuer, folded by its siblings). Absent = unknown.
    */
   known?: { a?: string; b?: string }
+  /** K2 step 2b.2 (Opus-Review 54 B1): the issuing M device (its name), set by the issuer under the automaton; only it may write `ticket-ack`. */
+  by?: string
 }
 
 /** 6845: eigene Mapping-Pflicht je Tupelpaar. */
@@ -622,7 +624,7 @@ export const SHAPES = {
     },
   },
   mediatorAct: {
-    object: { id, a: { object: { rel: id, key: id, keyAgreement: id } }, b: { object: { rel: id, key: id, keyAgreement: id } }, issuedAt: 'time', expiresAt: 'time', known: { optional: { object: { a: { optional: 'digest' }, b: { optional: 'digest' } } } } },
+    object: { id, a: { object: { rel: id, key: id, keyAgreement: id } }, b: { object: { rel: id, key: id, keyAgreement: id } }, issuedAt: 'time', expiresAt: 'time', known: { optional: { object: { a: { optional: 'digest' }, b: { optional: 'digest' } } } }, by: { optional: id } },
   },
 } satisfies Record<string, Shape>
 /**
@@ -1203,17 +1205,20 @@ export function usableView(s: HolderState, relId: string, now: string, mine?: Re
  *   `departed`  the addressee relationship departed, or the other one departed while the other ticket was not submitted
  *               (8232.1: before either is submitted both are cancelled; after the other one, the one on the departed);
  *   `withdrawn` the named key's evidence is `withdrawn` (withdrawn, buried, burnt, revoked writer: §3.3; decision 10).
- * `null` = admissible. `otherSubmitted`: the device knows the other ticket of the act at the carrier.
+ * `null` = admissible. `otherSubmitted` / `selfSubmitted`: the device knows the other ticket / this one at the carrier.
+ * Order (Opus-Review 54 S3): `deadline` before `accepted`.
  */
 export type TicketGate = 'accepted' | 'deadline' | 'departed' | 'withdrawn' | 'unknown-act'
-export function ticketGate(s: HolderState, actId: string, side: 'a' | 'b', now: string, otherSubmitted: boolean): TicketGate | null {
+export function ticketGate(s: HolderState, actId: string, side: 'a' | 'b', now: string, otherSubmitted: boolean, selfSubmitted = false): TicketGate | null {
   const a = s.mediatorActs.find((x) => x.id === actId)
   if (!a) return 'unknown-act'
-  if (a.known?.[side]) return 'accepted'
+  // Opus-Review 54 S3: the deadline first, so `TB` always ends a submission (also one with the receipt known).
   if (Date.parse(now) > Date.parse(a.expiresAt) - PARAM.consentReserveMs) return 'deadline'
+  if (a.known?.[side]) return 'accepted'
   const other = side === 'a' ? 'b' : 'a'
   const gone = (x: MediatorAct['a']) => findRel(s, x.rel)?.departed !== false
-  if (gone(a[side]) || (gone(a[other]) && !otherSubmitted)) return 'departed'
+  // Opus-Review 54 S1 (8232.0/8232.1): a submitted ticket is out and is never cancelled; the gate applies to unsubmitted ones.
+  if (!selfSubmitted && (gone(a[side]) || (gone(a[other]) && !otherSubmitted))) return 'departed'
   if (evidence(s, a[side].rel, a[side].key).state === 'withdrawn') return 'withdrawn'
   return null
 }
@@ -1362,6 +1367,14 @@ function applyBody(s: HolderState, op: Op): void {
       // K2 2b.2: acceptance knowledge, `unknown → accepted` the only transition (draft 3 §1.1); the first receipt stays.
       const a = s.mediatorActs.find((x) => x.id === op.act)
       if (!a) throw new Missing('act', op.act, s.person)
+      // Opus-Review 54 B1 (decision 11 as a rule of the fold): only the issuing device writes acceptance knowledge; a
+      // `ticket-ack` of any other writer is a finding, never state.
+      const writer = op.id.writer.split('@')[0]!
+      if (a.by !== undefined && writer !== a.by) {
+        const text = `ticket-ack:foreign-writer:${op.act}:${op.side}: ${writer} is not the issuer ${a.by}`
+        if (!s.findings.includes(text)) s.findings.push(text)
+        return
+      }
       a.known ??= {}
       a.known[op.side] ??= op.receiptDigest
       return

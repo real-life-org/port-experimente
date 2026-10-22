@@ -113,6 +113,48 @@ Subduction server in this worktree (environment), green after copying `.cache/su
 four K2 files (`mehrgeraet-k2`, `-k2-zuteilung`, `-buch`, `-k2-automat`) ≈ 17 min. Seed sweep `SEEDS=all` (`mehrgeraet-seeds`): 40/40 in ≈ 34 min (K2-strict with the 17/2/1 table,
 K1a).
 
+### After Opus-Review 54 (22 October 2026)
+
+Review `rltp/design/port-experimente-e15-opus-review54-2026-10-22.md` ("trägt nicht": B1–B3, S1–S9; the automaton holds,
+the instrument did not check it). The reviewer's counter-runs are fixed tests (`Opus-Review 54` blocks of
+`tests/mehrgeraet-k2-automat.test.ts`), written red first.
+
+- **B1, the checkers judge the resumption in both directions.** (i) `ticket-ack@1` is folded only from the issuing device:
+  the issuer sets `MediatorAct.by` (its name) under the automaton, the fold compares the op's writer device; another
+  writer is a finding `ticket-ack:foreign-writer:…`, never state (R54-B1a, the reviewer's PROBE1: M2 forging both acks).
+  (ii) P-Produktion accepts `accepted` as a reason only with a receipt of the expected signer for that ticket at the
+  carrier before the gate row; an omission's reason is the gate that held at its end (the last row before the deadline),
+  not the last reason seen; otherwise the round is admissible, and k of them without a deposit are a violation (PROBE1 is
+  now 1 violation). (iii) P-Aufhebung checks every submission, not only the issuance commit: a deposit of an own ticket
+  while the issuer's committed knowledge at that moment (its last `GateRow`) says `withdrawn`, `departed` or past `TB` is
+  a violation, once per ticket, not again when the issuance itself already is one (R54-B1b, PROBE6: 1 violation
+  mutated, 0 control). The gate rows are the ledger's own computation (`M.ticketGate` on the committed image, the
+  `IssuerImage` principle), not the holder's statement; P-Aufhebung is async now.
+- **B2, the three derived rows.** P-Eigen is a property in `judge` (`pEigen`: a ticket deposit by a deliverer other than
+  the committing device; the carrier frame carries `from`, the depositing device); K1m (M2 resumes M1's intents, test
+  hook on its journal fold): exactly 2 violations, acceptances unchanged; K9m (`DeclinedRow` fires: 1 violation); D8 and
+  its control (decision 8: two `8850.5-not-held` refusals without receipt; old path `buffered`, receipt).
+- **B3, serialization (draft 2 §2.2 no. 1, E1 of review 1).** One serialized step per device: `action`, `introduce`,
+  `round` and `reload` queue on a promise chain (`serial`, `AsyncLocalStorage` so a nested call of the same device runs
+  directly). `authorize(introduce)` under the automaton checks the same conditions as the choice (`unconsumed`: 8470,
+  not consumed), in the same state. Tests R54-B3a (two concurrent issuances on two key pairs, no error), B3b (a third
+  finds none left), B3c (a round concurrent with an issuance). The bench runs sequentially, so no cell order changes.
+- **S1** `ticketGate` never names a submitted ticket `departed` (8232.0: what is out is not cancelled; `selfSubmitted`).
+  **S2** the stop for `withdrawn` is no latch: when the evidence returns (revocation exception) the tick resumes the
+  repetition (`Zusteller.resume`). **S3** `deadline` is checked before `accepted`. **S4** (a) see B1; (b) gate rows
+  exist only at commits: every round and every action commits before it releases, so the row of that commit is the state
+  of the decision (`otherSubmitted` reads the image's submissions, the live one may know one deposit more, never less);
+  (c) without gate rows (K0, K1a, `automaton: false`) P-Produktion is the 2b.0 duty exactly (`open` stays `open`).
+  **S5** sheet corrected: N4 only "≥ 1" is derived (the reviewer's PROBE2: later batches can be byte-equal), N1 asserts
+  `= k + 1`, T4 asserts B too, K1 receipts/cards/`n` and K3's P-Bilanz 4 at A1 asserted. **S6** `deadTickets` reads ticket
+  outcomes from the seam (`HolderObserver.ticket`, `TicketOutcome` in the dump): a loaded dump gives the same counts.
+  **S7** X16 no longer shows decision 4a (the gate holds its ticket); test S7 does: the burial reaches M after the
+  submission, the device that allocated the key accepts. **S8** 8850.5 also for an anchor that is no stock key of the
+  side. **S9** `issuanceProblem` checks `device` = batch writer and the address = the named key; the `null` branch for
+  tickets in `introduce` was unreachable (the fan is the named key) and is removed, mutation U1 is back to its 2b.0 form;
+  `k2({ automaton: false })` is the 2b.1 path except the code-unit key order (decision 16) and the ledger's new rows;
+  8110.7 has its own test (S9: one round, the ticket handled, then A7).
+
 ## Step 2b.1 (21 October 2026): allocation per M device by A
 
 Design: `rltp/design/port-experimente-e15-k2-schritt-2b-kern-entwurf-4-2026-10-21.md`

@@ -11,7 +11,7 @@ import { diSign, jcs, receive, seal } from '@real-life/trust-protocol'
 import type { Json } from '@real-life/trust-protocol'
 import { MemoryStore } from '../src/lab/zustellung'
 import { k2 } from '../src/candidates/mehrgeraet-k2'
-import { deadTickets, judge, ledgerWorld, oneSided, pairCounter, type Buch, type Check } from '../src/lab/mehrgeraet/buch'
+import { Buch, deadTickets, judge, ledgerWorld, oneSided, pairCounter, type Check } from '../src/lab/mehrgeraet/buch'
 import { frameHash, TYPES, type HolderDevice } from '../src/lab/mehrgeraet/holder'
 import * as M from '../src/lab/mehrgeraet/model'
 import type { Welt15 } from '../src/lab/mehrgeraet/welt'
@@ -132,8 +132,10 @@ describe('K2 step 2b.2: core counter-runs K1–K10', () => {
       const { act } = await introduce(s, s.M1, variant)
       expect(s.M1.isDown).toBe(true)
       const writer = s.M1.cand.writer
+      const k = ownBatches(s.M1, writer)
       await reload(s, s.M1)
       expect(s.M1.cand.writer).toBe(writer) // 5.3: writer `M1@inc` unchanged
+      expect(ownBatches(s.M1, writer)).toBe(k) // Soll (S5): `n` continues from the committed journal (next batch k + 1)
       await s.round(4)
       const { a, tA, tB } = issued(s.M1, act)
       // Soll: issuance commits 1, digests 2.
@@ -152,6 +154,9 @@ describe('K2 step 2b.2: core counter-runs K1–K10', () => {
       expect(knowledge(s.M2!, act)).toEqual(['accepted', 'accepted'])
       // Soll: evidence unlisted / unlisted (consumed, refilled listing).
       expect([evidence(s.M1, a.a), evidence(s.M1, a.b)]).toEqual(['unlisted', 'unlisted'])
+      // Soll (S5): receipt documents 1 / 1 (a duplicate resends the stored bytes), cards 0.
+      expect([new Set(s.buch.carrier.receipts.filter((x) => x.ref === tA.digest).map((x) => x.frame)).size, new Set(s.buch.carrier.receipts.filter((x) => x.ref === tB.digest).map((x) => x.frame)).size]).toEqual([1, 1])
+      expect(s.w.carrier.carried.filter((f) => kind(s, f) === 'introduction-card').length).toBe(0)
       // Soll: no MV-3 conflict at M2.
       expect(s.M2!.state.findings.filter((f) => f.startsWith('Journal-Konflikt'))).toEqual([])
       await drain(s, a)
@@ -218,9 +223,13 @@ describe('K2 step 2b.2: core counter-runs K1–K10', () => {
     expect([sideState(s.A1, act), sideState(s.B1, act)]).toEqual(['none', 'expired'])
     const dead = deadTickets(s.buch, s.w)
     expect([dead.causes.zurueckgezogen, dead.deadAccepted]).toEqual([1, 1])
+    expect(deadTickets(Buch.load(s.buch.dump()))).toEqual(dead) // Opus-Review 54 S6: the counter from the dump
     const cs = await checks(s)
     expect(allOk(cs)).toEqual([])
     expect([prop(cs, 'P-Produktion').counts.obliged, prop(cs, 'P-Produktion').counts.kept]).toEqual([1, 1])
+    // Soll (S5): P-Bilanz max at A1 4 (4 → withdrawal 3 → supply 4, belegt 0), at B1 5.
+    const max = (dev: string) => Math.max(...s.buch.balances.filter((r) => r.device === dev).map((r) => r.belegt + r.reserviert))
+    expect([max('A1'), max('B1')]).toEqual([4, 5])
   }, 240_000)
 
   it('K4. Three M devices, `frei_zuteilbar = 1`: exactly one new right, to the first empty device by code-unit anchor order (sheet K4)', async () => {
@@ -447,9 +456,9 @@ describe('K2 step 2b.2: core counter-runs K1–K10', () => {
     const carrier = s.w.carrier
     const deposit = carrier.deposit.bind(carrier)
     let ka = ''
-    carrier.deposit = (address: string, bytes: Uint8Array) => {
+    carrier.deposit = (address: string, bytes: Uint8Array, from?: string) => {
       if (address === ka) throw new WireUnreachable('bench fault: deposit at xA unreachable')
-      return deposit(address, bytes)
+      return deposit(address, bytes, from)
     }
     // The named key is the smallest by code units among M1's nameable A keys (decision 16).
     ka = M.usableView(s.M1.state, s.am.y, s.w.clock.now(), new Set(await mine(s.M1, s.am.y))).unconsumed.sort((x, y) => M.byCode(x.anchor, y.anchor))[0]!.keyAgreement
@@ -601,6 +610,8 @@ describe('K2 step 2b.2: the six act-end tests (5.2), each at boundary −1 s / 0
         await s.round(2)
         const ok = automaton && d <= 0
         expect(acceptances(s, act, a.a.key)).toBe(ok ? 1 : 0)
+        // Soll for B (Opus-Review 54 S5): no round ran before the time step, so tB arrives at AE + d too: the same as A.
+        expect(acceptances(s, act, a.b.key)).toBe(ok ? 1 : 0)
         expect(load(s.A1, s.am.x, s.w.clock.now())).toBe(ok ? 1 : 0)
         expect(sideState(s.A1, act)).toBe(ok ? 'expired' : 'none')
         if (automaton) {
@@ -693,9 +704,9 @@ describe('K2 step 2b.2: restart from the last commit (5.3)', () => {
     expect(k).toBeGreaterThanOrEqual(2)
     await reload(s, s.M1)
     expect(s.M1.cand.writer).toBe(writer)
-    await introduce(s, s.M1) // one more own batch
+    await introduce(s, s.M1) // one more own batch: the issuance batch
+    expect(ownBatches(s.M1, writer)).toBe(k + 1) // Soll (5.3): batch k + 1 under the same writer
     await s.round(2)
-    expect(ownBatches(s.M1, writer)).toBeGreaterThanOrEqual(k + 1)
     expect(ownBatches(s.M2!, writer)).toBe(ownBatches(s.M1, writer)) // M2 folded it
     expect([conflicts(s.M1), conflicts(s.M2!)]).toEqual([0, 0])
   }, 240_000)
@@ -734,7 +745,10 @@ describe('K2 step 2b.2: restart from the last commit (5.3)', () => {
       expect(s.M1.cand.writer === writer).toBe(keepInc)
       await introduce(s, s.M1)
       await s.round(2)
-      expect(conflicts(s.M2!)).toBe(keepInc ? 1 : 0)
+      // Soll: N3 0; N4 ≥ 1 (the first new batch k + 1 reuses `M1@inc#(k+1)` with other content; whether later numbers collide
+      // too depends on whether their bytes happen to be equal, Opus-Review 54 S5, so only ≥ 1 is derived).
+      if (keepInc) expect(conflicts(s.M2!)).toBeGreaterThanOrEqual(1)
+      else expect(conflicts(s.M2!)).toBe(0)
       if (!keepInc) expect(ownBatches(s.M2!, s.M1.cand.writer)).toBeGreaterThanOrEqual(1)
     }, 240_000)
   }
@@ -874,5 +888,203 @@ describe('K2 step 2b.2: budget-cause fixture (core draft 4 §1)', () => {
     expect([dead.causes.budget, dead.deadAccepted]).toEqual([1, 1])
     const cs = await judge(s.buch, { share: 5 })
     expect(prop(cs, 'P-Bilanz').ok).toBe(true)
+  }, 240_000)
+})
+
+// ── Opus-Review 54 (rltp/design/port-experimente-e15-opus-review54-2026-10-22.md): the reviewer's counter-runs as fixed tests ──
+
+type Inner = { guarded(f: () => Promise<void>): Promise<boolean>; emit(body: Record<string, unknown>): unknown; commit(): void; ticketGateOf(d: string): string | null; applyRemote(tx: { ops: M.Op[]; intents: Array<{ device: string }> }): Promise<void> }
+const inner = (d: HolderDevice) => d as unknown as Inner
+
+describe('Opus-Review 54: the checkers see resumption errors in both directions (B1)', () => {
+  it('R54-B1a. A sibling writes `ticket-ack` for both sides (PROBE1): not folded (foreign writer), the missing production is a P-Produktion violation', async () => {
+    const s = await world()
+    const carrier = s.w.carrier
+    const deposit = carrier.deposit.bind(carrier)
+    const blocked = new Set<string>()
+    carrier.deposit = (address: string, bytes: Uint8Array, from?: string) => {
+      if (blocked.has(address)) throw new WireUnreachable('probe fault')
+      return deposit(address, bytes, from)
+    }
+    const view = (rel: string) => M.usableView(s.M1.state, rel, s.w.clock.now()).unconsumed.map((k) => k.keyAgreement)
+    for (const a of [...view(s.am.y), ...view(s.bm.y)]) blocked.add(a)
+    const { act } = await introduce(s, s.M1)
+    const { a, tA, tB } = issued(s.M1, act)
+    await s.round(1)
+    const m2 = inner(s.M2!)
+    await m2.guarded(async () => {
+      m2.emit({ kind: 'ticket-ack', act, side: 'a', receiptDigest: tA.digest })
+      m2.emit({ kind: 'ticket-ack', act, side: 'b', receiptDigest: tB.digest })
+    })
+    m2.commit()
+    await s.round(2)
+    // Soll: M1 folds neither (writer M2 is not the issuer M1): knowledge stays unknown, a finding names the foreign writer.
+    expect(knowledge(s.M1, act)).toEqual(['unknown', 'unknown'])
+    expect(s.M1.state.findings.filter((f) => f.startsWith('ticket-ack:foreign-writer')).length).toBe(2)
+    // Soll: the bench fault keeps both tickets `awaiting-transport` for 3 rounds in which submission is admissible → violation.
+    await drain(s, a)
+    const cs = await checks(s)
+    expect(prop(cs, 'P-Produktion').violations).toHaveLength(1)
+    expect(prop(cs, 'P-Produktion').counts['omitted:accepted']).toBe(0)
+    carrier.deposit = deposit
+  }, 300_000)
+
+  it('R54-B1b. K10 with a release that ignores `withdrawn` (PROBE6, mutation): the submission despite `withdrawn` is a P-Aufhebung violation; control holds', async () => {
+    for (const mutated of [false, true]) {
+      const s = await world()
+      const { act } = await introduce(s, s.M1, 'before-send')
+      const { a, tA } = issued(s.M1, act)
+      await s.A1.withdrawStock(s.am.x, [a.a.key])
+      await s.round(1)
+      await reload(s, s.M1)
+      if (mutated) {
+        const m = inner(s.M1)
+        const orig = m.ticketGateOf.bind(m)
+        m.ticketGateOf = (d: string) => {
+          const g = orig(d)
+          return g === 'withdrawn' ? null : g
+        }
+      }
+      await s.round(3)
+      expect(evidence(s.M1, a.a)).toBe('withdrawn')
+      expect(deposits(s, tA) > 0).toBe(mutated)
+      await drain(s, a)
+      const cs = await checks(s)
+      // Soll: control 0 violations (K10); mutated: P-Aufhebung 1 violation (one deposit of tA while M1's committed state holds xA withdrawn) and P-Produktion no `kept`.
+      expect(prop(cs, 'P-Aufhebung').violations).toHaveLength(mutated ? 1 : 0)
+      expect(prop(cs, 'P-Produktion').counts['omitted:rueckzug']).toBe(mutated ? 0 : 1)
+    }
+  }, 400_000)
+})
+
+describe('Opus-Review 54: the derived rows of the sheet that were not built (B2)', () => {
+  it('K1m. Mutation: M2 resumes M1\'s intents → P-Eigen fails with exactly 2 deposits by M2 (K1b, M2\'s round 1); acceptances unchanged (8640.4)', async () => {
+    for (const mutated of [false, true]) {
+      const s = await world()
+      if (mutated) {
+        const m2 = inner(s.M2!)
+        const orig = m2.applyRemote.bind(m2)
+        m2.applyRemote = (tx) => orig({ ...tx, intents: tx.intents.map((i) => ({ ...i, device: 'M2' })) })
+      }
+      const { act } = await introduce(s, s.M1, 'before-send')
+      const { a } = issued(s.M1, act)
+      await reload(s, s.M1)
+      await s.round(2)
+      const cs = await checks(s)
+      expect(prop(cs, 'P-Eigen').violations).toHaveLength(mutated ? 2 : 0)
+      expect([acceptances(s, act, a.a.key), acceptances(s, act, a.b.key)]).toEqual([1, 1])
+    }
+  }, 400_000)
+
+  it('K9m. Mutation: Ay folds Ax\'s consent and hand-over and still projects `declined` → exactly 1 P-Paar violation (`DeclinedRow`)', async () => {
+    const s = await world({ a2: true })
+    const { act } = await introduce(s, s.M1)
+    const { a } = issued(s.M1, act)
+    await s.round(3)
+    const by = M.rel(s.A1.state, s.am.x).stock.find((k) => k.anchor === a.a.key)!.by
+    const Ay = by === 'A1' ? s.A2! : s.A1
+    const Ax = by === 'A1' ? s.A1 : s.A2!
+    await Ax.consent(act)
+    await s.B1.consent(act)
+    await s.round(4)
+    expect(sideState(Ay, act)).toBe('connected')
+    let cs = await checks(s)
+    expect(prop(cs, 'P-Paar').violations).toEqual([])
+    M.act(Ay.state, act).state = 'declined' // test-only: the projection is wrong although the image holds the submitted card
+    inner(Ay).commit()
+    cs = await checks(s)
+    expect(prop(cs, 'P-Paar').violations).toHaveLength(1)
+  }, 300_000)
+
+  for (const automaton of [true, false]) {
+    it(`D8${automaton ? '' : ' control'}. Decision 8 (8850.5 sharpened): B's card to A's withdrawn key ${automaton ? 'is refused without ack, B repeats' : 'is buffered and acknowledged (old path)'} (PROBE4)`, async () => {
+      const s = await world({ automaton })
+      s.w.carrier.faults.withhold('A1', (f) => kind(s, f) === 'introduction-ticket')
+      const { act } = await introduce(s, s.M1)
+      await s.round(1)
+      const { a } = issued(s.M1, act)
+      await s.A1.withdrawStock(s.am.x, [a.a.key])
+      s.w.carrier.faults.reset()
+      await s.round(2)
+      await s.B1.consent(act)
+      await s.round(4)
+      const bCard = M.act(s.B1.state, act).ownCardDigest!
+      const log = s.A1.cardLog.filter((x) => x.act === act).map((x) => x.outcome)
+      // Soll: B1's card deposited in the consent action and repeated in B1's round 3 (no receipt) → 2 arrivals at A1, both refused; old path: 1, buffered, receipt.
+      if (automaton) {
+        expect(log).toEqual(['8850.5-not-held', '8850.5-not-held'])
+        expect(s.B1.zusteller.report(bCard)?.state).toBe('accepted')
+      } else {
+        expect(log).toEqual(['buffered'])
+        expect(s.B1.zusteller.report(bCard)?.state).toBe('delivered')
+      }
+    }, 240_000)
+  }
+})
+
+describe('Opus-Review 54: serialization per device (B3, draft 2 §2.2 no. 1, E1 of review 1)', () => {
+  it('R54-B3a. Two concurrent `introduce` on M1 (PROBE5): two issuances on two distinct key pairs, no error, no double consumption', async () => {
+    const s = await world()
+    const [r1, r2] = await Promise.all([s.M1.introduce(s.am.y, s.bm.y), s.M1.introduce(s.am.y, s.bm.y)])
+    expect(['act' in r1, 'act' in r2]).toEqual([true, true])
+    const acts = s.M1.state.mediatorActs
+    expect(acts).toHaveLength(2)
+    expect(new Set(acts.map((x) => x.a.key)).size).toBe(2)
+    expect(new Set(acts.map((x) => x.b.key)).size).toBe(2)
+    await s.round(3)
+    const cs = await checks(s)
+    expect(prop(cs, 'P-Einmal').ok).toBe(true)
+    expect(prop(cs, 'P-Einmal').counts.accepts).toBe(4)
+  }, 240_000)
+
+  it('R54-B3b. A third concurrent `introduce` finds no key pair left (2 + 2 keys for m1): refused, not a double issuance', async () => {
+    const s = await world()
+    const rs = await Promise.all([s.M1.introduce(s.am.y, s.bm.y), s.M1.introduce(s.am.y, s.bm.y), s.M1.introduce(s.am.y, s.bm.y)])
+    expect(rs.filter((r) => 'act' in r)).toHaveLength(2)
+    expect(s.M1.state.mediatorActs).toHaveLength(2)
+  }, 240_000)
+
+  it('R54-B3c. Receipt while issuing: a round of M1 runs concurrently with an `introduce`; both complete, the state is the serial one', async () => {
+    const s = await world()
+    const first = await introduce(s, s.M1)
+    await s.round(1)
+    const [, r] = await Promise.all([s.M1.round(), s.M1.introduce(s.am.y, s.bm.y)])
+    expect('act' in r).toBe(true)
+    await s.round(3)
+    expect(knowledge(s.M1, first.act)).toEqual(['accepted', 'accepted'])
+    const cs = await checks(s)
+    expect(prop(cs, 'P-Einmal').ok).toBe(true)
+  }, 240_000)
+})
+
+describe('Opus-Review 54: smaller findings', () => {
+  it('S7. Decision 4a: a ticket on a key the issuer\'s sibling buried, still active at the accepting device, is accepted (the content X16 lost)', async () => {
+    const s = await world({ a2: true })
+    const { act } = await introduce(s, s.M1, 'before-send')
+    const { a, tA } = issued(s.M1, act)
+    const by = M.rel(s.A1.state, s.am.x).stock.find((k) => k.anchor === a.a.key)!.by
+    const Ax = by === 'A1' ? s.A1 : s.A2!
+    const Ay = by === 'A1' ? s.A2! : s.A1
+    const selves = s.w.selfAddresses('A')
+    s.w.carrier.faults.withhold(Ax.name, (f) => selves.has(f.address))
+    for (const m of ['M1', 'M2']) s.w.carrier.faults.withhold(m, (f) => s.w.frameOrigin(f.bytes)?.device === Ay.name || s.w.frameOrigin(f.bytes)?.device === 'M2')
+    await Ay.setClass(s.am.x, false) // buries xA (B6), Ax never folds it, M not yet
+    await reload(s, s.M1)
+    await s.round(2)
+    expect(deposits(s, tA)).toBe(1)
+    expect(acceptances(s, act, a.a.key)).toBe(1) // 4a: the ticket counts
+    s.w.carrier.faults.reset()
+    await s.round(3)
+    expect(evidence(s.M1, a.a)).toBe('withdrawn') // the burial arrives after the submission
+  }, 300_000)
+
+  it('S9 (8110.7). A ticket arriving after TB is accepted and its act expired in the same round: documents before the time transition', async () => {
+    const { s, act, a, E } = await issuedWorld()
+    s.w.carrier.faults.withhold('A1', (f) => kind(s, f) === 'introduction-ticket')
+    at(s, E - DAY + SEC)
+    s.w.carrier.faults.reset()
+    await s.w.rounds(1) // exactly one round: the ticket is handled, then the tick (A7) fires
+    expect(acceptances(s, act, a.a.key)).toBe(1)
+    expect(sideState(s.A1, act)).toBe('expired')
   }, 240_000)
 })

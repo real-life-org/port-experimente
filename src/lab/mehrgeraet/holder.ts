@@ -32,6 +32,10 @@ import type { Json, KeyPair } from '@real-life/trust-protocol'
 import { createHash, createHmac } from 'node:crypto'
 import { Carrier, Zusteller, realClock, type Clock, type Store, type Submission, Crashed, type CrashPoint, WireUnreachable, type LogAnswer } from '../zustellung'
 import * as M from './model'
+import { AsyncLocalStorage } from 'node:async_hooks'
+
+/** Opus-Review 54 B3: the device whose serialized step is running (nested calls of the same device run directly). */
+const STEP = new AsyncLocalStorage<HolderDevice>()
 
 const enc = new TextEncoder()
 const dec = new TextDecoder()
@@ -441,8 +445,10 @@ export interface HolderObserver {
   produced(d: HolderDevice, p: { digest: string; type: string; issuer: string; recipient: string; payload: Record<string, Json>; frames: Uint8Array[] }): void
   /** A document delivered to this device that passed its parser's form checks (MV-24), before the fold decides on it. */
   admitted(d: HolderDevice, a: { digest: string; type: string; issuer: string; address: string; payload: Record<string, unknown> }): void
+  /** K2 2b.2 (Opus-Review 54 S6): every ticket arrival with its outcome (8640 step), for the dead-ticket counter in the dump. */
+  ticket?(d: HolderDevice, t: { act: string; own: string; at: string; outcome: string }): void
   /** A hook above threw; the seam caught it (an exception here is swallowed too). */
-  failed?(d: HolderDevice, hook: 'committed' | 'produced' | 'admitted', error: unknown): void
+  failed?(d: HolderDevice, hook: 'committed' | 'produced' | 'admitted' | 'ticket', error: unknown): void
 }
 
 /**
@@ -988,7 +994,7 @@ export class HolderDevice {
     this.observe('committed', (o) => o.committed(this, image))
   }
   /** The fail-safe observation seam: a hook that throws changes nothing in what the device does next (Tor-Review 42 (a)). */
-  private observe(hook: 'committed' | 'produced' | 'admitted', f: (o: HolderObserver) => void): void {
+  private observe(hook: 'committed' | 'produced' | 'admitted' | 'ticket', f: (o: HolderObserver) => void): void {
     const o = this.observer
     if (!o) return
     try {
@@ -1004,6 +1010,9 @@ export class HolderDevice {
   }
   /** Neuaufbau aus dem Store (#57): alles Flüchtige wird aus dem Abbild ersetzt, nichts bleibt aus dem alten Lauf. */
   async reload(opts: { fresh?: boolean } = {}): Promise<void> {
+    return this.serial(() => this.reloadNow(opts))
+  }
+  private async reloadNow(opts: { fresh?: boolean }): Promise<void> {
     // K2 2b.2 (core draft 4 §5.3): an image path (the store was given an image, or the caller says so) is a fresh journal
     // incarnation as in 2a; a rebuild on the device's own last commit is a restart (the candidate keeps inc and `n`).
     const fresh = (this.store?.takeRestored?.() ?? false) || !!opts.fresh
@@ -1074,7 +1083,8 @@ export class HolderDevice {
     if (!i || i.kind !== TYPES.ticket || !i.act || !i.side) return null
     const other = [...this.intents.values()].find((x) => x.kind === TYPES.ticket && x.act === i.act && x.side !== i.side)
     const os = other ? this.zusteller.submissions.get(other.digest) : undefined
-    return M.ticketGate(this.state, i.act, i.side, this.clock.now(), !!os && os.deposits > 0)
+    const self = this.zusteller.submissions.get(d)
+    return M.ticketGate(this.state, i.act, i.side, this.clock.now(), !!os && os.deposits > 0, !!self && self.deposits > 0)
   }
   /** K2 2b.2: a released ticket still `awaiting-transport` whose gate is closed for now (withdrawn) is not deposited. */
   private heldTicket(x: Submission): boolean {
@@ -1149,6 +1159,22 @@ export class HolderDevice {
   }
   /** Eine Nutzeraktion: blockiert (ganz zurückgenommen) oder abgestürzt heißt nicht fehlerhaft. */
   private async action(f: () => Promise<void>): Promise<ActionResult> {
+    return this.serial(() => this.actionNow(f))
+  }
+  /**
+   * K2 step 2b.2 (Opus-Review 54 B3; draft 2 §2.2 no. 1, E1 of review 1): one serialized step per device. A user action,
+   * a round (receipt and time transition) and a rebuild never run interleaved over the same state: each waits for the
+   * previous one. A step already inside the device's step (an action calling an action) runs directly. For every candidate:
+   * the bench runs sequentially, so this changes no order there; it closes the shared `pending` of concurrent calls.
+   */
+  private queue: Promise<unknown> = Promise.resolve()
+  private serial<T>(f: () => Promise<T>): Promise<T> {
+    if (STEP.getStore() === this) return f()
+    const run = this.queue.then(() => STEP.run(this, f))
+    this.queue = run.catch(() => undefined)
+    return run
+  }
+  private async actionNow(f: () => Promise<void>): Promise<ActionResult> {
     if (this.down) return 'crashed'
     try {
       if (!(await this.guarded(f))) return 'blocked'
@@ -1707,13 +1733,16 @@ export class HolderDevice {
   }
   /** M: zwei Seiten vorstellen (8605, 8570). Liefert die Akt-Id oder den Grund, warum nichts ging. */
   async introduce(relA: string, relB: string, nameA = 'A', nameB = 'B'): Promise<{ act: string } | { refused: string }> {
+    return this.serial(() => this.introduceNow(relA, relB, nameA, nameB))
+  }
+  private async introduceNow(relA: string, relB: string, nameA: string, nameB: string): Promise<{ act: string } | { refused: string }> {
     const now = this.clock.now()
     // 8570.4; kanonische Wahl (kleinster Anker), damit die Ankunftsreihenfolge nicht entscheidet (Review 4 B2).
     const pick = (relId: string) => [...this.nameable(relId).nameable].sort((a, b) => M.byCode(a.anchor, b.anchor))[0] ?? null // K2 2b.2 decision 16: code units
     const ka = pick(relA)
     const kb = pick(relB)
     if (!ka || !kb) return { refused: `kein benennbarer Schlüssel (${ka ? '' : relA} ${kb ? '' : relB})`.trim() }
-    const act: M.MediatorAct = { id: crypto.randomUUID(), a: { rel: M.resolveId(this.state, relA), key: ka.anchor, keyAgreement: ka.keyAgreement }, b: { rel: M.resolveId(this.state, relB), key: kb.anchor, keyAgreement: kb.keyAgreement }, issuedAt: now, expiresAt: new Date(Date.parse(now) + M.PARAM.actLifetimeMs).toISOString() }
+    const act: M.MediatorAct = { id: crypto.randomUUID(), a: { rel: M.resolveId(this.state, relA), key: ka.anchor, keyAgreement: ka.keyAgreement }, b: { rel: M.resolveId(this.state, relB), key: kb.anchor, keyAgreement: kb.keyAgreement }, issuedAt: now, expiresAt: new Date(Date.parse(now) + M.PARAM.actLifetimeMs).toISOString(), ...(this.automaton ? { by: this.name } : {}) }
     // MV-30 (Anton 20.10.): beide Schlüssel gegen denselben Zustand geprüft und erworben; Verbrauch (`introduce`) und beide
     // vollständigen Ticketbytes (Absichten) sind ein Schritt: ein Journalbatch, lokal committet (`flush`), bevor ein Ticket
     // das Gerät verlässt (HSC-110, 8570.2, 8605). Kein Warten auf eine Schwester (MV-34): nach einem Restore aus einem alten
@@ -1727,10 +1756,9 @@ export class HolderDevice {
         // K2 Schritt 2 (6o.2): das Ticket öffnet nur, wer den privaten Teil des benannten Vorrats-Schlüssels hält; es ist an
         // diesen versiegelt (das zuteilende Gerät) und von ihm quittiert.
         const fan = this.sets ? [{ anchor: own.key, rkid: own.keyAgreement }] : undefined
-        const sent = await this.sendDoc(TYPES.ticket, h.ownKey, fan ? own.key : h.peer, fan ? own.keyAgreement : h.peerKeyAgreement, (await this.keysFor(h.ownKey)).rkid, { act: act.id, issuedAt: act.issuedAt, expiresAt: act.expiresAt, own: own.key, voucher: { anchor: voucher.key, keyAgreement: voucher.keyAgreement, name } }, fan, this.automaton ? { act: act.id, side } : undefined)
-        // K2 2b.2 (draft 2 §2.2 no. 2, 3): both complete ticket intents or no issuance at all (MV-30): a ticket that was not
-        // produced takes the whole step back.
-        if (!sent && this.automaton) throw new InvalidInput(`introduce: ticket for side ${side} not produced`)
+        // K2 2b.2 (Opus-Review 54 S9): the ticket's fan is the named key itself, so `sendDoc` always produces it here; the
+        // composition of the batch is checked by the siblings' parser (`issuanceProblem`), not by a dead branch.
+        await this.sendDoc(TYPES.ticket, h.ownKey, fan ? own.key : h.peer, fan ? own.keyAgreement : h.peerKeyAgreement, (await this.keysFor(h.ownKey)).rkid, { act: act.id, issuedAt: act.issuedAt, expiresAt: act.expiresAt, own: own.key, voucher: { anchor: voucher.key, keyAgreement: voucher.keyAgreement, name } }, fan, this.automaton ? { act: act.id, side } : undefined)
       }
       await send(relA, { ...act.a, ...(ka.for ? { for: ka.for } : {}) }, act.b, nameB, 'a')
       await send(relB, { ...act.b, ...(kb.for ? { for: kb.for } : {}) }, act.a, nameA, 'b')
@@ -1956,6 +1984,9 @@ export class HolderDevice {
 
   // ── Runde ──
   async round(): Promise<void> {
+    return this.serial(() => this.roundNow())
+  }
+  private async roundNow(): Promise<void> {
     if (this.down) return
     try {
       if (this.online) {
@@ -2381,8 +2412,9 @@ export class HolderDevice {
     for (const i of this.intents.values()) {
       if (i.kind !== TYPES.ticket || !i.act || i.device !== this.name) continue
       const sub = this.zusteller.submissions.get(i.digest)
-      if (!sub || sub.report === null || sub.report.state === 'delivered' || sub.report.state === 'failed' || sub.stopped) continue
+      if (!sub || sub.report === null || sub.report.state === 'delivered' || sub.report.state === 'failed' || (sub.stopped && sub.stopped !== 'withdrawn')) continue
       const g = this.ticketGateOf(i.digest)
+      if (g === null && sub.stopped === 'withdrawn') this.zusteller.resume(i.digest) // Opus-Review 54 S2: no latch
       if (g === 'deadline') this.zusteller.expire(i.digest, 'consent-reserve')
       else if (g === 'withdrawn' && sub.deposits > 0) this.zusteller.expire(i.digest, 'withdrawn')
       else if (g === 'departed') this.zusteller.demarcate(i.digest)
@@ -2697,7 +2729,11 @@ export class HolderDevice {
             return own.state === 'active' || own.state === 'aging' // 8640.6
           },
         })
-        const tnote = (outcome: string) => void this.ticketLog.push({ act: String((doc.payload as { act?: unknown }).act), at: now, outcome })
+        const tnote = (outcome: string) => {
+          const t = { act: String((doc.payload as { act?: unknown }).act), own: String((doc.payload as { own?: unknown }).own), at: now, outcome }
+          this.ticketLog.push({ act: t.act, at: t.at, outcome })
+          this.observe('ticket', (o) => o.ticket?.(this, t))
+        }
         if (!v.ok) {
           tnote(v.step === 'state' ? `state:${v.own?.state}` : v.step)
           if (v.step === '8640.5') this.emit({ kind: 'finding', text: `ticket ${v.p!.act.slice(0, 8)}: own ${v.p!.own.slice(-8)} nicht auf dieser Beziehung (8640.5)` })
@@ -2774,8 +2810,9 @@ export class HolderDevice {
         if (!a && this.automaton) {
           // K2 2b.2 (core draft 4 §1, 8850.5 sharpened; derived, Anton may veto): a card to a stock key this side no longer
           // holds as `active`/`aging` (withdrawn, buried, consumed) has no buffer branch: refused without ack.
+          // Opus-Review 54 S8: also a key that is no stock key of this side at all ("fremd").
           const k = this.state.relationships.flatMap((r) => r.stock).find((x) => x.anchor === to)
-          if (k && k.state !== 'active' && k.state !== 'aging') return note('8850.5-not-held', false)
+          if (!k || (k.state !== 'active' && k.state !== 'aging')) return note('8850.5-not-held', false)
         }
         if (!a) {
           // Pufferzweig (8910.1–.3): die ganze Nutzlast, geprüft wird bei der Zuordnung (B7).

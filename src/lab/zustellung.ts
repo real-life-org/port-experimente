@@ -138,6 +138,8 @@ export interface Frame {
   id: number
   address: string
   bytes: Uint8Array
+  /** E15 K2 2b.2 (Opus-Review 54 B2, P-Eigen): the device whose deliverer deposited it (bench observation; absent for direct deposits). */
+  from?: string
 }
 
 export class WireUnreachable extends Error {}
@@ -284,9 +286,9 @@ export class Carrier {
   pending(address: string): number {
     return this.queues.get(address)?.length ?? 0
   }
-  deposit(address: string, bytes: Uint8Array) {
+  deposit(address: string, bytes: Uint8Array, from?: string) {
     if (this.unreachable) throw new WireUnreachable('Träger unerreichbar')
-    const f: Frame = { id: ++this.seq, address, bytes }
+    const f: Frame = { id: ++this.seq, address, bytes, ...(from ? { from } : {}) }
     this.carried.push(f)
     if (this.observe) {
       try {
@@ -489,8 +491,8 @@ export class Zusteller {
       return
     }
     try {
-      this.carrier().deposit(s.address, s.frame)
-      for (const x of s.extra ?? []) this.carrier().deposit(x.address, x.frame)
+      this.carrier().deposit(s.address, s.frame, this.device)
+      for (const x of s.extra ?? []) this.carrier().deposit(x.address, x.frame, this.device)
       s.transport = 'ok'
       s.deposits++
       s.sinceDeposit = 0
@@ -568,6 +570,11 @@ export class Zusteller {
     }
     s.stopped = reason
     return 'stopped'
+  }
+  /** Opus-Review 54 S2: a stop for `withdrawn` is no latch; when the evidence returns (revocation exception) the repetition resumes. */
+  resume(digest: string): void {
+    const s = this.submissions.get(digest)
+    if (s?.stopped === 'withdrawn') delete s.stopped
   }
   transport(digest: string) {
     return this.submissions.get(digest)?.transport

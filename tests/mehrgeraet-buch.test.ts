@@ -100,15 +100,11 @@ const prop = (r: { checks: Array<{ property: string; ok: boolean; violations: st
 // ── Test-only mutations (hooks on the instances of one world; the code under test has no switch for them) ──
 type Priv = { sendDoc: (type: string, ...rest: unknown[]) => Promise<{ digest: string } | null>; handle: (bytes: Uint8Array, address: string) => Promise<void>; connect: (a: M.Act, card: M.Card) => Promise<void> }
 const priv = (d: HolderDevice) => d as unknown as Priv
-/**
- * M produces no ticket at all (the issuance commits its consumption without ticket intents). Since 2b.2 the issuance
- * aborts when `sendDoc` reports a missing ticket (draft 2 §2.2 no. 3), so the mutation lies: it reports a ticket it never
- * built (the class "commit without intents" the checker must still see).
- */
+/** M produces no ticket at all (the issuance commits its consumption without ticket intents). */
 const suppressTickets: Mutation = (g) => {
   const d = priv(g.Mm)
   const orig = d.sendDoc.bind(g.Mm)
-  d.sendDoc = async (type, ...rest) => (type === TYPES.ticket ? { digest: 'suppressed', bytes: new Uint8Array(), address: '', frames: 0, total: 0 } : orig(type, ...rest))
+  d.sendDoc = async (type, ...rest) => (type === TYPES.ticket ? null : orig(type, ...rest))
 }
 /** M hands each ticket to the carrier the moment it is built, before the store commit of the issuance. */
 const ticketBeforeCommit: Mutation = (g) => {

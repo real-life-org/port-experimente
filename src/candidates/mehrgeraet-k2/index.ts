@@ -147,7 +147,7 @@ export class DeviceDirectory {
  * batch with an `introduce` holds exactly one, and exactly two ticket intents of that act, one per side; a ticket intent
  * outside an issuance batch, or of another act, is a form error. `null` = fine.
  */
-export function issuanceProblem(b: { ops: M.Op[]; intents: Array<{ kind: string; act?: string; side?: string }> }): string | null {
+export function issuanceProblem(b: { writer?: string; ops: M.Op[]; intents: Array<{ kind: string; act?: string; side?: string; device?: string; address?: string }> }): string | null {
   const intro = b.ops.filter((op) => op.kind === 'introduce')
   const tickets = b.intents.filter((i) => i.kind === TYPES.ticket)
   if (!intro.length) return tickets.length ? 'batch.intents(ticket without introduce)' : null
@@ -156,6 +156,11 @@ export function issuanceProblem(b: { ops: M.Op[]; intents: Array<{ kind: string;
   if (tickets.length !== 2) return `batch.intents(${tickets.length} tickets, MV-30 wants 2)`
   if (tickets.some((t) => t.act !== act)) return 'batch.intents(ticket of another act)'
   if (new Set(tickets.map((t) => t.side)).size !== 2 || tickets.some((t) => t.side !== 'a' && t.side !== 'b')) return 'batch.intents(ticket sides)'
+  // Opus-Review 54 S9: the issuing device is the batch writer, each ticket goes to the key agreement of the key it names.
+  const issuer = b.writer?.split('@')[0]
+  if (issuer !== undefined && tickets.some((t) => t.device !== issuer)) return 'batch.intents(ticket device is not the writer)'
+  const named = (intro[0] as M.Op & { kind: 'introduce' }).act
+  if (tickets.some((t) => t.address !== named[t.side as 'a' | 'b'].keyAgreement)) return 'batch.intents(ticket address is not the named key)'
   return null
 }
 export class K2Device extends K1aDevice {
@@ -273,7 +278,9 @@ export class K2Device extends K1aDevice {
    */
   override authorize(op: M.Op, state: M.HolderState): boolean {
     if (op.kind === 'ticket-accept') return true
-    if (op.kind === 'introduce') return [op.act.a, op.act.b].every((x) => M.usableView(state, x.rel, op.at, this.mineIn(state, x.rel)).listed.some((k) => k.anchor === x.key))
+    // Opus-Review 54 B3 (E1 of review 1): under the automaton the right is checked on the same conditions as the choice, in
+    // the same state (usable by 8470, not consumed); the 2b.1 path keeps `listed`.
+    if (op.kind === 'introduce') return [op.act.a, op.act.b].every((x) => M.usableView(state, x.rel, op.at, this.mineIn(state, x.rel))[this.issuanceAutomaton ? 'unconsumed' : 'listed'].some((k) => k.anchor === x.key))
     return super.authorize(op, state)
   }
   /** Step 2b.1: this device's anchors in a relationship (one per tuple context it derived). */

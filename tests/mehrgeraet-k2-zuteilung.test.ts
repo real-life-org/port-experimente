@@ -701,7 +701,7 @@ describe('K2 step 2b.1, part 2: the allocation checkers against counter-runs (To
     await s.w.rounds(3)
     expect(s.A.state.acts).toHaveLength(1)
     // Soll: the burial came from A2, revoked before the issuance, and A1 currently lists the key → no lifted key named.
-    const c = pAufhebung(s.buch)
+    const c = await pAufhebung(s.buch)
     expect(c.violations).toEqual([])
     expect(c.counts.issuances).toBe(1)
   }, 120_000)
@@ -729,7 +729,7 @@ describe('K2 step 2b.1, part 2: the allocation checkers against counter-runs (To
     expect('act' in r).toBe(true)
     await s.w.rounds(3)
     // Soll: 1 violation (x named after a burial by a non-revoked issuer that M had folded).
-    expect(pAufhebung(s.buch).violations).toHaveLength(1)
+    expect((await pAufhebung(s.buch)).violations).toHaveLength(1)
   }, 120_000)
 })
 
@@ -769,7 +769,7 @@ describe('K2 step 2b.1, part 2: the ledger reads the issuer\'s own durable knowl
       expect('act' in r, `mutate ${mutate}`).toBe(mutate)
       // Soll: at its issuance commit M1 holds x as buried by A2 (a non-revoked issuer in M1's knowledge) → mutated: 1
       // violation, 1 issuance; honest: M1 refuses, 0 issuances, 0 violations. M2's revocation is not M1's knowledge.
-      const c = pAufhebung(s.buch)
+      const c = await pAufhebung(s.buch)
       expect(c.violations, `mutate ${mutate}`).toHaveLength(mutate ? 1 : 0)
       expect(c.counts.issuances).toBe(mutate ? 1 : 0)
     }
