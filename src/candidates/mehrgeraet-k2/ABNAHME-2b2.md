@@ -34,7 +34,7 @@ to be added in 2b.2) or the holder/ledger read the test asserts directly.
 | deliverer repeat | after `HORIZON.ackWait` = 3 rounds without receipt | `Zusteller.advance` |
 | deliverer give-up | 12 rounds after carrier acceptance | `HORIZON.giveUp` |
 | P-Produktion window | k = 3 rounds in which the device is up | `PRODUCTION.rounds` |
-| supply target `to_am` | `max(1, min(⌊(share − belegt)/|M|⌋, 5, ⌊64/|M|⌋))` | `HolderDevice.supply` |
+| supply target `to_am` | max(1, min(⌊(share − belegt) / \|M\|⌋, 5, ⌊64 / \|M\|⌋)) | `HolderDevice.supply` |
 
 Times. `t0` = 2026-10-17T08:00:00.000Z (world start; setup does not move the
 clock). For an issuance at `tI`: `E = tI + 7 d` (act `expiresAt`),

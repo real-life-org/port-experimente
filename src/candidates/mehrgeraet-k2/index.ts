@@ -160,8 +160,9 @@ export function issuanceProblem(b: { writer?: string; ops: M.Op[]; intents: Arra
   const issuer = b.writer?.split('@')[0]
   if (issuer !== undefined && tickets.some((t) => t.device !== issuer)) return 'batch.intents(ticket device is not the writer)'
   const named = (intro[0] as M.Op & { kind: 'introduce' }).act
-  // Opus-Review 55 S5 (a): `by` (who may write `ticket-ack@1`) is the writer of the issuance batch.
-  if (issuer !== undefined && named.by !== undefined && named.by !== issuer) return 'batch.ops(introduce.act.by is not the writer)'
+  // Opus-Review 55 S5 (a), CodeRabbit (missing `by`): under the automaton `by` (who may write `ticket-ack@1`) is required
+  // and is the writer of the issuance batch; a batch without it would leave the act open to acknowledgements of any writer.
+  if (issuer !== undefined && named.by !== issuer) return named.by === undefined ? 'batch.ops(introduce.act.by missing)' : 'batch.ops(introduce.act.by is not the writer)'
   if (tickets.some((t) => t.address !== named[t.side as 'a' | 'b'].keyAgreement)) return 'batch.intents(ticket address is not the named key)'
   return null
 }
@@ -305,6 +306,21 @@ export class K2Device extends K1aDevice {
    * `journal:unknown-writer`, never state, no receipt). Then the assignments of the batch are learnt and K1a's shape and
    * order checks run on the batch without `sig`.
    */
+  /**
+   * The writer binding of a signed journal batch (loop review on 60a6674): every op id, every intent (`writer`, `device`),
+   * every allocated stock key (`by`) and the issuer of an act (`by`) name the authenticated signer of the batch. One place,
+   * the parser, before anything is learnt or folded. `null` = bound.
+   */
+  writerProblem(b: { writer: string; ops: M.Op[]; intents: Array<{ writer?: string; device?: string }> }): string | null {
+    const device = b.writer.split('@')[0]!
+    for (const op of b.ops) {
+      if (op.id.writer !== b.writer) return `op ${op.kind} claims writer ${op.id.writer}`
+      if (op.kind === 'allocate' && op.keys.some((k) => k.by !== undefined && k.by !== device)) return 'allocate claims another allocating device'
+      if (op.kind === 'introduce' && op.act.by !== undefined && op.act.by !== device) return 'introduce claims another issuer'
+    }
+    for (const i of b.intents) if ((i.writer !== undefined && i.writer !== b.writer) || (i.device !== undefined && i.device !== device)) return `intent claims writer ${i.writer} on ${i.device}`
+    return null
+  }
   override receiveOwnFrame(body: Uint8Array) {
     const raw: unknown = JSON.parse(dec.decode(body))
     if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw new MalformedBatch('batch')
@@ -316,6 +332,10 @@ export class K2Device extends K1aDevice {
     const pub = this.dir.journalPub(this.person, device)
     if (!pub) throw new UnknownWriter(`writer ${rest.writer} is not in the device set of ${this.person}`)
     if (!verify(null, signedBytes(rest), pub, Buffer.from(sig, 'base64'))) throw new UnknownWriter(`batch ${rest.writer}#${rest.n} not signed by ${device}`)
+    // Loop review on 60a6674 (writer binding, MV-24): the signature authenticates `rest.writer`; no field inside the batch
+    // may name another writer. Otherwise the whole batch is a form error, nothing of it is folded.
+    const mismatch = this.writerProblem(rest)
+    if (mismatch) throw new MalformedBatch(`batch:writer-mismatch: ${mismatch}`)
     if (this.issuanceAutomaton) {
       const bad = issuanceProblem(rest)
       if (bad) throw new MalformedBatch(bad)

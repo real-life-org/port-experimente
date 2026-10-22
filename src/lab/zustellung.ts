@@ -515,11 +515,11 @@ export class Zusteller {
     for (const s of this.submissions.values()) {
       if (s.report === null) continue // vorgemerkt, nicht freigegeben: liegt vor der Commit-Grenze des Geräts (#56)
       if (this.gate?.(s)) continue // zurückgehalten bis zum Nachholen (B1a): keine Einlieferung, keine Frist
+      if (s.stopped) continue // E15 K2 2b.2 (CodeRabbit): a stopped submission keeps its counters; after `resume` it retries, not fails
       s.rounds++
       s.sinceDeposit++
       if (s.sinceAccepted !== null) s.sinceAccepted++
       if (s.report?.state === 'delivered' || s.report?.state === 'failed') continue
-      if (s.stopped) continue // E15 K2 2b.2: expired after carrier acceptance: what is out stays out, no repetition
       if (s.sinceAccepted !== null && s.sinceAccepted >= HORIZON.giveUp) {
         s.report = { state: 'failed', reason: 'expired-by-adapter-policy' }
         this.notes.push(`${s.digest.slice(0, 8)} aufgegeben ${s.sinceAccepted} Runden nach der Annahme (zuletzt ${s.transport})`)
@@ -562,12 +562,14 @@ export class Zusteller {
    */
   expire(digest: string, reason: ExpireReason): 'given-up' | 'stopped' | 'none' {
     const s = this.submissions.get(digest)
+    // CodeRabbit: a delivered or failed submission is complete, whatever stop it had: nothing to expire.
+    if (!s || s.report?.state === 'delivered' || s.report?.state === 'failed') return 'none'
     // Opus-Review 55 S5 (b): a stop for `withdrawn` takes the later boundary's reason (the stop itself stays).
-    if (s?.stopped === 'withdrawn' && reason !== 'withdrawn') {
+    if (s.stopped === 'withdrawn' && reason !== 'withdrawn') {
       s.stopped = reason
       return 'stopped'
     }
-    if (!s || s.report?.state === 'delivered' || s.report?.state === 'failed' || s.stopped) return 'none'
+    if (s.stopped) return 'none'
     if (s.deposits === 0) {
       s.report = { state: 'failed', reason }
       this.notes.push(`${s.digest.slice(0, 8)} aufgegeben vor der Trägerannahme (${reason})`)

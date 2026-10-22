@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest'
 import { diSign, jcs, receive, seal } from '@real-life/trust-protocol'
 import type { Json } from '@real-life/trust-protocol'
 import { Carrier, MemoryStore, Zusteller } from '../src/lab/zustellung'
-import { issuanceProblem, k2 } from '../src/candidates/mehrgeraet-k2'
+import { issuanceProblem, k2, K2Device } from '../src/candidates/mehrgeraet-k2'
 import { Buch, deadTickets, judge, ledgerWorld, oneSided, pairCounter, type Check } from '../src/lab/mehrgeraet/buch'
 import { frameHash, TYPES, type HolderDevice } from '../src/lab/mehrgeraet/holder'
 import * as M from '../src/lab/mehrgeraet/model'
@@ -1273,6 +1273,10 @@ describe('Opus-Review 56: fixed tests for 8850.5 with a foreign anchor and for r
     })
     expect(issuanceProblem(batch('M1'))).toBeNull()
     expect(issuanceProblem(batch('M2'))).toBe('batch.ops(introduce.act.by is not the writer)')
+    // CodeRabbit (missing `by`): under the automaton the issuer is required.
+    const missing = batch('M1')
+    delete (missing.ops[0] as unknown as { act: { by?: string } }).act.by
+    expect(issuanceProblem(missing)).toBe('batch.ops(introduce.act.by missing)')
   })
 
   it('R56-S2b. A stop for `withdrawn` takes the reason of the later boundary (`consent-reserve` at TB), and stays a stop (review 55 S5 (b))', () => {
@@ -1288,5 +1292,77 @@ describe('Opus-Review 56: fixed tests for 8850.5 with a foreign anchor and for r
     z.resume('d1') // no longer a `withdrawn` stop: nothing resumes
     expect(z.submissions.get('d1')?.stopped).toBe('consent-reserve')
     expect(z.report('d1')?.state).toBe('accepted') // handed (decision 3)
+  })
+})
+
+// ── Loop review on 60a6674 (writer binding) and CodeRabbit on #84 ──
+
+describe('Loop review on 60a6674: the writer of every op is the authenticated signer of its batch (MV-24)', () => {
+  for (const mutated of [false, true]) {
+    it(`R57-B1${mutated ? ' (mutation: binding check removed)' : ''}. M2 signs a batch whose \`ticket-ack\` op claims writer M1: ${mutated ? 'M1 folds it, knowledge `accepted` without a receipt' : 'finding `batch:writer-mismatch`, nothing folded, knowledge unknown'}`, async () => {
+      const s = await world()
+      const carrier = s.w.carrier
+      const deposit = carrier.deposit.bind(carrier)
+      const blocked = new Set<string>()
+      carrier.deposit = (address: string, bytes: Uint8Array, from?: string) => {
+        if (blocked.has(address)) throw new WireUnreachable('bench fault: no ticket reaches a side, so no receipt exists')
+        return deposit(address, bytes, from)
+      }
+      const view = (rel: string) => M.usableView(s.M1.state, rel, s.w.clock.now()).unconsumed.map((k) => k.keyAgreement)
+      for (const x of [...view(s.am.y), ...view(s.bm.y)]) blocked.add(x)
+      const { act } = await introduce(s, s.M1)
+      const { tA } = issued(s.M1, act)
+      await s.round(1)
+      if (mutated) (s.M1.cand as unknown as { writerProblem(): string | null }).writerProblem = () => null
+      const m2 = s.M2! as unknown as { guarded(f: () => Promise<void>): Promise<boolean>; pending: { ops: M.Op[] } | null; commit(): void }
+      await m2.guarded(async () => {
+        m2.pending!.ops.push({ id: { writer: s.M1.cand.writer, n: 9_999 }, at: s.w.clock.now(), kind: 'ticket-ack', act, side: 'a', receiptDigest: tA.digest } as unknown as M.Op)
+      })
+      m2.commit()
+      await s.round(2)
+      expect(s.buch.carrier.receipts.filter((r) => r.ref === tA.digest)).toHaveLength(0) // no receipt anywhere
+      if (mutated) expect(knowledge(s.M1, act)[0]).toBe('accepted')
+      else {
+        expect(knowledge(s.M1, act)[0]).toBe('unknown')
+        expect(s.M1.state.findings.some((f) => f.includes('batch:writer-mismatch')) || s.M1.dispositions.some((d) => d.includes('batch:writer-mismatch'))).toBe(true)
+      }
+      carrier.deposit = deposit
+    }, 300_000)
+  }
+
+  it('R57-B1b. The parser binds op ids, intents, allocated keys and the act issuer to the signer (pure)', () => {
+    const probe = (b: Parameters<K2Device['writerProblem']>[0]) => K2Device.prototype.writerProblem.call(undefined as never, b)
+    const op = (writer: string, extra: Record<string, unknown> = {}) => ({ id: { writer, n: 1 }, at: '2026-10-17T08:00:00.000Z', kind: 'finding', text: 'x', ...extra }) as unknown as M.Op
+    expect(probe({ writer: 'M2@i', ops: [op('M2@i')], intents: [{ writer: 'M2@i', device: 'M2' }] })).toBeNull()
+    expect(probe({ writer: 'M2@i', ops: [op('M1@i')], intents: [] })).toContain('claims writer M1@i')
+    expect(probe({ writer: 'M2@i', ops: [], intents: [{ writer: 'M2@i', device: 'M1' }] })).toContain('intent claims')
+    expect(probe({ writer: 'A2@i', ops: [{ ...op('A2@i'), kind: 'allocate', rel: 'r', nonce: 'n', keys: [{ by: 'A1' }] } as unknown as M.Op], intents: [] })).toBe('allocate claims another allocating device')
+    expect(probe({ writer: 'M2@i', ops: [{ ...op('M2@i'), kind: 'introduce', act: { by: 'M1' } } as unknown as M.Op], intents: [] })).toBe('introduce claims another issuer')
+  })
+})
+
+describe('CodeRabbit on #84: deliverer stop and completion', () => {
+  it('CR-1. A stopped submission keeps its counters: after `resume` it retries instead of failing at once', () => {
+    const carrier = new Carrier()
+    const z = new Zusteller('M1', () => carrier, () => true)
+    z.record('d1', new Uint8Array([1]), 'addr')
+    z.deposit('d1')
+    z.expire('d1', 'withdrawn')
+    for (let i = 0; i < 20; i++) z.advance() // longer than HORIZON.giveUp
+    expect(z.submissions.get('d1')!.sinceAccepted).toBe(0)
+    z.resume('d1')
+    for (let i = 0; i < 3; i++) z.advance()
+    expect(z.report('d1')?.state).toBe('accepted') // not `failed`
+    expect(z.submissions.get('d1')!.deposits).toBe(2) // repeated after ackWait
+  })
+  it('CR-2. A delivered submission (late receipt after a `withdrawn` stop) is complete: a later `expire` is `none`', () => {
+    const carrier = new Carrier()
+    const z = new Zusteller('M1', () => carrier, () => true)
+    z.record('d1', new Uint8Array([1]), 'addr')
+    z.deposit('d1')
+    z.expire('d1', 'withdrawn')
+    z.acknowledged('d1')
+    expect(z.expire('d1', 'act-ended')).toBe('none')
+    expect(z.report('d1')).toEqual({ state: 'delivered', late: false })
   })
 })

@@ -161,6 +161,24 @@ Verify after Opus-Review 54: typecheck green; `mehrgeraet-k2-automat` 68/68; `me
 (≈ 4 min). Cell dump (seeded `runX15`) against main 0a4061c: K0, K1a, K1a at the service byte-identical; K2 both
 variants no cell changed, details and measures exactly as on c77e09a (the list above). `SEEDS=all`: 40/40 in ≈ 27 min.
 
+### After loop review (writer binding) and CodeRabbit (22 October 2026)
+
+- **B1, writer binding (MV-24).** A sister device could sign a valid batch whose ops claim another writer
+  (`op.id.writer = M1`), and the `ticket-ack@1` rule compared the issuer against that claim: M1 took over acceptance
+  knowledge without any receipt. Now the K2 parser (`K2Device.writerProblem`, in `receiveOwnFrame` right after the
+  signature check, before anything is learnt or folded) binds every field that names a writer to the authenticated
+  signer of the batch: every op id, every intent (`writer`, `device`), every allocated stock key (`by`) and the issuer of
+  an act (`introduce.act.by`). A mismatch makes the whole batch a form error (`batch:writer-mismatch: …`, corrupt-frame
+  finding, nothing folded, no receipt). Revisions (`stock-revision`) carry the counterpart's writer, which is the
+  revision signer's, not the batch writer's, and are not affected. This holds for K2 with and without the automaton (a
+  journal authentication rule, not a step of 2b.2); honest batches always satisfy it (ops are emitted with the batch's
+  writer). Tests R57-B1 (M2 forges, control: finding, knowledge `unknown`; mutation with the check removed: `accepted`
+  without a receipt) and R57-B1b (the five cases of the binding, pure).
+- **CodeRabbit (PR #84).** Missing `by`: under the automaton `issuanceProblem` requires `act.by` (R56-S2a extended). A
+  stopped submission keeps its counters in `advance` (no repeat budget spent while stopped; after `resume` it retries
+  instead of failing at once, CR-1). `expire` returns `none` for a delivered or failed submission before it looks at a
+  stop (CR-2). The supply formula in the sheet's table escapes its pipes.
+
 ### After Opus-Review 56 (22 October 2026)
 
 Review `rltp/design/port-experimente-e15-opus-review56-2026-10-22.md` ("trägt mit Bedingungen", no blocker). **S1**: the
