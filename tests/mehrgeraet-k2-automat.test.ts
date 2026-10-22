@@ -1484,3 +1484,23 @@ describe('Opus-Review 58: MV-38, the author of every op is op.id.writer', () => 
     expect(M.act(Ax.state, act).ownCard).toBeNull()
   }, 300_000)
 })
+
+// ── Opus-Review 59 (rltp/design/port-experimente-e15-opus-review59-2026-10-22.md) ──
+
+describe('Opus-Review 59 H1: the own pool belongs to the author (MV-38)', () => {
+  it('R59-H1. A device\'s own pool is keyed by its author without a `device` field; a `pool` op naming its own author is refused over the signed path', async () => {
+    const s = await world({ a2: true })
+    // The own pool exists, keyed by the author's device name, and no `pool` op of A2 in its batches names a device.
+    expect((M.own(s.A2!.state.pools, 'A2') ?? []).length).toBeGreaterThan(0)
+    const a2 = s.A2! as unknown as { guarded(f: () => Promise<void>): Promise<boolean>; pending: { ops: M.Op[] } | null; commit(): void }
+    await a2.guarded(async () => {
+      a2.pending!.ops.push({ id: { writer: s.A2!.cand.writer, n: 9_999 }, at: s.w.clock.now(), kind: 'pool', device: 'A2', keys: [{ i: 999, for: 'A1', anchor: 'forged', keyAgreement: 'forged' }] } as unknown as M.Op)
+      a2.pending!.ops.push({ id: { writer: s.A2!.cand.writer, n: 10_000 }, at: s.w.clock.now(), kind: 'finding', text: 'pool-marker' } as unknown as M.Op)
+    })
+    a2.commit()
+    await s.round(2)
+    expect(s.A1.dispositions.some((d) => d.includes('pool names its author'))).toBe(true)
+    expect(s.A1.state.findings.includes('pool-marker')).toBe(false)
+    expect((M.own(s.A1.state.pools, 'A2') ?? []).some((k) => k.i === 999)).toBe(false)
+  }, 240_000)
+})

@@ -183,11 +183,20 @@ of the batch** (to go into the core draft and the contract).
   act has no `by` field, and `known` is no op field either (it would carry acceptance knowledge into the fold).
 - **Role rules from the author (R58-H1).** At the input (`roleProblem`, with the receiver's state; the batch's deps bring
   the allocation first): `produce` only by the allocating device (not in the counter-run without the producer rule), `ticket-accept` and
-  `ticket-refuse-budget` only by the key's allocator (`batch:role-mismatch`). `withdraw` and `retire` stay person-level (a class
-  off withdraws the person's keys on every device, 8475.S6; a role rule there changed X16's measures and was not taken).
-- **`device-set.local` decides nothing.** It names the members' devices for display and measurement only.
+  `ticket-refuse-budget` only by the key's allocator (`batch:role-mismatch`). `withdraw` stays person-level: a class off
+  withdraws the person's keys on every device (8475.S6). A rule on `retire` would protect nothing, because a person-level
+  `withdraw` allows the same effect (Opus-Review 59 H3), so neither has a role rule.
+- **`device-set.local` decides nothing about the author of an op** (Opus-Review 59 S2 corrected the first wording). It
+  still decides two things that belong to device revocation (R4/K4, a later step): which anchors are revoked when a device
+  is revoked (`revokeInSets`) and which sibling still owes or already has its admission (`admitSiblings`). A device that
+  opens a relationship's root can record its own anchor under another name or not at all, and a later revocation of
+  exactly that device then misses the anchor (read in the code, not demonstrated). Fix direction for later: anchor → device
+  from `pool` (keyed by its author) and `pool-use`.
 - **Fields that rightly name another device or party stay** (they name a subject, not the author, and nothing derives a
-  right from them): `pool.device`/`pool-use.device` (the sibling whose pool key is assigned), `device-set.rev.signer` (the
+  right from them): `pool.device` only in the enrolment ceremony (the old device writes the new device's pool) and
+  `pool-use.device` (the sibling whose pool key is assigned). The own pool names no device: `refillPools` writes
+  `pool {keys}`, the fold keys it by the author, and a `pool` op naming its own author is refused (Opus-Review 59 H1, test
+  R59-H1); `device-set.rev.signer` (the
   signer of a received set revision), `deps` (heads of other writers), `stock-revision.writer`/`view.writer` (the
   counterpart's writer whose revision M folds, bound to that document's signer).
 - **Wire form.** K2's journal ops changed (no `by` in allocated keys and acts, no `writer`/`inc` in `revision`); K0 and
@@ -200,11 +209,37 @@ of the batch** (to go into the core draft and the contract).
   bypasses the fold rule through the act's effect. Evidence of the input: R57-B1; of the cases: R57-B1b.
 - **Measurement.** X17 compared A's writer keys with M's view by the old `<tag>.<inc>` key; it now translates the
   device's own counter (keyed by its author incarnation) into M's name for it (signer id of the head key, `incTag`).
-  Without that, X17's `writersAcceptedByM` read 0 and the cell flipped; the behaviour did not change.
+  Without that, X17's `writersAcceptedByM` read 0 and the cell flipped; the behaviour did not change. The measurement is
+  narrower than before (Opus-Review 59 H3): it reads each device's own counter, translated to the current head key's name,
+  no longer the union of every writer entry on every A device (a diverging counter A1 knows of A2 would no longer show).
+  Its success condition and its values are unchanged.
 - **Verify (88a0c6a).** Typecheck green; full suite (`vitest run`, 43 files): 709 passed + 1 expected fail (D1) + 2 skipped
   in ≈ 15 min; cell dump against main 0a4061c: K0, K1a, K1a at the service byte-identical; K2 both variants 17/2/1, no cell
   changed; against the dump after review 57 only sizes changed (X8 state copy −44 B, X11 and X21 journal −206 B: the K2
   ops carry no author fields); `SEEDS=all` 40/40 in ≈ 14 min.
+
+### Known limit: effect authorship with three or more devices (Opus-Review 59 S1, issue #86)
+
+MV-38 fixes *who wrote* an op. State that comes into being through the *first* op with a given effect identity takes the
+author of the op folded first: the issuer of an act (the `introduce` effect, read by the `ticket-ack@1` rule) and the
+allocating device of a stock key (`by` of the first `allocate`, read by the input role rules). The reviewer's probes
+P59-1/P59-2 show both orders giving different results at fold level. Not reachable with two devices per person: a forger
+copies only after the original is folded at its device, so at the victim the original comes first. Reachable with a third
+device of the person, with a rebuild whose order does not follow creation, or with a batch that leaves out its `deps`
+(payload; the input role check runs before the predecessor check). A role check against a key not known yet gives no
+verdict, and the fold of `produce` has no role rule of its own. The second half of MV-38 (an order-free effect identity, a
+finding when two authors produce it, role rules as fold rules) is issue #86.
+
+### Spec follow-ups after Opus-Review 59
+
+- **H2, forwarded counterpart documents.** M's journal op `stock-revision` carries the counterpart's revision payload,
+  not its document proof; only the receiving device checks the signer at the input (`revisionFormProblem`). An M sister
+  can therefore invent a revision under A's writer (`classOff`, `bury`, `rev` at the limit), and M1 folds it. This is not
+  a MV-38 question (the revision's author is A, not the sister) but trust among siblings. For the contract: a naming of a
+  third party in the journal is data whose authenticity rests on the forwarding device, unless the signed document travels
+  with it.
+- MV-38 second half (issue #86); `device-set.local` as display only, revocation targets from the authenticated
+  anchor → device assignment (R4/K4).
 
 ### After Opus-Review 57 (22 October 2026)
 

@@ -1320,7 +1320,7 @@ export class HolderDevice {
   /** Fällige Arbeit (B6): der eigene Vorrat öffentlicher Geräteschlüssel je Schwester, unter zwei unbenutzten auf vier aufgefüllt. */
   private async refillPools(): Promise<void> {
     if (!this.sets || this.catchUp || !this.cand.poolKey) return
-    const mine = M.own(this.state.pools, this.me) ?? []
+    const mine = M.own(this.state.pools, M.authorOf({ id: { writer: this.cand.writer, n: 0 } })) ?? [] // MV-38: keyed by the author
     let next = Math.max(-1, ...mine.map((k) => k.i)) + 1
     const keys: Array<{ i: number; for: string; anchor: string; keyAgreement: string }> = []
     for (const sib of this.cand.siblingNames?.() ?? []) {
@@ -1331,7 +1331,8 @@ export class HolderDevice {
         keys.push({ i: next, for: sib, anchor: k.anchor, keyAgreement: k.rkid })
       }
     }
-    if (keys.length) await this.guarded(async () => void this.emit({ kind: 'pool', device: this.me, keys }))
+    // MV-38: the own pool's device is the author, not a payload field.
+    if (keys.length) await this.guarded(async () => void this.emit({ kind: 'pool', keys }))
   }
   /**
    * Die eigene Menge jeder eigenen Wurzel veröffentlichen (fällige Arbeit, B6): ein Gerät sendet eine Revision (kumulativ:

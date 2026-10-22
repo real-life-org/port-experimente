@@ -313,6 +313,8 @@ export class K2Device extends K1aDevice {
     for (const op of b.ops) {
       if (op.id.writer !== b.writer) return `op ${op.kind} claims writer ${op.id.writer}`
       if (op.kind === 'revision' && (op.writer !== undefined || op.inc !== undefined)) return 'revision names an author in its payload (MV-38)'
+      // Opus-Review 59 H1: a `pool` op names a device only for another device's pool (the enrolment ceremony).
+      if (op.kind === 'pool' && op.device === b.writer.split('@')[0]) return 'pool names its author in its payload (MV-38)'
     }
     return null
   }

@@ -455,7 +455,7 @@ export type Op = { id: OpId; at: string } & (
   | { kind: 'consent'; act: string; card: Card | null; cardKey: string | null } // 8325.A4; K2 Schritt 2: ohne Karte auf einem Gerät, das den Vorrats-Schlüssel nicht zugeteilt hat (E2 (iv))
   | { kind: 'produce'; act: string; card: Card; cardKey: string; v: string } // K2 Schritt 2: das zuteilende Gerät erzeugt die eine Karte (8727, E2 (iv))
   | { kind: 'device-set'; root: string; rootKeyAgreement: string; certs: SetCert[]; local?: Record<string, string>; rev?: { signer: string; n: number; digest: string | null; covered?: string[] }; seen?: string; deps?: string[] } // K2 Schritt 2: device-set@1; `deps` die signierten Vorgänger einer empfangenen Revision (Review 33 B2)
-  | { kind: 'pool'; device: string; keys: Array<{ i: number; for: string; anchor: Anchor; keyAgreement: string }> } // K2 Schritt 2
+  | { kind: 'pool'; device?: string; keys: Array<{ i: number; for: string; anchor: Anchor; keyAgreement: string }> } // K2 Schritt 2; MV-38 (Opus-Review 59 H1): `device` only for another device's pool (enrolment), the own pool's device is the author
   | { kind: 'pool-use'; device: string; i: number; root: string; ctx: string } // K2 Schritt 2: Schlüssel `i` des Vorrats von `device` ist dessen Schlüssel für den Kontext `ctx` der Wurzel `root`
   | { kind: 'decline'; act: string } // 8325.A3
   | { kind: 'hand-over'; act: string; o: HandOver; digest?: string } // 8326
@@ -666,7 +666,7 @@ const OP_FIELDS: { [K in Op['kind']]: { [field: string]: Shape } } = {
   consent: { act: id, card: { nullable: SHAPES.card }, cardKey: { nullable: id } },
   produce: { act: id, card: SHAPES.card, cardKey: id, v: str },
   'device-set': { root: id, rootKeyAgreement: id, certs: { array: SHAPES.cert }, local: { optional: { record: id } }, rev: { optional: { object: { signer: 'tag', n: 'nat', digest: { nullable: 'digest' }, covered: { optional: { array: str } } } } }, seen: { optional: 'digest' }, deps: { optional: { array: 'digest' } } },
-  pool: { device: id, keys: { array: { object: { i: 'nat', for: id, anchor: id, keyAgreement: id } } } },
+  pool: { device: { optional: id }, keys: { array: { object: { i: 'nat', for: id, anchor: id, keyAgreement: id } } } },
   'pool-use': { device: id, i: 'nat', root: id, ctx: id },
   decline: { act: id },
   'hand-over': { act: id, o: handOver, digest: { optional: 'digest' } },
@@ -1510,10 +1510,11 @@ function applyBody(s: HolderState, op: Op): void {
     }
     case 'pool': {
       const pools = tableOf(s.pools)
-      const held = [...(own(pools, op.device) ?? [])]
+      const device = op.device ?? authorOf(op) // MV-38: the own pool belongs to the op's author
+      const held = [...(own(pools, device) ?? [])]
       for (const k of op.keys) if (!held.some((x) => x.i === k.i)) held.push({ ...k, used: null })
       held.sort((x, y) => x.i - y.i)
-      put(pools, op.device, held)
+      put(pools, device, held)
       s.pools = pools
       return
     }
