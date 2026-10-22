@@ -243,11 +243,19 @@ finding when two authors produce it, role rules as fold rules) is issue #86.
 
 Verify after Opus-Review 59 (69bf1dd): typecheck green; `mehrgeraet-k2-automat`, `-buch`, `-k2-zuteilung` 213 + 1 expected
 fail (D1); `mehrgeraet-k2`, `-k0`, `-k1a`, `-k1a-dienst`, `-seeds` (standard) 138/138; cell dump against main 0a4061c: K0,
-K1a, K1a at the service byte-identical, K2 both variants 17/2/1, no cell changed. Against eec72ca the K2 details moved
-in X11, X12, X14, X17 and X21 (rounds to converge ±1, the forced branch of X21, journal sizes): the same classes as before.
-Three variants of the H1 change (with or without the `device` field, the own pool read by author or by `me`) each
-moved them differently, and none trips the new parser rule in an honest run (checked on X12 and X21). I did not trace which
-bench path is sensitive to the exact op form. `SEEDS=all` 40/40 in ≈ 13 min.
+K1a, K1a at the service byte-identical, K2 both variants 17/2/1, no cell changed. `SEEDS=all` 40/40 in ≈ 13 min.
+
+**The detail shift of 69bf1dd, traced (bench rule: no change of course without a known cause).** On 69bf1dd the K2
+details moved against eec72ca in X11, X12, X14, X17 and X21 (rounds ±1, the forced branch of X21, journal sizes). A trace
+of every emitted op, every deposit and every draw of the seeded randomness over the whole K2 run, on both trees, gives the
+first divergence in X9: the thief (`welt.steal`, the stolen image of A2 run under the name `A2-dieb`) refilled a pool of
+its own. `refillPools` read the own pool by the author name, the thief's author name is not the stolen device's, so it
+found no pool and derived four new pool keys. That drew randomness, and the bench's seeded randomness runs on across the
+scenarios of one candidate (reset per candidate, not per scenario). Every later scenario therefore ran on other random
+values; the X11–X21 shifts are that, not a rule change in an honest run. Fix (fda… below): `refillPools` reads the own
+pool by `me` again. For every member of the set `me` is the author, so the MV-38 keying of the fold holds; a copy outside
+the set keeps its old behaviour. After the fix the dump differs from eec72ca only in sizes (X11 and X21 journal −14 B, the
+dropped `device` field), every round count, branch and detail of course is identical.
 
 ### After Opus-Review 57 (22 October 2026)
 

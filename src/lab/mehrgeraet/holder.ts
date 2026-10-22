@@ -1320,7 +1320,10 @@ export class HolderDevice {
   /** Fällige Arbeit (B6): der eigene Vorrat öffentlicher Geräteschlüssel je Schwester, unter zwei unbenutzten auf vier aufgefüllt. */
   private async refillPools(): Promise<void> {
     if (!this.sets || this.catchUp || !this.cand.poolKey) return
-    const mine = M.own(this.state.pools, M.authorOf({ id: { writer: this.cand.writer, n: 0 } })) ?? [] // MV-38: keyed by the author
+    // The own pool of this device (`me`): for every member of the set `me` is the author of its ops (MV-38: the fold keys the
+    // own pool by the author). Only a copy outside the set (`welt.steal`: a thief runs a stolen image under another name)
+    // differs; it keeps reading the stolen device's pool as before and adds no pool of its own (no change of its behaviour).
+    const mine = M.own(this.state.pools, this.me) ?? []
     let next = Math.max(-1, ...mine.map((k) => k.i)) + 1
     const keys: Array<{ i: number; for: string; anchor: string; keyAgreement: string }> = []
     for (const sib of this.cand.siblingNames?.() ?? []) {
