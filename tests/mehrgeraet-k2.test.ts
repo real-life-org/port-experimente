@@ -800,15 +800,17 @@ describe('K2 Schritt 2: Karte (E1 (a), E2 (iv), E3 (a))', () => {
   }, 90_000)
 
   it('C8. Dieb gewinnt zuerst (E1 (a)): der Dieb mit A2s Abbild erzeugt die Karte (strict, A2s Schlüssel), B bindet sie; der Widerruf heilt diese Beziehung nicht (benannter Preis)', async () => {
-    const s = await world(k2()) // one mediator device (step 2a fixture) names every key
+    // Bench rule 6m (every cell in every branch): the branch "A2 allocated the named stock key" is forced. M's choice is the
+    // canonically smallest anchor among A1's and A2's listed keys (random keys, about one in two for A2). Declining and
+    // introducing again in the same world spends the acceptance quota of B (MV-9: budget 10 over 2 slots, 5 per device; every
+    // ticket counts, declined or not): after five A1 picks in a row B lists no key and M refuses ("kein benennbarer
+    // Schlüssel"), flaky. A fresh world per attempt spends nothing; the first introduction there is the act under test.
+    let s = await world(k2()) // one mediator device (step 2a fixture) names every key
     let act = ''
-    for (let i = 0; i < 6 && !act; i++) {
+    for (let i = 0; i < 24 && !act; i++) {
+      if (i) s = await world(k2())
       const x = await introduced(s)
       if (allocatorOf(s.A, x) === 'A2') act = x
-      else {
-        await s.A.decline(x)
-        await s.w.rounds(1)
-      }
     }
     expect(act).not.toBe('')
     const thief = rogue(await s.w.steal(s.A2, 'A2-dieb'))
