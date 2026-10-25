@@ -186,17 +186,19 @@ of the batch** (to go into the core draft and the contract).
   `ticket-refuse-budget` only by the key's allocator (`batch:role-mismatch`). `withdraw` stays person-level: a class off
   withdraws the person's keys on every device (8475.S6). A rule on `retire` would protect nothing, because a person-level
   `withdraw` allows the same effect (Opus-Review 59 H3), so neither has a role rule.
-- **`device-set.local` decides nothing about the author of an op** (Opus-Review 59 S2 corrected the first wording). It
+- **`device-set.local` decides nothing about the author of an op.** It
   still decides two things that belong to device revocation (R4/K4, a later step): which anchors are revoked when a device
   is revoked (`revokeInSets`) and which sibling still owes or already has its admission (`admitSiblings`). A device that
   opens a relationship's root can record its own anchor under another name or not at all, and a later revocation of
   exactly that device then misses the anchor (read in the code, not demonstrated). Fix direction for later: anchor → device
   from `pool` (keyed by its author) and `pool-use`.
-- **Fields that rightly name another device or party stay** (they name a subject, not the author, and nothing derives a
-  right from them): `pool.device` only in the enrolment ceremony (the old device writes the new device's pool) and
-  `pool-use.device` (the sibling whose pool key is assigned). The own pool names no device: `refillPools` writes
-  `pool {keys}`, the fold keys it by the author, and a `pool` op naming its own author is refused (Opus-Review 59 H1, test
-  R59-H1); `device-set.rev.signer` (the
+- **Fields that name another device or party stay** (they name a subject, not the author): `pool-use.device` (the
+  sibling whose pool key is assigned) and `pool.device`, written by the enrolling device for the new device's pool. The
+  own pool names no device: `refillPools` writes `pool {keys}`, the fold keys it by the author, and a `pool` op naming its
+  own author is refused (test R59-H1). `pool.device` is not bound to the ceremony and does derive a right: foreign pool
+  entries are accepted from any sibling at any time, the fold files them under the named device (per index the first
+  entry wins), and `admitSiblings` certifies an anchor from that pool into a device set (known limit below, tracked in
+  issue #87); `device-set.rev.signer` (the
   signer of a received set revision), `deps` (heads of other writers), `stock-revision.writer`/`view.writer` (the
   counterpart's writer whose revision M folds, bound to that document's signer).
 - **Wire form.** K2's journal ops changed (no `by` in allocated keys and acts, no `writer`/`inc` in `revision`); K0 and
@@ -230,6 +232,26 @@ device of the person, with a rebuild whose order does not follow creation, or wi
 verdict, and the fold of `produce` has no role rule of its own. The second half of MV-38 (an order-free effect identity, a
 finding when two authors produce it, role rules as fold rules) is issue #86.
 
+### Known limit: foreign pool entries are accepted (Opus-Review 60 S1, issue #87)
+
+Foreign pool entries are accepted; tracked in issue #87. `writerProblem` refuses only a `pool` op that names its own
+author; `pool {device: X}` from any sibling for any third device X is accepted outside the enrolment ceremony. The fold
+files it under X, per index the first entry folded wins, and `admitSiblings` certifies an anchor from `pools[X]`. The
+reviewer's probe P60 (`k2({devices: 3})`: M2 writes `pool {device: 'M3', keys: [{i: 500, for: 'M1', anchor:
+'forged-anchor'}]}`) gives no finding; index 500 with the forged anchor stands in M3's pool at M1 and at M3. That M1
+later certifies it is read in the code, not demonstrated. Reachable only with three or more devices of a person. Fix
+direction: a foreign pool only with a proof of the named device (signed by the new device in the ceremony, carried in the
+op), and a conflict per index as a finding instead of "the first wins".
+
+### After Opus-Review 60 and the loop review (25 October 2026)
+
+No blocker. **S1** (also the loop review's should-fix): the sentence on `pool.device` claimed a binding to the ceremony
+that the code does not have; corrected above, P60 named as a known limit and tracked in issue #87 (the fix needs a proof
+of the named device, not a parser check: a sibling legitimately writes another device's pool in the ceremony). **H3**:
+the +16 B of X21 added, history removed from the rule paragraphs. H1 (a thief whose refill comes due writes pool keys under
+its own author name; no fixed test) and H2 (R59-H1 does not itself pin the keying by author) stay open as notes; NOTES
+only, no code change.
+
 ### Spec follow-ups after Opus-Review 59
 
 - **H2, forwarded counterpart documents.** M's journal op `stock-revision` carries the counterpart's revision payload,
@@ -238,7 +260,11 @@ finding when two authors produce it, role rules as fold rules) is issue #86.
   a MV-38 question (the revision's author is A, not the sister) but trust among siblings. For the contract: a naming of a
   third party in the journal is data whose authenticity rests on the forwarding device, unless the signed document travels
   with it.
-- MV-38 second half (issue #86); `device-set.local` as display only, revocation targets from the authenticated
+- MV-38 second half (issue #86); foreign `pool` only with a proof of the named device (issue #87). Opus-Review 60 asks
+  for one contract rule instead of field by field: a foreign mention decides only when it carries a proof of the named
+  device (signed pool from the ceremony, signed counterpart document), otherwise it is display. It would cover #87, H2
+  above and `device-set.local`.
+- `device-set.local` as display only, revocation targets from the authenticated
   anchor → device assignment (R4/K4).
 
 Verify after Opus-Review 59 (69bf1dd): typecheck green; `mehrgeraet-k2-automat`, `-buch`, `-k2-zuteilung` 213 + 1 expected
@@ -255,7 +281,7 @@ scenarios of one candidate (reset per candidate, not per scenario). Every later 
 values; the X11–X21 shifts are that, not a rule change in an honest run. Fix (b3ea652): `refillPools` reads the own
 pool by `me` again. For every member of the set `me` is the author, so the MV-38 keying of the fold holds; a copy outside
 the set keeps its old behaviour. After the fix the dump differs from eec72ca only in sizes (X11 and X21 journal −14 B, the
-dropped `device` field), every round count, branch and detail of course is identical.
+dropped `device` field; X21 K2 self address +16 B, 6 553 906 → 6 553 922 B), every round count and branch is identical.
 
 ### After Opus-Review 57 (22 October 2026)
 
