@@ -21,7 +21,7 @@
 
 import { createHmac, createPrivateKey, createPublicKey, randomBytes, sign, verify, type KeyObject } from 'node:crypto'
 import { edFromSeed, xFromSeed, anchorOfEd, mkOfX } from '@real-life/trust-protocol'
-import { derive, EnrolmentRefused, UnknownWriter, type CandidateDevice, type EnrolOptions, type HolderDevice, type KeyScheme, type Keys, type MultiDeviceCandidate } from '../../lab/mehrgeraet/holder'
+import { derive, EnrolmentRefused, TYPES, UnknownWriter, type CandidateDevice, type EnrolOptions, type HolderDevice, type KeyScheme, type Keys, type MultiDeviceCandidate } from '../../lab/mehrgeraet/holder'
 import * as M from '../../lab/mehrgeraet/model'
 import { batchProblem, K1aDevice, MalformedBatch, type Batch } from '../mehrgeraet-k1a'
 
@@ -48,6 +48,12 @@ export interface K2Options {
   producerRule?: boolean
   /** X23: lifetime of new stock keys (default 8465, 180 days). */
   stockLifetimeMs?: number
+  /**
+   * Step 2b.2 (core draft 4 §5, E4): the K2 capability of the issuance automaton: two facts per side with `ticket-ack@1`,
+   * resumption as due work, the act-end stop at 8110.5 in three places, `TB` in release and resumption, 8232.1 for
+   * tickets, the restart from the last commit. Default on for K2; `false` = the 2b.1 path (counter-run). K0/K1a never.
+   */
+  automaton?: boolean
 }
 
 /** Keys of one device for every context, derived from the device secret (step 1); the self key and the journal key come from here. */
@@ -136,6 +142,25 @@ export class DeviceDirectory {
   }
 }
 
+/**
+ * Step 2b.2 (draft 2 §2.3, MV-24, MV-30): the composition of an issuance batch, checked by the parser before the fold. A
+ * batch with an `introduce` holds exactly one, and exactly two ticket intents of that act, one per side; a ticket intent
+ * outside an issuance batch, or of another act, is a form error. `null` = fine.
+ */
+export function issuanceProblem(b: { ops: M.Op[]; intents: Array<{ kind: string; act?: string; side?: string; address?: string }> }): string | null {
+  const intro = b.ops.filter((op) => op.kind === 'introduce')
+  const tickets = b.intents.filter((i) => i.kind === TYPES.ticket)
+  if (!intro.length) return tickets.length ? 'batch.intents(ticket without introduce)' : null
+  if (intro.length > 1) return 'batch.ops(more than one introduce)'
+  const act = (intro[0] as M.Op & { kind: 'introduce' }).act.id
+  if (tickets.length !== 2) return `batch.intents(${tickets.length} tickets, MV-30 wants 2)`
+  if (tickets.some((t) => t.act !== act)) return 'batch.intents(ticket of another act)'
+  if (new Set(tickets.map((t) => t.side)).size !== 2 || tickets.some((t) => t.side !== 'a' && t.side !== 'b')) return 'batch.intents(ticket sides)'
+  // Opus-Review 54 S9: each ticket goes to the key agreement of the key it names. The issuer is the batch's author (MV-38).
+  const named = (intro[0] as M.Op & { kind: 'introduce' }).act
+  if (tickets.some((t) => t.address !== named[t.side as 'a' | 'b'].keyAgreement)) return 'batch.intents(ticket address is not the named key)'
+  return null
+}
 export class K2Device extends K1aDevice {
   /** The device secret: the root of every key of this device; part of the image (`persist`), never shared. */
   private secret: Uint8Array
@@ -160,8 +185,10 @@ export class K2Device extends K1aDevice {
     readonly producerRule = true,
     readonly revocationToCounterparts = true,
     readonly stockLifetimeMs?: number,
+    readonly issuanceAutomaton = true,
   ) {
     super(person, name, new Uint8Array(32), index, slots, budget, false, false) // no writer tags, no number classes
+    this.keepOnRestart = issuanceAutomaton
     this.owner = name
     this.secret = secret
     this.member = dir.member(name, secret)
@@ -249,7 +276,9 @@ export class K2Device extends K1aDevice {
    */
   override authorize(op: M.Op, state: M.HolderState): boolean {
     if (op.kind === 'ticket-accept') return true
-    if (op.kind === 'introduce') return [op.act.a, op.act.b].every((x) => M.usableView(state, x.rel, op.at, this.mineIn(state, x.rel)).listed.some((k) => k.anchor === x.key))
+    // Opus-Review 54 B3 (E1 of review 1): under the automaton the right is checked on the same conditions as the choice, in
+    // the same state (usable by 8470, not consumed); the 2b.1 path keeps `listed`.
+    if (op.kind === 'introduce') return [op.act.a, op.act.b].every((x) => M.usableView(state, x.rel, op.at, this.mineIn(state, x.rel))[this.issuanceAutomaton ? 'unconsumed' : 'listed'].some((k) => k.anchor === x.key))
     return super.authorize(op, state)
   }
   /** Step 2b.1: this device's anchors in a relationship (one per tuple context it derived). */
@@ -272,7 +301,46 @@ export class K2Device extends K1aDevice {
    * `journal:unknown-writer`, never state, no receipt). Then the assignments of the batch are learnt and K1a's shape and
    * order checks run on the batch without `sig`.
    */
-  override receiveOwnFrame(body: Uint8Array) {
+  /**
+   * The writer binding of a signed journal batch (loop review on 60a6674): every op id, every intent (`writer`, `device`),
+   * every allocated stock key (`by`) and the issuer of an act (`by`) name the authenticated signer of the batch. One place,
+   * the parser, before anything is learnt or folded. `null` = bound.
+   */
+  writerProblem(b: { writer: string; ops: M.Op[] }): string | null {
+    // MV-38 (Anton, 22.10., Opus-Review 58): the author of every op is `op.id.writer`, and it is the authenticated signer of
+    // the batch; no op names its author in its payload (the K2 `revision` op carries no `writer`/`inc`). Everything the
+    // fold keys by device (own revision counters, `by` of stock keys, the issuer of an act) it takes from `op.id.writer`.
+    for (const op of b.ops) {
+      if (op.id.writer !== b.writer) return `op ${op.kind} claims writer ${op.id.writer}`
+      if (op.kind === 'revision' && (op.writer !== undefined || op.inc !== undefined)) return 'revision names an author in its payload (MV-38)'
+      // Opus-Review 59 H1: a `pool` op names a device only for another device's pool (the enrolment ceremony).
+      if (op.kind === 'pool' && op.device === b.writer.split('@')[0]) return 'pool names its author in its payload (MV-38)'
+    }
+    return null
+  }
+  /**
+   * MV-38, role rules (Opus-Review 58 H1): ops only the device a stock key belongs to may write. `produce` (E2 (iv): the
+   * allocating device produces the one card; not under the counter-run without the producer rule), `ticket-accept` and
+   * `ticket-refuse-budget` (only the allocator holds the private part and accepts). The owner is the `by` of the key in
+   * this device's state, itself the author of the `allocate` op; a key not known yet gives no verdict (the batch's deps
+   * bring the allocation first).
+   */
+  roleProblem(b: { writer: string; ops: M.Op[] }, state?: M.HolderState): string | null {
+    if (!state) return null
+    const device = b.writer.split('@')[0]!
+    const owner = (rel: string, anchor: string) => M.findRel(state, rel)?.stock.find((k) => k.anchor === anchor)?.by
+    for (const op of b.ops) {
+      let by: string | undefined
+      if (op.kind === 'produce' && this.producerRule) {
+        const a = state.acts.find((x) => x.id === op.act)
+        by = a ? owner(a.mediator, a.own) : undefined
+      } else if (op.kind === 'ticket-accept') by = owner(op.act.mediator, op.act.own)
+      else if (op.kind === 'ticket-refuse-budget') by = owner(op.rel, op.own)
+      if (by !== undefined && by !== device) return `${op.kind} by ${device} on a key of ${by}`
+    }
+    return null
+  }
+  override receiveOwnFrame(body: Uint8Array, state?: M.HolderState) {
     const raw: unknown = JSON.parse(dec.decode(body))
     if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw new MalformedBatch('batch')
     const { sig, ...rest } = raw as SignedBatch
@@ -283,6 +351,18 @@ export class K2Device extends K1aDevice {
     const pub = this.dir.journalPub(this.person, device)
     if (!pub) throw new UnknownWriter(`writer ${rest.writer} is not in the device set of ${this.person}`)
     if (!verify(null, signedBytes(rest), pub, Buffer.from(sig, 'base64'))) throw new UnknownWriter(`batch ${rest.writer}#${rest.n} not signed by ${device}`)
+    // MV-38 (loop review on 60a6674, Opus-Review 58): the signature authenticates `rest.writer`, every op's author is that
+    // writer, and no op names an author in its payload. Otherwise the whole batch is a form error, nothing of it is folded.
+    const mismatch = this.writerProblem(rest)
+    if (mismatch) throw new MalformedBatch(`batch:writer-mismatch: ${mismatch}`)
+    const role = this.roleProblem(rest, state)
+    if (role) throw new MalformedBatch(`batch:role-mismatch: ${role}`)
+    // MV-38: an intent's device and writer are the batch's author, not what the payload says.
+    rest.intents = rest.intents.map((i) => ({ ...i, device, writer: rest.writer }))
+    if (this.issuanceAutomaton) {
+      const bad = issuanceProblem(rest)
+      if (bad) throw new MalformedBatch(bad)
+    }
     this.learn({ ...rest, sig })
     return super.receiveOwnFrame(enc.encode(JSON.stringify(rest)))
   }
@@ -293,8 +373,8 @@ export class K2Device extends K1aDevice {
   override persist() {
     return { ...super.persist(), secret: Buffer.from(this.secret).toString('base64'), owner: this.owner }
   }
-  override restore(data: unknown): void {
-    super.restore(data)
+  override restore(data: unknown, opts?: { fresh?: boolean }): void {
+    super.restore(data, opts)
     const d = data as { secret?: string; owner?: string } | null
     if (!d?.secret) return
     this.secret = new Uint8Array(Buffer.from(d.secret, 'base64'))
@@ -322,7 +402,8 @@ export function k2(opts: K2Options = {}): K2Candidate {
   const devices = new Map<string, K2Device[]>()
   const ceremonies: K2Candidate['ceremonies'] = []
   const secret = () => new Uint8Array(randomBytes(32))
-  const make = (person: string, name: string, index: number) => new K2Device(person, name, secret(), index, slots, budget, dir, producer, counterparts, opts.stockLifetimeMs)
+  const automaton = opts.automaton ?? true
+  const make = (person: string, name: string, index: number) => new K2Device(person, name, secret(), index, slots, budget, dir, producer, counterparts, opts.stockLifetimeMs, automaton)
   const id = single.includes('M') ? 'k2-device-keys' : 'k2-device-keys-distributed-m'
   const size = (x: unknown) => Buffer.byteLength(JSON.stringify(x), 'utf8')
   return {

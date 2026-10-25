@@ -1,4 +1,4 @@
-# K2: device keys (step 1), device sets and one card per act (step 2a), outcome ledger (step 2b.0), allocation by A (step 2b.1)
+# K2: device keys (step 1), device sets and one card per act (step 2a), outcome ledger (step 2b.0), allocation by A (step 2b.1), issuance automaton (step 2b.2)
 
 Plan E15, sections 6o.4, 6r, 6s and 6t (`rltp/design/port-experimente-e15-mehrgeraet-plan-2026-10-17.md`).
 Candidate `k2-device-keys` (K2-strict, M as single-writer fixture) in
@@ -6,11 +6,365 @@ Candidate `k2-device-keys` (K2-strict, M as single-writer fixture) in
 split); tests `tests/mehrgeraet-k2.test.ts`; measurements
 `src/lab/mehrgeraet/geraetemengen.ts`. K2 reuses K1a's journal, holder and
 model (`src/lab/mehrgeraet/{holder,model,welt}.ts`,
-`src/candidates/mehrgeraet-k1a`). Step 2b.1 (allocation per M device
-by A) comes first, then step 2b.0 (the measuring instrument for 2b),
+`src/candidates/mehrgeraet-k1a`). Step 2b.2 (issuance automaton) comes first, then step 2b.1 (allocation per M device
+by A), then step 2b.0 (the measuring instrument for 2b),
 then step 2a; the step-2
 sections follow where they still hold (with the parts 2a removed marked),
 then step 1.
+
+## Step 2b.2 (21 October 2026): issuance automaton, act-end stop, restart from the last commit
+
+Design: `rltp/design/port-experimente-e15-k2-schritt-2b-kern-entwurf-4-2026-10-21.md` (core draft 4, Fassung 4) §1
+(incl. 1.3, 1.4), §5, §6 "2b.2"; draft 3 §1.1, §1.2, §7.3; draft 2 §2.1–2.6. Acceptance sheet with every expected value,
+derived before the build, and the decisions taken before it: `ABNAHME-2b2.md` (this directory). Tests:
+`tests/mehrgeraet-k2-automat.test.ts` (57 tests: K1–K10 with K5c, the six act-end tests × three boundaries with
+controls, N1–N5, R1, R4, B13 (i)/(ii), F1).
+
+**K2 capability.** `CandidateDevice.issuanceAutomaton` (candidate option; `k2({ automaton })`, default on for K2,
+`false` = the 2b.1 path; K0 and K1a never set it and run the old path in every function touched below). Every new rule
+below is behind it except three that are neutral for K0/K1a and measured so: the restore marker of the store, the
+ticket log (a measurement like `cardLog`) and the code-unit order of the key choice (decision 16; K0/K1a cells, details
+and measures stay byte-identical, below).
+
+**Two facts per side (draft 3 §1.1).** Acceptance knowledge: a receipt for an own ticket is journaled as
+`ticket-ack@1 { act, side, receiptDigest }` (op `ticket-ack`, MV-24 shape in `OP_FIELDS`), written only by the issuer in
+`onAck`, folded by its siblings into `MediatorAct.known`; a late receipt still counts. Evidence: `M.evidence` as in 2b.1.
+Ticket intents carry `act` and `side` (`Intent`, `INTENT_FIELDS`).
+
+**One batch (draft 2 §2.3).** `introduce` aborts the whole step if a ticket is not produced (`sendDoc` returns null:
+`InvalidInput`, no issuance); the parser of K2 (`issuanceProblem` in `receiveOwnFrame`) refuses a batch with an
+`introduce` that does not hold exactly two ticket intents of that act, one per side, and a ticket intent without
+`introduce`. The ticket payload has an MV-24 form (`DOC_SHAPES.ticket`).
+
+**Release gate and resumption as due work (5.1, 1.4; decisions 9, 10, 13, 15).** One model function,
+`M.ticketGate(state, act, side, now, otherSubmitted)`, used by the holder's release, its tick and the ledger:
+`accepted` (receipt known: omitted, decision 13, derived), `deadline` (`now > expiresAt − consent-reserve`, equality
+admissible), `departed` (8232.1: the addressee relationship departed, or the other one while the other ticket was not
+submitted), `withdrawn` (withdrawn, buried, burnt, revoked writer; decision 10). The gate runs in `release` itself (the
+release in `round()` precedes the tick, decision 9): `deadline` → `zusteller.expire(·, 'consent-reserve')`, `departed` →
+cancelled (`demarcate`), `withdrawn` → held as due work (`due`, re-released at every flush, rebuilt from the unreleased
+submissions after a restart). An own ticket intent brought by the journal without a submission is resumed (MV-8; never a
+sibling's). Omissions are measured per intent (`HolderDevice.ticketOmissions`).
+
+**Act-end stop (5.2; decision 3).** `Zusteller.expire(digest, reason)`: before the first carrier acceptance `failed`
+with the reason (given up), after it the report stays `accepted` (handed) and only the repetition stops (`stopped`); a
+late receipt makes it `delivered`. The holder's tick (`actEndStop`) calls it for own tickets past `TB` and for tickets at
+the carrier whose key is known `withdrawn` (decision 15), for own cards past 8110.5 (`act-ended`). The side's ticket
+branch accepts until `expiresAt + act-skew` (`TicketReceiver.skew`), 8325.A8 expires `consented` only after 8110.5. A
+released ticket still `awaiting-transport` is not deposited while its gate is closed (`Zusteller.gate`).
+
+**8850.5 sharpened (decision 8; derived from core §1, Anton may veto).** A card to a stock key the side holds neither
+`active` nor `aging` and without an act is refused without ack (`8850.5-not-held`), no buffer branch.
+
+**Restart from the last commit (5.3).** `K1aDevice.restore(data, { fresh })`: with `keepOnRestart` (K2 under the
+capability) a rebuild that is not fresh keeps `inc` and continues `n` from the highest own batch in the committed
+journal. Fresh = the store was given an image (`MemoryStore.restore` sets a marker that holds until the device's next
+commit, `takeRestored`) or `reload({ fresh: true })`. Every image path of the bench (scenario restores, `welt.steal`)
+goes through `MemoryStore.restore`, so it stays fresh with no call site changed. Finding while building: a marker
+cleared at the first rebuild made X21 fail with 5 MV-3 conflicts (A2 restored, crashed before its first commit, the
+restart took the image's own incarnation and rewrote batches #2–#6); held until a commit, X21 is back to 0.
+
+**Crash points (decision 12).** The code names hold: `before-send` (§6 "after-commit" of an issuance), `between-sends`
+(§6 "between-tickets"), the round's `after-commit` (§6 "after acceptance before the receipt").
+
+**Ledger (rule of 2b.1: a mirror, no second projection).** `GateRow` per commit of the issuing device from
+`M.ticketGate` on the committed image; P-Produktion counts per ticket the k-round window over the up rounds in which
+submission was admissible, restarting when a round is not (decision 6, general rule: k = 3 rounds from the first round in
+which submission is admissible; a return to `listed` starts the window again); an issuance with no admissible round
+counts as `down` (decision 2); omissions by the last reason before the deadline (`omitted:rueckzug`, `omitted:abgang`,
+`omitted:accepted`). P-Paar adds the reconstructed-state row: a `declined` image that holds its own card submitted or the
+act opened (MV-15 rule 2) is a violation (`DeclinedRow`); `oneSided` counts one-sided connections (`late-card` from the
+delivery protocol, `other`); `deadTickets` counts dead acts per cause of the failed side, `deadAccepted` apart (decision
+4), from the holders' ticket log and the gate rows.
+
+**Results** (`tests/mehrgeraet-k2-automat.test.ts`, Soll from `ABNAHME-2b2.md`): K1a/K1b, K2, K3, K4, K5a/K5b/K5c,
+K6, K7a/K7b, K8a/K8b/K8c, K9, K10 green with the sheet's values; T1–T6 green at −1 s, 0, +1 s with the controls on the
+old path (T4: 8640.3 at `expiresAt`, T5: 8325.A8 at `expiresAt`) showing why the bounds moved; N1–N5, R1, B13 (i),
+(ii-a) re-sealed → `ack-unbound`, (ii-b) misrouted → `failed(malformed)`, F1 green. Measured only: R4 (`burn`: `xA`
+`withdrawn` at M1, `tA` not resubmitted, 0 acceptances) and the K4 follow-up issuance. Corrections the build found in the
+sheet are listed in its section 7a (K2 also withholds M2's journal at M1; the restore marker holds until a commit).
+`singleDevice` is not used by K1–K10 (two and three M devices).
+
+Mutation U1 of 2b.0 (`suppressTickets`) now lies to the issuance (it reports a ticket it never built): since 2b.2 a
+missing ticket aborts the issuance, so the class "commit without intents" can only be produced by a lying `sendDoc`; the
+counts are unchanged (P-Commit 1, P-Produktion 1).
+
+**Cells.** K0, K1a, K1a at the service: every cell, detail and measure identical to `main` 0a4061c (seeded `runX15`
+dump, compared cell by cell). K2 (`k2-device-keys`, `k2-device-keys-distributed-m`): no cell changed (17/2/1); details
+and measures changed, each explained: X16 (the ticket on the key of the revoked class is no longer accepted: the M devices
+come back online, fold the class-off revision and the release gate holds the ticket as `withdrawn`, so it never reaches the
+carrier; decision 4a's acceptance is information in X16, the cell holds), X21 (the restart keeps the incarnation: fewer
+journal frames and batches, other repair rounds; `forcedBranchDeclines` 2 → 0 by the code-unit key order), X12, X18
+(another allocator is named first, decision 16), X3, X17 (rounds to converge ±1, the act-end and gate timing), X8, X11
+(state copy −1 B, journal +5 B; sizes only, not traced further: other keys named, other ids). `public/matrix.html` not re-generated (no cell changed).
+
+**Spec follow-ups (2b.2).** `ticket-ack@1` as the mediator's acceptance knowledge (MV-24 shape; journaled by the issuer
+only); 8640.3 at 8110.5 (ticket branch), 8325.A8 after 8110.5; `TB` (`expiresAt − consent-reserve`) as the end of ticket
+submission and resumption, equality admissible; 8232.1 for tickets as a gate on unsubmitted parts; resumption omitted on
+known `accepted` (derived, decision 13) and on `withdrawn`/`burned` (draft 3 §1.2); the deliverer stops repeating a
+submitted ticket to a key known `withdrawn` (decision 15); 8850.5 sharpened: a card at a key not held `active`/`aging`
+without an act is refused without ack (derived, core §1, Anton may veto); P-Produktion over admissible rounds (decisions
+2, 6); the restart/image distinction in the bench (marker until the next commit); the bench keeps `consentReserveMs` P1D
+against 8155's P7D (inventory), to be aligned with the profile parameter.
+
+**Verify 2b.2.** `pnpm typecheck` green. Full suite (`vitest run`, 43 files): 673 passed + 1 expected fail (D1) + 2
+skipped in ≈ 19.5 min (22:05–22:24) under load; the one failure of that run, `keyhive-ark` "Basislinie", was the missing
+Subduction server in this worktree (environment), green after copying `.cache/subduction-0.18.0` (≈ 9.5 min alone). The
+four K2 files (`mehrgeraet-k2`, `-k2-zuteilung`, `-buch`, `-k2-automat`) ≈ 17 min. Seed sweep `SEEDS=all` (`mehrgeraet-seeds`): 40/40 in ≈ 34 min (K2-strict with the 17/2/1 table,
+K1a).
+
+### After Opus-Review 54 (22 October 2026)
+
+Review `rltp/design/port-experimente-e15-opus-review54-2026-10-22.md` ("trägt nicht": B1–B3, S1–S9; the automaton holds,
+the instrument did not check it). The reviewer's counter-runs are fixed tests (`Opus-Review 54` blocks of
+`tests/mehrgeraet-k2-automat.test.ts`), written red first.
+
+- **B1, the checkers judge the resumption in both directions.** (i) `ticket-ack@1` is folded only from the issuing device:
+  the issuer sets `MediatorAct.by` (its name) under the automaton, the fold compares the op's writer device; another
+  writer is a finding `ticket-ack:foreign-writer:…`, never state (R54-B1a, the reviewer's PROBE1: M2 forging both acks).
+  (ii) P-Produktion accepts `accepted` as a reason only with a receipt of the expected signer for that ticket at the
+  carrier before the gate row; an omission's reason is the gate that held at its end (the last row before the deadline),
+  not the last reason seen; otherwise the round is admissible, and k of them without a deposit are a violation (PROBE1 is
+  now 1 violation). (iii) P-Aufhebung checks every submission, not only the issuance commit: a deposit of an own ticket
+  while the issuer's committed knowledge at that moment (its last `GateRow`) says `withdrawn`, `departed` or past `TB` is
+  a violation, once per ticket, not again when the issuance itself already is one (R54-B1b, PROBE6: 1 violation
+  mutated, 0 control). The gate rows are the ledger's own computation (`M.ticketGate` on the committed image, the
+  `IssuerImage` principle), not the holder's statement; P-Aufhebung is async now.
+- **B2, the three derived rows.** P-Eigen is a property in `judge` (`pEigen`: a ticket deposit by a deliverer other than
+  the committing device; the carrier frame carries `from`, the depositing device); K1m (M2 resumes M1's intents, test
+  hook on its journal fold): exactly 2 violations, acceptances unchanged; K9m (`DeclinedRow` fires: 1 violation); D8 and
+  its control (decision 8: two `8850.5-not-held` refusals without receipt; old path `buffered`, receipt).
+- **B3, serialization (draft 2 §2.2 no. 1, E1 of review 1).** One serialized step per device: `action`, `introduce`,
+  `round` and `reload` queue on a promise chain (`serial`, `AsyncLocalStorage` so a nested call of the same device runs
+  directly). `authorize(introduce)` under the automaton checks the same conditions as the choice (`unconsumed`: 8470,
+  not consumed), in the same state. Tests R54-B3a (two concurrent issuances on two key pairs, no error), B3b (a third
+  finds none left), B3c (a round concurrent with an issuance). The bench runs sequentially, so no cell order changes.
+- **S1** `ticketGate` never names a submitted ticket `departed` (8232.0: what is out is not cancelled; `selfSubmitted`).
+  **S2** the stop for `withdrawn` is no latch: when the evidence returns (revocation exception) the tick resumes the
+  repetition (`Zusteller.resume`). **S3** `deadline` is checked before `accepted`. **S4** (a) see B1; (b) gate rows
+  exist only at commits: every round and every action commits before it releases, so the row of that commit is the state
+  of the decision (`otherSubmitted` reads the image's submissions, the live one may know one deposit more, never less);
+  (c) without gate rows (K0, K1a, `automaton: false`) P-Produktion is the 2b.0 duty exactly (`open` stays `open`).
+  **S5** sheet corrected: N4 only "≥ 1" is derived (the reviewer's PROBE2: later batches can be byte-equal), N1 asserts
+  `= k + 1`, T4 asserts B too, K1 receipts/cards/`n` and K3's P-Bilanz 4 at A1 asserted. **S6** `deadTickets` reads ticket
+  outcomes from the seam (`HolderObserver.ticket`, `TicketOutcome` in the dump): a loaded dump gives the same counts.
+  **S7** X16 no longer shows decision 4a (the gate holds its ticket); test S7 does: the burial reaches M after the
+  submission, the device that allocated the key accepts. **S8** 8850.5 also for an anchor that is no stock key of the
+  side. **S9** `issuanceProblem` checks `device` = batch writer and the address = the named key; the `null` branch for
+  tickets in `introduce` was unreachable (the fan is the named key) and is removed, mutation U1 is back to its 2b.0 form;
+  `k2({ automaton: false })` is the 2b.1 path except the code-unit key order (decision 16) and the ledger's new rows;
+  8110.7 has its own test (S9: one round, the ticket handled, then A7).
+
+Verify after Opus-Review 54: typecheck green; `mehrgeraet-k2-automat` 68/68; `mehrgeraet-k2`, `-k2-zuteilung`, `-buch`
+173 + R50-B1 after moving P-Eigen into the K2 rows of `judge` (175 with 1 expected fail, D1), ≈ 20 min; `mehrgeraet-k0`,
+`-k1a`, `-k1a-dienst`, `-gegenlauf`, `-modell`, `-engine`, `zustellung`, `zustellung-harness`, `traeger`, `matrix`: 162/162
+(≈ 4 min). Cell dump (seeded `runX15`) against main 0a4061c: K0, K1a, K1a at the service byte-identical; K2 both
+variants no cell changed, details and measures exactly as on c77e09a (the list above). `SEEDS=all`: 40/40 in ≈ 27 min.
+
+### MV-38: author from op.id.writer (22 October 2026, after Opus-Review 58)
+
+Review `rltp/design/port-experimente-e15-opus-review58-2026-10-22.md` ("trägt mit Bedingungen", no blocker) found the
+fourth finding of one class in a row (review 54 B1, loop review B1, review 57 S1, now R58-S1): state that belongs to a
+device was keyed by an identifier in the payload instead of the authenticated origin, and each fix bound one more field;
+the last one leaned on `device-set.local`, itself unbound (A1 omits or forges A2's entry, then its forged revision for
+A2's counter passes). Anton's decision (22.10.): fix it now with one rule, not a fourth field binding. **MV-38: no journal
+op names its author in its payload; the fold takes the author of every op from `op.id.writer`, the authenticated signer
+of the batch** (to go into the core draft and the contract).
+
+- **One rule at the input.** `K2Device.writerProblem` is now only: every op's `op.id.writer` is the batch writer, and no
+  op names an author (`revision` with `writer`/`inc` is refused). Signature check, then this rule, then nothing of a
+  failing batch is folded (`batch:writer-mismatch`). Intents' `device` and `writer` are set from the batch's author when
+  the batch is parsed (they are needed by other readers: resumption, ledger), never read from the payload.
+- **Device-bound state keyed by the author.** Own revision counters (`r.writers`) of the K2 form are keyed by the author
+  incarnation `op.id.writer`; the K2 `revision` op carries no `writer`/`inc` any more (the `stock-revision@2` document to
+  M keeps its `writer`/`inc`, signed by the stock key and checked there against its signer, as before). The allocating
+  device of a stock key (`by`) is the author of the `allocate` op, set by the fold (`by` is no op field). The issuer of an
+  act is the author of its `introduce` op (from the act's effect), and `ticket-ack@1` folds only from that author; the
+  act has no `by` field, and `known` is no op field either (it would carry acceptance knowledge into the fold).
+- **Role rules from the author (R58-H1).** At the input (`roleProblem`, with the receiver's state; the batch's deps bring
+  the allocation first): `produce` only by the allocating device (not in the counter-run without the producer rule), `ticket-accept` and
+  `ticket-refuse-budget` only by the key's allocator (`batch:role-mismatch`). `withdraw` stays person-level: a class off
+  withdraws the person's keys on every device (8475.S6). A rule on `retire` would protect nothing, because a person-level
+  `withdraw` allows the same effect (Opus-Review 59 H3), so neither has a role rule.
+- **`device-set.local` decides nothing about the author of an op.** It
+  still decides two things that belong to device revocation (R4/K4, a later step): which anchors are revoked when a device
+  is revoked (`revokeInSets`) and which sibling still owes or already has its admission (`admitSiblings`). A device that
+  opens a relationship's root can record its own anchor under another name or not at all, and a later revocation of
+  exactly that device then misses the anchor (read in the code, not demonstrated). Fix direction for later: anchor → device
+  from `pool` (keyed by its author) and `pool-use`.
+- **Fields that name another device or party stay** (they name a subject, not the author): `pool-use.device` (the
+  sibling whose pool key is assigned) and `pool.device`, written by the enrolling device for the new device's pool. The
+  own pool names no device: `refillPools` writes `pool {keys}`, the fold keys it by the author, and a `pool` op naming its
+  own author is refused (test R59-H1). `pool.device` is not bound to the ceremony and does derive a right: foreign pool
+  entries are accepted from any sibling at any time, the fold files them under the named device (per index the first
+  entry wins), and `admitSiblings` certifies an anchor from that pool into a device set (known limit below, tracked in
+  issue #87); `device-set.rev.signer` (the
+  signer of a received set revision), `deps` (heads of other writers), `stock-revision.writer`/`view.writer` (the
+  counterpart's writer whose revision M folds, bound to that document's signer).
+- **Wire form.** K2's journal ops changed (no `by` in allocated keys and acts, no `writer`/`inc` in `revision`); K0 and
+  K1a are unchanged (their `revision` keeps its writer tag; K1a has no per-device signer).
+- **Tests.** R58-S1 (the reviewer's P58, `omit` and `forge`: refused, A2's counter unchanged) and R58-H1 (a `produce` by
+  the non-allocating A device: `batch:role-mismatch`, no card), both red without the rule. R57-B1b now runs over the
+  signed path (Opus-Review 58 H2) in four variants with a marker op in the same batch (op-id claim, author in a revision op,
+  issuer in an act, allocating device in a stock key); the revision variant is red without the rule, the act and key
+  variants are refused by the op shapes. R56-S2a and R57-S4 test the issuer as the author (no `by` field), R55-S2b
+  bypasses the fold rule through the act's effect. Evidence of the input: R57-B1; of the cases: R57-B1b.
+- **Measurement.** X17 compared A's writer keys with M's view by the old `<tag>.<inc>` key; it now translates the
+  device's own counter (keyed by its author incarnation) into M's name for it (signer id of the head key, `incTag`).
+  Without that, X17's `writersAcceptedByM` read 0 and the cell flipped; the behaviour did not change. The measurement is
+  narrower than before (Opus-Review 59 H3): it reads each device's own counter, translated to the current head key's name,
+  no longer the union of every writer entry on every A device (a diverging counter A1 knows of A2 would no longer show).
+  Its success condition and its values are unchanged.
+- **Verify (88a0c6a).** Typecheck green; full suite (`vitest run`, 43 files): 709 passed + 1 expected fail (D1) + 2 skipped
+  in ≈ 15 min; cell dump against main 0a4061c: K0, K1a, K1a at the service byte-identical; K2 both variants 17/2/1, no cell
+  changed; against the dump after review 57 only sizes changed (X8 state copy −44 B, X11 and X21 journal −206 B: the K2
+  ops carry no author fields); `SEEDS=all` 40/40 in ≈ 14 min.
+
+### Known limit: effect authorship with three or more devices (Opus-Review 59 S1, issue #86)
+
+MV-38 fixes *who wrote* an op. State that comes into being through the *first* op with a given effect identity takes the
+author of the op folded first: the issuer of an act (the `introduce` effect, read by the `ticket-ack@1` rule) and the
+allocating device of a stock key (`by` of the first `allocate`, read by the input role rules). The reviewer's probes
+P59-1/P59-2 show both orders giving different results at fold level. Not reachable with two devices per person: a forger
+copies only after the original is folded at its device, so at the victim the original comes first. Reachable with a third
+device of the person, with a rebuild whose order does not follow creation, or with a batch that leaves out its `deps`
+(payload; the input role check runs before the predecessor check). A role check against a key not known yet gives no
+verdict, and the fold of `produce` has no role rule of its own. The second half of MV-38 (an order-free effect identity, a
+finding when two authors produce it, role rules as fold rules) is issue #86.
+
+### Known limit: foreign pool entries are accepted (Opus-Review 60 S1, issue #87)
+
+Foreign pool entries are accepted; tracked in issue #87. `writerProblem` refuses only a `pool` op that names its own
+author; `pool {device: X}` from any sibling for any third device X is accepted outside the enrolment ceremony. The fold
+files it under X, per index the first entry folded wins, and `admitSiblings` certifies an anchor from `pools[X]`. The
+reviewer's probe P60 (`k2({devices: 3})`: M2 writes `pool {device: 'M3', keys: [{i: 500, for: 'M1', anchor:
+'forged-anchor'}]}`) gives no finding; index 500 with the forged anchor stands in M3's pool at M1 and at M3. That M1
+later certifies it is read in the code, not demonstrated. Reachable only with three or more devices of a person. Fix
+direction: a foreign pool only with a proof of the named device (signed by the new device in the ceremony, carried in the
+op), and a conflict per index as a finding instead of "the first wins".
+
+### After Opus-Review 60 and the loop review (25 October 2026)
+
+No blocker. **S1** (also the loop review's should-fix): the sentence on `pool.device` claimed a binding to the ceremony
+that the code does not have; corrected above, P60 named as a known limit and tracked in issue #87 (the fix needs a proof
+of the named device, not a parser check: a sibling legitimately writes another device's pool in the ceremony). **H3**:
+the +16 B of X21 added, history removed from the rule paragraphs. H1 (a thief whose refill comes due writes pool keys under
+its own author name; no fixed test) and H2 (R59-H1 does not itself pin the keying by author) stay open as notes; NOTES
+only, no code change.
+
+### Spec follow-ups after Opus-Review 59
+
+- **H2, forwarded counterpart documents.** M's journal op `stock-revision` carries the counterpart's revision payload,
+  not its document proof; only the receiving device checks the signer at the input (`revisionFormProblem`). An M sister
+  can therefore invent a revision under A's writer (`classOff`, `bury`, `rev` at the limit), and M1 folds it. This is not
+  a MV-38 question (the revision's author is A, not the sister) but trust among siblings. For the contract: a naming of a
+  third party in the journal is data whose authenticity rests on the forwarding device, unless the signed document travels
+  with it.
+- MV-38 second half (issue #86); foreign `pool` only with a proof of the named device (issue #87). Opus-Review 60 asks
+  for one contract rule instead of field by field: a foreign mention decides only when it carries a proof of the named
+  device (signed pool from the ceremony, signed counterpart document), otherwise it is display. It would cover #87, H2
+  above and `device-set.local`.
+- `device-set.local` as display only, revocation targets from the authenticated
+  anchor → device assignment (R4/K4).
+
+Verify after Opus-Review 59 (69bf1dd): typecheck green; `mehrgeraet-k2-automat`, `-buch`, `-k2-zuteilung` 213 + 1 expected
+fail (D1); `mehrgeraet-k2`, `-k0`, `-k1a`, `-k1a-dienst`, `-seeds` (standard) 138/138; cell dump against main 0a4061c: K0,
+K1a, K1a at the service byte-identical, K2 both variants 17/2/1, no cell changed. `SEEDS=all` 40/40 in ≈ 13 min.
+
+**The detail shift of 69bf1dd, traced (bench rule: no change of course without a known cause).** On 69bf1dd the K2
+details moved against eec72ca in X11, X12, X14, X17 and X21 (rounds ±1, the forced branch of X21, journal sizes). A trace
+of every emitted op, every deposit and every draw of the seeded randomness over the whole K2 run, on both trees, gives the
+first divergence in X9: the thief (`welt.steal`, the stolen image of A2 run under the name `A2-dieb`) refilled a pool of
+its own. `refillPools` read the own pool by the author name, the thief's author name is not the stolen device's, so it
+found no pool and derived four new pool keys. That drew randomness, and the bench's seeded randomness runs on across the
+scenarios of one candidate (reset per candidate, not per scenario). Every later scenario therefore ran on other random
+values; the X11–X21 shifts are that, not a rule change in an honest run. Fix (b3ea652): `refillPools` reads the own
+pool by `me` again. For every member of the set `me` is the author, so the MV-38 keying of the fold holds; a copy outside
+the set keeps its old behaviour. After the fix the dump differs from eec72ca only in sizes (X11 and X21 journal −14 B, the
+dropped `device` field; X21 K2 self address +16 B, 6 553 906 → 6 553 922 B), every round count and branch is identical.
+
+### After Opus-Review 57 (22 October 2026)
+
+Review `rltp/design/port-experimente-e15-opus-review57-2026-10-22.md` ("trägt mit Bedingungen", no blocker). **S1** the
+own `revision` op was not bound: A2 could sign a batch naming A1's (writer, inc) and push A1's revision counter to 1000 or
+to MAX_SAFE − 1 (then A1 could not send a stock revision in that relationship any more; the class of review 31 B1 on the
+journal path, pre-existing on main). Bound in the same place (above); tests R57-S1 (P7: `batch:writer-mismatch`, counter
+stays 1) and R57-S1b (P7b: no blockade, A1's next revision goes out with counter 2); both red without the binding.
+**S2** the exceptions are listed above. **S3** the sheet's give-up row counts only unstopped rounds (CR-1). **S4** P8 as
+R57-S4: an issuance batch signed by M1 without `act.by` is refused by M2 (`batch.ops(introduce.act.by missing)`), the act
+is not folded there. CodeRabbit's nitpick (one `Opener` for P-Commit, P-Aufhebung, P-Eigen) is declined: a cost of the
+test harness only, while separate openers keep each checker independent of the others' measurement errors (review 50).
+
+Verify after the loop review and Opus-Review 57 (on c485f40): typecheck green; `mehrgeraet-k2-automat`, `-buch`,
+`-k2-zuteilung` 206 + 1 expected fail (D1); `mehrgeraet-k2`, `-k0`, `-k1a`, `-k1a-dienst`, `-gegenlauf`, `-seeds`
+(standard), `zustellung`, `zustellung-harness`, `traeger` 178/178; cell dump against main 0a4061c: K0, K1a, K1a at the
+service byte-identical, K2 both variants 17/2/1, the dump identical to the one after review 55; `SEEDS=all` 40/40 in
+≈ 15 min (run once for both parser changes, the writer binding of the loop review and the revision binding of review 57).
+
+### After loop review (writer binding) and CodeRabbit (22 October 2026)
+
+- **B1, writer binding (MV-24).** A sister device could sign a valid batch whose ops claim another writer
+  (`op.id.writer = M1`), and the `ticket-ack@1` rule compared the issuer against that claim: M1 took over acceptance
+  knowledge without any receipt. Now the K2 parser (`K2Device.writerProblem`, in `receiveOwnFrame` right after the
+  signature check, before anything is learnt or folded) binds every field that names **the writing device itself** to the
+  authenticated signer of the batch: every op id, every intent (`writer`, `device`), every allocated stock key (`by`), the
+  issuer of an act (`introduce.act.by`) and, since Opus-Review 57 S1, the writer of an own `revision` op (its `writer` is
+  the signer id of the writing device's key in that relationship; the own device sets' `local` map says whose it is; an
+  unknown one gets no verdict, its `inc` cannot be checked by a sibling and only matters together with the writer).
+  Superseded by MV-38 (above): the field-by-field binding and its exception list were replaced by one rule; the
+  remaining exceptions are listed there (`device-set.local` is no longer one of them, it decides nothing). A mismatch makes the whole batch a form error (`batch:writer-mismatch: …`, corrupt-frame
+  finding, nothing folded, no receipt). Revisions (`stock-revision`) carry the counterpart's writer, which is the
+  revision signer's, not the batch writer's, and are not affected. This holds for K2 with and without the automaton (a
+  journal authentication rule, not a step of 2b.2); honest batches always satisfy it (ops are emitted with the batch's
+  writer). Tests R57-B1 (M2 forges, control: finding, knowledge `unknown`; mutation with the check removed: `accepted`
+  without a receipt) and R57-B1b (the five cases of the binding, pure).
+- **CodeRabbit (PR #84).** Missing `by`: under the automaton `issuanceProblem` requires `act.by` (R56-S2a extended). A
+  stopped submission keeps its counters in `advance` (no repeat budget spent while stopped; after `resume` it retries
+  instead of failing at once, CR-1). `expire` returns `none` for a delivered or failed submission before it looks at a
+  stop (CR-2). The supply formula in the sheet's table escapes its pipes.
+
+### After Opus-Review 56 (22 October 2026)
+
+Review `rltp/design/port-experimente-e15-opus-review56-2026-10-22.md` ("trägt mit Bedingungen", no blocker). **S1**: the
+first reason given for S8 was wrong. `cardSetProblem` checks the set proof of the card's root (the sender's set), not the
+receiving address; every registered own address (tuple, card, self context) can be reached. R56-S1 is the reviewer's P56:
+a test hook redirects B1's card to A1's tuple address (no stock key); the first arrival comes before A1 saw B's set
+revision and is deferred, the repetition reaches the card branch: under the automaton `8850.5-not-held` without receipt,
+on the 2b.1 path `buffered` with receipt. An honest sender addresses only the voucher, so without the hook the case does
+not arise in the bench. **S2**: fixed tests for review 55 S5 (a) (R56-S2a, `issuanceProblem` with `by` ≠ batch writer)
+and (b) (R56-S2b, the stop reason changes from `withdrawn` to `consent-reserve`, the stop stays, `resume` no longer applies).
+
+### After Opus-Review 55 (22 October 2026)
+
+Review `rltp/design/port-experimente-e15-opus-review55-2026-10-22.md` ("trägt mit Bedingungen"; B1–B3 of review 54
+closed). Tests: the `Opus-Review 55` block of `tests/mehrgeraet-k2-automat.test.ts`.
+
+- **B1** the ledger's gate rows now call `M.ticketGate` with the same inputs as the holder's gate, `selfSubmitted`
+  included (from the image's submissions): a submitted ticket is never `departed` in either computation. R55-B1 is the
+  reviewer's Q1 (M1 departs from B after `tB` is at the carrier, the deliverer repeats `tB`, 6845.7): 0 violations, the
+  holder's gate `null`, no `departed` row, P-Produktion `kept 1`; red on d8a5819 (1 P-Aufhebung violation). Its mutation
+  (K8c, then the release ignores `departed`, so `tA` goes out after the departure): 1 violation.
+- **S1** fixed tests for the fixes of review 54: S1 in R55-B1; S2 (R55-S2: the stop for `withdrawn` is lifted when the
+  revocation exception makes the key listed again, and the repetition resumes); S3 (R55-S3, the pure gate: at `TB` with the
+  receipt known `accepted`, one second later `deadline`); the `unconsumed` check of `authorize(introduce)` (R55-S1
+  authorize: a test hook brings the consumed key back into the choice; under the automaton the right refuses,
+  `blocked`; on the 2b.1 path the key is named again). S8 (8850.5 for a foreign anchor): see "After Opus-Review 56" (the reason given here first was wrong).
+- **S2** a second test for review 54 B1 (ii) alone (R55-S2b, the reviewer's Q5: the fold rule bypassed by clearing `by`,
+  the forged acks are folded, knowledge `accepted/accepted`, yet P-Produktion 1 violation and `omitted:accepted` 0
+  because no receipt of the expected signer is at the carrier).
+- **S3** pre-existing on main, not in this PR: P-Commit flags every issuance by a sister M device (the mediator context
+  uses the tuples' `own` anchors, a sister device signs under its own device anchor). Issue #85.
+- **S4** limit of the serialization: serialized are `action` (every user action), `introduce`, `round` and `reload`.
+  Outside the chain are the world's set-up and revocation calls: `deviceRevoked` (commits directly), `relisten` (with
+  `resumeDuties`), `openEncounter` (registers keys before its action), `enrolMember`/`revokeInSets` (several steps one after
+  another). The bench calls them sequentially; their serialization is a later step (2c or after).
+- **S5** (a) `issuanceProblem` binds `act.by` to the writer of the issuance batch; (b) a stop for `withdrawn` takes the
+  later boundary's reason (`consent-reserve` at `TB`); (c) K1m asserts both deposits by M2 in M2's round 1.
+
+Verify after Opus-Review 55: typecheck green; full suite (`vitest run`, 43 files, keyhive-ark with the Subduction server):
+691 passed + 1 expected fail (D1) + 2 skipped in ≈ 17 min (06:23–06:40).
+Cell dump (seeded `runX15`) against main 0a4061c: K0, K1a, K1a at the service byte-identical; K2 both variants 17/2/1,
+no cell changed, dump identical to the one after review 54. `SEEDS=all`: 40/40 in ≈ 17 min.
 
 ## Step 2b.1 (21 October 2026): allocation per M device by A
 
