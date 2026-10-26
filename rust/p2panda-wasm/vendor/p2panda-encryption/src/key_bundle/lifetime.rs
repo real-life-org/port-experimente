@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
+// Changed by port-experimente (2026): web-time instead of std::time, so the
+// clock works on wasm32-unknown-unknown. Also the error type. See rust/p2panda-wasm/vendor/README.md.
 
 use web_time::{Duration, SystemTime, UNIX_EPOCH};
 

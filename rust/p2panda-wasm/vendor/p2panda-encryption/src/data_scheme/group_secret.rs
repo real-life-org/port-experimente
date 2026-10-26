@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
+// Changed by port-experimente (2026): web-time instead of std::time, so the
+// clock works on wasm32-unknown-unknown. See rust/p2panda-wasm/vendor/README.md.
 
 //! Methods to create and maintain multiple secrets known by a group which are used to encrypt and decrypt data.
 use std::collections::HashMap;
