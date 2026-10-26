@@ -160,3 +160,9 @@ shortened DIDs, digest prefixes, counts, hosts and values from fixed lists.
 The browser page is published via GitHub Pages on every push to `main`.
 There, all runs can be started on a real device (S9, for example on
 GrapheneOS) and the result copied as JSON.
+
+## License
+
+[MIT](LICENSE). The vendored p2panda crates under `rust/p2panda-wasm/vendor/`
+keep their own license, MIT OR Apache-2.0; the texts are in
+[`rust/p2panda-wasm/vendor/LICENSES/`](rust/p2panda-wasm/vendor/LICENSES/).

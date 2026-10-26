@@ -1,5 +1,6 @@
 {
   "name": "port-experimente",
+  "license": "MIT",
   "private": true,
   "version": "0.0.0",
   "description": "Prüfstand: Gruppen-Autorität und Schlüsselvereinbarung verschiedener Kandidaten unter gleichen Szenarien",

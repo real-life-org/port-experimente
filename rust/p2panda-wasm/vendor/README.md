@@ -80,3 +80,9 @@ ein wasm32-Ziel in ihrer CI.
 
 Weg zum Beitrag: erst Anfrage bei p2panda (Anton), dann ein kleiner PR über
 einen Fork. Nichts davon ohne Freigabe.
+
+## Lizenz
+
+Copyright (c) 2024 p2panda contributors. Wahlweise unter MIT oder Apache-2.0,
+die Texte von v0.7.1 liegen in [`LICENSES/`](LICENSES/). Die beiden Änderungen
+oben stehen unter derselben Doppellizenz; jede geänderte Datei trägt oben einen Änderungshinweis.
