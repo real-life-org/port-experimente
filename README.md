@@ -163,5 +163,6 @@ GrapheneOS) and the result copied as JSON.
 
 ## License
 
-[MIT](LICENSE). The vendored crates under `rust/*/vendor/` keep their own
-license (MIT OR Apache-2.0).
+[MIT](LICENSE). The vendored p2panda crates under `rust/p2panda-wasm/vendor/`
+keep their own license, MIT OR Apache-2.0; the texts are in
+[`rust/p2panda-wasm/vendor/LICENSES/`](rust/p2panda-wasm/vendor/LICENSES/).
