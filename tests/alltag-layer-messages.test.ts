@@ -36,7 +36,7 @@ describe('messages through the layer: one conversation on both devices, each mes
     const doc = await written(B, b, 'hello')
     const acks = await T.receive(doc.envelope)
     await T.takeAll()
-    acks.push(...(await L.syncFrom(T)))
+    acks.push(...(await L.syncFrom(T)).outbound)
     const { verdicts } = await handTo(B, acks)
     expect([texts(T), texts(L)]).toEqual([['in:hello'], ['in:hello']])
     expect([await inbox(T), await inbox(L)]).toEqual([0, 0])
@@ -87,20 +87,53 @@ describe('messages through the layer: one conversation on both devices, each mes
     expect([texts(T), texts(L)]).toEqual([['out:from the laptop', 'out:from the phone'], ['out:from the laptop', 'out:from the phone']])
   })
 
-  // Open finding. B's acknowledgement names the document it acknowledges; only
-  // the device that issued that document holds it and can settle it. Handed
-  // to both devices, each acknowledgement is refused by the sister. The
-  // layer has no answer yet: the delivery state of an issued document would
-  // have to travel as proof. `fails` marks the wanted outcome as not reached.
-  test.fails('B\'s acknowledgements reach both devices and neither refuses one', async () => {
+  test('a sync that breaks off leaves the entry open: the next sync brings the message', async () => {
+    const { T, L, B, b } = await world(0x51)
+    const doc = await written(B, b, 'hello')
+    await T.receive(doc.envelope)
+    await T.takeAll()
+    // the laptop's library throws once while taking the passed-on document
+    const real = L.P.h
+    let thrown = 0
+    L.P.h = Object.create(real, { receive: { value: async (...args: any[]) => { if (!thrown++) throw new Error('store unavailable'); return real.receive(...args) } } })
+    const first = await L.syncFrom(T)
+    expect(first.stoppedAt).toBe('phone#1')
+    expect([texts(L), await inbox(L)]).toEqual([[], 0])
+    const second = await L.syncFrom(T)
+    expect(second.stoppedAt).toBe(null)
+    expect([texts(L), await inbox(L)]).toEqual([['in:hello'], 0])
+  })
+
+  // Open finding, stated as what is measured. B's acknowledgement names the
+  // document it acknowledges; only the device that issued that document
+  // holds it and can settle it. Handed to both devices, each acknowledgement
+  // is accepted by its issuer and refused by the sister. The layer has no
+  // answer yet: the delivery state of an issued document would have to
+  // travel as proof. When that is built, this expectation changes.
+  test('open: B\'s acknowledgements reach both devices, each is refused by the sister of its document\'s issuer', async () => {
     const { T, L, B, a } = await world(0x4f)
-    const out = [...(await T.send(a.id, 'from the phone')), ...(await L.send(a.id, 'from the laptop'))]
-    const { answers } = await handTo(B, out)
-    const back: string[] = []
-    for (const o of answers) for (const D of [T, L]) {
-      const got = await D.P.h.receive(o.envelope, clk(D.P, tick()))
-      back.push(`${D.name}: ${got.disposition}${got.reason ? ' ' + got.reason : ''}`)
+    const fromPhone = await T.send(a.id, 'from the phone'), fromLaptop = await L.send(a.id, 'from the laptop')
+    const ackOf = async (docs: any[]): Promise<any> => {
+      const { answers, verdicts } = await handTo(B, docs)
+      expect(verdicts).toEqual(['message/0.1: unique'])
+      expect(answers).toHaveLength(1)
+      return answers[0]
     }
-    expect(back.filter((v) => v.includes('failed'))).toEqual([])
+    const forPhone = await ackOf(fromPhone), forLaptop = await ackOf(fromLaptop)
+    const take = async (D: Device, o: any): Promise<string> => {
+      const got = await D.P.h.receive(o.envelope, clk(D.P, tick()))
+      return got.disposition + (got.reason ? ' ' + got.reason : '')
+    }
+    expect({
+      'phone takes the ack of its own document': await take(T, forPhone),
+      'laptop takes the ack of the phone\'s document': await take(L, forPhone),
+      'laptop takes the ack of its own document': await take(L, forLaptop),
+      'phone takes the ack of the laptop\'s document': await take(T, forLaptop),
+    }).toEqual({
+      'phone takes the ack of its own document': 'unique',
+      'laptop takes the ack of the phone\'s document': 'failed validation-failed',
+      'laptop takes the ack of its own document': 'unique',
+      'phone takes the ack of the laptop\'s document': 'failed validation-failed',
+    })
   })
 })

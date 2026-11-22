@@ -9,7 +9,7 @@ import { seedKeys, createHolder } from 'rltp-lib'
 import { InMemoryStore } from 'rltp-lib/testing'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-export type Person = { h: any, store: InMemoryStore, seed: Uint8Array, fill: number, late?: number, read: () => Promise<any> }
+export type Person = { h: any, store: InMemoryStore, seed: Uint8Array, fill: number, late?: number, read: () => Promise<any> }  // `h` is replaceable so a test can make it fail
 
 export const T0 = Date.parse('2026-10-15T09:00:00Z')
 export const LATE = 13_000

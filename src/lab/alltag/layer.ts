@@ -68,29 +68,35 @@ export class Device {
     ok(await this.P.h.takeMessages(due.map((m: any) => m.id), { when: clk(this.P, t) }))
   }
 
-  /** Takes the entries of `from` this device lacks, in causal order. Returns what the library answers on the way. */
-  async syncFrom (from: Device, t = tick()): Promise<any[]> {
-    const out: any[] = []
+  /** Takes the entries of `from` this device lacks, in causal order. An
+   *  entry counts as applied only after its effect is in place: when the
+   *  library throws or does not accept a passed-on document, the entry and
+   *  everything after it stay open and the next sync tries again. Returns
+   *  what the library answers on the way and the entry it stopped at. */
+  async syncFrom (from: Device, t = tick()): Promise<{ outbound: any[], stoppedAt: string | null }> {
+    const outbound: any[] = []
     let moved = true
     while (moved) {
       moved = false
       for (const e of from.entries.values()) {
         if (this.applied.has(e.id) || !e.deps.every((d) => this.applied.has(d))) continue
-        this.entries.set(e.id, e); this.applied.add(e.id)
-        this.heads = [...this.heads.filter((h) => !e.deps.includes(h)), e.id]
         if (e.body.kind === 'received') {
-          const got = await this.P.h.receive(e.body.envelope, clk(this.P, t))
-          if (got.disposition === 'unique') out.push(...got.outbound)
+          let got: any
+          try { got = await this.P.h.receive(e.body.envelope, clk(this.P, t)) } catch { return { outbound, stoppedAt: e.id } }
+          if (got.disposition !== 'unique' && got.disposition !== 'duplicate-known') return { outbound, stoppedAt: e.id }
+          if (got.disposition === 'unique') outbound.push(...got.outbound)
         } else if (e.body.kind === 'taken') {
           for (const id of e.body.ids) this.taken.add(id)
         } else {
           this.conversation.set(e.body.digest, { dir: 'out', contactId: e.body.contactId, text: e.body.text, key: e.body.digest })
         }
+        this.entries.set(e.id, e); this.applied.add(e.id)
+        this.heads = [...this.heads.filter((h) => !e.deps.includes(h)), e.id]
         await this.settleInbox(t)
         moved = true
       }
     }
-    return out
+    return { outbound, stoppedAt: null }
   }
 }
 
