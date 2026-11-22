@@ -34,7 +34,13 @@ jobs:
         run: |
           full=true; k2=true; ark=true
           if [ "$EVENT" = pull_request ]; then
-            files=$(git diff --name-only "$BASE"...HEAD)
+            # --no-renames: eine verschobene Datei zählt mit altem und neuem Pfad.
+            # Lässt sich der Unterschied nicht ermitteln, scheitert der Job (und
+            # damit der Sammel-Check), statt still den Kurzlauf zu wählen.
+            if ! files=$(git diff --no-renames --name-only "$BASE"...HEAD); then
+              echo "::error::geänderte Dateien nicht ermittelbar"; exit 1
+            fi
+            if [ -z "$files" ]; then echo "::error::keine geänderten Dateien gefunden"; exit 1; fi
             other=$(echo "$files" | grep -Ev '^(src/lab/alltag/|tests/alltag-[^/]*\.test\.ts$|tsconfig\.alltag\.json$|.*\.md$)' || true)
             if [ -z "$other" ]; then full=false; else echo "voller Lauf wegen:"; echo "$other"; fi
             # Zwei Dateien laufen je rund zehn Minuten. Sie laufen im PR nur, wenn
