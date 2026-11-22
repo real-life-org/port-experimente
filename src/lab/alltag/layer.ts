@@ -47,8 +47,8 @@ export class Device {
     const ids = (await this.P.h.inbox()).map((m: any) => m.id)
     if (!ids.length) return
     for (const id of ids) this.taken.add(id)
+    await this.settleInbox(t)          // the own effect first; a failure leaves no entry behind
     this.write({ kind: 'taken', ids })
-    await this.settleInbox(t)
   }
 
   /** The human writes to a contact. Returns the documents to hand to the carrier. */
@@ -68,11 +68,17 @@ export class Device {
     ok(await this.P.h.takeMessages(due.map((m: any) => m.id), { when: clk(this.P, t) }))
   }
 
-  /** Takes the entries of `from` this device lacks, in causal order. An
-   *  entry counts as applied only after its effect is in place: when the
-   *  library throws or does not accept a passed-on document, the entry and
-   *  everything after it stay open and the next sync tries again. Returns
-   *  what the library answers on the way and the entry it stopped at. */
+  /** Takes the entries of `from` this device lacks, in causal order.
+   *
+   *  An entry is applied when this device has taken its whole effect over,
+   *  and only then do `applied` and the heads move. For `received` that is:
+   *  the library accepted the document. For `taken`: none of the named
+   *  messages is left in the inbox, and each stands once in the
+   *  conversation. For `sent`: the line stands in the conversation.
+   *  When a step fails, the entry and everything after it stay open; the
+   *  call returns the entry it stopped at and the answers produced so far.
+   *  A later call repeats the entry: a document already accepted runs on
+   *  as `duplicate-known`, and a message id makes one conversation line. */
   async syncFrom (from: Device, t = tick()): Promise<{ outbound: any[], stoppedAt: string | null }> {
     const outbound: any[] = []
     let moved = true
@@ -80,19 +86,26 @@ export class Device {
       moved = false
       for (const e of from.entries.values()) {
         if (this.applied.has(e.id) || !e.deps.every((d) => this.applied.has(d))) continue
-        if (e.body.kind === 'received') {
-          let got: any
-          try { got = await this.P.h.receive(e.body.envelope, clk(this.P, t)) } catch { return { outbound, stoppedAt: e.id } }
-          if (got.disposition !== 'unique' && got.disposition !== 'duplicate-known') return { outbound, stoppedAt: e.id }
-          if (got.disposition === 'unique') outbound.push(...got.outbound)
-        } else if (e.body.kind === 'taken') {
-          for (const id of e.body.ids) this.taken.add(id)
-        } else {
-          this.conversation.set(e.body.digest, { dir: 'out', contactId: e.body.contactId, text: e.body.text, key: e.body.digest })
+        try {
+          if (e.body.kind === 'received') {
+            const got = await this.P.h.receive(e.body.envelope, clk(this.P, t))
+            if (got.disposition !== 'unique' && got.disposition !== 'duplicate-known') return { outbound, stoppedAt: e.id }
+            if (got.disposition === 'unique') outbound.push(...got.outbound)
+          } else if (e.body.kind === 'taken') {
+            for (const id of e.body.ids) this.taken.add(id)
+          } else {
+            this.conversation.set(e.body.digest, { dir: 'out', contactId: e.body.contactId, text: e.body.text, key: e.body.digest })
+          }
+          await this.settleInbox(t)
+          if (e.body.kind === 'taken') {
+            const ids = e.body.ids
+            if ((await this.P.h.inbox()).some((m: any) => ids.includes(m.id))) return { outbound, stoppedAt: e.id }
+          }
+        } catch {
+          return { outbound, stoppedAt: e.id }
         }
         this.entries.set(e.id, e); this.applied.add(e.id)
         this.heads = [...this.heads.filter((h) => !e.deps.includes(h)), e.id]
-        await this.settleInbox(t)
         moved = true
       }
     }

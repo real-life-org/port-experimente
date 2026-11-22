@@ -63,12 +63,19 @@ over), `sent` (a message the human wrote). Measured 2026-11-23, library
 | both devices read the same message apart | one line on each |
 | the human writes from both devices apart | both devices show both lines, the friend gets both |
 | a sync breaks off while taking a passed-on document | the entry stays open, the next sync brings the message |
+| taking "read" over breaks off between the conversation line and the inbox | the entry stays open; after the next sync one line, an empty inbox |
 | the friend's acknowledgements reach both devices | **open**: each is accepted by the device that issued the document and refused by the sister (pinned as measured) |
 
 What the layer had to keep that the library does not: the set of inbox
 entries the person took over on any device. The library's take is local and
 immediate; a message that reaches a device after the person read it
 elsewhere needs a mark that waits for it.
+
+An entry is applied when the device has taken its whole effect over, and
+only then does its progress move; a repeated entry tolerates the steps
+already done. Whether progress and effect must also survive a process
+breaking off between them is a question for a persistent implementation and
+is not answered here.
 
 Not covered: the personal log here is the smallest thing that orders
 entries, in memory and unsealed; it stands in for the exchange and is no

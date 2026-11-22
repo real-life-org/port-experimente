@@ -104,6 +104,20 @@ describe('messages through the layer: one conversation on both devices, each mes
     expect([texts(L), await inbox(L)]).toEqual([['in:hello'], 0])
   })
 
+  test('taking "read" over breaks off after the conversation line, before the inbox is emptied: the next sync finishes it', async () => {
+    const { T, L, B, b } = await world(0x53)
+    const doc = await written(B, b, 'hello')
+    await T.receive(doc.envelope); await L.receive(doc.envelope)
+    await T.takeAll()
+    const real = L.P.h
+    let thrown = 0
+    L.P.h = Object.create(real, { takeMessages: { value: async (...args: any[]) => { if (!thrown++) throw new Error('store unavailable'); return real.takeMessages(...args) } } })
+    const first = await L.syncFrom(T)
+    expect({ stoppedAt: first.stoppedAt, lines: texts(L), inbox: await inbox(L) }).toEqual({ stoppedAt: 'phone#2', lines: ['in:hello'], inbox: 1 })
+    const again = await L.syncFrom(T)
+    expect({ stoppedAt: again.stoppedAt, lines: texts(L), inbox: await inbox(L) }).toEqual({ stoppedAt: null, lines: ['in:hello'], inbox: 0 })
+  })
+
   // Open finding, stated as what is measured. B's acknowledgement names the
   // document it acknowledges; only the device that issued that document
   // holds it and can settle it. Handed to both devices, each acknowledgement
