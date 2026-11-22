@@ -118,6 +118,23 @@ describe('messages through the layer: one conversation on both devices, each mes
     expect({ stoppedAt: again.stoppedAt, lines: texts(L), inbox: await inbox(L) }).toEqual({ stoppedAt: null, lines: ['in:hello'], inbox: 0 })
   })
 
+  test('reading A fails once on the phone, then B arrives: A is read on both devices, B stays unread on both', async () => {
+    const { T, L, B, b } = await world(0x55)
+    const docA = await written(B, b, 'A')
+    await T.receive(docA.envelope); await L.receive(docA.envelope)
+    const real = T.P.h
+    let thrown = 0
+    T.P.h = Object.create(real, { takeMessages: { value: async (...args: any[]) => { if (!thrown++) throw new Error('store unavailable'); return real.takeMessages(...args) } } })
+    const first = await T.takeAll()
+    expect(first.stoppedAt).toBe('phone#2')
+    const docB = await written(B, b, 'B')
+    await T.receive(docB.envelope); await L.receive(docB.envelope)   // the phone's next step finishes the reading of A
+    const synced = await L.syncFrom(T)
+    expect(synced.stoppedAt).toBe(null)
+    const unread = async (D: Device): Promise<string[]> => (await D.P.h.inbox()).map((m: any) => m.text)
+    expect({ phone: [texts(T), await unread(T)], laptop: [texts(L), await unread(L)] }).toEqual({ phone: [['in:A'], ['B']], laptop: [['in:A'], ['B']] })
+  })
+
   // Open finding, stated as what is measured. B's acknowledgement names the
   // document it acknowledges; only the device that issued that document
   // holds it and can settle it. Handed to both devices, each acknowledgement

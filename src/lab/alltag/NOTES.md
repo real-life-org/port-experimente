@@ -64,16 +64,21 @@ over), `sent` (a message the human wrote). Measured 2026-11-23, library
 | the human writes from both devices apart | both devices show both lines, the friend gets both |
 | a sync breaks off while taking a passed-on document | the entry stays open, the next sync brings the message |
 | taking "read" over breaks off between the conversation line and the inbox | the entry stays open; after the next sync one line, an empty inbox |
+| reading A fails once on the phone, then B arrives | A is read on both devices, B stays unread on both |
 | the friend's acknowledgements reach both devices | **open**: each is accepted by the device that issued the document and refused by the sister (pinned as measured) |
 
-What the layer had to keep that the library does not: the set of inbox
-entries the person took over on any device. The library's take is local and
+What the layer had to keep that the library does not: which inbox entries
+the person took over on any device (read from the `taken` entries of the
+log). The library's take is local and
 immediate; a message that reaches a device after the person read it
 elsewhere needs a mark that waits for it.
 
-An entry is applied when the device has taken its whole effect over, and
-only then does its progress move; a repeated entry tolerates the steps
-already done. Whether progress and effect must also survive a process
+What the human did is recorded once, as an entry with fixed ids, before
+anything is done about it; every device, the acting one included, applies
+that entry by the same routine. An entry is applied when the device has
+taken its whole effect over, and only then does its progress move; a
+repeated entry tolerates the steps already done and works on the ids it was
+written with. Whether progress and effect must also survive a process
 breaking off between them is a question for a persistent implementation and
 is not answered here.
 
