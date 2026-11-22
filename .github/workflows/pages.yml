@@ -14,7 +14,48 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
+  # Ein PR, der nur die Alltags-Experimente (src/lab/alltag, tests/alltag-*)
+  # oder Markdown anfasst, lässt nur deren Tests laufen. Alles andere, jeder
+  # Push auf main und jeder Handstart laufen voll.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      full: ${{ steps.scope.outputs.full }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          full=true
+          if [ "$EVENT" = pull_request ]; then
+            other=$(git diff --name-only "$BASE"...HEAD | grep -Ev '^(src/lab/alltag/|tests/alltag-[^/]*\.test\.ts$|tsconfig\.alltag\.json$|.*\.md$)' || true)
+            if [ -z "$other" ]; then full=false; else echo "voller Lauf wegen:"; echo "$other"; fi
+          fi
+          echo "full=$full" >> "$GITHUB_OUTPUT"
+
+  # Die Alltags-Experimente brauchen weder Rust noch WASM noch einen Server.
+  alltag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec tsc -p tsconfig.alltag.json
+      - run: pnpm exec vitest run tests/alltag- --passWithNoTests
+
+  # WASM-Hüllen einmal bauen und ihre Rust-Tests laufen lassen; die
+  # Testscheiben und der Build holen die Pakete als Artefakt.
+  wasm:
+    needs: changes
+    if: needs.changes.outputs.full == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -41,6 +82,29 @@ jobs:
           cargo +1.96 test --manifest-path rust/beekem-wasm/Cargo.toml
           cargo +1.96 test --manifest-path rust/mls-wasm/Cargo.toml --test peer
           cargo +1.96 build --manifest-path rust/mls-wasm/Cargo.toml --example vectors
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm-pkg
+          retention-days: 1
+          path: |
+            src/candidates/p2panda/pkg
+            src/candidates/rltp-beekem/pkg
+            src/candidates/rltp-mls/pkg
+
+  # Die Testdateien in vier Scheiben nebeneinander (vitest --shard).
+  test:
+    needs: wasm
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm-pkg
+          path: src/candidates
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -49,7 +113,23 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Subduction-Server für den Keyhive-Lauf a (ARK)
         run: sh scripts/fetch-subduction.sh
-      - run: pnpm test
+      - run: pnpm exec vitest run --shard=${{ matrix.shard }}/4
+
+  build:
+    needs: wasm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm-pkg
+          path: src/candidates
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       - run: pnpm build
         env:
           VITE_BUILD: ${{ github.sha }}
@@ -58,9 +138,22 @@ jobs:
         with:
           path: dist
 
+  # Ein Check für den Branch-Schutz: grün, wenn nichts gescheitert ist
+  # (übersprungene Jobs eines Alltags-PRs zählen nicht als Fehler).
+  ci:
+    if: always()
+    needs: [changes, alltag, wasm, test, build]
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "$RESULTS"
+          case " $RESULTS " in *" failure "*|*" cancelled "*) exit 1 ;; esac
+
   deploy:
     if: github.event_name != 'pull_request'
-    needs: build
+    needs: [build, test, alltag]
     runs-on: ubuntu-latest
     permissions:
       pages: write
