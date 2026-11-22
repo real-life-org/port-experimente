@@ -21,6 +21,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       full: ${{ steps.scope.outputs.full }}
+      k2: ${{ steps.scope.outputs.k2 }}
+      ark: ${{ steps.scope.outputs.ark }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,12 +32,20 @@ jobs:
           EVENT: ${{ github.event_name }}
           BASE: ${{ github.event.pull_request.base.sha }}
         run: |
-          full=true
+          full=true; k2=true; ark=true
           if [ "$EVENT" = pull_request ]; then
-            other=$(git diff --name-only "$BASE"...HEAD | grep -Ev '^(src/lab/alltag/|tests/alltag-[^/]*\.test\.ts$|tsconfig\.alltag\.json$|.*\.md$)' || true)
+            files=$(git diff --name-only "$BASE"...HEAD)
+            other=$(echo "$files" | grep -Ev '^(src/lab/alltag/|tests/alltag-[^/]*\.test\.ts$|tsconfig\.alltag\.json$|.*\.md$)' || true)
             if [ -z "$other" ]; then full=false; else echo "voller Lauf wegen:"; echo "$other"; fi
+            # Zwei Dateien laufen je rund zehn Minuten. Sie laufen im PR nur, wenn
+            # ihr Experiment oder etwas Gemeinsames angefasst ist.
+            shared='^(package\.json|pnpm-lock\.yaml|\.github/|vite\.config\.ts|tsconfig\.json|scripts/|rust/|src/lab/[^/]*\.ts$|src/candidates/[^/]*\.ts$)'
+            echo "$other" | grep -Eq "$shared|^src/(lab|candidates)/mehrgeraet|^tests/mehrgeraet-" || k2=false
+            echo "$other" | grep -Eq "$shared|^src/candidates/keyhive|^tests/keyhive-" || ark=false
           fi
           echo "full=$full" >> "$GITHUB_OUTPUT"
+          echo "k2=$k2" >> "$GITHUB_OUTPUT"
+          echo "ark=$ark" >> "$GITHUB_OUTPUT"
 
   # Die Alltags-Experimente brauchen weder Rust noch WASM noch einen Server.
   alltag:
@@ -91,7 +101,8 @@ jobs:
             src/candidates/rltp-beekem/pkg
             src/candidates/rltp-mls/pkg
 
-  # Die Testdateien in vier Scheiben nebeneinander (vitest --shard).
+  # Die Testdateien in vier Scheiben nebeneinander (vitest --shard), ohne
+  # die zwei langen Dateien; die laufen als eigene Jobs (test-lang).
   test:
     needs: wasm
     runs-on: ubuntu-latest
@@ -113,7 +124,43 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Subduction-Server für den Keyhive-Lauf a (ARK)
         run: sh scripts/fetch-subduction.sh
-      - run: pnpm exec vitest run --shard=${{ matrix.shard }}/4
+      - run: pnpm exec vitest run --shard=${{ matrix.shard }}/4 --exclude tests/mehrgeraet-k2.test.ts --exclude tests/keyhive-ark.test.ts
+
+  test-lang:
+    needs: [changes, wasm]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - file: tests/mehrgeraet-k2.test.ts
+            run: ${{ needs.changes.outputs.k2 }}
+          - file: tests/keyhive-ark.test.ts
+            run: ${{ needs.changes.outputs.ark }}
+    steps:
+      - if: matrix.run != 'true'
+        run: echo "übersprungen, das Experiment ist in diesem PR nicht angefasst"
+      - if: matrix.run == 'true'
+        uses: actions/checkout@v4
+      - if: matrix.run == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: wasm-pkg
+          path: src/candidates
+      - if: matrix.run == 'true'
+        uses: pnpm/action-setup@v4
+      - if: matrix.run == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - if: matrix.run == 'true'
+        run: pnpm install --frozen-lockfile
+      - name: Subduction-Server für den Keyhive-Lauf a (ARK)
+        if: matrix.run == 'true'
+        run: sh scripts/fetch-subduction.sh
+      - if: matrix.run == 'true'
+        run: pnpm exec vitest run ${{ matrix.file }}
 
   build:
     needs: wasm
@@ -142,7 +189,7 @@ jobs:
   # (übersprungene Jobs eines Alltags-PRs zählen nicht als Fehler).
   ci:
     if: always()
-    needs: [changes, alltag, wasm, test, build]
+    needs: [changes, alltag, wasm, test, test-lang, build]
     runs-on: ubuntu-latest
     steps:
       - env:
@@ -153,7 +200,7 @@ jobs:
 
   deploy:
     if: github.event_name != 'pull_request'
-    needs: [build, test, alltag]
+    needs: [build, test, test-lang, alltag]
     runs-on: ubuntu-latest
     permissions:
       pages: write
