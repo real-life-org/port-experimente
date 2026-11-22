@@ -39,3 +39,49 @@ document silently has a second effect.
 Not measured: whether a real mediator hands a document to every device of
 an address; whether two accepted credential deliveries make two
 relationships.
+
+## Messages through a layer above the library (`layer.ts`)
+
+The first vertical cut of the build the design review proposed for device
+sync (in the private design journal: review 1 of the sync draft): a device
+passes what it received on to the person's other devices as an input, and
+what the human did as a named entry; each device runs the library's own
+reception and computes its views itself. Built as a layer above the
+published library, so nothing moves into the library before the cut holds.
+
+Three kinds of entry carry the whole message case: `received` (the
+envelope a device accepted), `taken` (the application took inbox entries
+over), `sent` (a message the human wrote). Measured 2026-11-23, library
+0.19.0, second device 13 s late:
+
+| Scenario | Result |
+|---|---|
+| both devices get the message from the carrier, the phone reads it | one conversation line on each device, both inboxes empty, the friend refuses nothing, status `delivered` |
+| only the phone gets it; the laptop learns it from the phone | same |
+| the laptop learns "read" before the carrier brings it the message | same on the laptop |
+| the laptop was off for 30 days, carrier copy and entries in either order | same on the laptop |
+| both devices read the same message apart | one line on each |
+| the human writes from both devices apart | both devices show both lines, the friend gets both |
+| a sync breaks off while taking a passed-on document | the entry stays open, the next sync brings the message |
+| taking "read" over breaks off between the conversation line and the inbox | the entry stays open; after the next sync one line, an empty inbox |
+| reading A fails once on the phone, then B arrives | A is read on both devices, B stays unread on both |
+| the friend's acknowledgements reach both devices | **open**: each is accepted by the device that issued the document and refused by the sister (pinned as measured) |
+
+What the layer had to keep that the library does not: which inbox entries
+the person took over on any device (read from the `taken` entries of the
+log). The library's take is local and
+immediate; a message that reaches a device after the person read it
+elsewhere needs a mark that waits for it.
+
+What the human did is recorded once, as an entry with fixed ids, before
+anything is done about it; every device, the acting one included, applies
+that entry by the same routine. An entry is applied when the device has
+taken its whole effect over, and only then does its progress move; a
+repeated entry tolerates the steps already done and works on the ids it was
+written with. Whether progress and effect must also survive a process
+breaking off between them is a question for a persistent implementation and
+is not answered here.
+
+Not covered: the personal log here is the smallest thing that orders
+entries, in memory and unsealed; it stands in for the exchange and is no
+proposal for it. Nothing here concerns who may write an entry.
