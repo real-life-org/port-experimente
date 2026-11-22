@@ -1,6 +1,7 @@
 # Port notes: RLTP over BeeKEM on Portable Web Spaces (E12)
 
-As of 11 October 2026. Plan: `rltp/design/port-experimente-2026-10.md`,
+As of 11 October 2026, results table as of the matrix run of 20 October
+2026. Plan: `rltp/design/port-experimente-2026-10.md`,
 E12; background `rltp/design/pws-bruecke-2026-10.md`. Portable Web Spaces
 (PWS, formerly Wallet Attached Storage, W3C CCG v0.5) as a group's storage,
 with the unchanged BeeKEM candidate (E6–E9) on top. Only the transport
@@ -85,8 +86,9 @@ bench (E10/E11) as a door of its own, not in this candidate.
 The server additionally sees: resource ids with device names and sequence
 numbers (a pseudonym per device × group would be the answer, E8 finding
 5), the frame labels and sizes. The server stores no checkpoints: it sees
-one only in each read request, and with one shared key it cannot tie a
-request to a device.
+one only in each read request, and the signature of the one shared key
+does not tie a request to a device. A write names its device in the
+resource id; a read can be tied to one only through connection metadata.
 
 ### Check 4: server switch
 
@@ -132,12 +134,14 @@ Not built; derived from the server code (`was-teaching-server` 0.42.2).
 - **Displacement.** Today removal acts only via the epoch. With the chain
   as controller history, the next view would take a removed device key out
   of the document; WAS's current-key-set rule makes that effective at the
-  server immediately, including everything that key delegated. That is
+  server, including everything that key delegated. That is
   service class "view" from Access §9.3, without a service of our own.
   The server offers this path today without a new method: promote the
   space to a self-hosted `did:webvh` whose document lists each device key
   under `capabilityInvocation`; removing a key from the document removes
-  it at the server. This holds only with `@interop/did-method-webvh`
+  it at the server (a server process that shares the backend with the
+  writing one serves its cached document for up to 5 seconds,
+  `WEBVH_DOCUMENT_CACHE_TTL`). This holds only with `@interop/did-method-webvh`
   5.16.0 or later: earlier versions accepted a log entry whose `proof` is
   an empty array, so any holder of a write grant on `did.jsonl` could have
   added or kept a device key without the update key. The server requires
