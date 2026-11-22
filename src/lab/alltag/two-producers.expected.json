@@ -1,0 +1,59 @@
+{
+  "trust given on the phone, the laptop holds the same state": {
+    "anchor-mapping/0.3": "phone: unique | laptop: failed validation-failed RLTP-TRU-6270",
+    "delivery-ack/0.1": "phone: duplicate-known / unique | laptop: duplicate-known / unique"
+  },
+  "trust given apart on both": {
+    "anchor-mapping/0.3": "phone: unique | laptop: failed validation-failed RLTP-TRU-6270",
+    "delivery-ack/0.1": "phone: duplicate-known / unique | laptop: duplicate-known / unique"
+  },
+  "B trusts A, both devices answer": {
+    "delivery-ack/0.1": "phone: duplicate-known / unique | laptop: duplicate-known / unique",
+    "star/0.2": "phone: unique | laptop: failed validation-failed RLTP-TRU-5150"
+  },
+  "the same profile set apart on both": {
+    "delivery-ack/0.1": "phone: duplicate-known | laptop: duplicate-known",
+    "profile/0.1": "phone: unique | laptop: unique"
+  },
+  "different profiles set apart on both": {
+    "delivery-ack/0.1": "phone: duplicate-known | laptop: duplicate-known",
+    "profile/0.1": "phone: unique | laptop: failed validation-failed RLTP-TRU-6270"
+  },
+  "B writes a message, both devices acknowledge": {
+    "delivery-ack/0.1": "phone: duplicate-known / unique | laptop: duplicate-known / unique"
+  },
+  "B invites A, both devices answer the prelude, the phone accepts": {
+    "delivery-ack/0.1": "phone: duplicate-known / unique | laptop: duplicate-known / unique",
+    "group-star/0.1": "phone: unique | laptop: none sent",
+    "membership-accept/0.2": "phone: unique | laptop: none sent",
+    "membership-prelude-reply/0.1": "phone: unique | laptop: failed validation-failed RLTP-MT-3965",
+    "x-access-sync/0.1": "phone: unique | laptop: none sent"
+  },
+  "B invites A, both devices accept apart": {
+    "delivery-ack/0.1": "phone: duplicate-known / unique | laptop: duplicate-known / unique",
+    "group-star/0.1": "phone: unique | laptop: none sent",
+    "membership-accept/0.2": "phone: unique | laptop: failed validation-failed RLTP-MT-3270",
+    "membership-prelude-reply/0.1": "phone: unique | laptop: failed validation-failed RLTP-MT-3965",
+    "x-access-sync/0.1": "phone: unique | laptop: none sent"
+  },
+  "A invited B on the phone, both devices take the answers": {
+    "delivery-ack/0.1": "phone: duplicate-known / unique | laptop: duplicate-known / unique",
+    "group-star/0.1": "phone: unique | laptop: failed validation-failed RLTP-TRU-5150",
+    "membership-invite/0.2": "phone: unique | laptop: unique",
+    "membership-prelude-request/0.1": "phone: unique | laptop: none sent",
+    "x-access-page/0.1": "the device whose invitation was answered first: unique | the other: none sent",
+    "x-membership-welcome/0.1": "phone: unique | laptop: unique",
+    "invitations B holds": "2"
+  },
+  "B asks the group log of a group A founded, both devices answer": {
+    "delivery-ack/0.1": "phone: duplicate-known / unique | laptop: duplicate-known / unique",
+    "x-access-page/0.1": "phone: unique | laptop: failed validation-failed"
+  },
+  "A showed a card on the phone, B scans it, both devices confirm": {
+    "continuity-probe/0.1": "phone: unique | laptop: failed validation-failed RLTP-TRU-6700 / unique",
+    "delivery-ack/0.1": "phone: duplicate-known / unique | laptop: duplicate-known / unique",
+    "encounter-credential-delivery/0.1": "phone: unique | laptop: unique",
+    "group-star/0.1": "phone: unique | laptop: failed validation-failed RLTP-TRU-5150",
+    "star/0.2": "phone: unique | laptop: failed validation-failed RLTP-TRU-5150"
+  }
+}
