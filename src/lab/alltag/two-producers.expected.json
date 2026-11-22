@@ -41,7 +41,7 @@
     "group-star/0.1": "phone: unique | laptop: failed validation-failed RLTP-TRU-5150",
     "membership-invite/0.2": "phone: unique | laptop: unique",
     "membership-prelude-request/0.1": "phone: unique | laptop: none sent",
-    "x-access-page/0.1": "the device whose invitation was answered first: unique | the other: none sent",
+    "x-access-page/0.1": "one device: unique | the other: none sent",
     "x-membership-welcome/0.1": "phone: unique | laptop: unique",
     "invitations B holds": "2"
   },
