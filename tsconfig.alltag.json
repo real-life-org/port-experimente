@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "resolveJsonModule": true, "noEmit": true },
+  "include": ["src/lab/alltag", "tests/alltag-*.test.ts"]
+}
