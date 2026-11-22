@@ -39,3 +39,36 @@ document silently has a second effect.
 Not measured: whether a real mediator hands a document to every device of
 an address; whether two accepted credential deliveries make two
 relationships.
+
+## Messages through a layer above the library (`layer.ts`)
+
+The first vertical cut of the build the design review proposed for device
+sync (in the private design journal: review 1 of the sync draft): a device
+passes what it received on to the person's other devices as an input, and
+what the human did as a named entry; each device runs the library's own
+reception and computes its views itself. Built as a layer above the
+published library, so nothing moves into the library before the cut holds.
+
+Three kinds of entry carry the whole message case: `received` (the
+envelope a device accepted), `taken` (the application took inbox entries
+over), `sent` (a message the human wrote). Measured 2026-11-23, library
+0.19.0, second device 13 s late:
+
+| Scenario | Result |
+|---|---|
+| both devices get the message from the carrier, the phone reads it | one conversation line on each device, both inboxes empty, the friend refuses nothing, status `delivered` |
+| only the phone gets it; the laptop learns it from the phone | same |
+| the laptop learns "read" before the carrier brings it the message | same on the laptop |
+| the laptop was off for 30 days, carrier copy and entries in either order | same on the laptop |
+| both devices read the same message apart | one line on each |
+| the human writes from both devices apart | both devices show both lines, the friend gets both |
+| the friend's acknowledgements reach both devices | **open**: each device refuses the acknowledgement of the sister's document |
+
+What the layer had to keep that the library does not: the set of inbox
+entries the person took over on any device. The library's take is local and
+immediate; a message that reaches a device after the person read it
+elsewhere needs a mark that waits for it.
+
+Not covered: the personal log here is the smallest thing that orders
+entries, in memory and unsealed; it stands in for the exchange and is no
+proposal for it. Nothing here concerns who may write an entry.
