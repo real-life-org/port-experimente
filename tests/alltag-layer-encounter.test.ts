@@ -215,9 +215,8 @@ describe('an encounter through the layer', () => {
     await L.act({ act: 'confirm', contactId, choice: 'decline' })
     // the phone learns the decline, but applying it breaks off before anything is settled
     const h = T.P.h
-    let broke = false
-    T.P.h = new Proxy(h, { get: (o, k) => (k === 'contact' && !broke ? async () => { broke = true; throw new Error('crash') } : o[k]) })
-    expect((await T.syncFrom(L)).stoppedAt).toMatch(/crash/)
+    T.P.h = { ...h, contact: async () => { throw new Error('crash') } }
+    expect((await T.syncFrom(L)).stoppedAt).toBe('laptop#1: crash')
     T.P.h = h
     expect(T.verdict(contactId)!.body.choice).toBe('decline')
     // at the door the rule is asked again: nothing leaves, and no handover is recorded
@@ -227,6 +226,43 @@ describe('an encounter through the layer', () => {
     await both(T, L)
     expect(await lines(B)).toEqual(['Al outgoing'])
     expect(T.verdict(contactId)!.body.choice).toBe('decline')
+  })
+
+  test('the library refuses the laptop\'s decline: it had no effect and counts nowhere, the phone\'s accept leaves', async () => {
+    const { T, L, B } = await world(0x5d)
+    await shows(T, B, [T]); await L.syncFrom(T)
+    const contactId = (await request(T))!
+    const d1 = await T.act({ act: 'confirm', contactId, choice: 'accept' })
+    const h = L.P.h
+    L.P.h = { ...h, decide: async () => ({ ok: false, code: 'refused-here' }) }
+    const d2 = await L.act({ act: 'confirm', contactId, choice: 'decline' })
+    L.P.h = h
+    expect({ stoppedAt: d2.stoppedAt, refused: L.refused }).toEqual({ stoppedAt: null, refused: ['laptop#1: refused-here'] })
+    expect([...L.entries.values()].some((e) => e.body.kind === 'void' && e.body.cause === 'laptop#1')).toBe(true)
+    // the one evaluation: on the laptop and, after the sync, on the phone, the refused decline is no answer
+    expect(L.verdict(contactId)).toBe(null)
+    expect((await T.syncFrom(L)).stoppedAt).toBe(null)
+    expect(T.verdict(contactId)!.body.choice).toBe('accept')
+    const leaving = T.toCarrier(d1.outbound)
+    expect(leaving.map((o: any) => short(o.type))).toEqual(['encounter-credential-delivery/0.1'])
+    await carry(B, [], [T], leaving)
+    await both(T, L)
+    expect({ phone: await lines(T.P), laptop: await lines(L.P), atB: await lines(B), open: await request(L) })
+      .toEqual({ phone: ['Bea mutual'], laptop: ['Bea mutual'], atB: ['Al mutual'], open: undefined })
+  })
+
+  test('open, as measured: the laptop was active itself the next day before it catches up: the earlier encounter stays unverified on it, and the sync says so', async () => {
+    const { T, L, B } = await world(0x61)
+    await scans(T, B, [T])
+    // the laptop's own act a day later moves its time past the encounter
+    await L.act({ act: 'show', name: 'Al' }, tick(24 * 3600 * 1000))
+    expect((await L.syncFrom(T)).stoppedAt).toBe(null)
+    await carry(B, [], [T, L], [], 20); await both(T, L)
+    // the library never lets a holder's time fall: the laptop holds the ceremony at its own later time, and the
+    // friend's credential from the day before does not fit it. The library takes it without effect.
+    expect({ phone: await lines(T.P), laptop: await lines(L.P), atB: await lines(B) }).toEqual({ phone: ['Bea mutual'], laptop: ['Bea outgoing'], atB: ['Al mutual'] })
+    expect(await ids(L)).toEqual(await ids(T))
+    expect(L.notTaken).toContain('encounter-credential-delivery/0.1: taken without effect')
   })
 
   test('a card the library refuses for good: the act is closed as refused, a later act runs, and the laptop does not hang on it', async () => {

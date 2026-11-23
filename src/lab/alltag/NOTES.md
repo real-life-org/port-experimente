@@ -202,6 +202,8 @@ reported nothing.
 | applying a scan breaks off on the laptop | the entry stays open, the next sync applies it, one contact |
 | the laptop catches up a day after the phone met B | verified on the laptop like on the phone |
 | the phone accepted offline, the laptop declined, the phone's sync breaks off | the phone knows the decline; at the door its accept does not leave, B stays `outgoing` |
+| the library refuses the laptop's decline | it had no effect and counts nowhere (sync, verdict, door); the phone's accept leaves |
+| the laptop was active itself the next day before it catches up | **open**: phone and friend `mutual`, the laptop `outgoing` under the same contact id; the library takes the friend's credential without effect, the layer reports it as not taken |
 | the library refuses a card for good (`card-invalid`) | the act is closed as refused, a later act runs, the laptop does not hang on it |
 | B meets the phone and later, apart, the laptop | **open**: the phone ends with one line for B, the laptop with two; B with one or two, by chance (10 and 10 in 20 runs) |
 
@@ -220,6 +222,13 @@ What the library would need:
   RLTP-TRU-5150). In the last scenario this decides the outcome: the
   friend's continuity mapping answers the probe of one device, and the
   other device refuses it.
+- **Taking over a ceremony that is already verified.** Running the act at
+  its original time works only while the sister's holder has seen no later
+  time; the library never lets a holder's time fall. A sister that was
+  active later holds the ceremony at its own time, and the counterpart's
+  credential no longer fits. It needs a way to take over the confirmation
+  the acting device already checked, with the acting device still
+  recognisable.
 - **Same bytes for what a duty produces.** For an act, seed and time in
   the entry give the same document on every device. The documents that
   follow an encounter come from the library's duties on `resume`, with
@@ -234,6 +243,9 @@ every cut:
   handover, not from what an earlier application managed to do. The
   handover gives an accept its standing; it must not be what decides
   whether it may be handed over.
+- **One evaluation of what took effect.** An answer the library refused on
+  its device (`void`) counts nowhere: not in the sync, not in what a device
+  shows, not at the door. All three ask the same function.
 - **A refusal closes, a break does not.** A step that breaks off (an
   exception) leaves the entry open and is tried again. A refusal by the
   library is its verdict on the act: the acting device notes in the log

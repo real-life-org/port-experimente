@@ -202,8 +202,17 @@ export class Device {
     return out
   }
 
+  /** The library refused the act of this entry on its device: it had no effect, anywhere. */
+  private voided (id: string): boolean {
+    return [...this.entries.values()].some((x) => x.body.kind === 'void' && x.body.cause === id)
+  }
+
+  /** The answers to a request that took effect, by the entries this device
+   *  knows. The one evaluation behind the sync, what a device shows and the
+   *  door to the carrier: an answer the library refused on its device
+   *  (`void`) counts nowhere. */
   private confirms (contactId: string): Array<{ id: string, body: Confirm }> {
-    return [...this.entries.values()].filter((e) => e.body.kind === 'act' && e.body.act === 'confirm' && e.body.contactId === contactId)
+    return [...this.entries.values()].filter((e) => e.body.kind === 'act' && e.body.act === 'confirm' && e.body.contactId === contactId && !this.voided(e.id))
       .sort((x, y) => (x.id < y.id ? -1 : 1)) as any
   }
 
@@ -270,7 +279,7 @@ export class Device {
    *  own verdict. Returns true: the entry is done with. */
   private close (e: Entry, code: string, own: boolean): true {
     this.refused.push(`${e.id}: ${code}`)
-    if (own && ![...this.entries.values()].some((x) => x.body.kind === 'void' && x.body.cause === e.id)) this.write({ kind: 'void', cause: e.id, code }, true)
+    if (own && !this.voided(e.id)) this.write({ kind: 'void', cause: e.id, code }, true)
     return true
   }
 
@@ -295,14 +304,18 @@ export class Device {
             const got = await this.P.h.receive(e.body.envelope, e.body.when)
             if (got.disposition === 'unique') {
               for (const o of got.outbound) (TOLERATED.has(short(o.type)) ? outbound : this.withheld).push(o)
+              // the library takes a credential it cannot place (the ceremony stands at another time here) without a word: say so
+              if (e.body.type.startsWith('encounter-credential-delivery/') && !ev(got, 'encounter.accepted').length) this.notTaken.push(`${e.body.type}: taken without effect`)
             } else if (got.disposition !== 'duplicate-known') {
               this.notTaken.push(`${e.body.type}: ${got.reason ?? got.disposition}`)
             }
           } else if (e.body.kind === 'handed') {
             await this.settle(e.body.contactId, t)
           } else if (e.body.kind === 'void') {
-            // nothing to do: the act it names is skipped where it has not run
-          } else if ([...this.entries.values()].some((x) => x.body.kind === 'void' && x.body.cause === e.id)) {
+            // the act it names is skipped where it has not run; an answer it names no longer counts, so what holds is settled again
+            const cause = this.entries.get(e.body.cause)?.body as any
+            if (cause?.act === 'confirm') await this.settle(cause.contactId, t)
+          } else if (this.voided(e.id)) {
             // the acting device was refused: nothing happened there, nothing happens here
           } else if (e.body.act === 'confirm') {
             // the request has not reached this device yet: the entry waits
