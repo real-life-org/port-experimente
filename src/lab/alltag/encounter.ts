@@ -152,6 +152,9 @@ export class Device extends Sync<Body, Seeded> {
     return (v === 'declined' ? all.find((c) => c.body.choice === 'decline') : all.find((c) => c.id === v.accepts[0])) ?? null
   }
 
+  /** The credential delivery is the document that proves the person's answer to a request. */
+  protected carriesAnswer (doc: any): boolean { return short(doc.type).startsWith('encounter-credential-delivery/') }
+
   protected subjectOf (body: Body): string | undefined {
     return body.kind === 'act' && body.act === 'confirm' ? body.contactId : undefined
   }

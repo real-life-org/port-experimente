@@ -115,6 +115,9 @@ export class Device extends Sync<Body> {
     })
   }
 
+  /** The accept is the document that proves the person's answer to an invitation. */
+  protected carriesAnswer (doc: any): boolean { return short(doc.type).startsWith('membership-accept/') }
+
   protected subjectOf (body: Body): string | undefined {
     return body.kind === 'decided' ? body.credDigest : undefined
   }

@@ -59,6 +59,7 @@ export class Device extends Sync<Body> {
 
   /** Messages have no answer whose standing a handover would give. */
   protected mayLeave (): boolean { return true }
+  protected carriesAnswer (): boolean { return false }
   /** A stop is named by its entry alone. */
   protected stopped (id: string): string { return id }
 

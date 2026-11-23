@@ -16,7 +16,10 @@ class Toy extends Sync<Body> {
     const accepts = all.filter((e) => e.body.choice === 'accept').map((e) => e.id)
     return rule({ handed: this.handed(subject).filter((c) => accepts.includes(c)), declined: all.some((e) => e.body.choice === 'decline'), first: accepts[0] })
   }
-  doc = (id: string): any => ({ digest: 'doc-of-' + id })
+  doc = (id: string): any => ({ digest: 'doc-of-' + id, type: 'answer' })
+  protected carriesAnswer (doc: any): boolean { return doc.type === 'answer' }
+  /** the library stored the answer's document and the call broke off before the layer noted whose it is */
+  storedThenBroke = false
   protected subjectOf (b: Body): string { return b.subject }
   declining (subject: string): boolean { return this.running(this.of('answer').filter((e) => e.body.subject === subject)).some((e) => e.body.choice === 'decline') }
   protected mayLeave (subject: string, cause: string): boolean {
@@ -26,6 +29,7 @@ class Toy extends Sync<Body> {
   protected async apply (e: { id: string, body: Body }, own: boolean): Promise<Step> {
     if (!own) return
     if (this.fate === 'breaks') throw new Error('crash')
+    if (this.storedThenBroke) { this.storedThenBroke = false; throw new Error('crash after the library stored it') }
     if (this.fate === 'refused') { this.refuse(e, 'no'); return }
     this.ran.push(e.id)
     if (e.body.choice === 'accept') this.leaves(e.id, e.body.subject, [this.doc(e.id)])
@@ -169,6 +173,27 @@ test('three facts, each its own entry: chosen, took effect, handed', async () =>
     expect((await T.answer('s', 'accept')).stoppedAt).toBe('phone#1: crash')
     expect((await T.syncFrom(T)).stoppedAt).toBe(null)
     expect(kinds(T)).toEqual(['phone#1 answer', 'phone#2 took'])
+  })
+
+  test('the door is closed by default: a document that proves an answer waits while the layer cannot assign it, also when it is offered again', async () => {
+    const T = new Toy('phone'), L = new Toy('laptop')
+    T.storedThenBroke = true
+    expect((await T.answer('s', 'accept')).stoppedAt).toMatch(/crash after the library stored it/)
+    const offeredAgain = [T.doc('phone#1')]                  // what the library's resume hands out
+    expect(T.toCarrier(offeredAgain)).toEqual([])            // no entry says whose it is
+    // the phone learns the laptop's decline; the open accept is completed and the rule says no
+    await L.answer('s', 'decline')
+    expect((await T.syncFrom(L)).stoppedAt).toBe(null)
+    expect({ holds: T.holds('s'), leaves: T.toCarrier(offeredAgain) }).toEqual({ holds: 'declined', leaves: [] })
+    // without a decline the same break only delays the accept
+    const U = new Toy('phone')
+    U.storedThenBroke = true
+    await U.answer('s', 'accept')
+    expect(U.toCarrier(offeredAgain)).toEqual([])
+    await U.syncFrom(U)
+    expect(U.toCarrier(offeredAgain)).toEqual(offeredAgain)
+    // a document of another kind is not held up
+    expect(U.toCarrier([{ digest: 'x', type: 'ack' }])).toEqual([{ digest: 'x', type: 'ack' }])
   })
 
     test('the accept of a refused act never leaves', async () => {

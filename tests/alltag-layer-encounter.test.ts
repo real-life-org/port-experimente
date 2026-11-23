@@ -323,6 +323,38 @@ describe('an encounter through the layer', () => {
     expect({ holds: T.verdict(contactId), declining: T.declining(contactId), open: await request(T), laptop: await request(L) }).toEqual({ holds: null, declining: false, open: contactId, laptop: contactId })
   })
 
+  test('the library stores the phone\'s accept and the call breaks off; the phone learns the laptop\'s decline: the credential the library offers again does not leave', async () => {
+    const { T, L, B } = await world(0x85)
+    await shows(T, B, [T]); await L.syncFrom(T)
+    const contactId = (await request(T))!
+    const h = T.P.h
+    T.P.h = { ...h, decide: async (...a: any[]) => { await h.decide(...a); throw new Error('crash after the commit') } }
+    expect((await T.act({ act: 'confirm', contactId, choice: 'accept' })).stoppedAt).toMatch(/crash after the commit/)
+    T.P.h = h
+    // the library holds the credential in its outbox; the layer has no note yet whose it is
+    const offered = (await T.P.h.resume(clk(T.P, tick(3600_000)))).outbound   // an hour later the library tries again
+    expect(offered.map((o: any) => short(o.type))).toContain('encounter-credential-delivery/0.1')
+    expect(T.toCarrier(offered).map((o: any) => short(o.type))).not.toContain('encounter-credential-delivery/0.1')
+    await L.act({ act: 'confirm', contactId, choice: 'decline' })
+    expect((await T.syncFrom(L)).stoppedAt).toBe(null)
+    expect(T.verdict(contactId)!.body.choice).toBe('decline')
+    await carry(B, [], [T, L], [], 20); await both(T, L)
+    expect(await lines(B)).toEqual(['Al outgoing'])
+  })
+
+  test('the same break without a decline only delays the accept: the next application completes the act and the credential leaves', async () => {
+    const { T, L, B } = await world(0x89)
+    await shows(T, B, [T]); await L.syncFrom(T)
+    const contactId = (await request(T))!
+    const h = T.P.h
+    T.P.h = { ...h, decide: async (...a: any[]) => { await h.decide(...a); throw new Error('crash after the commit') } }
+    await T.act({ act: 'confirm', contactId, choice: 'accept' })
+    T.P.h = h
+    await carry(B, [], [T, L], [], 20); await both(T, L)
+    expect({ phone: await lines(T.P), laptop: await lines(L.P), atB: await lines(B) }).toEqual({ phone: ['Bea mutual'], laptop: ['Bea mutual'], atB: ['Al mutual'] })
+    expect([...T.entries.values()].filter((e) => e.body.kind === 'took')).toHaveLength(1)
+  })
+
   test('a card the library refuses for good: the act is closed as refused, a later act runs, and the laptop does not hang on it', async () => {
     const { T, L, B } = await world(0x55)
     const good = cardOf(ok(await B.h.show(at(B, { name: 'Bea' }))))

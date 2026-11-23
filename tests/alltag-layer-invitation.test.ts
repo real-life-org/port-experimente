@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { at, copyOf, ev, met, mk, ok, type Person } from '../src/lab/alltag/fixture'
+import { at, clk, copyOf, ev, met, mk, ok, tick, type Person } from '../src/lab/alltag/fixture'
 import { Device } from '../src/lab/alltag/invitation'
 import { carry } from '../src/lab/alltag/carrier'
 
@@ -235,5 +235,22 @@ describe('a group invitation through the layer', () => {
     expect(await run(0x99, 2, 'took')).toEqual(await run(0x9d, 1, 'took'))
     expect(await run(0xa1, 2, 'void')).toEqual({ holds: 'accept', card: false, status: 'accepted', declining: false, leaves: 1 })
     expect(await run(0xa5, 2, 'took')).toEqual({ holds: 'declined', card: false, status: 'declined', declining: false, leaves: 0 })
+  })
+
+  test('the library stores the phone\'s accept and the call breaks off; the phone learns the laptop\'s decline: the accept the library offers again does not leave', async () => {
+    const { T, L, B, b, g } = await world(0xa9)
+    await carry(B, [T, L], [T, L], await invite(B, b, g))
+    const real = T.P.h
+    T.P.h = Object.create(real, { decide: { value: async (...a: any[]) => { await real.decide(...a); throw new Error('crash after the commit') } } })
+    expect((await T.decide(g, 'accept')).stoppedAt).toMatch(/crash after the commit/)
+    T.P.h = real
+    const accepts = (docs: any[]): number => docs.filter((o: any) => o.type.includes('membership-accept')).length
+    const offered = (await T.P.h.resume(clk(T.P, tick(3600_000)))).outbound   // an hour later the library tries again
+    expect({ offered: accepts(offered), leaves: accepts(T.toCarrier(offered)) }).toEqual({ offered: 1, leaves: 0 })
+    await L.decide(g, 'decline')
+    expect((await T.syncFrom(L)).stoppedAt).toBe(null)
+    await L.syncFrom(T)
+    await carry(B, [T, L], [T, L], [], 20)
+    expect({ atB: await members(B, g), holds: [T.verdict(await credOf(T)), L.verdict(await credOf(L))] }).toEqual({ atB: 1, holds: ['declined', 'declined'] })
   })
 })

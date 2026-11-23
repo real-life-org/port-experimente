@@ -25,6 +25,10 @@
 //      document may leave is computed from the entries the device knows at
 //      that moment (`toCarrier`), never from a list an earlier application
 //      left behind, so a later `void` lifts what a running decline held up.
+//      The door is closed by default: a document that proves an answer
+//      leaves only when the layer can assign it to an answer that took
+//      effect; one it cannot assign waits, also when the library offers it
+//      again.
 //   5. Between two answers of one person (Anton, 2026-11-23): what the
 //      counterpart took first holds, proven by its answer; what has not left
 //      the own device may be taken back (`rule`).
@@ -221,21 +225,31 @@ export abstract class Sync<B extends { kind: string }, P extends Person = Person
 
   /** Whether the answer of entry `cause` about `subject` may leave now, by what this device knows. */
   protected abstract mayLeave (subject: string, cause: string): boolean
+  /** Whether a document is of a kind that proves an answer of the person (an accept, a credential). */
+  protected abstract carriesAnswer (doc: any): boolean
 
   /** What of `docs` may go to the carrier now. An answer that leaves is
    *  recorded as handed.
    *
+   *  The door is closed by default for every document that proves an answer
+   *  of the person: it leaves only when this device can assign it to an
+   *  answer that took effect and the rule lets that answer leave. That holds
+   *  for the first call and for every later offer by the library's resume. A
+   *  document of that kind the layer cannot assign waits: the library may
+   *  have stored it and the call may have broken off before the layer noted
+   *  whose it is; the next application of the open entry completes the note.
+   *
    *  The rule is asked every time, from the entries this device knows now:
    *  the handover gives an answer its standing, so it must not be what
    *  decides whether it may be handed over; and what a running decline holds
-   *  up today may leave tomorrow, when the decline turned out void. A
-   *  document held back is offered again by the library's next resume. */
+   *  up today may leave tomorrow, when the decline turned out void. */
   toCarrier (docs: any[]): any[] {
     const out: any[] = []
     next: for (const o of docs) {
       if (this.withheld.some((w) => w.digest === o.digest)) continue
-      for (const [cause, s] of this.standing) {
-        if (!s.docs.some((m) => m.digest === o.digest)) continue
+      const causes = [...this.standing].filter(([, s]) => s.docs.some((m) => m.digest === o.digest))
+      if (!causes.length && this.carriesAnswer(o)) continue
+      for (const [cause, s] of causes) {
         if (!this.took(cause) || this.voided(cause) || !this.mayLeave(s.subject, cause)) continue next
         if (!this.handed(s.subject).includes(cause)) this.write({ kind: 'handed', subject: s.subject, cause }, true)
       }

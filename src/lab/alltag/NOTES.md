@@ -70,6 +70,19 @@ subject. The core holds five rules:
 5. **Between two answers of one person**: a confirmed accept stands; else
    every accept that left a device; else a decline; else the first accept.
 
+The door is closed by default. A document that proves an answer of the
+person (the membership accept, the encounter's credential delivery) leaves
+only when the layer can assign it to an answer that took effect and the
+rule lets that answer leave; one it cannot assign waits. This holds for
+the first call and for every later offer by the library's `resume`. The
+case behind it: the library stores the accept and the call breaks off
+before the layer notes whose document it is; the device then learns a
+decline, and the library offers the stored document again.
+
+What stays a limit of the library: the document is in its outbox. The
+layer keeps it from the carrier; it cannot remove it or undo the accept
+in the holder.
+
 The test for rule 3 and 4: whether a decision and what became of it reach
 a sister in one sync or in two, the sister ends with the same verdict, the
 same prompt and the same answer at the door (core, invitation and
