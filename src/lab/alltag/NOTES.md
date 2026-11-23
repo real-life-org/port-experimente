@@ -141,7 +141,12 @@ refuses is recorded and the log moves on.
   person's devices; a device that the carrier does not reach stays at
   `joining`.
 
-**Limits of the rule.** It needs an arbiter: here the one counterpart and
-in the end the group's log. A profile has none; two friends can take
-different versions first. And the human has to be told: who declines on the
-laptop and is a member all the same needs to read that the phone accepted.
+**Limits of the rule.** It works where there is one counterpart whose
+answer counts: the inviter's welcome names the accept it took, both devices
+read that one answer, and the group's log keeps the same fact. It does not
+work for what goes to many at once. A profile changed apart on two devices
+reaches twenty friends in either order; each keeps the one that came first,
+and "what the counterpart took first" has twenty answers. There the devices
+agree on one version after their sync and send it to all as a newer one.
+And the human has to be told: who declines on the laptop and is a member
+all the same needs to read that the phone accepted.
