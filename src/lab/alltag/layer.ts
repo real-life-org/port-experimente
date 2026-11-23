@@ -32,29 +32,35 @@ export class Device extends Sync<Body> {
   readonly conversation = new Map<string, Line>()
 
   /** A document arrives from the carrier. Returns what the library answers. */
-  async receive (envelope: any, t = tick()): Promise<any[]> {
-    const got = await this.P.h.receive(envelope, clk(this.P, t))
-    if (got.disposition === 'unique') this.write({ kind: 'received', envelope }, true)
-    const { outbound } = await this.applyOpen(t)
-    return [...(got.disposition === 'unique' || got.disposition === 'duplicate-known' ? got.outbound : []), ...outbound]
+  receive (envelope: any, t = tick()): Promise<any[]> {
+    return this.exclusive(async () => {
+      const got = await this.P.h.receive(envelope, clk(this.P, t))
+      if (got.disposition === 'unique') this.write({ kind: 'received', envelope }, true)
+      const { outbound } = await this.applyOpen(t)
+      return [...(got.disposition === 'unique' || got.disposition === 'duplicate-known' ? got.outbound : []), ...outbound]
+    })
   }
 
   /** The human reads: the application takes every inbox entry over. The
    *  act is recorded with the ids read now; a message that arrives later is
    *  not part of it. */
-  async takeAll (t = tick()): Promise<Progress> {
-    const ids = (await this.P.h.inbox()).map((m: any) => m.id)
-    if (ids.length) this.write({ kind: 'taken', ids }, false)
-    return this.applyOpen(t)
+  takeAll (t = tick()): Promise<Progress> {
+    return this.exclusive(async () => {
+      const ids = (await this.P.h.inbox()).map((m: any) => m.id)
+      if (ids.length) this.write({ kind: 'taken', ids }, false)
+      return this.applyOpen(t)
+    })
   }
 
   /** The human writes to a contact. Returns the documents to hand to the carrier. */
-  async send (contactId: string, text: string, t = tick()): Promise<any[]> {
-    const r = ok(await this.P.h.sendMessage(contactId, text, { when: clk(this.P, t), actId: `${this.name}-send-${this.next - 1}` }))
-    const digest = r.outbound[0].digest
-    this.conversation.set(digest, { dir: 'out', contactId, text, key: digest })
-    this.write({ kind: 'sent', contactId, text, digest }, true)
-    return r.outbound
+  send (contactId: string, text: string, t = tick()): Promise<any[]> {
+    return this.exclusive(async () => {
+      const r = ok(await this.P.h.sendMessage(contactId, text, { when: clk(this.P, t), actId: `${this.name}-send-${this.next - 1}` }))
+      const digest = r.outbound[0].digest
+      this.conversation.set(digest, { dir: 'out', contactId, text, key: digest })
+      this.write({ kind: 'sent', contactId, text, digest }, true)
+      return r.outbound
+    })
   }
 
   /** Messages have no answer whose standing a handover would give. */

@@ -36,7 +36,7 @@
 // The log itself is the smallest thing that orders entries (ids,
 // dependencies, exchange of what is missing): a stand-in for the group
 // log's exchange, not a proposal for it. It is in memory and unsealed.
-import { tick, type Person } from './fixture'
+import { clk, tick, type Person } from './fixture'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -103,17 +103,36 @@ export abstract class Sync<B extends { kind: string }, P extends Person = Person
     return [...this.entries.values()].filter((e) => e.body.kind === kind) as any
   }
 
+  /** One thing at a time on a device. Everything that enters a device (a
+   *  document, an act of the human, a sync, the library's resume) runs
+   *  after what entered before it has finished: two loops never apply the
+   *  same open entry, and what the library draws during one act comes from
+   *  that act's seed and no other. */
+  private busy: Promise<unknown> = Promise.resolve()
+  protected exclusive<T> (run: () => Promise<T>): Promise<T> {
+    const turn = this.busy.then(run, run)
+    this.busy = turn.catch(() => undefined)
+    return turn
+  }
+
   /** Learns the entries of `from` this device lacks and applies what is open. */
-  async syncFrom (from: { entries: Map<string, Entry<B>> }, t = tick()): Promise<Progress> {
-    let moved = true
-    while (moved) {
-      moved = false
-      for (const e of from.entries.values()) {
-        if (this.entries.has(e.id) || !e.deps.every((d) => this.entries.has(d))) continue
-        this.know(e); moved = true
+  syncFrom (from: { entries: Map<string, Entry<B>> }, t = tick()): Promise<Progress> {
+    return this.exclusive(async () => {
+      let moved = true
+      while (moved) {
+        moved = false
+        for (const e of from.entries.values()) {
+          if (this.entries.has(e.id) || !e.deps.every((d) => this.entries.has(d))) continue
+          this.know(e); moved = true
+        }
       }
-    }
-    return this.applyOpen(t)
+      return this.applyOpen(t)
+    })
+  }
+
+  /** The library's own turn (retries, duties): what it hands out goes through the door. */
+  resume (t = tick()): Promise<any[]> {
+    return this.exclusive(async () => this.toCarrier((await this.P.h.resume(clk(this.P, t))).outbound))
   }
 
   // ---- what took effect (rule 3)

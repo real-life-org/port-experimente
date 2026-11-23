@@ -355,6 +355,37 @@ describe('an encounter through the layer', () => {
     expect([...T.entries.values()].filter((e) => e.body.kind === 'took')).toHaveLength(1)
   })
 
+  test('apart: both accepts left their devices; the one counted first is not delivered: the other is still free to leave again', async () => {
+    const { T, L, B } = await world(0x8d)
+    await shows(T, B, [T]); await L.syncFrom(T)
+    const contactId = (await request(T))!
+    const [d1, d2] = [await T.act({ act: 'confirm', contactId, choice: 'accept' }), await L.act({ act: 'confirm', contactId, choice: 'accept' })]
+    expect([T.toCarrier(d1.outbound).length, L.toCarrier(d2.outbound).length]).toEqual([1, 1])   // both left, neither arrived
+    await both(T, L)
+    expect([T.verdict(contactId)!.id, L.verdict(contactId)!.id]).toEqual(['laptop#1', 'laptop#1'])
+    // the phone's accept is not the one counted first, but it left: the library's repeat goes through the door
+    expect(T.toCarrier(d1.outbound).map((o: any) => short(o.type))).toEqual(['encounter-credential-delivery/0.1'])
+    await carry(B, [], [T], T.toCarrier(d1.outbound)); await both(T, L)
+    expect({ phone: await lines(T.P), laptop: await lines(L.P), atB: await lines(B) }).toEqual({ phone: ['Bea mutual'], laptop: ['Bea mutual'], atB: ['Al mutual'] })
+  })
+
+  test('two acts entered at once on one device: each draws from its own seed, the laptop derives the same two cards', async () => {
+    const { T, L } = await world(0x91)
+    const [a, b] = await Promise.all([T.act({ act: 'show', name: 'Al' }), T.act({ act: 'show', name: 'Al' })])
+    expect([a.stoppedAt, b.stoppedAt]).toEqual([null, null])
+    expect((await L.syncFrom(T)).stoppedAt).toBe(null)
+    const cards = (D: Device): string[] => ['phone#1', 'phone#2'].map((id) => JSON.stringify(cardOf(D.results.get(id))))
+    expect(cards(L)).toEqual(cards(T))
+    expect(cards(T)[0]).not.toBe(cards(T)[1])
+  })
+
+  test('the time and the seed of an act are the layer\'s: a caller cannot set them', async () => {
+    const { T } = await world(0x95)
+    await T.act({ act: 'show', name: 'Al', when: 0, seed: 'x', kind: 'received' } as any)
+    const e = [...T.entries.values()][0]!.body as any
+    expect({ kind: e.kind, seeded: e.seed.length, later: e.when > 0 }).toEqual({ kind: 'act', seeded: 64, later: true })
+  })
+
   test('a card the library refuses for good: the act is closed as refused, a later act runs, and the laptop does not hang on it', async () => {
     const { T, L, B } = await world(0x55)
     const good = cardOf(ok(await B.h.show(at(B, { name: 'Bea' }))))

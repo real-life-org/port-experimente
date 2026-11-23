@@ -121,21 +121,26 @@ export class Device extends Sync<Body, Seeded> {
   readonly stuck: string[] = []
 
   /** A document arrives from the carrier. Returns what the library answers. */
-  async receive (envelope: any, t = tick()): Promise<any[]> {
-    const when = clk(this.P, t)
-    const got = await this.P.h.receive(envelope, when)
-    if (got.disposition === 'unique' && !PRIVATE.has(short(got.type))) this.write({ kind: 'received', envelope, type: short(got.type), when }, true)
-    const more = await this.applyOpen(t)
-    return [...(got.disposition === 'unique' || got.disposition === 'duplicate-known' ? got.outbound : []), ...more.outbound]
+  receive (envelope: any, t = tick()): Promise<any[]> {
+    return this.exclusive(async () => {
+      const when = clk(this.P, t)
+      const got = await this.P.h.receive(envelope, when)
+      if (got.disposition === 'unique' && !PRIVATE.has(short(got.type))) this.write({ kind: 'received', envelope, type: short(got.type), when }, true)
+      const more = await this.applyOpen(t)
+      return [...(got.disposition === 'unique' || got.disposition === 'duplicate-known' ? got.outbound : []), ...more.outbound]
+    })
   }
 
   /** The human acts on this device. The act is recorded with a fresh seed
    *  before anything is done, then applied like any entry. Returns the
    *  library's result of the act beside the progress. */
-  async act (a: Act, t = tick()): Promise<Progress & { result: any }> {
-    const e = this.write({ kind: 'act', seed: randomBytes(32).toString('hex'), when: clk(this.P, t), ...a }, false)
-    const p = await this.applyOpen(t)
-    return { ...p, result: this.results.get(e.id) }
+  act (a: Act, t = tick()): Promise<Progress & { result: any }> {
+    return this.exclusive(async () => {
+      // kind, seed and time are the layer's: they come after what the caller gave
+      const e = this.write({ ...a, kind: 'act', seed: randomBytes(32).toString('hex'), when: clk(this.P, t) }, false)
+      const p = await this.applyOpen(t)
+      return { ...p, result: this.results.get(e.id) }
+    })
   }
 
   /** The answers to a request that took effect, by the entries this device knows. */
@@ -164,11 +169,13 @@ export class Device extends Sync<Body, Seeded> {
     return this.running(this.of('act').filter((e) => e.body.act === 'confirm' && e.body.contactId === contactId)).some((e) => (e.body as Confirm).choice === 'decline')
   }
 
-  /** At the door: the accept of this device's answer `cause` may leave while it is the answer that stands.
-   *  While a decline is still running, an accept that has not left yet waits for what becomes of it. */
+  /** At the door. An accept that already left stays free to leave again: every accept that left is a
+   *  candidate until the counterpart's answer names one, and if the one this device counts first never
+   *  arrives, the other must still be able to. An accept that has not left yet may leave while it is the
+   *  answer that stands and no decline is running. */
   protected mayLeave (contactId: string, cause: string): boolean {
-    if (this.verdict(contactId)?.id !== cause) return false
-    return this.handed(contactId).includes(cause) || !this.declining(contactId)
+    if (this.handed(contactId).includes(cause)) return true
+    return this.verdict(contactId)?.id === cause && !this.declining(contactId)
   }
 
   private async prompt (contactId: string): Promise<any | undefined> {

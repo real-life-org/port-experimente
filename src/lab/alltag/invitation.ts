@@ -77,21 +77,25 @@ export class Device extends Sync<Body> {
   }
 
   /** A document arrives from the carrier. Returns what the library answers. */
-  async receive (envelope: any, t = tick()): Promise<any[]> {
-    const got = await this.takeTrying(envelope, t)
-    await this.noteConfirmed()
-    // an acknowledgement settles a document only its issuer holds: it is not passed on
-    if (got.disposition === 'unique' && !PRIVATE.has(short(got.type))) this.write({ kind: 'received', envelope, type: short(got.type) }, true)
-    const more = await this.applyOpen(t)
-    return [...(got.disposition === 'unique' || got.disposition === 'duplicate-known' ? got.outbound : []), ...more.outbound]
+  receive (envelope: any, t = tick()): Promise<any[]> {
+    return this.exclusive(async () => {
+      const got = await this.takeTrying(envelope, t)
+      await this.noteConfirmed()
+      // an acknowledgement settles a document only its issuer holds: it is not passed on
+      if (got.disposition === 'unique' && !PRIVATE.has(short(got.type))) this.write({ kind: 'received', envelope, type: short(got.type) }, true)
+      const more = await this.applyOpen(t)
+      return [...(got.disposition === 'unique' || got.disposition === 'duplicate-known' ? got.outbound : []), ...more.outbound]
+    })
   }
 
   /** The human answers the invitation to `groupId` on this device. */
-  async decide (groupId: string, choice: 'accept' | 'decline', t = tick()): Promise<Progress> {
-    const inv = await this.invite(groupId)
-    if (!inv) throw new Error(`${this.name}: no invitation to ${groupId}`)
-    this.write({ kind: 'decided', credDigest: inv.credDigest, groupId, choice }, false)
-    return this.applyOpen(t)
+  decide (groupId: string, choice: 'accept' | 'decline', t = tick()): Promise<Progress> {
+    return this.exclusive(async () => {
+      const inv = await this.invite(groupId)
+      if (!inv) throw new Error(`${this.name}: no invitation to ${groupId}`)
+      this.write({ kind: 'decided', credDigest: inv.credDigest, groupId, choice }, false)
+      return this.applyOpen(t)
+    })
   }
 
   /** The accept a device issued for its answer `cause`, if this device knows of one. */

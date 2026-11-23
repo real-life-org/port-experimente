@@ -74,9 +74,10 @@ export async function runLayer (): Promise<LayerRow[]> {
     // K1: the phone meets B, the laptop learns it
     const { T, L, B } = await encounter(0xb1)
     await scans(T, B)
+    const met = await idsOf(T)
     await L.syncFrom(T); await T.syncFrom(L)
     const k1 = [await shown(T), await shown(L)]
-    rows.push(verdict('K1', k1[0] === k1[1] && k1[0]!.endsWith('mutual'), `phone ${k1[0]}; laptop ${k1[1] || 'nothing'}`))
+    rows.push(verdict('K1', met.length === 1 && k1[0] === `${met[0]} mutual` && k1[1] === k1[0], `met as ${met.join(', ')}; phone ${k1[0]}; laptop ${k1[1] || 'nothing'}`))
   }
   {
     // K2: a fresh pair of devices, apart: the phone meets B, the laptop meets C; only then they sync
@@ -84,12 +85,13 @@ export async function runLayer (): Promise<LayerRow[]> {
     const C = await first(0xb7)
     await scans(T, B)
     await scans(L, C)
-    const apart = [(await T.P.h.contacts()).length, (await L.P.h.contacts()).length]
+    const apart = [await idsOf(T), await idsOf(L)]
     await L.syncFrom(T); await T.syncFrom(L)
     const k2 = [await shown(T), await shown(L)]
-    const all = k2[0]!.split(', ')
-    rows.push(verdict('K2', apart[0] === 1 && apart[1] === 1 && k2[0] === k2[1] && all.length === 2 && all.every((x) => x.endsWith('mutual')),
-      `apart: phone ${apart[0]}, laptop ${apart[1]} contacts; after sync: phone ${k2[0]}; laptop ${k2[1]}`))
+    // the ids each device met under, both verified, on both devices
+    const want = [...apart[0]!, ...apart[1]!].map((id) => `${id} mutual`).sort().join(', ')
+    rows.push(verdict('K2', apart[0]!.length === 1 && apart[1]!.length === 1 && apart[0]![0] !== apart[1]![0] && k2[0] === want && k2[1] === want,
+      `apart: phone ${apart[0]!.join(', ')}, laptop ${apart[1]!.join(', ')}; after sync: phone ${k2[0]}; laptop ${k2[1]}`))
   }
   {
     // K3: B meets the phone and later, apart, the laptop
@@ -98,9 +100,10 @@ export async function runLayer (): Promise<LayerRow[]> {
     await L.syncFrom(T); await T.syncFrom(L)
     await carry(B, [], [T, L], [], 30)
     await L.syncFrom(T); await T.syncFrom(L)
-    const n = [(await T.P.h.contacts()).length, (await L.P.h.contacts()).length]
-    rows.push(verdict('K3', n[0] === 1 && n[1] === 1 && (await B.h.contacts()).length === 1,
-      `lines for B: phone ${n[0]}, laptop ${n[1]}; the laptop refuses the friend's continuity mapping (it answers the other device's probe); lines for A at B: one or two, by chance`))
+    const n = [(await T.P.h.contacts()).length, (await L.P.h.contacts()).length, (await B.h.contacts()).length]
+    const notTaken = [...new Set(L.notTaken)]
+    rows.push(verdict('K3', n[0] === 1 && n[1] === 1 && n[2] === 1,
+      `lines for B: phone ${n[0]}, laptop ${n[1]}; lines for A at B: ${n[2]}${notTaken.length ? `; the laptop did not take: ${notTaken.join(', ')}` : ''}`))
   }
   return rows
 }
@@ -116,5 +119,6 @@ async function scans (D: Enc, B: Person): Promise<void> {
   const prompt = (await B.h.prompts()).find((p: any) => p.kind === 'encounter-confirm')
   await carry(B, [], [D], [...got.outbound, ...ok(await B.h.decide(prompt.id, 'accept', at(B))).outbound])
 }
+const idsOf = async (D: Enc): Promise<string[]> => (await D.P.h.contacts()).map((c: any) => c.id as string).sort()
 /** What a device shows of its contacts: the full id and the verification, sorted. */
 const shown = async (D: Enc): Promise<string> => (await D.P.h.contacts()).map((c: any) => `${c.id} ${c.verification}`).sort().join(', ')
