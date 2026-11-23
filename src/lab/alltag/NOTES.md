@@ -49,11 +49,19 @@ steps once per day and what falls due is delivered at that instant, so
 both runs cover the same five days. Measured 2026-11-24, library 0.19.0;
 the full table is `aftermath.expected.json`.
 
-"Shows" means what the comparison reads: per contact the name, the
-verification, the trust flags and whether it can be messaged; per group
-name, phase and the numbers of members and pending; the profile; the
-number of inbox items; the kinds of open prompts. Counters, revisions and
-message contents are not compared.
+Two comparisons, with different reach:
+
+- **The friend, with two devices against with one:** per contact the
+  verification and the trust flags (given, received, pending); per group
+  the phase and the numbers of members and of pending; the number of inbox
+  items. Not compared at the friend: names, whether a contact can be
+  messaged, the profile, open prompts, counters, revisions, message
+  contents.
+- **The phone against the laptop:** per contact the name, the
+  verification, the trust flags and whether it can be messaged; per group
+  name, phase and the two numbers; the profile; the number of inbox items;
+  the kinds of open prompts. Not compared: counters, revisions, message
+  contents.
 
 | Scenario | The friend shows | The two devices show | Sent and refused on each of the five days |
 |---|---|---|---|
@@ -68,8 +76,10 @@ message contents are not compared.
 Three findings:
 
 1. **In what was compared, the counterpart shows no difference.** In every
-   scenario the friend shows what it shows with one device. Whether its
-   counters or revisions differ was not looked at.
+   scenario the friend's verification, trust flags, group phase, member
+   and pending numbers and inbox number are those of the run with one
+   device. An extra open prompt at the friend, or another value of
+   "can be messaged", would not show in this table.
 2. **The refused device never learns.** A refusal carries no reason and no
    acknowledgement, so the laptop offers the same document again, once on
    each observed day. What would end it is an answer where the counterpart

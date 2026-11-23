@@ -7,11 +7,12 @@
 // same afterwards, does the counterpart show what it shows with one device,
 // and what is still being sent and refused days later.
 //
-// "Shows the same" compares what `sig` reads: per contact the name, the
-// verification, the trust flags and whether it can be messaged; per group
-// name, phase and the numbers of members and pending; the profile; the
-// number of inbox items; the kinds of open prompts. Counters, revisions and
-// message contents are not compared.
+// Two comparisons with different reach. The friend with two devices against
+// with one: per contact verification and trust flags, per group phase and
+// the numbers of members and pending, the number of inbox items (the row
+// "the friend shows"); nothing else of the friend is compared. The phone
+// against the laptop: everything `sig` reads. Counters, revisions and
+// message contents are in neither.
 //
 // The second device is the stand-in of fixture.ts (same seed, a copy of the
 // store, a late clock); the carrier stand-in hands an envelope to every
