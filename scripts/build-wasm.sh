@@ -5,15 +5,18 @@
 # Ein gebautes Paket liegt zusätzlich im gemeinsamen Zwischenspeicher
 # ($PORT_EXPERIMENTE_CACHE, sonst $XDG_CACHE_HOME/port-experimente, sonst ~/.cache/port-experimente), unter einem
 # Schlüssel aus dem Inhalt der Hülle (alle Dateien, die git kennt oder nicht
-# ignoriert), der Toolchain und der wasm-bindgen-Version. Ein zweiter Worktree
+# ignoriert), der Toolchain, der wasm-bindgen-Version und den Cargo- und rustc-Einstellungen der Umgebung. Ein zweiter Worktree
 # mit denselben Quellen kopiert es, statt zu bauen. WASM_CACHE=off baut immer.
 set -eu
 cd "$(dirname "$0")/.."
 TOOLCHAIN="${RUST_TOOLCHAIN:-1.96}"
 SHARED="${PORT_EXPERIMENTE_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/port-experimente}"
+case "$SHARED" in /*) ;; *) SHARED="$PWD/$SHARED" ;; esac # ein relativer Pfad gilt ab der Wurzel des Checkouts
 key() { # <crate-dir>
   {
     echo "$TOOLCHAIN"; rustc "+$TOOLCHAIN" --version; wasm-bindgen --version; cat scripts/build-wasm.sh
+    # Was Cargo oder rustc über die Umgebung anders bauen lässt (Profil, Flags, Wrapper), gehört zum Schlüssel.
+    env | grep -E '^(CARGO_(PROFILE|BUILD|ENCODED|TARGET)_|RUSTFLAGS=|RUSTC)' | sort || true
     git ls-files -z --cached --others --exclude-standard "rust/$1" | sort -z | xargs -0 sha256sum
   } | sha256sum | cut -c1-32
 }

@@ -52,7 +52,8 @@ describe('findings summary', () => {
     for (const r of rows) for (const id of r.cands) {
       const n = counts.get(id)
       if (!n) throw new Error(`candidate ${id} not in the matrix`)
-      expect({ id, kept: n.kept, partial: n.partial, notKept: n.notKept, na: n.na })
+      // Weicht eine Zahl ab: `pnpm matrix` schreibt die Zusammenfassung aus den Ergebnisdateien neu; public/findings.html mitcommitten.
+      expect({ id, kept: n.kept, partial: n.partial, notKept: n.notKept, na: n.na }, 'public/findings.html is behind results/: run `pnpm matrix` and commit it')
         .toEqual({ id, kept: r.kept, partial: r.partial, notKept: r.notKept, na: r.na })
     }
   })

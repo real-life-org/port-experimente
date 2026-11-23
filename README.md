@@ -28,7 +28,9 @@ workshop repository (`rltp/design/port-experimente-2026-10.md`).
   table of `public/findings.html` from the result files without loading a
   candidate; it runs before every build, so the page and `matrix.md` are
   build output and not in the repository. After changing a candidate,
-  re-run it and commit its result file. The English text of ports,
+  re-run it, run `pnpm matrix` and commit its result file together with
+  `public/findings.html`: the summary table there is committed, and a test
+  fails when its numbers differ from the result files. The English text of ports,
   promises, scenarios and candidates is in `src/lab/matrix-en.ts`; a test
   fails when one is missing. The browser page renders the matrix at the end
   of a run.

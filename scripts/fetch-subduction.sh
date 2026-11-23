@@ -17,6 +17,7 @@ case "$(uname -s)-$(uname -m)" in
 esac
 OUT=".cache/subduction-$VERSION"
 SHARED="${PORT_EXPERIMENTE_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/port-experimente}"
+case "$SHARED" in /*) ;; *) SHARED="$PWD/$SHARED" ;; esac # ein relativer Pfad gilt ab der Wurzel des Checkouts, auch als Ziel des Verweises
 # Der Tag gehört zum Namen: dieselbe Version aus einem anderen Release ist ein anderes Binary.
 BIN="$SHARED/subduction/$TAG/$ASSET"
 if [ ! -x "$BIN" ]; then
