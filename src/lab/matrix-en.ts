@@ -20,7 +20,7 @@ export const portEn: Record<Port, { id: string; title: string }> = {
   },
   "mehrgerät": {
     "id": "multidevice",
-    "title": "Multi-device port (E15: holder state across the devices of one person; Trust 0.32 §8/§6a, HSC)"
+    "title": "Multi-device port (E15: holder state across the devices of one person; Trust 0.32 §8/§6a, HSC; from MG13 on: multi-device in everyday use, against the published library)"
   }
 }
 
@@ -290,6 +290,46 @@ export const promiseEn: Record<string, { title: string; ref: string; gap: string
     "title": "Delivery with several devices: lost receipt and unreachable carrier per device never end silently, effect once",
     "ref": "Delivery 6.1, 6.3 (X12)",
     "gap": null
+  },
+  "MG13": {
+    "title": "Messages across devices: a message reaches every device, a sent one stands in the conversation on each, 'taken over' on one holds on all",
+    "ref": "Message Tasks 4.5, 4420; everyday scenarios N1–N3",
+    "gap": "no scenario in the E15 model bench; checked only against the published library (everyday candidates)"
+  },
+  "MG14": {
+    "title": "Answer with any device: a group invitation shows on every device, accepting on one makes all of them members",
+    "ref": "Membership Tasks 3.1, 3.5; requirement of 2026-11-22 (M1, M2)",
+    "gap": "no scenario in the E15 model bench; checked only against the published library (everyday candidates)"
+  },
+  "MG15": {
+    "title": "Two answers of one person apart: one outcome on every device and at the counterpart (what the counterpart took first holds)",
+    "ref": "rule of 2026-11-23; MV-15 (M3)",
+    "gap": "no scenario in the E15 model bench; checked only against the published library (everyday candidates)"
+  },
+  "MG16": {
+    "title": "Groups from any device: found on one and invite from the other, invite beside leave, a leave holds on all",
+    "ref": "Access §3, RLTP-ACC-5150 (M4–M6)",
+    "gap": "no scenario in the E15 model bench; checked only against the published library (everyday candidates)"
+  },
+  "MG17": {
+    "title": "Contacts and trust across devices: an encounter, a given trust and a removed contact hold on every device, acting apart gives one effect",
+    "ref": "Trust §2, §5; 'removal wins', 2026-11-22 (K1, K2, K4–K6)",
+    "gap": "no scenario in the E15 model bench; checked only against the published library (everyday candidates)"
+  },
+  "MG18": {
+    "title": "Profile across devices: a change holds on every device and at every friend, also after changes apart; one profile per contact",
+    "ref": "Trust §6b, RLTP-TRU-6450 (P1–P3)",
+    "gap": "no scenario in the E15 model bench; checked only against the published library (everyday candidates)"
+  },
+  "MG19": {
+    "title": "Recovery from the words: contacts, trust, profile, groups and messages come back",
+    "ref": "Identity §5.3, §9.3 (G4)",
+    "gap": "no scenario in the E15 model bench; checked only against the published library (everyday candidates)"
+  },
+  "MG20": {
+    "title": "What others learn: the number of devices can be told, devices cannot be linked across relationships, no device list",
+    "ref": "requirement of 2026-11-22 (S1)",
+    "gap": "no scenario in the E15 model bench; checked only against the published library (everyday candidates)"
   }
 }
 
@@ -347,7 +387,34 @@ export const scenarioEn: Record<string, string> = {
   "X16": "A1 revokes the class, A2, separated, holds the old stock; a mediator device with the old view still introduces, A2 accepts the ticket: under decision 4a the ticket holds, the withdrawal takes effect when the empty revision arrives; after healing the devices agree, the key is consumed once, M's view is empty (8535, 8475.S6, 8640.6)",
   "X17": "A1 and A2, separated, each produce a revision (each accepts another ticket and refills): parallel production; with a writer tag per relationship M accepts both, the stock is the union (8500 and 6270 per writer, decision 3a); measured what M learns about the devices; probe sequence 6680 not modelled",
   "X18": "A1 and A2, separated, consent to the same act and each produce a card: two cards of one act, what B sees (8325.A4, 8910.7, 8910.8)",
-  "X21": "Journal duplicated, reordered, incomplete: completed batches after an old and a double restore, concurrent requests, crashes before and after commit; loss of request, answer, batches alone (reply head delivered) and receipt, each for more than 12 rounds; repair ends only with no pending catch-up (HSC-440, reviews 9 and 11)"
+  "X21": "Journal duplicated, reordered, incomplete: completed batches after an old and a double restore, concurrent requests, crashes before and after commit; loss of request, answer, batches alone (reply head delivered) and receipt, each for more than 12 rounds; repair ends only with no pending catch-up (HSC-440, reviews 9 and 11)",
+  "XA-G1": "Everyday, published library: A adds the laptop next to the phone: the laptop shows the same contacts, trust, profile and groups",
+  "XA-G2": "Everyday, published library: a new phone while the old one is still there, then A removes the old one: the new phone shows the same, the old one speaks to no friend any more",
+  "XA-G3": "Everyday, published library: the phone is lost, A removes it from the laptop: the phone speaks to no friend any more",
+  "XA-G4": "Everyday, published library: every device is lost, A has the recovery words: contacts, trust, profile, groups and messages come back",
+  "XA-G5": "Everyday, published library: A restores an old image while the laptop goes on: the restored device catches up",
+  "XA-G6": "Everyday, published library: the laptop was off for 30 days: it catches up",
+  "XA-K1": "Everyday, published library: A meets B with the phone: B is on the laptop too",
+  "XA-K2": "Everyday, published library: apart: the phone meets B, the laptop meets C: both devices show B and C",
+  "XA-K3": "Everyday, published library: B meets the phone, later and apart the laptop: one line for B on both devices, one line for A at B",
+  "XA-K4": "Everyday, published library: A trusts B on the phone: it holds on the laptop, B sees one effect and no device refuses anything",
+  "XA-K5": "Everyday, published library: apart: A trusts B on the phone and on the laptop: one effect at B, nobody refuses anything",
+  "XA-K6": "Everyday, published library: A removes B on the phone and, apart, writes to B on the laptop: B is gone on both devices",
+  "XA-P1": "Everyday, published library: A changes the profile on the phone: the laptop and the friends show it",
+  "XA-P2": "Everyday, published library: apart: the profile changed on the phone and on the laptop: both devices and every friend end on the same",
+  "XA-P3": "Everyday, published library: A gives B another of its profiles on the phone: the laptop knows the assignment",
+  "XA-N1": "Everyday, published library: B writes to A: the message is on the phone and the laptop",
+  "XA-N2": "Everyday, published library: A writes from the phone: the message is in the conversation on the laptop",
+  "XA-N3": "Everyday, published library: A takes a message over on the phone: the laptop no longer offers it as new",
+  "XA-M1": "Everyday, published library: an invitation to G arrives: the card is on the phone and the laptop",
+  "XA-M2": "Everyday, published library: A accepts on the phone: the laptop is in G without an act of its own, its card is decided",
+  "XA-M3": "Everyday, published library: apart: accept on the phone, decline on the laptop: one outcome on both devices and in the log",
+  "XA-M4": "Everyday, published library: A founds G on the phone and invites B from the laptop: B joins, both devices show B as a member",
+  "XA-M5": "Everyday, published library: apart: the phone invites C, the laptop leaves G: one outcome, A is not half a member",
+  "XA-M6": "Everyday, published library: A leaves G on the phone: the laptop shows G as left",
+  "XA-M7": "Everyday, published library: A adds the laptop while a member of G: the laptop has G with its members and their provenance",
+  "XA-M8": "Everyday, published library: A removes the lost phone: A stays a member, the phone reads nothing new from G",
+  "XA-S1": "Everyday, published library: others can tell that A has several devices, cannot link them across relationships, and see no device list"
 }
 
 /** Candidate id → name and one line. */
@@ -423,5 +490,13 @@ export const candidateEn: Record<string, { name: string; desc: string }> = {
   "k2-device-keys": {
     "name": "K2-strict: device keys, device sets",
     "desc": "K1a's journal and fold rules with keys per device: every device has its own secret, registers its own addresses and signs its journal batches; counterparts know a person's device set per relationship only from received proofs (device-set@1: signed admissions and revocations, chained to the anchor first verified at the encounter or through the voucher); one card per act, produced by the device that allocated the named stock key; a stock key's private part stays on that device, only it opens the ticket; each device lists only as many own keys as it can still accept; no gate after restore (MV-6 new): a restored device acts from its reachable state, the counterpart catches duplicates (8640.12 as a rule); step 2a: the mediator runs as a single-writer fixture (one device), distributed mediator issuance is step 2b"
+  },
+  "lib-one-writer": {
+    "name": "Library 0.19.0 as it is",
+    "desc": "the published library, built for one writer per holder; the second device is a stand-in (the same seed with an empty store, or with a copy of the first device's store), its clock runs 13 s late; the everyday baseline, the point every build step is measured from"
+  },
+  "layer-d-prototype": {
+    "name": "Layer D above the library (prototype)",
+    "desc": "device sync as a layer above the published library: what a device received travels to the person's other devices as an input, what the human did as a named entry recorded before it is carried out; each device runs the library's own reception; what the counterpart took first holds; covers messages and a group invitation, the rest is not run; the personal log is an in-memory stand-in, and taking a sister's decision over is a write into the store that marks a missing library entry point"
   }
 }

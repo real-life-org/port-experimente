@@ -9,9 +9,11 @@ workshop repository (`rltp/design/port-experimente-2026-10.md`).
 
 ## Results
 
-- **The conformance matrix**, interactive: 53 promises across four ports
+- **The conformance matrix**, interactive: 61 promises across four ports
   (group candidates in the authority, key and replication ports, multi-device
-  candidates in the multi-device port), every cell with its scenarios and
+  candidates in the multi-device port; there the model candidates of E15
+  stand beside the published library as it is and under the layer prototype
+  of `src/lab/alltag`), every cell with its scenarios and
   the recorded result:
   https://real-life.org/port-experimente/matrix.html. The page and the
   Markdown matrix (`matrix.md`) are both written by

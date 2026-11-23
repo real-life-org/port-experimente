@@ -7,13 +7,18 @@ import { pageData, renderPage, updateFindingsSummary } from '../src/lab/matrix-p
 import { allCandidates as candidates } from '../src/candidates/node-only'
 import { multiDeviceCandidates } from '../src/candidates/mehrgeraet'
 import { runX15 } from '../src/lab/mehrgeraet/scenarios'
+import { everydayCandidates } from '../src/candidates/alltag'
 
 // Gibt die Ergebnistabelle aller Kandidaten und die Konformitätsmatrix aus:
 //   REPORT=1 pnpm test report            (Tabelle auf stdout, Matrix nach matrix.md, Seite nach public/matrix.html)
 //   REPORT=1 MATRIX_OUT=pfad PAGE_OUT=pfad pnpm test report
+//   REPORT=1 REPORT_SKIP=rltp-beekem-datarooms pnpm test report   (ohne Kandidaten, die einen lokalen Stack brauchen)
 it.runIf(process.env.REPORT)('Bericht', async () => {
   const runs: CandidateRun[] = []
+  // REPORT_SKIP=id,id lässt Kandidaten aus, die hier nicht laufen können (rltp-beekem-datarooms braucht einen lokalen VTI-Stack und sein wasm-Paket).
+  const skip = new Set((process.env.REPORT_SKIP ?? '').split(',').filter(Boolean))
   for (const c of candidates) {
+    if (skip.has(c.id)) continue
     const scenarios = await runAll(c.make)
     const carrier = await runCarrier(c.make)
     for (const r of [...scenarios, ...carrier]) {
@@ -26,6 +31,12 @@ it.runIf(process.env.REPORT)('Bericht', async () => {
     const xs = await runX15(c.make())
     for (const r of xs) process.stdout.write([c.id, 'mehrgerät', r.scenario, r.outcome, r.detail, JSON.stringify(r.measures)].join(' | ') + '\n')
     runs.push({ id: c.id, scenarios: [], carrier: xs.map((r) => ({ scenario: r.scenario, title: r.title, outcome: r.outcome, crashed: r.crashed, promiseChanged: r.promiseChanged, authority: r.detail, keys: JSON.stringify(r.measures), ms: 0 })) })
+  }
+  // Mehrgerät im Alltag: die veröffentlichte Bibliothek, wie sie ist, und unter dem Schicht-Prototyp; Alltagsszenarien XA-….
+  for (const c of everydayCandidates) {
+    const xs = await c.run()
+    for (const r of xs) process.stdout.write([c.id, 'alltag', r.scenario, r.outcome, r.authority].join(' | ') + '\n')
+    runs.push({ id: c.id, scenarios: [], carrier: xs })
   }
   const matrix = buildMatrix(runs)
   const md = toMarkdown(matrix)

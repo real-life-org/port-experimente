@@ -5,6 +5,7 @@ import { candidateEn, promiseEn, scenarioEn } from '../src/lab/matrix-en'
 import { candidates } from '../src/candidates/index'
 import { nodeCandidates } from '../src/candidates/node-only'
 import { multiDeviceCandidates } from '../src/candidates/mehrgeraet'
+import { everydayCandidates, everydayScenarioIds } from '../src/candidates/alltag'
 import { scenarios } from '../src/lab/scenarios'
 import { carrierScenarios } from '../src/lab/traeger'
 import { x15 } from '../src/lab/mehrgeraet/scenarios'
@@ -18,8 +19,8 @@ const r = (scenario: string, outcome: ScenarioResult['outcome'], extra: Partial<
 describe('Matrixseite aus dem Report', () => {
   it('jede Zusage, jedes Szenario und jeder Kandidat hat einen englischen Text', () => {
     for (const p of promises) expect(promiseEn[p.id], p.id).toBeDefined()
-    for (const s of [...scenarios.map((s) => s.id), ...carrierScenarios.map((s) => s.id), ...x15.map((s) => s.id)]) expect(scenarioEn[s], s).toBeDefined()
-    for (const c of [...candidates.map((c) => c.id), ...nodeCandidates.map((c) => c.id), ...multiDeviceCandidates.map((c) => c.id)]) expect(candidateEn[c], c).toBeDefined()
+    for (const s of [...scenarios.map((s) => s.id), ...carrierScenarios.map((s) => s.id), ...x15.map((s) => s.id), ...everydayScenarioIds]) expect(scenarioEn[s], s).toBeDefined()
+    for (const c of [...candidates.map((c) => c.id), ...nodeCandidates.map((c) => c.id), ...multiDeviceCandidates.map((c) => c.id), ...everydayCandidates.map((c) => c.id)]) expect(candidateEn[c], c).toBeDefined()
   })
 
   it('zwei Familien: Gruppen-Kandidaten in drei Ports, Mehrgeräte-Kandidaten im vierten; alle Zusagen, Marken erhalten', () => {
@@ -45,7 +46,7 @@ describe('Matrixseite aus dem Report', () => {
     expect(d.scen.X5).toContain('A1 ends the relationship with B')
     const html = renderPage(d)
     expect(html).toContain('run of 17 October 2026')
-    expect(html).toContain('Two tables: two candidate stacks as rows, 53 promises across four ports as columns.')
+    expect(html).toContain('Two tables: two candidate stacks as rows, 61 promises across four ports as columns.')
     expect(html).toContain('const D = {"at":')
     expect(html).not.toContain('__DATA__')
     expect(html).toContain('⚠ run crashed')

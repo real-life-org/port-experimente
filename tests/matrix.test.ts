@@ -125,3 +125,36 @@ describe('Konformitätsmatrix', () => {
     expect(md).toMatch(/\| A1 [^|]*\| ✓ S1 \|/)
   })
 })
+
+describe('Mehrgerät im Alltag: Alltags-Kandidaten neben den Modell-Kandidaten', () => {
+  const y = (scenario: string, outcome: ScenarioResult['outcome']): ScenarioResult => ({ scenario, title: scenario, outcome, authority: '', keys: '', ms: 0 })
+  const runs: CandidateRun[] = [
+    { id: 'k2-device-keys', scenarios: [], carrier: [y('X7', 'nicht bestanden'), y('X7b', 'bestanden'), y('X14', 'bestanden'), y('X15', 'bestanden'), y('X8', 'bestanden')] },
+    { id: 'lib-one-writer', scenarios: [], carrier: [y('XA-K3', 'nicht bestanden'), y('XA-G1', 'nicht bestanden'), y('XA-G2', 'nicht bestanden'), y('XA-M7', 'nicht bestanden'), y('XA-N1', 'bestanden'), y('XA-N2', 'nicht abbildbar'), y('XA-N3', 'nicht bestanden')] },
+    { id: 'layer-d-prototype', scenarios: [], carrier: [y('XA-N1', 'bestanden'), y('XA-N2', 'bestanden'), y('XA-N3', 'bestanden')] },
+  ]
+  const mg = buildMatrix(runs).ports.find((p) => p.port === 'mehrgerät')!
+  const cellOf = (id: string, c: string) => mg.rows.find((r) => r.promise.id === id)!.cells[c]!
+
+  it('alle drei stehen im Mehrgeräte-Port', () => {
+    expect(mg.candidates).toEqual(['k2-device-keys', 'lib-one-writer', 'layer-d-prototype'])
+  })
+  it('eine gemeinsame Zusage: der Modell-Kandidat wird an den X-Szenarien gemessen, der Alltags-Kandidat an den Alltagsszenarien', () => {
+    expect(cellOf('MG8', 'k2-device-keys').evidence.map((e) => e.scenario)).toEqual(['X8'])
+    expect(cellOf('MG8', 'k2-device-keys').status).toBe('bestanden')
+    expect(cellOf('MG8', 'lib-one-writer').evidence.map((e) => e.scenario)).toEqual(['XA-G1', 'XA-G2', 'XA-M7'])
+    expect(cellOf('MG8', 'lib-one-writer').status).toBe('nicht bestanden')
+    expect(cellOf('MG7', 'k2-device-keys').status).toBe('nicht bestanden')
+    expect(cellOf('MG7', 'lib-one-writer').evidence.map((e) => e.scenario)).toEqual(['XA-K3'])
+  })
+  it('eine Zusage nur aus dem Alltag ist für das Modell nicht geprüft; eine nur aus dem Modell für den Alltag nicht geprüft', () => {
+    expect(cellOf('MG13', 'k2-device-keys')).toEqual({ status: 'nicht geprüft', evidence: [] })
+    expect(cellOf('MG13', 'lib-one-writer').status).toBe('nicht bestanden')
+    expect(cellOf('MG13', 'layer-d-prototype').status).toBe('bestanden')
+    expect(cellOf('MG1', 'lib-one-writer')).toEqual({ status: 'nicht geprüft', evidence: [] })
+  })
+  it('was der Prototyp nicht abdeckt, ist nicht gelaufen und nie bestanden', () => {
+    expect(cellOf('MG8', 'layer-d-prototype').status).toBe('nicht geprüft')
+    expect(cellOf('MG8', 'layer-d-prototype').evidence.every((e) => e.outcome === 'nicht gelaufen')).toBe(true)
+  })
+})

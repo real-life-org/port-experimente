@@ -14,7 +14,7 @@ export const portTitle: Record<Port, string> = {
   autorität: 'Autoritäts-Port (Access §3, §3.6, §4, §7.3, §9.3)',
   schlüssel: 'Schlüssel-Port (KV1–KV6 aus der Port-Synthese; Geräte aus E7)',
   replikation: 'Replikations-Port (Replication Contract I1–I16, Türen D1–D5; Zustellung DV aus E11)',
-  mehrgerät: 'Mehrgeräte-Port (E15: Holder-Zustand über mehrere Geräte einer Person; Trust 0.32 §8/§6a, HSC)',
+  mehrgerät: 'Mehrgeräte-Port (E15: Holder-Zustand über mehrere Geräte einer Person; Trust 0.32 §8/§6a, HSC; ab MG13 Mehrgerät im Alltag an der veröffentlichten Bibliothek)',
 }
 
 export interface Promise {
@@ -27,6 +27,8 @@ export interface Promise {
   readonly scenarios: readonly string[]
   /** Bei leeren Szenarien: warum es noch keines gibt (Harness-Grenze, offene Spec-Frage, noch nicht gebaut). */
   readonly gap?: string
+  /** Mehrgeräte-Port: die Alltagsszenarien (XA-…, src/lab/alltag), die dieselbe Zusage an der veröffentlichten Bibliothek prüfen. Sie gelten für die Alltags-Kandidaten, die Szenarien oben für die Modell-Kandidaten aus E15. */
+  readonly everyday?: readonly string[]
 }
 
 export const promises: Promise[] = [
@@ -80,13 +82,22 @@ export const promises: Promise[] = [
   { id: 'MG3', port: 'mehrgerät', title: 'Ein Zustand je Person: Consent und Ablehnung sind terminal, die Gegenseite sieht nichts, was die Person als Ganzes nicht trägt', ref: '§8 8325.A3/A4, 8765, 8910.7/.8 (X3, X18)', scenarios: ['X3', 'X18'] },
   { id: 'MG4', port: 'mehrgerät', title: 'Klassenwiderruf neben Versand und altem Vorrat: der laufende Akt läuft weiter, ein Ticket auf einen inzwischen zurückgezogenen Schlüssel gilt und verbraucht ihn einmal (der Widerruf wirkt ab Ankunft der leeren Revision, Entscheidung 4a), Ms Sicht wird leer, keine Equivokation', ref: '§8 8232.2, 8535, 8475.S6, 6270 (X4, X16)', scenarios: ['X4', 'X16'] },
   { id: 'MG5', port: 'mehrgerät', title: 'Abgang beendet Pflichten; ein Replay von einem anderen Gerät belebt nichts', ref: '§6a 6845.7, 6845.10 (X5)', scenarios: ['X5'] },
-  { id: 'MG6', port: 'mehrgerät', title: 'Nummern über Geräte: weder ein Restore aus dem Backup noch parallele Produktion zweier Geräte verwendet eine Nummer wieder; kein veralteter Vorrat, keine verlorenen Akte', ref: '§8 8500, 8315–8318, 6270; §6a 6680 (X6, X17, später X19)', scenarios: ['X6', 'X17'] },
-  { id: 'MG7', port: 'mehrgerät', title: 'Kontinuität über Geräte: zwei Begegnungen derselben Personen auf verschiedenen Geräten werden eine Beziehung, keine Doppel', ref: '§6a 2300, 6806, 6975, 6987; I-6 (X7, X7b, X14, X15)', scenarios: ['X7', 'X7b', 'X14', 'X15'] },
-  { id: 'MG8', port: 'mehrgerät', title: 'Enrollment: ein neues Gerät sieht alles und handelt sofort', ref: 'HSC-020 Ersatz, Identity Enrollment (X8)', scenarios: ['X8'] },
-  { id: 'MG9', port: 'mehrgerät', title: 'Gerätewiderruf: ein widerrufenes Gerät liest nichts Neues, auch nicht mit dem alten Zustand', ref: 'Identity Widerruf; K7 (X9, später X20)', scenarios: ['X9'] },
+  { id: 'MG6', port: 'mehrgerät', title: 'Nummern über Geräte: weder ein Restore aus dem Backup noch parallele Produktion zweier Geräte verwendet eine Nummer wieder; kein veralteter Vorrat, keine verlorenen Akte', ref: '§8 8500, 8315–8318, 6270; §6a 6680 (X6, X17, später X19)', scenarios: ['X6', 'X17'], everyday: ['XA-G5'] },
+  { id: 'MG7', port: 'mehrgerät', title: 'Kontinuität über Geräte: zwei Begegnungen derselben Personen auf verschiedenen Geräten werden eine Beziehung, keine Doppel', ref: '§6a 2300, 6806, 6975, 6987; I-6 (X7, X7b, X14, X15)', scenarios: ['X7', 'X7b', 'X14', 'X15'], everyday: ['XA-K3'] },
+  { id: 'MG8', port: 'mehrgerät', title: 'Enrollment: ein neues Gerät sieht alles und handelt sofort', ref: 'HSC-020 Ersatz, Identity Enrollment (X8)', scenarios: ['X8'], everyday: ['XA-G1', 'XA-G2', 'XA-M7'] },
+  { id: 'MG9', port: 'mehrgerät', title: 'Gerätewiderruf: ein widerrufenes Gerät liest nichts Neues, auch nicht mit dem alten Zustand', ref: 'Identity Widerruf; K7 (X9, später X20)', scenarios: ['X9'], everyday: ['XA-G3', 'XA-M8'] },
   { id: 'MG10', port: 'mehrgerät', title: 'Rechte je Gerät oder App: eine eingeschränkte App kann nur, was ihr Recht erlaubt', ref: 'Delegationsprofil K2 (X10, später X22)', scenarios: ['X10'] },
-  { id: 'MG11', port: 'mehrgerät', title: 'Konvergenz nach langer Trennung und Journalreparatur: gleiche fachliche Projektion aller Geräte, kein fehlender Batch, die Reparatur endet', ref: 'HSC-440; Plan E15 Abschnitt 5 (X11, X21)', scenarios: ['X11', 'X21'] },
+  { id: 'MG11', port: 'mehrgerät', title: 'Konvergenz nach langer Trennung und Journalreparatur: gleiche fachliche Projektion aller Geräte, kein fehlender Batch, die Reparatur endet', ref: 'HSC-440; Plan E15 Abschnitt 5 (X11, X21)', scenarios: ['X11', 'X21'], everyday: ['XA-G6'] },
   { id: 'MG12', port: 'mehrgerät', title: 'Zustellung bei Mehrgerät: Quittungsverlust und unerreichbarer Träger je Gerät enden nie still, Wirkung einmal', ref: 'Delivery 6.1, 6.3 (X12)', scenarios: ['X12'] },
+  // ── Mehrgerät im Alltag (22./23.11.): Zusagen, die das Modell aus E15 nie geprüft hat; nur Alltagsszenarien ──
+  { id: 'MG13', port: 'mehrgerät', title: 'Nachrichten über Geräte: eine Nachricht kommt auf jedem Gerät an, eine gesendete steht auf jedem im Gespräch, „übernommen“ auf einem gilt auf allen', ref: 'Message Tasks 4.5, 4420; Alltagsszenarien N1–N3', scenarios: [], gap: 'kein Szenario im Modell aus E15; nur an der veröffentlichten Bibliothek geprüft', everyday: ['XA-N1', 'XA-N2', 'XA-N3'] },
+  { id: 'MG14', port: 'mehrgerät', title: 'Mit jedem Gerät antworten: eine Gruppeneinladung steht auf jedem Gerät, die Annahme auf einem macht alle zu Mitgliedern', ref: 'Membership Tasks 3.1, 3.5; Vorgabe 22.11. (M1, M2)', scenarios: [], gap: 'kein Szenario im Modell aus E15; nur an der veröffentlichten Bibliothek geprüft', everyday: ['XA-M1', 'XA-M2'] },
+  { id: 'MG15', port: 'mehrgerät', title: 'Zwei getrennte Antworten einer Person: ein Ergebnis auf allen Geräten und bei der Gegenseite (es gilt, was die Gegenseite zuerst angenommen hat)', ref: 'Regel 23.11.; MV-15 (M3)', scenarios: [], gap: 'kein Szenario im Modell aus E15; nur an der veröffentlichten Bibliothek geprüft', everyday: ['XA-M3'] },
+  { id: 'MG16', port: 'mehrgerät', title: 'Gruppen von jedem Gerät: auf einem gründen und vom anderen einladen, einladen neben verlassen, verlassen gilt auf allen', ref: 'Access §3, RLTP-ACC-5150 (M4–M6)', scenarios: [], gap: 'kein Szenario im Modell aus E15; nur an der veröffentlichten Bibliothek geprüft', everyday: ['XA-M4', 'XA-M5', 'XA-M6'] },
+  { id: 'MG17', port: 'mehrgerät', title: 'Kontakte und Vertrauen über Geräte: eine Begegnung, ein gegebenes Vertrauen und ein entfernter Kontakt gelten auf allen Geräten, getrenntes Handeln ergibt eine Wirkung', ref: 'Trust §2, §5; „Löschen gewinnt“ 22.11. (K1, K2, K4–K6)', scenarios: [], gap: 'kein Szenario im Modell aus E15; nur an der veröffentlichten Bibliothek geprüft', everyday: ['XA-K1', 'XA-K2', 'XA-K4', 'XA-K5', 'XA-K6'] },
+  { id: 'MG18', port: 'mehrgerät', title: 'Profil über Geräte: eine Änderung gilt auf allen Geräten und bei allen Freunden, auch nach getrennter Änderung; ein Profil je Kontakt', ref: 'Trust §6b, RLTP-TRU-6450 (P1–P3)', scenarios: [], gap: 'kein Szenario im Modell aus E15; nur an der veröffentlichten Bibliothek geprüft', everyday: ['XA-P1', 'XA-P2', 'XA-P3'] },
+  { id: 'MG19', port: 'mehrgerät', title: 'Wiederherstellung aus den Worten: Kontakte, Vertrauen, Profil, Gruppen und Nachrichten kommen zurück', ref: 'Identity §5.3, §9.3 (G4)', scenarios: [], gap: 'kein Szenario im Modell aus E15; nur an der veröffentlichten Bibliothek geprüft', everyday: ['XA-G4'] },
+  { id: 'MG20', port: 'mehrgerät', title: 'Was andere erfahren: die Zahl der Geräte ist erkennbar, über Beziehungen nicht verknüpfbar, keine Geräteliste', ref: 'Vorgabe 22.11. (S1)', scenarios: [], gap: 'kein Szenario im Modell aus E15; nur an der veröffentlichten Bibliothek geprüft', everyday: ['XA-S1'] },
 ]
 
 /** `teilweise`: ein Teil der zugeordneten Szenarien besteht, der Rest ist nicht abbildbar oder nicht gelaufen; die Zusage gilt damit nicht. */
@@ -122,17 +133,23 @@ export interface Matrix {
  * ein Teil, der Rest ist nicht abbildbar oder nicht gelaufen: teilweise.
  * Alles nicht abbildbar: nicht abbildbar. Ohne Szenario: nicht geprüft.
  */
+/** Die Szenarien einer Zusage für einen Kandidaten: die Alltagsszenarien für einen Alltags-Kandidaten, sonst die des Modells. */
+export const scenariosFor = (p: Promise, everyday: boolean): readonly string[] => (everyday ? (p.everyday ?? []) : p.scenarios)
+/** Ein Alltags-Kandidat läuft die Alltagsszenarien (XA-…) an der veröffentlichten Bibliothek. */
+export const isEveryday = (r: CandidateRun): boolean => [...r.scenarios, ...r.carrier].some((x) => x.scenario.startsWith('XA-'))
+
 export type CellResult = { outcome: Outcome; crashed?: boolean; promiseChanged?: boolean }
 
-export function cell(p: Promise, results: ReadonlyMap<string, CellResult>): Cell {
-  const evidence = [...p.scenarios].sort().map((s) => {
+export function cell(p: Promise, results: ReadonlyMap<string, CellResult>, everyday = false): Cell {
+  const list = scenariosFor(p, everyday)
+  const evidence = [...list].sort().map((s) => {
     const r = results.get(s)
     return r ? { scenario: s, outcome: r.outcome, crashed: r.crashed, promiseChanged: r.promiseChanged } : { scenario: s, outcome: 'nicht gelaufen' as const }
   })
   // Ein abgebrochener Lauf ist kein gemessener Verstoß (Issue #60): für den Status zählt er wie „nicht gelaufen“, die Marke bleibt im Beleg.
   const outcomes = evidence.map((e) => (e.crashed ? ('nicht gelaufen' as const) : e.outcome))
   let status: CellStatus
-  if (!p.scenarios.length) status = 'nicht geprüft'
+  if (!list.length) status = 'nicht geprüft'
   else if (outcomes.includes('nicht bestanden')) status = 'nicht bestanden'
   else if (outcomes.every((o) => o === 'bestanden')) status = 'bestanden'
   else if (outcomes.includes('bestanden')) status = 'teilweise'
@@ -145,6 +162,7 @@ export function buildMatrix(runs: readonly CandidateRun[]): Matrix {
   const byCandidate = new Map(runs.map((r) => [r.id, new Map([...r.scenarios, ...r.carrier].map((x) => [x.scenario, { outcome: x.outcome, crashed: x.crashed, promiseChanged: x.promiseChanged }] as const))] as const))
   // Zwei Familien: Gruppen-Kandidaten (S/T/Z-Szenarien) stehen in den drei Gruppen-Ports, Mehrgeräte-Kandidaten (X) im Mehrgeräte-Port.
   const family = (r: CandidateRun) => ([...r.scenarios, ...r.carrier].some((x) => x.scenario.startsWith('X')) ? 'X' : 'ST')
+  const everyday = new Set(runs.filter(isEveryday).map((r) => r.id))
   const ports = (['autorität', 'schlüssel', 'replikation', 'mehrgerät'] as Port[]).map((port) => {
     const ofPort = promises.filter((p) => p.port === port)
     const cands = runs.filter((r) => family(r) === (port === 'mehrgerät' ? 'X' : 'ST')).map((r) => r.id)
@@ -152,7 +170,7 @@ export function buildMatrix(runs: readonly CandidateRun[]): Matrix {
       port,
       title: portTitle[port],
       candidates: cands,
-      rows: ofPort.map((promise) => ({ promise, cells: Object.fromEntries(cands.map((c) => [c, cell(promise, byCandidate.get(c)!)])) })),
+      rows: ofPort.map((promise) => ({ promise, cells: Object.fromEntries(cands.map((c) => [c, cell(promise, byCandidate.get(c)!, everyday.has(c))])) })),
     }
   })
   return { candidates: runs.map((r) => r.id), ports }
