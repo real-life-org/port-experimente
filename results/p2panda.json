@@ -1,0 +1,284 @@
+{
+ "id": "p2panda",
+ "kind": "group",
+ "at": "2026-11-23T07:20:08.402Z",
+ "scenarios": [
+  {
+   "scenario": "S1",
+   "title": "Gründen, zwei Mitglieder aufnehmen, Inhalte tauschen",
+   "ms": 129.1,
+   "outcome": "bestanden",
+   "authority": "alle sehen {alice, bob, carol}",
+   "keys": "alle lesen alle drei Einträge"
+  },
+  {
+   "scenario": "S2",
+   "title": "Mitglied entfernen; Entfernter liest Neues nicht mehr",
+   "ms": 51,
+   "outcome": "bestanden",
+   "authority": "alle sehen {alice, bob}",
+   "keys": "Carol liest Neues: nein; Alice/Bob lesen: ja"
+  },
+  {
+   "scenario": "S3",
+   "title": "Offline schreiben, danach konvergieren",
+   "ms": 37.5,
+   "outcome": "bestanden",
+   "authority": "alle sehen {alice, bob, carol}",
+   "keys": "alle lesen beide Einträge"
+  },
+  {
+   "scenario": "S4a",
+   "title": "Alice entfernt Bob, während Bob schreibt",
+   "ms": 46,
+   "outcome": "bestanden",
+   "authority": "alle sehen {alice, carol}; Bobs gleichzeitiger Eintrag: alice:sieht carol:sieht",
+   "keys": "Bob liest Einträge nach dem Zusammenführen: nein"
+  },
+  {
+   "scenario": "S4b",
+   "title": "Zwei Admins entfernen gleichzeitig verschiedene Personen",
+   "ms": 99.7,
+   "outcome": "nicht bestanden",
+   "authority": "alle sehen {alice, bob}; Zustand wartend=; dave verarbeitet content: tried to decrypt message with an unknown group secret: b78fce894f8b7a72001c002974de3fbe7d54bf792e54a968ceaf334aca946bdd",
+   "keys": "Bob liest Neues: ja; Entfernte lesen Neues: carol"
+  },
+  {
+   "scenario": "S4c",
+   "title": "Gegenseitige Entfernung zweier Admins",
+   "ms": 41.8,
+   "outcome": "bestanden",
+   "authority": "alle sehen {carol}; alice (entfernt) sieht {carol}; bob (entfernt) sieht {carol}; Zustand wartend=",
+   "keys": "—"
+  },
+  {
+   "scenario": "S4c2",
+   "title": "Gegenseitige Entfernung: beide sind draußen, keiner liest Neues",
+   "ms": 46.3,
+   "outcome": "nicht bestanden",
+   "authority": "Carol sieht {carol}; alice sieht {carol}, bob sieht {carol}; Zustand wartend=; bob verarbeitet content: tried to decrypt message with an unknown group secret: adf6eb52d30def37805dade3c0e061f14c8f848551fe0fd8b7c9c9af0849c69f",
+   "keys": "LECK: alice lesen Carols Eintrag"
+  },
+  {
+   "scenario": "S4d",
+   "title": "Entfernung neben Rotation eines anderen Mitglieds",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: rotate",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "S4e",
+   "title": "Zwei gleichzeitige Änderungen der Gruppenregeln",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: policy",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "S4j",
+   "title": "Regeländerung neben Entfernung: Fork, Ende durch eine Regeländerung auf beide Zweige",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: policy",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "S4f",
+   "title": "Entfernte lädt gleichzeitig ein, Eingeladener lädt weiter ein",
+   "ms": 170,
+   "outcome": "bestanden",
+   "authority": "alle sehen {alice, bob, carol}; übrig aus Mallorys Kette: niemand; x lädt y ein",
+   "keys": "neuer Inhalt nur bei Mitgliedern: ja"
+  },
+  {
+   "scenario": "S5",
+   "title": "Zweites Gerät derselben Person",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: multi-device",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "S5b",
+   "title": "Gerät verloren: Person entfernt ihr eigenes Gerät, der Finder liest nicht weiter",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: multi-device, device-remove, steal",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "S5c",
+   "title": "Person mit zwei Geräten wird entfernt; keines liest Neues",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: multi-device",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "S6",
+   "title": "Neues Mitglied liest die Historie",
+   "ms": 59.3,
+   "outcome": "bestanden",
+   "authority": "Dave Mitglied: ja",
+   "keys": "Dave liest {alt-1, alt-2, alt-3}"
+  },
+  {
+   "scenario": "S6b",
+   "title": "Neues Mitglied liest die Historie nach dem nächsten Eintrag",
+   "ms": 60.2,
+   "outcome": "bestanden",
+   "authority": "Dave Mitglied: ja",
+   "keys": "direkt nach Aufnahme 3 Einträge; nach neuem Eintrag {alt-1, alt-2, alt-bob, neu}"
+  },
+  {
+   "scenario": "S7",
+   "title": "Gerät erbeutet, danach Rotation: liest der Angreifer weiter?",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: steal, rotate",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "S11",
+   "title": "Schlüsseloperation ohne Logeintrag: ein entferntes Gerät nimmt ein neues Blatt in den Baum",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: steal, forge-key-op",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "S8",
+   "title": "Ersteller fällt weg, Gruppe bleibt handlungsfähig",
+   "ms": 52.3,
+   "outcome": "bestanden",
+   "authority": "Carol sieht {alice, bob, carol}; Zustand wartend=; dave verarbeitet content: tried to decrypt message with an unknown group secret: 6991982ceae31d460ba7c2437e938f37fa27279901d460773fa90ed2a0ff84e6",
+   "keys": "Bob liest Neues: ja; Dave liest Neues: nein"
+  },
+  {
+   "scenario": "S10a",
+   "title": "Dienst: Entfernter schreibt gleichzeitig, das Relay verwirft (kein Residual)",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: service",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "S10b",
+   "title": "Dienst: Entfernung ohne Relay, der Entfernte schreibt am Relay weiter (veraltete Sicht)",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: service",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "S10c",
+   "title": "Dienst: gegenseitige Entfernung lässt nur ein Mitglied, Quorum der Sicht",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: service",
+   "keys": "—",
+   "ms": 0
+  }
+ ],
+ "carrier": [
+  {
+   "scenario": "T1",
+   "title": "Träger verliert einen Rahmen still",
+   "door": "DV2 nichts endet still · I12 Lückenreparatur",
+   "ms": 37.7,
+   "outcome": "nicht abbildbar",
+   "authority": "der Träger hat keinen Rahmen dieser Art gesehen (Autoritätsrahmen von alice); der Kandidat nennt seine Rahmen anders",
+   "keys": "—"
+  },
+  {
+   "scenario": "T2",
+   "title": "Träger ordnet um",
+   "door": "I2 kausale Anwendung",
+   "ms": 63.6,
+   "outcome": "nicht bestanden",
+   "authority": "alice {alice, bob, dave} bob {alice, bob, dave} dave {alice, bob, dave}",
+   "keys": "alice:{drei, eins, zwei} bob:{drei, eins, zwei} dave:{eins, zwei}"
+  },
+  {
+   "scenario": "T3",
+   "title": "Träger liefert doppelt",
+   "door": "DV3 / 6.3 idempotent über den Inhalt",
+   "ms": 36.6,
+   "outcome": "bestanden",
+   "authority": "alice {alice, bob} bob {alice, bob}; carol liest {}; Zustand bob: wartend=; carol verarbeitet content: tried to decrypt message with an unknown group secret: 5577b38b6cea963516c37f4936030ce6766213fb522785567ef175db7eca0a85",
+   "keys": "Einträge: {einmal} {einmal}"
+  },
+  {
+   "scenario": "T4",
+   "title": "Träger spielt eine alte Entfernung erneut ein",
+   "door": "I8 Zustand, nicht Kante · RLTP-ACC-3475",
+   "ms": 30.5,
+   "outcome": "nicht abbildbar",
+   "authority": "der Träger hat keinen Rahmen dieser Art gesehen (Autoritätsrahmen von alice); der Kandidat nennt seine Rahmen anders",
+   "keys": "—"
+  },
+  {
+   "scenario": "T5",
+   "title": "Träger verändert einen Rahmen",
+   "door": "D1 signierter DAG · Form vor Inhalt",
+   "ms": 70,
+   "outcome": "nicht abbildbar",
+   "authority": "der Träger hat keinen Rahmen dieser Art gesehen (Autoritätsrahmen von alice); der Kandidat nennt seine Rahmen anders",
+   "keys": "—"
+  },
+  {
+   "scenario": "T6",
+   "title": "Träger hält einem Gerät gezielt einen Eintrag vor",
+   "door": "D5 beglaubigtes Konvergenzziel · I5",
+   "ms": 41.1,
+   "outcome": "nicht abbildbar",
+   "authority": "der Träger hat keinen Rahmen dieser Art gesehen (Autoritätsrahmen von alice); der Kandidat nennt seine Rahmen anders",
+   "keys": "—"
+  },
+  {
+   "scenario": "T6b",
+   "title": "Träger friert ein Gerät ein (alles vorgehalten)",
+   "door": "D5 beglaubigtes Konvergenzziel · I5",
+   "ms": 35.9,
+   "outcome": "nicht bestanden",
+   "authority": "Carol sieht {alice, bob, carol}; bemerkt: nein; Zustand: wartend=",
+   "keys": "Carol liest Daves Eintrag: nein"
+  },
+  {
+   "scenario": "T7",
+   "title": "Entferntes Gerät fragt weiter",
+   "door": "Dienstklassen §9.3 · KV1",
+   "ms": 27.5,
+   "outcome": "bestanden",
+   "authority": "Carol wird bedient (blind); Zustand: wartend=; carol verarbeitet content: tried to decrypt message with an unknown group secret: 455cee93c459b4d8dc150d22fe32b44b10f74c76186d6809393aab0e78f73e68",
+   "keys": "Carol liest nach der Entfernung: nein"
+  },
+  {
+   "scenario": "T8",
+   "title": "Trägerwechsel mitten im Leben",
+   "door": "I15 Rebinding · Portabilität",
+   "ms": 0.3,
+   "outcome": "nicht abbildbar",
+   "authority": "der Träger kennt keinen Wechsel (ein Prüfstand-Relay)",
+   "keys": "—"
+  },
+  {
+   "scenario": "T11",
+   "title": "Zwei Gruppen auf einem Träger",
+   "door": "DV4/DV6 Pseudonym je Gruppe",
+   "ms": 0,
+   "outcome": "nicht abbildbar",
+   "authority": "ein Kandidat trägt genau eine Gruppe; Verknüpfung über Gruppen hinweg braucht zwei Gruppen auf einem Träger",
+   "keys": "—"
+  },
+  {
+   "scenario": "T12",
+   "title": "Versiegelter Eintrag: was der Träger liest",
+   "door": "I6 key-blindness · Access-Envelope",
+   "ms": 23.4,
+   "outcome": "bestanden",
+   "authority": "nur Chiffretext",
+   "keys": "Inhalt versiegelt"
+  }
+ ]
+}

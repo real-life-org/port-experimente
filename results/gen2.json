@@ -1,0 +1,284 @@
+{
+ "id": "gen2",
+ "kind": "group",
+ "at": "2026-11-23T07:19:08.579Z",
+ "scenarios": [
+  {
+   "scenario": "S1",
+   "title": "Gründen, zwei Mitglieder aufnehmen, Inhalte tauschen",
+   "ms": 2041.9,
+   "outcome": "bestanden",
+   "authority": "alle sehen {alice, bob, carol}",
+   "keys": "alle lesen alle drei Einträge"
+  },
+  {
+   "scenario": "S2",
+   "title": "Mitglied entfernen; Entfernter liest Neues nicht mehr",
+   "ms": 2626,
+   "outcome": "bestanden",
+   "authority": "alle sehen {alice, bob}",
+   "keys": "Carol liest Neues: nein; Alice/Bob lesen: ja"
+  },
+  {
+   "scenario": "S3",
+   "title": "Offline schreiben, danach konvergieren",
+   "ms": 6571.3,
+   "outcome": "bestanden",
+   "authority": "alle sehen {alice, bob, carol}",
+   "keys": "alle lesen beide Einträge"
+  },
+  {
+   "scenario": "S4a",
+   "title": "Alice entfernt Bob, während Bob schreibt",
+   "ms": 7315.4,
+   "outcome": "bestanden",
+   "authority": "alle sehen {alice, carol}; Bobs gleichzeitiger Eintrag: alice:verwirft carol:verwirft",
+   "keys": "Bob liest Einträge nach dem Zusammenführen: nein"
+  },
+  {
+   "scenario": "S4b",
+   "title": "Zwei Admins entfernen gleichzeitig verschiedene Personen",
+   "ms": 7285.9,
+   "outcome": "nicht bestanden",
+   "authority": "alle sehen {alice, bob, dave}; Zustand gen=1; bob entfernt dave: RemovalPendingNotEnforcedError: Removal of did:key:z6MkjxhcqQjJG1MLTcpHXip2yXUYgm16KETktG14aJJTP7eS from space bab19831-21e6-4141-a75f-6f086e4fcbdb is staged but NOT yet enforced (target generation 1); not all home brokers confirmed the space-rotate. The staging is durable and will be retried (VE-C3 crash-recovery).",
+   "keys": "Bob liest Neues: ja; Entfernte lesen Neues: dave"
+  },
+  {
+   "scenario": "S4c",
+   "title": "Gegenseitige Entfernung zweier Admins",
+   "ms": 6604.2,
+   "outcome": "bestanden",
+   "authority": "alle sehen {alice, carol}; bob (entfernt) sieht {alice, bob, carol}; Zustand gen=1; bob entfernt alice: RemovalPendingNotEnforcedError: Removal of did:key:z6Mki7tNMNo8GoUS7nCAPfAeH3E6oBMDbvrFZh6ziABW9PEt from space 52e8e11d-b321-4469-8187-15182a7c8d77 is staged but NOT yet enforced (target generation 1); not all home brokers confirmed the space-rotate. The staging is durable and will be retried (VE-C3 crash-recovery).",
+   "keys": "—"
+  },
+  {
+   "scenario": "S4c2",
+   "title": "Gegenseitige Entfernung: beide sind draußen, keiner liest Neues",
+   "ms": 7209,
+   "outcome": "nicht bestanden",
+   "authority": "Carol sieht {alice, carol}; alice sieht {alice, carol}, bob sieht {alice, bob, carol}; Zustand gen=1; bob entfernt alice: RemovalPendingNotEnforcedError: Removal of did:key:z6MkfzDsruoNabn3PSdb2qwaPrK4ukh92R7xA5sZbPj8hLni from space f5382109-bb08-4d63-b8dc-5ad92e6a2fc9 is staged but NOT yet enforced (target generation 1); not all home brokers confirmed the space-rotate. The staging is durable and will be retried (VE-C3 crash-recovery).",
+   "keys": "LECK: alice lesen Carols Eintrag"
+  },
+  {
+   "scenario": "S4d",
+   "title": "Entfernung neben Rotation eines anderen Mitglieds",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: rotate",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "S4e",
+   "title": "Zwei gleichzeitige Änderungen der Gruppenregeln",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: policy",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "S4j",
+   "title": "Regeländerung neben Entfernung: Fork, Ende durch eine Regeländerung auf beide Zweige",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: policy",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "S4f",
+   "title": "Entfernte lädt gleichzeitig ein, Eingeladener lädt weiter ein",
+   "ms": 8558.2,
+   "outcome": "bestanden",
+   "authority": "alle sehen {alice, bob, carol}; übrig aus Mallorys Kette: niemand; x kann y nicht einladen (Space d3ccc85f-a55e-4ee0-9baa-f2581de2e76b not found)",
+   "keys": "neuer Inhalt nur bei Mitgliedern: ja"
+  },
+  {
+   "scenario": "S5",
+   "title": "Zweites Gerät derselben Person",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: multi-device",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "S5b",
+   "title": "Gerät verloren: Person entfernt ihr eigenes Gerät, der Finder liest nicht weiter",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: multi-device, device-remove, steal",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "S5c",
+   "title": "Person mit zwei Geräten wird entfernt; keines liest Neues",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: multi-device",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "S6",
+   "title": "Neues Mitglied liest die Historie",
+   "ms": 3157.1,
+   "outcome": "bestanden",
+   "authority": "Dave Mitglied: ja",
+   "keys": "Dave liest {alt-1, alt-2, alt-3}"
+  },
+  {
+   "scenario": "S6b",
+   "title": "Neues Mitglied liest die Historie nach dem nächsten Eintrag",
+   "ms": 3825.5,
+   "outcome": "bestanden",
+   "authority": "Dave Mitglied: ja",
+   "keys": "direkt nach Aufnahme 3 Einträge; nach neuem Eintrag {alt-1, alt-2, alt-bob, neu}"
+  },
+  {
+   "scenario": "S7",
+   "title": "Gerät erbeutet, danach Rotation: liest der Angreifer weiter?",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: steal, rotate",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "S11",
+   "title": "Schlüsseloperation ohne Logeintrag: ein entferntes Gerät nimmt ein neues Blatt in den Baum",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: steal, forge-key-op",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "S8",
+   "title": "Ersteller fällt weg, Gruppe bleibt handlungsfähig",
+   "ms": 4620.1,
+   "outcome": "nicht bestanden",
+   "authority": "Carol sieht {alice, bob, carol, dave}; Zustand gen=0; bob entfernt dave: RemovalPendingNotEnforcedError: Removal of did:key:z6MkrYGzfNab3oJeCBvAbvDuj9N6CQZ8ZmE2nJKXvkmaqFdQ from space 9ff725fc-fb68-4be5-a130-a7bb9bdf065c is staged but NOT yet enforced (target generation 1); not all home brokers confirmed the space-rotate. The staging is durable and will be retried (VE-C3 crash-recovery).",
+   "keys": "Bob liest Neues: ja; Dave liest Neues: ja"
+  },
+  {
+   "scenario": "S10a",
+   "title": "Dienst: Entfernter schreibt gleichzeitig, das Relay verwirft (kein Residual)",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: service",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "S10b",
+   "title": "Dienst: Entfernung ohne Relay, der Entfernte schreibt am Relay weiter (veraltete Sicht)",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: service",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "S10c",
+   "title": "Dienst: gegenseitige Entfernung lässt nur ein Mitglied, Quorum der Sicht",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: service",
+   "keys": "—",
+   "ms": 0
+  }
+ ],
+ "carrier": [
+  {
+   "scenario": "T1",
+   "title": "Träger verliert einen Rahmen still",
+   "door": "DV2 nichts endet still · I12 Lückenreparatur",
+   "outcome": "nicht abbildbar",
+   "authority": "Träger ohne Fehlerinjektion",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "T2",
+   "title": "Träger ordnet um",
+   "door": "I2 kausale Anwendung",
+   "outcome": "nicht abbildbar",
+   "authority": "Träger ohne Fehlerinjektion",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "T3",
+   "title": "Träger liefert doppelt",
+   "door": "DV3 / 6.3 idempotent über den Inhalt",
+   "outcome": "nicht abbildbar",
+   "authority": "Träger ohne Fehlerinjektion",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "T4",
+   "title": "Träger spielt eine alte Entfernung erneut ein",
+   "door": "I8 Zustand, nicht Kante · RLTP-ACC-3475",
+   "outcome": "nicht abbildbar",
+   "authority": "Träger ohne Fehlerinjektion",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "T5",
+   "title": "Träger verändert einen Rahmen",
+   "door": "D1 signierter DAG · Form vor Inhalt",
+   "outcome": "nicht abbildbar",
+   "authority": "Träger ohne Fehlerinjektion",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "T6",
+   "title": "Träger hält einem Gerät gezielt einen Eintrag vor",
+   "door": "D5 beglaubigtes Konvergenzziel · I5",
+   "outcome": "nicht abbildbar",
+   "authority": "Träger ohne Fehlerinjektion",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "T6b",
+   "title": "Träger friert ein Gerät ein (alles vorgehalten)",
+   "door": "D5 beglaubigtes Konvergenzziel · I5",
+   "outcome": "nicht abbildbar",
+   "authority": "Träger ohne Fehlerinjektion",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "T7",
+   "title": "Entferntes Gerät fragt weiter",
+   "door": "Dienstklassen §9.3 · KV1",
+   "outcome": "nicht abbildbar",
+   "authority": "Träger ohne Fehlerinjektion",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "T8",
+   "title": "Trägerwechsel mitten im Leben",
+   "door": "I15 Rebinding · Portabilität",
+   "outcome": "nicht abbildbar",
+   "authority": "Träger ohne Fehlerinjektion",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "T11",
+   "title": "Zwei Gruppen auf einem Träger",
+   "door": "DV4/DV6 Pseudonym je Gruppe",
+   "outcome": "nicht abbildbar",
+   "authority": "Träger ohne Fehlerinjektion",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "T12",
+   "title": "Versiegelter Eintrag: was der Träger liest",
+   "door": "I6 key-blindness · Access-Envelope",
+   "outcome": "nicht abbildbar",
+   "authority": "Träger ohne Fehlerinjektion",
+   "keys": "—",
+   "ms": 0
+  }
+ ]
+}

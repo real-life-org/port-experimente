@@ -1,0 +1,284 @@
+{
+ "id": "rltp-beekem-logreplik",
+ "kind": "group",
+ "at": "2026-11-23T07:20:35.814Z",
+ "scenarios": [
+  {
+   "scenario": "S1",
+   "title": "Gründen, zwei Mitglieder aufnehmen, Inhalte tauschen",
+   "ms": 104,
+   "outcome": "bestanden",
+   "authority": "alle sehen {alice, bob, carol}",
+   "keys": "alle lesen alle drei Einträge"
+  },
+  {
+   "scenario": "S2",
+   "title": "Mitglied entfernen; Entfernter liest Neues nicht mehr",
+   "ms": 106.3,
+   "outcome": "bestanden",
+   "authority": "alle sehen {alice, bob}",
+   "keys": "Carol liest Neues: nein; Alice/Bob lesen: ja"
+  },
+  {
+   "scenario": "S3",
+   "title": "Offline schreiben, danach konvergieren",
+   "ms": 177.6,
+   "outcome": "bestanden",
+   "authority": "alle sehen {alice, bob, carol}",
+   "keys": "alle lesen beide Einträge"
+  },
+  {
+   "scenario": "S4a",
+   "title": "Alice entfernt Bob, während Bob schreibt",
+   "ms": 108.8,
+   "outcome": "bestanden",
+   "authority": "alle sehen {alice, carol}; Bobs gleichzeitiger Eintrag: alice:verwirft carol:verwirft",
+   "keys": "Bob liest Einträge nach dem Zusammenführen: nein"
+  },
+  {
+   "scenario": "S4b",
+   "title": "Zwei Admins entfernen gleichzeitig verschiedene Personen",
+   "ms": 137.8,
+   "outcome": "bestanden",
+   "authority": "alle sehen {alice, bob}; Zustand baum=2; schlüssel=ja; fork=nein; regeln=v2; ziel=seq 8 (0 fehlen, 1 geholt)",
+   "keys": "Bob liest Neues: ja; Entfernte lesen Neues: niemand"
+  },
+  {
+   "scenario": "S4c",
+   "title": "Gegenseitige Entfernung zweier Admins",
+   "ms": 64.7,
+   "outcome": "bestanden",
+   "authority": "alle sehen {carol}; alice (entfernt) sieht {alice, carol}; bob (entfernt) sieht {bob, carol}; Zustand baum=2; schlüssel=nein; fork=nein; regeln=v2; ziel=seq 5 (0 fehlen, 0 geholt)",
+   "keys": "—"
+  },
+  {
+   "scenario": "S4c2",
+   "title": "Gegenseitige Entfernung: beide sind draußen, keiner liest Neues",
+   "ms": 70.4,
+   "outcome": "bestanden",
+   "authority": "Carol sieht {carol}; alice sieht {alice, carol}, bob sieht {bob, carol}; Zustand baum=1; schlüssel=ja; fork=nein; regeln=v2; ziel=seq 6 (0 fehlen, 1 geholt)",
+   "keys": "keiner der beiden liest Carols Eintrag"
+  },
+  {
+   "scenario": "S4d",
+   "title": "Entfernung neben Rotation eines anderen Mitglieds",
+   "ms": 88,
+   "outcome": "bestanden",
+   "authority": "alle sehen {alice, bob}; Zustand baum=2; schlüssel=ja; fork=nein; regeln=v2; ziel=seq 7 (0 fehlen, 0 geholt)",
+   "keys": "Alice liest Neues: ja; Carol liest Neues: nein"
+  },
+  {
+   "scenario": "S4e",
+   "title": "Zwei gleichzeitige Änderungen der Gruppenregeln",
+   "ms": 161.5,
+   "outcome": "bestanden",
+   "authority": "alle: baum=3; schlüssel=nein; fork=ja; regeln=v2",
+   "keys": "—"
+  },
+  {
+   "scenario": "S4j",
+   "title": "Regeländerung neben Entfernung: Fork, Ende durch eine Regeländerung auf beide Zweige",
+   "ms": 208.4,
+   "outcome": "bestanden",
+   "authority": "im Fork: alle sehen fork=ja; Carol bleibt: ja; Ende: ja; danach alle sehen {alice, bob}",
+   "keys": "—"
+  },
+  {
+   "scenario": "S4f",
+   "title": "Entfernte lädt gleichzeitig ein, Eingeladener lädt weiter ein",
+   "ms": 308,
+   "outcome": "bestanden",
+   "authority": "alle sehen {alice, bob, carol}; übrig aus Mallorys Kette: niemand; x kann y nicht einladen (unbekannte Person y)",
+   "keys": "neuer Inhalt nur bei Mitgliedern: ja"
+  },
+  {
+   "scenario": "S5",
+   "title": "Zweites Gerät derselben Person",
+   "ms": 239.8,
+   "outcome": "bestanden",
+   "authority": "Mitglieder laut Alice: {alice, bob, carol}",
+   "keys": "bob-2 liest {nachher, vorher}"
+  },
+  {
+   "scenario": "S5b",
+   "title": "Gerät verloren: Person entfernt ihr eigenes Gerät, der Finder liest nicht weiter",
+   "ms": 416.7,
+   "outcome": "bestanden",
+   "authority": "Bob bleibt Mitglied: ja; Mitglieder laut Alice: {alice, bob, carol}",
+   "keys": "Finder liest vor dem Entfernen: ja; danach: nein; Bobs erstes Gerät liest weiter: ja"
+  },
+  {
+   "scenario": "S5c",
+   "title": "Person mit zwei Geräten wird entfernt; keines liest Neues",
+   "ms": 215.9,
+   "outcome": "bestanden",
+   "authority": "alle sehen {alice, carol}",
+   "keys": "beide Geräte lasen vorher: ja; lesen Neues: keines"
+  },
+  {
+   "scenario": "S6",
+   "title": "Neues Mitglied liest die Historie",
+   "ms": 170.5,
+   "outcome": "nicht bestanden",
+   "authority": "Dave Mitglied: ja",
+   "keys": "Dave liest {}"
+  },
+  {
+   "scenario": "S6b",
+   "title": "Neues Mitglied liest die Historie nach dem nächsten Eintrag",
+   "ms": 230.7,
+   "outcome": "bestanden",
+   "authority": "Dave Mitglied: ja",
+   "keys": "direkt nach Aufnahme 0 Einträge; nach neuem Eintrag {alt-1, alt-2, alt-bob, neu}"
+  },
+  {
+   "scenario": "S7",
+   "title": "Gerät erbeutet, danach Rotation: liest der Angreifer weiter?",
+   "ms": 158,
+   "outcome": "bestanden",
+   "authority": "—",
+   "keys": "Angreifer liest vor der Rotation: ja; nach der Rotation: nein; Alice/Carol lesen nach der Rotation: ja"
+  },
+  {
+   "scenario": "S11",
+   "title": "Schlüsseloperation ohne Logeintrag: ein entferntes Gerät nimmt ein neues Blatt in den Baum",
+   "ms": 282,
+   "outcome": "bestanden",
+   "authority": "alle sehen {alice, bob, carol}; gemeinsamer Vorgänger von Fälschung und Entfernung: ohne Epochen; kein Tiebreak (zusammengeführt); Zustand alice: baum=3; schlüssel=ja; fork=nein; regeln=v2; ziel=seq 18 (0 fehlen, 2 geholt)",
+   "keys": "Kontrolle: Blatt wirkt ja, Mitglieder verarbeiten die Operation ja; als Mitglied liest es Neues: nein; nach der Entfernung liest das gefälschte Blatt Neues: nein; Mitglieder lesen: ja"
+  },
+  {
+   "scenario": "S8",
+   "title": "Ersteller fällt weg, Gruppe bleibt handlungsfähig",
+   "ms": 88.4,
+   "outcome": "bestanden",
+   "authority": "Carol sieht {alice, bob, carol}; Zustand baum=3; schlüssel=ja; fork=nein; regeln=v2; ziel=seq 5 (0 fehlen, 0 geholt)",
+   "keys": "Bob liest Neues: ja; Dave liest Neues: nein"
+  },
+  {
+   "scenario": "S10a",
+   "title": "Dienst: Entfernter schreibt gleichzeitig, das Relay verwirft (kein Residual)",
+   "ms": 82.2,
+   "outcome": "bestanden",
+   "authority": "Bob raus: ja; Urteil über Bobs Eintrag: verwerfen; Dienst bedient Bob: nein; Logreplik: 2 Mitglieder, abgelehnte Antworten=0, verworfen=5",
+   "keys": "Residual bei niemandem; Bob liest danach: nein"
+  },
+  {
+   "scenario": "S10b",
+   "title": "Dienst: Entfernung ohne Relay, der Entfernte schreibt am Relay weiter (veraltete Sicht)",
+   "ms": 241,
+   "outcome": "bestanden",
+   "authority": "Daves Eintrag vor Zustellung der Entfernung kam durch: ja (Sicht veraltet, erwartet); danach: verwerfen; Logreplik: 3 Mitglieder, abgelehnte Antworten=0, verworfen=2",
+   "keys": "stale-2 bei niemandem"
+  },
+  {
+   "scenario": "S10c",
+   "title": "Dienst: gegenseitige Entfernung lässt nur ein Mitglied, Quorum der Sicht",
+   "ms": 76,
+   "outcome": "bestanden",
+   "authority": "bediente Geräte alle sehen {carol}; Dienst bedient noch: niemanden der Entfernten; wissen von ihrer Entfernung: keiner; Urteil über Alices Eintrag: verwerfen; Logreplik: 1 Mitglieder, abgelehnte Antworten=0, verworfen=8",
+   "keys": "Carol liest {allein}"
+  }
+ ],
+ "carrier": [
+  {
+   "scenario": "T1",
+   "title": "Träger verliert einen Rahmen still",
+   "door": "DV2 nichts endet still · I12 Lückenreparatur",
+   "ms": 236.1,
+   "outcome": "nicht bestanden",
+   "authority": "Lücke bleibt: alice {alice, bob, carol, dave}, bob {alice, bob, carol}; verschluckt 1 Rahmen; Zustand bob: baum=3; schlüssel=nein; fork=nein; regeln=v2; ungeöffnet=1; ziel=seq 11 (0 fehlen, 0 geholt)",
+   "keys": "Dave liest: nein"
+  },
+  {
+   "scenario": "T2",
+   "title": "Träger ordnet um",
+   "door": "I2 kausale Anwendung",
+   "ms": 269.4,
+   "outcome": "nicht bestanden",
+   "authority": "alice {alice, bob, dave} bob {alice, bob, dave} dave {alice, bob, dave}",
+   "keys": "alice:{eins} bob:{drei} dave:{zwei}"
+  },
+  {
+   "scenario": "T3",
+   "title": "Träger liefert doppelt",
+   "door": "DV3 / 6.3 idempotent über den Inhalt",
+   "ms": 98.9,
+   "outcome": "bestanden",
+   "authority": "alice {alice, bob} bob {alice, bob}; carol liest {}; Zustand bob: baum=2; schlüssel=ja; fork=nein; regeln=v2; ziel=seq 5 (0 fehlen, 1 geholt)",
+   "keys": "Einträge: {einmal} {einmal}"
+  },
+  {
+   "scenario": "T4",
+   "title": "Träger spielt eine alte Entfernung erneut ein",
+   "door": "I8 Zustand, nicht Kante · RLTP-ACC-3475",
+   "ms": 187.8,
+   "outcome": "bestanden",
+   "authority": "bob {alice, bob, carol}",
+   "keys": "Alice liest Carols Eintrag: ja"
+  },
+  {
+   "scenario": "T5",
+   "title": "Träger verändert einen Rahmen",
+   "door": "D1 signierter DAG · Form vor Inhalt",
+   "ms": 552.8,
+   "outcome": "nicht bestanden",
+   "authority": "bob {alice, bob, carol, dave} carol {alice, bob, carol, dave}; Müll notiert: ja; zerstörte Rahmen repariert: nein; Zustand bob: baum=4; schlüssel=nein; fork=nein; regeln=v2; ungeöffnet=1; ziel=seq 19 (0 fehlen, 0 geholt); verworfen: Unterminated string in JSON at position 849 (line 1 column 850); verworfen: Unexpected end of JSON input",
+   "keys": "—"
+  },
+  {
+   "scenario": "T6",
+   "title": "Träger hält einem Gerät gezielt einen Eintrag vor",
+   "door": "D5 beglaubigtes Konvergenzziel · I5",
+   "ms": 291.5,
+   "outcome": "nicht bestanden",
+   "authority": "Carol sieht {alice, bob, carol} (zurück: ja); bemerkt: nein; Zustand: baum=3; schlüssel=nein; fork=nein; regeln=v2; ungeöffnet=1; ziel=seq 11 (0 fehlen, 0 geholt)",
+   "keys": "Carol liest Daves Eintrag: nein"
+  },
+  {
+   "scenario": "T6b",
+   "title": "Träger friert ein Gerät ein (alles vorgehalten)",
+   "door": "D5 beglaubigtes Konvergenzziel · I5",
+   "ms": 343.7,
+   "outcome": "bestanden",
+   "authority": "Carol sieht {alice, bob, carol}; bemerkt: ja; Zustand: baum=3; schlüssel=nein; fork=nein; regeln=v2; ziel=angefragt, keine Antwort (zuletzt seq 4)",
+   "keys": "Carol liest Daves Eintrag: nein"
+  },
+  {
+   "scenario": "T7",
+   "title": "Entferntes Gerät fragt weiter",
+   "door": "Dienstklassen §9.3 · KV1",
+   "ms": 125.5,
+   "outcome": "bestanden",
+   "authority": "Carol wird verweigert; Zustand: baum=3; schlüssel=nein; fork=nein; regeln=v2; ziel=angefragt, keine Antwort (zuletzt seq 1)",
+   "keys": "Carol liest nach der Entfernung: nein"
+  },
+  {
+   "scenario": "T8",
+   "title": "Trägerwechsel mitten im Leben",
+   "door": "I15 Rebinding · Portabilität",
+   "ms": 0,
+   "outcome": "nicht abbildbar",
+   "authority": "der Träger kennt keinen Wechsel (ein Prüfstand-Relay)",
+   "keys": "—"
+  },
+  {
+   "scenario": "T11",
+   "title": "Zwei Gruppen auf einem Träger",
+   "door": "DV4/DV6 Pseudonym je Gruppe",
+   "ms": 0,
+   "outcome": "nicht abbildbar",
+   "authority": "ein Kandidat trägt genau eine Gruppe; Verknüpfung über Gruppen hinweg braucht zwei Gruppen auf einem Träger",
+   "keys": "—"
+  },
+  {
+   "scenario": "T12",
+   "title": "Versiegelter Eintrag: was der Träger liest",
+   "door": "I6 key-blindness · Access-Envelope",
+   "ms": 127.6,
+   "outcome": "nicht bestanden",
+   "authority": "im Klartext beim Träger: card:alice, card:bob, card:carol, auth:alice, auth:bob, policy:alice, policy:bob, auth:carol",
+   "keys": "Inhalt versiegelt"
+  }
+ ]
+}

@@ -110,10 +110,26 @@ export interface Cell {
   readonly evidence: ReadonlyArray<{ scenario: string; outcome: Outcome | 'nicht gelaufen'; crashed?: boolean; promiseChanged?: boolean }>
 }
 
+/** Familie eines Kandidaten: Gruppen-Kandidaten (S/T), Mehrgeräte-Kandidaten des Modells (X), Alltags-Kandidaten an der veröffentlichten Bibliothek (XA). */
+export type RunKind = 'group' | 'multidevice' | 'everyday'
+
 export interface CandidateRun {
   readonly id: string
   readonly scenarios: readonly ScenarioResult[]
   readonly carrier: readonly ScenarioResult[]
+  /** Aus der Ergebnisdatei (results/<id>.json). Fehlt die Familie, ergibt sie sich aus den Szenarien des Laufs. */
+  readonly kind?: RunKind
+  /** Zeitpunkt des Laufs dieses Kandidaten. */
+  readonly at?: string
+  /** Der Kandidat konnte nicht laufen: der Grund. Seine Zellen stehen dann als „nicht gelaufen“ da. */
+  readonly notRun?: string
+}
+
+/** Die Familie eines Laufs: die genannte, sonst aus den Szenarien. Ein Lauf ohne Ergebnis braucht die genannte. */
+export const kindOf = (r: CandidateRun): RunKind => {
+  if (r.kind) return r.kind
+  const ids = [...r.scenarios, ...r.carrier].map((x) => x.scenario)
+  return ids.some((s) => s.startsWith('XA-')) ? 'everyday' : ids.some((s) => s.startsWith('X')) ? 'multidevice' : 'group'
 }
 
 export interface Row {
@@ -137,7 +153,7 @@ export interface Matrix {
 /** Die Szenarien einer Zusage für einen Kandidaten: die Alltagsszenarien für einen Alltags-Kandidaten, sonst die des Modells. */
 export const scenariosFor = (p: Promise, everyday: boolean): readonly string[] => (everyday ? (p.everyday ?? []) : p.scenarios)
 /** Ein Alltags-Kandidat läuft die Alltagsszenarien (XA-…) an der veröffentlichten Bibliothek. */
-export const isEveryday = (r: CandidateRun): boolean => [...r.scenarios, ...r.carrier].some((x) => x.scenario.startsWith('XA-'))
+export const isEveryday = (r: CandidateRun): boolean => kindOf(r) === 'everyday'
 
 export type CellResult = { outcome: Outcome; crashed?: boolean; promiseChanged?: boolean }
 
@@ -162,7 +178,7 @@ export function cell(p: Promise, results: ReadonlyMap<string, CellResult>, every
 export function buildMatrix(runs: readonly CandidateRun[]): Matrix {
   const byCandidate = new Map(runs.map((r) => [r.id, new Map([...r.scenarios, ...r.carrier].map((x) => [x.scenario, { outcome: x.outcome, crashed: x.crashed, promiseChanged: x.promiseChanged }] as const))] as const))
   // Zwei Familien: Gruppen-Kandidaten (S/T/Z-Szenarien) stehen in den drei Gruppen-Ports, Mehrgeräte-Kandidaten (X) im Mehrgeräte-Port.
-  const family = (r: CandidateRun) => ([...r.scenarios, ...r.carrier].some((x) => x.scenario.startsWith('X')) ? 'X' : 'ST')
+  const family = (r: CandidateRun) => (kindOf(r) === 'group' ? 'ST' : 'X')
   const everyday = new Set(runs.filter(isEveryday).map((r) => r.id))
   const ports = (['autorität', 'schlüssel', 'replikation', 'mehrgerät'] as Port[]).map((port) => {
     const ofPort = promises.filter((p) => p.port === port)
