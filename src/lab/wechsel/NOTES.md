@@ -47,9 +47,25 @@ counterpart acknowledged the change.
    that its state is stale and that the counterpart holds an entry it
    does not know.
 
-6. **A sibling that comes back does not turn a change back.** Syncing
-   only ever lets a device's own log grow; a shorter log changes nothing.
-   Giving up one's own continuation after a fork is a step of its own.
+6. **A sibling that comes back turns nothing back.** Syncing only ever
+   lets a device's own log grow, and what the counterpart acknowledged is
+   never forgotten. Giving up one's own continuation after a fork is a
+   step of its own.
+
+## Material and paths
+
+A device holds key material (receive keys, access to addresses) and uses
+receive paths, and the model keeps the two apart. Which paths a device
+uses follows from its log, from the newest entry the counterpart
+acknowledged, and from the rules: the head's path always; older ones
+while the change is not acknowledged; one more below that if the old path
+is to stay open for a while. Two devices with the same log and the same
+acknowledgement use the same paths, whatever each still holds. So an old
+address that stays open is a rule that says so, and a closed one stays
+closed when an older sibling syncs: after change, acknowledgement, return
+of the old laptop and a sync in both directions, phone and laptop both use
+the new path only (or both the new and the old, under the rule that keeps
+it open), although the laptop still holds the old address as material.
 
 ## The same question in a group (`group.ts`)
 

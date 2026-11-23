@@ -1,7 +1,7 @@
 // Scenarios for the model of model.ts. Each returns plain facts; the rules
 // under discussion are switched per variant so that the table shows what
 // each rule buys. A measurement of the model, not of the library.
-import { Carrier, RULES, change, device, headId, met, receive, send, share, takeOver, type Device, type Rules } from './model'
+import { Carrier, RULES, change, device, headId, met, paths, receive, send, share, takeOver, type Device, type Rules } from './model'
 
 export type Row = Record<string, string | number | boolean>
 const settle = (c: Carrier, rules: Rules, devs: Device[], rounds = 6): void => { for (let i = 0; i < rounds; i++) for (const d of devs) receive(d, c, rules) }
@@ -83,7 +83,7 @@ function writtenDuringTheChange (rules: Rules, lostFetchesFirst: boolean): Row {
   return {
     '"written before b knew" is read by': who('written before b knew'),
     '"written after b knew" is read by': who('written after b knew'),
-    'the lost device can still fetch at an address of the owner': [...tablet.own.addr].some((x) => phone.own.addr.has(x)),
+    'the lost device can still fetch at an address the owner uses': paths(phone, rules).some((st) => tablet.own.addr.has(st.addr)),
   }
 }
 
@@ -102,16 +102,30 @@ function answerAfterTheChange (rules: Rules): Row {
   }
 }
 
-/** The phone changed keys while the laptop was offline; then the two sync, in either order. */
-function siblingComesBack (): Row {
-  const [phone, laptop, b] = [device('phone'), device('laptop'), device('b')] as [Device, Device, Device]
+/** The whole sequence: the phone changes keys while the laptop is offline,
+ *  the counterpart acknowledges, the laptop comes back, the two sync in
+ *  both directions. */
+function siblingComesBack (rules: Rules): Row {
+  const c = new Carrier(), [phone, laptop, b] = [device('phone'), device('laptop'), device('b')] as [Device, Device, Device]
   met([phone, laptop], [b], [phone, laptop], [b])
-  change(phone, RULES, [phone])
-  const before = phone.own.log.length
+  const old = phone.own.log[0]?.state.addr ?? ''
+  const uses = (d: Device): string => paths(d, rules).map((st) => (st.addr === old ? 'old' : 'new')).sort().join('+')
+  change(phone, rules, [phone]); send(phone, c, rules, 'message', 'news')
+  const beforeAck = uses(phone)
+  settle(c, rules, [b, phone])
+  const afterAck = uses(phone), length = phone.own.log.length
   share(laptop, phone, true)
-  const kept = phone.own.log.length === before
+  const afterOldSibling = uses(phone), kept = phone.own.log.length === length
   share(phone, laptop, true)
-  return { 'syncing from the laptop leaves the phone\'s newer log as it is': kept, 'syncing from the phone brings the laptop to the same head': headId(laptop.own.log) === headId(phone.own.log) }
+  return {
+    'the phone uses, before the acknowledgement': beforeAck,
+    'the phone uses, after the acknowledgement': afterAck,
+    'syncing from the laptop leaves the phone\'s newer log as it is': kept,
+    'the phone uses, after syncing from the older laptop': afterOldSibling,
+    'the laptop uses, after syncing from the phone': uses(laptop),
+    'both devices are at the same head': headId(laptop.own.log) === headId(phone.own.log),
+    'the laptop still holds the old address as material': laptop.own.addr.has(old),
+  }
 }
 
 const v = (r: Partial<Rules>): Rules => ({ ...RULES, ...r })
@@ -130,6 +144,7 @@ export function measure (): Record<string, Row> {
     'the same; the lost device fetches first': writtenDuringTheChange(RULES, true),
     'the same; the owner drops the old receive path at once': writtenDuringTheChange(v({ keepOldUntilAck: false }), false),
     'an answer after the change, from both own devices': answerAfterTheChange(RULES),
-    'a sibling that was offline during the change comes back': siblingComesBack(),
+    'a sibling that was offline during the change comes back': siblingComesBack(RULES),
+    'the same; the old receive path stays open for a while': siblingComesBack(v({ graceAfterAck: true })),
   }
 }

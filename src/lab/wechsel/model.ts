@@ -10,7 +10,10 @@
 //     Peer-to-Peer Updates");
 //   - every document carries the head of the sender's own log and the head
 //     it holds of the receiver's log (`heads`);
-//   - a carrier with one mailbox per address that deletes what was fetched.
+//   - a carrier with one mailbox per address that deletes what was fetched;
+//   - a device holds key material and uses receive paths, and the two are
+//     kept apart: which paths it uses follows from its log, from what the
+//     counterpart acknowledged and from the rules (`paths`).
 //
 // Signatures are real (Ed25519). Encryption is modelled as possession: a
 // device opens a document sealed to a receive key if it holds that key.
@@ -41,8 +44,9 @@ export function follows (prev: Entry | null, e: Entry): boolean {
 export type Own = {
   log: Entry[]
   sig: Map<string, KeyObject>     // everyday signing keys, by public key
-  enc: Set<string>                // receive keys it can open
-  addr: Set<string>               // addresses it can fetch from
+  enc: Set<string>                // receive keys it holds (material; what it may use is `paths`)
+  addr: Set<string>               // addresses it holds the access to
+  acked: number                   // the newest entry of its own log the counterpart acknowledged
   update: Map<string, KeyObject>  // update keys it holds, by public key
   owed: Entry[]                   // entries the counterpart has not acknowledged
 }
@@ -64,15 +68,27 @@ export const RULES: Rules = { heads: true, replyToSender: true, keepOldUntilAck:
 export class Carrier {
   private boxes = new Map<string, Doc[]>()
   put (d: Doc): void { this.boxes.set(d.to, [...(this.boxes.get(d.to) ?? []), d]) }
-  fetch (dev: Device): Doc[] {
+  fetch (addrs: string[]): Doc[] {
     const out: Doc[] = []
-    for (const a of dev.own.addr) { out.push(...(this.boxes.get(a) ?? [])); this.boxes.delete(a) }
+    for (const a of addrs) { out.push(...(this.boxes.get(a) ?? [])); this.boxes.delete(a) }
     return out
   }
   waiting (addr: string): number { return (this.boxes.get(addr) ?? []).length }
 }
 
 const head = (log: Entry[]): Entry => log[log.length - 1] as Entry
+/** The receive paths a device uses. What it holds is material; what it may
+ *  use follows from its log, from what the counterpart acknowledged and
+ *  from the rules: the head's path always; older ones down to the
+ *  acknowledged entry while the change is not acknowledged
+ *  (`keepOldUntilAck`); one more below that for a while (`graceAfterAck`).
+ *  Two devices with the same log and the same acknowledgement use the same
+ *  paths, whatever material each still holds. A lost device follows no rule. */
+export function paths (dev: Device, rules: Rules): State[] {
+  if (dev.lost) return dev.own.log.map((e) => e.state).filter((st) => dev.own.addr.has(st.addr))
+  const from = rules.keepOldUntilAck ? dev.own.acked : dev.own.log.length - 1
+  return dev.own.log.slice(Math.max(0, from - (rules.graceAfterAck ? 1 : 0))).map((e) => e.state).filter((st) => dev.own.addr.has(st.addr) && dev.own.enc.has(st.enc))
+}
 const newState = (): { st: State, sigPair: Pair } => { const sigPair = pair(); return { st: { sig: sigPair.pub, enc: 'enc-' + randomBytes(6).toString('hex'), addr: 'addr-' + randomBytes(6).toString('hex') }, sigPair } }
 
 /** A relationship's first entry, written on `dev`; the next update key is
@@ -82,7 +98,7 @@ export function open (dev: Device, holders: Device[]): void {
   const b = { n: 0, prev: null, update: up.pub, next: h(nextUp.pub), state: st }
   const proof = sign(null, Buffer.from(body(b)), up.priv).toString('base64url')
   const e: Entry = { ...b, proof, id: h(body(b) + proof) }
-  dev.own.log = [e]; dev.own.sig.set(st.sig, sigPair.priv); dev.own.enc.add(st.enc); dev.own.addr.add(st.addr); dev.own.owed = [e]
+  dev.own.log = [e]; dev.own.sig.set(st.sig, sigPair.priv); dev.own.enc.add(st.enc); dev.own.addr.add(st.addr); dev.own.owed = [e]; dev.own.acked = 0
   for (const x of holders) x.own.update.set(nextUp.pub, nextUp.priv)
 }
 const extendsLog = (longer: Entry[], shorter: Entry[]): boolean => shorter.length === 0 || (longer.length > shorter.length && longer.some((e) => e.id === head(shorter).id))
@@ -92,7 +108,10 @@ const extendsLog = (longer: Entry[], shorter: Entry[]): boolean => shorter.lengt
  *  its own. A shorter log changes nothing, and neither does a fork (two
  *  logs of which neither continues the other): see `takeOver`. */
 export function share (from: Device, to: Device, holder: boolean): void {
+  const fork = to.own.log.length > 0 && from.own.log.length > 0 && !from.own.log.some((e) => e.id === head(to.own.log).id) && !to.own.log.some((e) => e.id === head(from.own.log).id)
   if (extendsLog(from.own.log, to.own.log)) { to.own.log = [...from.own.log]; to.own.owed = [...from.own.owed] }
+  // what the counterpart acknowledged is never forgotten: an older sibling cannot reopen a closed path
+  if (!fork) to.own.acked = Math.max(to.own.acked, Math.min(from.own.acked, to.own.log.length - 1))
   for (const [k, v] of from.own.sig) to.own.sig.set(k, v)
   for (const x of from.own.enc) to.own.enc.add(x)
   for (const x of from.own.addr) to.own.addr.add(x)
@@ -103,7 +122,7 @@ export function share (from: Device, to: Device, holder: boolean): void {
 /** The deliberate step after a fork: `to` gives up its own continuation
  *  and takes `from`'s, the one the counterpart accepted. */
 export function takeOver (from: Device, to: Device, holder: boolean): void {
-  to.own.log = [...from.own.log]; to.own.owed = [...from.own.owed]
+  to.own.log = [...from.own.log]; to.own.owed = [...from.own.owed]; to.own.acked = from.own.acked
   share(from, to, holder)
 }
 
@@ -124,10 +143,8 @@ export function change (dev: Device, rules: Rules, holders: Device[]): boolean {
     made = { e: { ...b, proof, id: h(body(b) + proof) }, sigPair, nextUp }
     if (rules.deterministic) prepared.set(hd.id, made)
   }
-  const old = hd.state
   dev.own.log.push(made.e); dev.own.owed.push(made.e)
   dev.own.sig.set(made.e.state.sig, made.sigPair.priv); dev.own.enc.add(made.e.state.enc); dev.own.addr.add(made.e.state.addr)
-  if (!rules.keepOldUntilAck) { dev.own.enc.delete(old.enc); dev.own.addr.delete(old.addr) }
   for (const x of holders) if (!x.lost) x.own.update.set(made.nextUp.pub, made.nextUp.priv)
   return true
 }
@@ -150,8 +167,9 @@ export function send (dev: Device, c: Carrier, rules: Rules, kind: string, text?
  *  counts only after its signature was checked under the head this device
  *  holds of the counterpart's log. */
 export function receive (dev: Device, c: Carrier, rules: Rules): void {
-  for (const d of c.fetch(dev)) {
-    if (!dev.own.enc.has(d.sealedTo)) { dev.notices.push(`fetched a ${d.kind} it cannot open`); continue }
+  const open = paths(dev, rules)
+  for (const d of c.fetch(open.map((st) => st.addr))) {
+    if (!(dev.lost ? dev.own.enc.has(d.sealedTo) : open.some((st) => st.enc === d.sealedTo))) { dev.notices.push(`fetched a ${d.kind} it cannot open`); continue }
     // the counterpart's entries that came along
     let refused: Entry | undefined
     for (const e of d.entries) {
@@ -184,10 +202,7 @@ export function receive (dev: Device, c: Carrier, rules: Rules): void {
     if (d.heads) {
       const known = dev.own.log.findIndex((e) => e.id === d.heads?.yours)
       if (known === -1) dev.notices.push('the counterpart holds a continuation of the own log that this device does not know')
-      else {
-        dev.own.owed = dev.own.owed.filter((e) => e.n > known)
-        if (rules.keepOldUntilAck && !rules.graceAfterAck && known === dev.own.log.length - 1) for (const e of dev.own.log.slice(0, -1)) { dev.own.enc.delete(e.state.enc); dev.own.addr.delete(e.state.addr) }
-      }
+      else { dev.own.owed = dev.own.owed.filter((e) => e.n > known); dev.own.acked = Math.max(dev.own.acked, known) }
     }
     if (d.kind === 'refused') { dev.notices.push('the counterpart refused this device\'s continuation'); continue }
     if (d.kind === 'stale') { dev.notices.push('the counterpart says this device\'s state is stale'); continue }
@@ -198,7 +213,7 @@ export function receive (dev: Device, c: Carrier, rules: Rules): void {
   }
 }
 
-export const device = (name: string): Device => ({ name, own: { log: [], sig: new Map(), enc: new Set(), addr: new Set(), update: new Map(), owed: [] }, peer: { log: [], evidence: [] }, notices: [], inbox: [] })
+export const device = (name: string): Device => ({ name, own: { log: [], sig: new Map(), enc: new Set(), addr: new Set(), update: new Map(), owed: [], acked: 0 }, peer: { log: [], evidence: [] }, notices: [], inbox: [] })
 /** Two persons who met: A's devices and B's devices each know the other's first entry. */
 export function met (as: Device[], bs: Device[], holdersA: Device[], holdersB: Device[]): void {
   open(as[0] as Device, holdersA); open(bs[0] as Device, holdersB)
