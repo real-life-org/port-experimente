@@ -6,7 +6,7 @@
 // by hand, the English text lives in matrix-en.ts.
 
 import { readFileSync } from 'node:fs'
-import type { CandidateRun, Matrix, CellStatus } from './matrix'
+import { isEveryday, scenariosFor, type CandidateRun, type Matrix, type CellStatus } from './matrix'
 import { candidateEn, portEn, promiseEn, scenarioEn } from './matrix-en'
 
 export interface PageEvidence {
@@ -21,7 +21,9 @@ export interface PageRow {
   ref: string
   scs: string[]
   gap: string | null
-  cells: Record<string, { status: string; ev: PageEvidence[] }>
+  cells: Record<string, { status: string; ev: PageEvidence[]; scs?: string[] }>
+  /** The everyday scenarios of the promise (run by the everyday candidates against the published library). */
+  everyday?: string[]
 }
 export interface PageData {
   at: string
@@ -53,6 +55,7 @@ export function pageData(m: Matrix, runs: readonly CandidateRun[], at: string): 
       scen[x.scenario] = need(scenarioEn, x.scenario, 'scenario')
     }
   }
+  const everyday = new Set(runs.filter(isEveryday).map((r) => r.id))
   const port = (p: Matrix['ports'][number]) => {
     const en = portEn[p.port]
     return {
@@ -63,9 +66,10 @@ export function pageData(m: Matrix, runs: readonly CandidateRun[], at: string): 
         const cells: PageRow['cells'] = {}
         for (const c of p.candidates) {
           const cell = row.cells[c]!
-          cells[c] = { status: statusEn(cell.status, row.promise.scenarios.length > 0), ev: cell.evidence.map((e) => ({ s: e.scenario, o: e.outcome, ...(e.crashed ? { c: true } : {}), ...(e.promiseChanged ? { p: true } : {}) })) }
+          const own = scenariosFor(row.promise, everyday.has(c))
+          cells[c] = { status: statusEn(cell.status, own.length > 0), ...(everyday.has(c) ? { scs: [...own].sort() } : {}), ev: cell.evidence.map((e) => ({ s: e.scenario, o: e.outcome, ...(e.crashed ? { c: true } : {}), ...(e.promiseChanged ? { p: true } : {}) })) }
         }
-        return { id: row.promise.id, title: pe.title, ref: pe.ref, scs: [...row.promise.scenarios].sort(), gap: pe.gap, cells }
+        return { id: row.promise.id, title: pe.title, ref: pe.ref, scs: [...row.promise.scenarios].sort(), gap: pe.gap, cells, ...(row.promise.everyday ? { everyday: [...row.promise.everyday].sort() } : {}) }
       }),
     }
   }

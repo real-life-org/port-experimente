@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest'
-import { at, clk, copyOf, ev, met, mk, ok, short, tick, type Person } from '../src/lab/alltag/fixture'
+import { at, copyOf, ev, met, mk, ok, type Person } from '../src/lab/alltag/fixture'
 import { Device } from '../src/lab/alltag/invitation'
+import { carry } from '../src/lab/alltag/carrier'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -12,31 +13,6 @@ async function world (fill: number): Promise<{ T: Device, L: Device, B: Person, 
   return { T: new Device('phone', A), L: new Device('laptop', await copyOf(A)), B, b, g }
 }
 
-/** The carrier and the friend: hands documents on until nothing moves.
- *  `reach`: which of A's devices the carrier reaches. Returns what B refused. */
-async function carry (B: Person, devices: Device[], reach: Device[], first: any[], rounds = 10): Promise<string[]> {
-  const refusedByB: string[] = []
-  let toA: any[] = [], toB: any[] = []
-  const sort = async (docs: any[]): Promise<void> => {
-    for (const o of docs) (Object.hasOwn((await B.read()).addresses.keys, o.envelope.rkid) ? toB : toA).push(o)
-  }
-  await sort(first)
-  for (let r = 0; r < rounds; r++) {
-    const t = tick()
-    await sort((await B.h.resume(clk(B, t))).outbound)
-    for (const D of reach) await sort(D.toCarrier((await D.P.h.resume(clk(D.P, t))).outbound))
-    if (!toA.length && !toB.length) break
-    const [a, b] = [toA, toB]; toA = []; toB = []
-    for (const o of b) {
-      const got = await B.h.receive(o.envelope, clk(B, t))
-      if (got.disposition === 'unique' || got.disposition === 'duplicate-known') await sort(got.outbound)
-      else refusedByB.push(`${short(o.type)}: ${got.reason ?? got.disposition}`)
-    }
-    for (const o of a) for (const D of reach) await sort(D.toCarrier(await D.receive(o.envelope, t)))
-    void devices
-  }
-  return [...new Set(refusedByB)].sort()
-}
 const phase = async (D: Device | Person, g: string): Promise<string | undefined> => (await ('P' in D ? D.P : D).h.groups()).find((x: any) => x.id === g)?.phase
 const members = async (P: Person, g: string): Promise<number> => (await P.h.groups()).find((x: any) => x.id === g).members.length
 const card = async (D: Device, g: string): Promise<boolean> => (await D.P.h.prompts()).some((p: any) => p.kind === 'group-invite' && p.groupId === g)
