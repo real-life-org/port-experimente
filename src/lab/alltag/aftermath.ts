@@ -108,7 +108,9 @@ async function run (name: string, fill: number, two: boolean): Promise<Row> {
   const L = two ? await copyOf(T) : T
   const c: Cast = { T, L, B }
   const now = { sent: [] as string[], refused: [] as string[] }
-  await SCENARIOS[name](c, a, b, now)
+  const scenario = SCENARIOS[name]
+  if (!scenario) throw new Error('no scenario ' + name)
+  await scenario(c, a, b, now)
   const later = { sent: [] as string[], refused: [] as string[] }
   for (let d = 0; d < DAYS; d++) await settle(c, [], later, 6, DAY)
   const [t, l, f] = [await sig(T), await sig(L), await sig(B)]
