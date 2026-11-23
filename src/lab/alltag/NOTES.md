@@ -178,9 +178,19 @@ from the seed, on every device, the acting one included. No stand-in is
 needed for this: entropy is a port of the library
 (`createHolder({ entropy })`).
 
+The entry also carries the acting device's time, and every device runs the
+act at that time (the library raises it where a device has been active
+later). With seed and time a sister produces the same document, byte for
+byte, as the acting device: the bundle of a scan and the credential of an
+answer have the same digest on both. A `received` entry carries the time
+the receiving device took the document, for the same reason. Run at the
+time of the replay instead, a laptop that caught up a day later ended with
+the contact `outgoing` while phone and friend held `mutual`, and its sync
+reported nothing.
+
 | Scenario | Result |
 |---|---|
-| the phone scans B's card, the laptop learns it | the same contact id on both devices, verified on both sides; the laptop's own bundle (other bytes: its clock) stays in the house |
+| the phone scans B's card, the laptop learns it | the same contact id on both devices, verified on both sides; the laptop's bundle is the same document and stays in the house |
 | the phone shows its card, only the phone is reached, the laptop answers the request | verified on both devices and at B; the phone's credential for the same answer stays in the house |
 | both devices get the request, the phone answers | the request closes on the laptop |
 | the request reaches the laptop before it learns of the show | refused once; open after the show is applied and the friend's library sends again |
@@ -190,6 +200,9 @@ needed for this: entropy is a port of the library
 | the laptop declines before the phone looks | the request closes on the phone |
 | apart: the phone meets B, the laptop meets C | both devices hold both under the same ids |
 | applying a scan breaks off on the laptop | the entry stays open, the next sync applies it, one contact |
+| the laptop catches up a day after the phone met B | verified on the laptop like on the phone |
+| the phone accepted offline, the laptop declined, the phone's sync breaks off | the phone knows the decline; at the door its accept does not leave, B stays `outgoing` |
+| the library refuses a card for good (`card-invalid`) | the act is closed as refused, a later act runs, the laptop does not hang on it |
 | B meets the phone and later, apart, the laptop | **open**: the phone ends with one line for B, the laptop with two; B with one or two, by chance (10 and 10 in 20 runs) |
 
 What the library would need:
@@ -207,10 +220,26 @@ What the library would need:
   RLTP-TRU-5150). In the last scenario this decides the outcome: the
   friend's continuity mapping answers the probe of one device, and the
   other device refuses it.
-- **Time in the act.** Under the same seed the two devices produce the
-  same labels, keys and challenges, but not the same bytes: the document
-  carries the device's time. Whether the same bytes from each device would
-  be a way out for documents with a counter was not tried.
+- **Same bytes for what a duty produces.** For an act, seed and time in
+  the entry give the same document on every device. The documents that
+  follow an encounter come from the library's duties on `resume`, with
+  each device's own entropy and time. Whether the same bytes from each
+  device would be a way out there was not tried.
+
+Two rules of the layer came out of the review of this cut and hold for
+every cut:
+
+- **The rule is asked at the door.** Whether an accept may leave is
+  decided from the entries the device knows at the moment of the first
+  handover, not from what an earlier application managed to do. The
+  handover gives an accept its standing; it must not be what decides
+  whether it may be handed over.
+- **A refusal closes, a break does not.** A step that breaks off (an
+  exception) leaves the entry open and is tried again. A refusal by the
+  library is its verdict on the act: the acting device notes in the log
+  that nothing happened (`void`), the entry is closed, and what follows
+  runs. A sister that meets the act before the note gets the library's own
+  verdict.
 
 The seed in an entry is as secret as the keys derived from it; in this
 prototype the log is in memory and unsealed.

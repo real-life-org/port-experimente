@@ -95,9 +95,10 @@ export type Act =
   | { act: 'scan', card: any, name?: string }
   | { act: 'confirm', contactId: string, choice: 'accept' | 'decline' }
 export type Body =
-  | { kind: 'received', envelope: any, type: string }
+  | { kind: 'received', envelope: any, type: string, when: number }   // a document a device accepted, with the device's time then
   | ({ kind: 'act', seed: string, when: number } & Act)
   | { kind: 'handed', contactId: string, cause: string }     // the accept of entry `cause` left its device for the carrier
+  | { kind: 'void', cause: string, code: string }            // the library refused the act of entry `cause` on its device: nothing happened
 export type Entry = { id: string, deps: string[], body: Body }
 export type Progress = { outbound: any[], stoppedAt: string | null }
 type Confirm = Extract<Body, { act: 'confirm' }>
@@ -128,6 +129,8 @@ export class Device {
   private readonly prompts = new Map<string, any>()
   /** where this device stands with a rule it cannot follow (pinned as measured) */
   readonly stuck: string[] = []
+  /** acts the library refused for good on this device, with its code: they are closed, not retried */
+  readonly refused: string[] = []
 
   constructor (readonly name: string, readonly P: Seeded) {}
 
@@ -145,8 +148,9 @@ export class Device {
 
   /** A document arrives from the carrier. Returns what the library answers. */
   async receive (envelope: any, t = tick()): Promise<any[]> {
-    const got = await this.P.h.receive(envelope, clk(this.P, t))
-    if (got.disposition === 'unique' && !PRIVATE.has(short(got.type))) this.write({ kind: 'received', envelope, type: short(got.type) }, true)
+    const when = clk(this.P, t)
+    const got = await this.P.h.receive(envelope, when)
+    if (got.disposition === 'unique' && !PRIVATE.has(short(got.type))) this.write({ kind: 'received', envelope, type: short(got.type), when }, true)
     const more = await this.applyOpen(t)
     return [...(got.disposition === 'unique' || got.disposition === 'duplicate-known' ? got.outbound : []), ...more.outbound]
   }
@@ -172,16 +176,26 @@ export class Device {
     return this.applyOpen(t)
   }
 
-  /** What of `docs` may go to the carrier now. An accept that leaves is recorded as handed. */
+  /** What of `docs` may go to the carrier now. An accept that leaves is
+   *  recorded as handed.
+   *
+   *  The rule is asked here, at the door, from the entries this device
+   *  knows, and not from what an earlier application managed to do: an
+   *  accept leaves for the first time only while no decline is known. The
+   *  handover is what gives an accept its standing; it must not be what
+   *  decides whether it may be handed over. */
   toCarrier (docs: any[]): any[] {
     const out: any[] = []
-    for (const o of docs) {
+    next: for (const o of docs) {
       if (this.withheld.some((w) => w.digest === o.digest)) continue
       for (const [cause, r] of this.results) {
         const b = this.entries.get(cause)!.body as any
         if (b.act !== 'confirm' || b.choice !== 'accept' || !cause.startsWith(this.name + '#') || !(r.outbound ?? []).some((m: any) => m.digest === o.digest)) continue
         const known = [...this.entries.values()].some((e) => e.body.kind === 'handed' && e.body.cause === cause)
-        if (!known) this.write({ kind: 'handed', contactId: b.contactId, cause }, true)
+        if (!known) {
+          if (this.verdict(b.contactId)?.body.choice === 'decline') { this.withheld.push(o); continue next }
+          this.write({ kind: 'handed', contactId: b.contactId, cause }, true)
+        }
       }
       out.push(o)
     }
@@ -206,11 +220,17 @@ export class Device {
     return p
   }
 
-  /** Runs the library's act of an entry under the entry's seed. The act id
-   *  is the entry's id, so a repeated application replays the library's
-   *  journal instead of acting twice. */
-  private async run (id: string, b: Extract<Body, { kind: 'act' }>, t: number): Promise<any> {
-    const o = { when: Math.max(b.when, clk(this.P, t)), actId: id }
+  /** Runs the library's act of an entry under the entry's seed and at the
+   *  entry's time. The act id is the entry's id, so a repeated application
+   *  replays the library's journal instead of acting twice.
+   *
+   *  The time is the acting device's, not the time of the replay: a device
+   *  that catches up a day later must hold the ceremony at the moment it
+   *  took place, or the counterpart's answer from that moment no longer
+   *  fits. The library never lets a holder's time fall: where this device
+   *  has already been active later, it raises the act to that time. */
+  private async run (id: string, b: Extract<Body, { kind: 'act' }>, _t: number): Promise<any> {
+    const o = { when: b.when, actId: id }
     const r = await this.P.under(b.seed, async () => {
       if (b.act === 'show') return this.P.h.show({ ...o, ...(b.name ? { name: b.name } : {}) })
       if (b.act === 'scan') return this.P.h.scan(b.card, { ...o, ...(b.name ? { name: b.name } : {}) })
@@ -233,6 +253,7 @@ export class Device {
       // declined here, and the sister's accept left: take the decline back and accept
       if (!open) { const kept = this.prompts.get(contactId); if (!kept) return; await reopen(this.P, kept) }
       const r = await this.run(v.id, v.body, t)
+      // this device's copy of a sister's accept stays in the house; its own accept goes through the door (toCarrier)
       if (r.ok && !v.id.startsWith(this.name + '#')) this.withheld.push(...r.outbound)
     } else {
       if (open) await this.run(v.id, v.body, t)
@@ -243,6 +264,23 @@ export class Device {
     }
   }
 
+  /** The library refused an act for good. On the acting device nothing
+   *  happened: it says so in the log, and the entry is closed. A sister that
+   *  knows this never runs the act; one that ran it first got the library's
+   *  own verdict. Returns true: the entry is done with. */
+  private close (e: Entry, code: string, own: boolean): true {
+    this.refused.push(`${e.id}: ${code}`)
+    if (own && ![...this.entries.values()].some((x) => x.body.kind === 'void' && x.body.cause === e.id)) this.write({ kind: 'void', cause: e.id, code }, true)
+    return true
+  }
+
+  /** Applies every open entry whose dependencies are applied.
+   *
+   *  Two kinds of failure are kept apart. A step that breaks off (an
+   *  exception: the store, a crash) leaves the entry open, and the next call
+   *  tries it again. A refusal by the library (`ok: false` with a code) is
+   *  its verdict on the act: the entry is closed as refused and the log moves
+   *  on, so an act that can never succeed does not hold up what follows. */
   private async applyOpen (t: number): Promise<Progress> {
     const outbound: any[] = []
     let moved = true
@@ -253,7 +291,8 @@ export class Device {
         const own = e.id.startsWith(this.name + '#')
         try {
           if (e.body.kind === 'received') {
-            const got = await this.P.h.receive(e.body.envelope, clk(this.P, t))
+            // at the time the receiving device took it, like an act (the library raises it where this device was active later)
+            const got = await this.P.h.receive(e.body.envelope, e.body.when)
             if (got.disposition === 'unique') {
               for (const o of got.outbound) (TOLERATED.has(short(o.type)) ? outbound : this.withheld).push(o)
             } else if (got.disposition !== 'duplicate-known') {
@@ -261,20 +300,24 @@ export class Device {
             }
           } else if (e.body.kind === 'handed') {
             await this.settle(e.body.contactId, t)
+          } else if (e.body.kind === 'void') {
+            // nothing to do: the act it names is skipped where it has not run
+          } else if ([...this.entries.values()].some((x) => x.body.kind === 'void' && x.body.cause === e.id)) {
+            // the acting device was refused: nothing happened there, nothing happens here
           } else if (e.body.act === 'confirm') {
             // the request has not reached this device yet: the entry waits
             if (!(await this.P.h.contact(e.body.contactId))) return { outbound, stoppedAt: `${e.id}: the request is not here yet` }
             // the acting device answers its own prompt; what then holds is settled for every device alike
             if (own && (await this.prompt(e.body.contactId))) {
               const r = await this.run(e.id, e.body, t)
-              if (!r.ok) return { outbound, stoppedAt: `${e.id}: ${r.code}` }
-              outbound.push(...r.outbound)
+              if (r.ok) outbound.push(...r.outbound)
+              else this.close(e, r.code, own)
             }
             await this.settle(e.body.contactId, t)
           } else {
             const r = await this.run(e.id, e.body, t)
-            if (!r.ok) return { outbound, stoppedAt: `${e.id}: ${r.code}` }
-            ;(own ? outbound : this.withheld).push(...r.outbound)
+            if (r.ok) (own ? outbound : this.withheld).push(...r.outbound)
+            else this.close(e, r.code, own)
           }
         } catch (err) {
           return { outbound, stoppedAt: `${e.id}: ${(err as Error).message}` }

@@ -71,17 +71,25 @@ export async function runLayer (): Promise<LayerRow[]> {
       `accept out: ${a.join('/')}; accept held: ${b.join('/')}`))
   }
   {
-    // K1: the phone meets B; K2: apart, the phone meets B and the laptop meets C
+    // K1: the phone meets B, the laptop learns it
     const { T, L, B } = await encounter(0xb1)
     await scans(T, B)
     await L.syncFrom(T); await T.syncFrom(L)
     const k1 = [await shown(T), await shown(L)]
     rows.push(verdict('K1', k1[0] === k1[1] && k1[0]!.endsWith('mutual'), `phone ${k1[0]}; laptop ${k1[1] || 'nothing'}`))
-    const C = await first(0xb3)
+  }
+  {
+    // K2: a fresh pair of devices, apart: the phone meets B, the laptop meets C; only then they sync
+    const { T, L, B } = await encounter(0xb3)
+    const C = await first(0xb7)
+    await scans(T, B)
     await scans(L, C)
+    const apart = [(await T.P.h.contacts()).length, (await L.P.h.contacts()).length]
     await L.syncFrom(T); await T.syncFrom(L)
     const k2 = [await shown(T), await shown(L)]
-    rows.push(verdict('K2', k2[0] === k2[1] && k2[0]!.split(', ').length === 2, `phone ${k2[0]}; laptop ${k2[1]}`))
+    const all = k2[0]!.split(', ')
+    rows.push(verdict('K2', apart[0] === 1 && apart[1] === 1 && k2[0] === k2[1] && all.length === 2 && all.every((x) => x.endsWith('mutual')),
+      `apart: phone ${apart[0]}, laptop ${apart[1]} contacts; after sync: phone ${k2[0]}; laptop ${k2[1]}`))
   }
   {
     // K3: B meets the phone and later, apart, the laptop
@@ -108,5 +116,5 @@ async function scans (D: Enc, B: Person): Promise<void> {
   const prompt = (await B.h.prompts()).find((p: any) => p.kind === 'encounter-confirm')
   await carry(B, [], [D], [...got.outbound, ...ok(await B.h.decide(prompt.id, 'accept', at(B))).outbound])
 }
-/** What a device shows of its contacts: id and verification, sorted. */
-const shown = async (D: Enc): Promise<string> => (await D.P.h.contacts()).map((c: any) => `${c.id.slice(0, 10)} ${c.verification}`).sort().join(', ')
+/** What a device shows of its contacts: the full id and the verification, sorted. */
+const shown = async (D: Enc): Promise<string> => (await D.P.h.contacts()).map((c: any) => `${c.id} ${c.verification}`).sort().join(', ')

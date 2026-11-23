@@ -65,9 +65,9 @@ describe('an encounter through the layer', () => {
     expect((await L.syncFrom(T)).stoppedAt).toBe(null)
     expect(await ids(L)).toEqual(await ids(T))
     expect({ phone: await lines(T.P), laptop: await lines(L.P), atB: await lines(B) }).toEqual({ phone: ['Bea mutual'], laptop: ['Bea mutual'], atB: ['Al mutual'] })
-    // the laptop ran the same act under the same seed: its bundle is not the same bytes (its clock), and it stays in the house
+    // the laptop ran the same act under the same seed and at the act's time: its bundle is the same document, and it stays in the house
     expect(L.withheld.map((o: any) => short(o.type))).toContain('encounter-bundle/0.1')
-    expect(L.withheld.find((o: any) => short(o.type) === 'encounter-bundle/0.1').digest).not.toBe(sent[0].digest)
+    expect(L.withheld.find((o: any) => short(o.type) === 'encounter-bundle/0.1').digest).toBe(sent[0].digest)
     expect(refused).toEqual([])
     expect([L.notTaken, T.notTaken]).toEqual([[], []])
     // open: the documents that follow the encounter, from both devices
@@ -88,8 +88,9 @@ describe('an encounter through the layer', () => {
     expect({ phone: await lines(T.P), laptop: await lines(L.P), atB: await lines(B), open: [await request(T), await request(L)] })
       .toEqual({ phone: ['Bea mutual'], laptop: ['Bea mutual'], atB: ['Al mutual'], open: [undefined, undefined] })
     expect(await ids(L)).toEqual(await ids(T))
-    // the phone's own credential for the same answer stays in the house
+    // the phone's copy of the same answer is the same document, and it stays in the house
     expect(T.withheld.map((o: any) => short(o.type))).toEqual(['encounter-credential-delivery/0.1'])
+    expect(T.withheld[0].digest).toBe(d.outbound[0].digest)
   })
 
   test('both devices get the request from the carrier, the phone answers: the request closes on the laptop', async () => {
@@ -194,6 +195,69 @@ describe('an encounter through the layer', () => {
     expect((await L.syncFrom(T)).stoppedAt).toBe(null)
     expect(await ids(L)).toEqual(await ids(T))
     expect(await lines(L.P)).toEqual(['Bea mutual'])
+  })
+
+  test('the laptop catches up a day after the phone met B: it holds the encounter at the time it took place, verified like the phone', async () => {
+    const { T, L, B } = await world(0x4d)
+    await scans(T, B, [T])
+    const s1 = await L.syncFrom(T, tick(24 * 3600 * 1000))
+    expect(s1.stoppedAt).toBe(null)
+    expect({ phone: await lines(T.P), laptop: await lines(L.P), atB: await lines(B) }).toEqual({ phone: ['Bea mutual'], laptop: ['Bea mutual'], atB: ['Al mutual'] })
+    expect(await ids(L)).toEqual(await ids(T))
+    expect(L.notTaken).toEqual([])
+  })
+
+  test('the phone accepted offline, the laptop declined, the phone\'s sync breaks off: the phone knows the decline, and its accept does not leave', async () => {
+    const { T, L, B } = await world(0x51)
+    await shows(T, B, [T]); await L.syncFrom(T)
+    const contactId = (await request(T))!
+    const d1 = await T.act({ act: 'confirm', contactId, choice: 'accept' })
+    await L.act({ act: 'confirm', contactId, choice: 'decline' })
+    // the phone learns the decline, but applying it breaks off before anything is settled
+    const h = T.P.h
+    let broke = false
+    T.P.h = new Proxy(h, { get: (o, k) => (k === 'contact' && !broke ? async () => { broke = true; throw new Error('crash') } : o[k]) })
+    expect((await T.syncFrom(L)).stoppedAt).toMatch(/crash/)
+    T.P.h = h
+    expect(T.verdict(contactId)!.body.choice).toBe('decline')
+    // at the door the rule is asked again: nothing leaves, and no handover is recorded
+    expect(T.toCarrier(d1.outbound)).toEqual([])
+    expect([...T.entries.values()].some((e) => e.body.kind === 'handed')).toBe(false)
+    await carry(B, [], [T, L], [])
+    await both(T, L)
+    expect(await lines(B)).toEqual(['Al outgoing'])
+    expect(T.verdict(contactId)!.body.choice).toBe('decline')
+  })
+
+  test('a card the library refuses for good: the act is closed as refused, a later act runs, and the laptop does not hang on it', async () => {
+    const { T, L, B } = await world(0x55)
+    const good = cardOf(ok(await B.h.show(at(B, { name: 'Bea' }))))
+    const bad = await T.act({ act: 'scan', card: { ...good, name: 'Mallory' }, name: 'Al' })
+    expect({ ok: bad.result.ok, code: bad.result.code, stoppedAt: bad.stoppedAt }).toEqual({ ok: false, code: 'card-invalid', stoppedAt: null })
+    expect(T.refused).toEqual(['phone#1: card-invalid'])
+    // a later, valid act is not held up
+    const shown = await T.act({ act: 'show', name: 'Al' })
+    expect(shown.stoppedAt).toBe(null)
+    expect(cardOf(shown.result)).toBeTruthy()
+    // the laptop learns that nothing happened and goes on to the show
+    expect((await L.syncFrom(T)).stoppedAt).toBe(null)
+    expect(L.refused).toEqual([])
+    await carry(B, [], [T, L], ok(await B.h.scan(cardOf(shown.result), at(B, { name: 'Bea' }))).outbound)
+    expect([await request(T), await request(L)].every(Boolean)).toBe(true)
+    expect(await ids(L)).toEqual(await ids(T))
+  })
+
+  test('a step that breaks off is tried again, a refusal is not: the laptop meets the refused act before it knows the phone was refused', async () => {
+    const { T, L, B } = await world(0x59)
+    const good = cardOf(ok(await B.h.show(at(B, { name: 'Bea' }))))
+    await T.act({ act: 'scan', card: { ...good, name: 'Mallory' }, name: 'Al' })
+    // only the act entry reaches the laptop, not yet the note that it was refused
+    const act = [...T.entries.values()].find((e) => e.body.kind === 'act')!
+    const partial = new Device('phone', T.P); partial.entries.set(act.id, act)
+    expect((await L.syncFrom(partial)).stoppedAt).toBe(null)
+    expect(L.refused).toEqual(['phone#1: card-invalid'])     // the library's own verdict, the same on this device
+    expect((await L.syncFrom(T)).stoppedAt).toBe(null)
+    expect(await ids(L)).toEqual([])
   })
 
   test('open, as measured: B meets the phone and later, apart, the laptop: the phone ends with one line, the laptop with two, the friend with one or two', async () => {
