@@ -47,6 +47,20 @@ counterpart acknowledged the change.
    that its state is stale and that the counterpart holds an entry it
    does not know.
 
+6. **A sibling that comes back does not turn a change back.** Syncing
+   only ever lets a device's own log grow; a shorter log changes nothing.
+   Giving up one's own continuation after a fork is a step of its own.
+
+## What the switches cover
+
+Every document is signed under the head of the sender's log and checked
+under the head the receiver holds, in every variant. What a document says
+about the receiver's log (the acknowledgement) counts only after that
+check. The switch for log heads removes the two heads and nothing else;
+since the heads are also how a change is acknowledged, a variant without
+them never stops attaching the entry and never closes the old receive
+path. That is the effect measured in finding 3, not a weaker check.
+
 ## Limits
 
 - One relationship, one carrier, no time. Open requests are a plain

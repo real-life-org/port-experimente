@@ -85,17 +85,26 @@ export function open (dev: Device, holders: Device[]): void {
   dev.own.log = [e]; dev.own.sig.set(st.sig, sigPair.priv); dev.own.enc.add(st.enc); dev.own.addr.add(st.addr); dev.own.owed = [e]
   for (const x of holders) x.own.update.set(nextUp.pub, nextUp.priv)
 }
+const extendsLog = (longer: Entry[], shorter: Entry[]): boolean => shorter.length === 0 || (longer.length > shorter.length && longer.some((e) => e.id === head(shorter).id))
 /** A sibling device gets what `from` holds of the relationship (the
- *  personal group's doing); update keys only if it is a holder. */
+ *  personal group's doing); update keys only if it is a holder. The own
+ *  log only ever grows by this: `to` takes `from`'s log if that continues
+ *  its own. A shorter log changes nothing, and neither does a fork (two
+ *  logs of which neither continues the other): see `takeOver`. */
 export function share (from: Device, to: Device, holder: boolean): void {
-  const stale = to.own.log.length > 0 && from.own.log.length > 0 && !from.own.log.some((e) => e.id === head(to.own.log).id)
-  if (to.own.log.length === 0 || from.own.log.length >= to.own.log.length || stale) { to.own.log = [...from.own.log]; to.own.owed = [...from.own.owed] }
+  if (extendsLog(from.own.log, to.own.log)) { to.own.log = [...from.own.log]; to.own.owed = [...from.own.owed] }
   for (const [k, v] of from.own.sig) to.own.sig.set(k, v)
   for (const x of from.own.enc) to.own.enc.add(x)
   for (const x of from.own.addr) to.own.addr.add(x)
   if (holder) for (const [k, v] of from.own.update) to.own.update.set(k, v)
-  if (to.peer.log.length < from.peer.log.length) to.peer.log = [...from.peer.log]
+  if (extendsLog(from.peer.log, to.peer.log)) to.peer.log = [...from.peer.log]
   for (const e of from.peer.evidence) if (!to.peer.evidence.some((x) => x.id === e.id)) to.peer.evidence.push(e)
+}
+/** The deliberate step after a fork: `to` gives up its own continuation
+ *  and takes `from`'s, the one the counterpart accepted. */
+export function takeOver (from: Device, to: Device, holder: boolean): void {
+  to.own.log = [...from.own.log]; to.own.owed = [...from.own.owed]
+  share(from, to, holder)
 }
 
 /** `dev` writes the next entry of its own log: new everyday key, new
@@ -123,16 +132,23 @@ export function change (dev: Device, rules: Rules, holders: Device[]): boolean {
   return true
 }
 
-/** `dev` sends a document to the counterpart, as it knows it. */
-export function send (dev: Device, c: Carrier, rules: Rules, kind: string, text?: string, extra: Partial<Doc> = {}): void {
-  const mine = head(dev.own.log), yours = head(dev.peer.log)
+const signed = (d: Pick<Doc, 'kind' | 'text' | 'heads' | 'ref'>): Buffer => Buffer.from(JSON.stringify([d.kind, d.text ?? '', d.heads?.mine ?? '', d.heads?.yours ?? '', d.ref ?? '']))
+/** `dev` sends a document to the counterpart, as it knows it; `at` names
+ *  another state of the counterpart's log to send to (a reply to a device
+ *  that is not at the head). Every document is signed under the head of
+ *  the sender's own log, with or without log heads. */
+export function send (dev: Device, c: Carrier, rules: Rules, kind: string, text?: string, extra: Partial<Doc> = {}, at?: State): void {
+  const mine = head(dev.own.log), yours = head(dev.peer.log), to = at ?? yours.state
   const key = dev.own.sig.get(mine.state.sig)
   if (!key) { dev.notices.push('cannot sign under the head of its own log'); return }
-  const payload = JSON.stringify([kind, text ?? '', mine.id])
-  c.put({ from: dev.name, kind, text, sigKey: mine.state.sig, sig: sign(null, Buffer.from(payload), key).toString('base64url'), entries: [...dev.own.owed], heads: rules.heads ? { mine: mine.id, yours: yours.id } : undefined, sealedTo: yours.state.enc, to: yours.state.addr, ...extra })
+  const d = { from: dev.name, kind, text, entries: [...dev.own.owed], heads: rules.heads ? { mine: mine.id, yours: yours.id } : undefined, ...extra }
+  c.put({ ...d, sigKey: mine.state.sig, sig: sign(null, signed(d), key).toString('base64url'), sealedTo: to.enc, to: to.addr })
 }
 
-/** `dev` fetches and handles what waits for it. */
+/** `dev` fetches and handles what waits for it. Entries of the
+ *  counterpart's log prove themselves; everything else a document says
+ *  counts only after its signature was checked under the head this device
+ *  holds of the counterpart's log. */
 export function receive (dev: Device, c: Carrier, rules: Rules): void {
   for (const d of c.fetch(dev)) {
     if (!dev.own.enc.has(d.sealedTo)) { dev.notices.push(`fetched a ${d.kind} it cannot open`); continue }
@@ -140,35 +156,42 @@ export function receive (dev: Device, c: Carrier, rules: Rules): void {
     let refused: Entry | undefined
     for (const e of d.entries) {
       const held = dev.peer.log[e.n]
-      if (held) { if (held.id !== e.id && !dev.peer.evidence.some((x) => x.id === e.id)) { dev.peer.evidence.push(e); dev.notices.push('a second continuation of the counterpart\'s log was refused'); refused = e } else if (held.id !== e.id) refused = e; continue }
+      if (held) {
+        if (held.id === e.id) continue
+        refused = e
+        if (!dev.peer.evidence.some((x) => x.id === e.id)) { dev.peer.evidence.push(e); dev.notices.push('a second continuation of the counterpart\'s log was refused') }
+        continue
+      }
       if (follows(dev.peer.log.length ? head(dev.peer.log) : null, e)) dev.peer.log.push(e)
     }
     if (refused) {
       // tell the sender which head stands here; where the answer goes is a rule
-      const back = rules.replyToSender ? refused.state : head(dev.peer.log).state
-      c.put({ from: dev.name, kind: 'refused', sigKey: '', sig: '', entries: [], heads: rules.heads ? { mine: head(dev.own.log).id, yours: head(dev.peer.log).id } : undefined, sealedTo: back.enc, to: back.addr })
+      send(dev, c, rules, 'refused', undefined, { entries: [] }, rules.replyToSender ? refused.state : undefined)
       continue
     }
-    // what the sender holds of this device's own log
+    // is the document signed under the head this device holds of the counterpart?
+    const cur = head(dev.peer.log)
+    if (d.sigKey !== cur.state.sig) {
+      const older = d.heads ? dev.peer.log.find((e) => e.id === d.heads?.mine) : undefined
+      if (d.heads && !older) { send(dev, c, rules, 'need-log'); dev.notices.push('behind on the counterpart\'s log, asked for it'); continue }
+      // signed under an older state of the counterpart's log: tell that device, at the address of that state
+      if (older) send(dev, c, rules, 'stale', undefined, { entries: [] }, older.state)
+      dev.notices.push(`refused a ${d.kind}: not signed under the counterpart's current key`)
+      continue
+    }
+    if (!verify(null, signed(d), pubKey(d.sigKey), Buffer.from(d.sig, 'base64url'))) { dev.notices.push(`refused a ${d.kind}: bad signature`); continue }
+    // authentic from here on: what the sender holds of this device's own log
     if (d.heads) {
       const known = dev.own.log.findIndex((e) => e.id === d.heads?.yours)
       if (known === -1) dev.notices.push('the counterpart holds a continuation of the own log that this device does not know')
-      else { dev.own.owed = dev.own.owed.filter((e) => e.n > known); if (rules.keepOldUntilAck && !rules.graceAfterAck && known === dev.own.log.length - 1) for (const e of dev.own.log.slice(0, -1)) { dev.own.enc.delete(e.state.enc); dev.own.addr.delete(e.state.addr) } }
+      else {
+        dev.own.owed = dev.own.owed.filter((e) => e.n > known)
+        if (rules.keepOldUntilAck && !rules.graceAfterAck && known === dev.own.log.length - 1) for (const e of dev.own.log.slice(0, -1)) { dev.own.enc.delete(e.state.enc); dev.own.addr.delete(e.state.addr) }
+      }
     }
     if (d.kind === 'refused') { dev.notices.push('the counterpart refused this device\'s continuation'); continue }
     if (d.kind === 'stale') { dev.notices.push('the counterpart says this device\'s state is stale'); continue }
     if (d.kind === 'need-log') { send(dev, c, rules, 'log', undefined, { entries: [...dev.own.log] }); continue }
-    // the document itself: signed under the head this device holds of the counterpart?
-    const cur = head(dev.peer.log)
-    if (d.sigKey !== cur.state.sig) {
-      if (d.heads && d.heads.mine !== cur.id && !dev.peer.log.some((e) => e.id === d.heads?.mine)) { send(dev, c, rules, 'need-log'); dev.notices.push('behind on the counterpart\'s log, asked for it'); continue }
-      // signed under an older state of the counterpart's log: tell that device, at the address of that state
-      const older = d.heads ? dev.peer.log.find((e) => e.id === d.heads?.mine) : undefined
-      if (older) c.put({ from: dev.name, kind: 'stale', sigKey: '', sig: '', entries: [], heads: { mine: head(dev.own.log).id, yours: cur.id }, sealedTo: older.state.enc, to: older.state.addr })
-      dev.notices.push(`refused a ${d.kind}: not signed under the counterpart's current key`)
-      continue
-    }
-    if (!verify(null, Buffer.from(JSON.stringify([d.kind, d.text ?? '', d.heads?.mine ?? cur.id])), pubKey(d.sigKey), Buffer.from(d.sig, 'base64url')) && d.heads) { dev.notices.push(`refused a ${d.kind}: bad signature`); continue }
     if (d.kind === 'log') continue
     if (d.text) dev.inbox.push(d.text)
     if (d.kind !== 'ack') send(dev, c, rules, 'ack', undefined, { ref: d.kind })

@@ -1,7 +1,7 @@
 // Scenarios for the model of model.ts. Each returns plain facts; the rules
 // under discussion are switched per variant so that the table shows what
 // each rule buys. A measurement of the model, not of the library.
-import { Carrier, RULES, change, device, headId, met, receive, send, share, type Device, type Rules } from './model'
+import { Carrier, RULES, change, device, headId, met, receive, send, share, takeOver, type Device, type Rules } from './model'
 
 export type Row = Record<string, string | number | boolean>
 const settle = (c: Carrier, rules: Rules, devs: Device[], rounds = 6): void => { for (let i = 0; i < rounds; i++) for (const d of devs) receive(d, c, rules) }
@@ -17,7 +17,7 @@ function twoOwnDevices (rules: Rules): Row {
   send(phone, c, rules, 'message', 'from the phone'); send(laptop, c, rules, 'message', 'from the laptop')
   settle(c, rules, [b, phone, laptop])
   const before = reads(b, 'from the laptop')
-  if (has(laptop, 'refused this device')) share(phone, laptop, true)   // the loser takes the sibling's state
+  if (has(laptop, 'refused this device')) takeOver(phone, laptop, true)   // the loser gives up its continuation and takes the sibling's
   send(laptop, c, rules, 'message', 'again from the laptop'); settle(c, rules, [b, phone, laptop])
   return {
     'the two devices wrote the same entry': same,
@@ -102,6 +102,18 @@ function answerAfterTheChange (rules: Rules): Row {
   }
 }
 
+/** The phone changed keys while the laptop was offline; then the two sync, in either order. */
+function siblingComesBack (): Row {
+  const [phone, laptop, b] = [device('phone'), device('laptop'), device('b')] as [Device, Device, Device]
+  met([phone, laptop], [b], [phone, laptop], [b])
+  change(phone, RULES, [phone])
+  const before = phone.own.log.length
+  share(laptop, phone, true)
+  const kept = phone.own.log.length === before
+  share(phone, laptop, true)
+  return { 'syncing from the laptop leaves the phone\'s newer log as it is': kept, 'syncing from the phone brings the laptop to the same head': headId(laptop.own.log) === headId(phone.own.log) }
+}
+
 const v = (r: Partial<Rules>): Rules => ({ ...RULES, ...r })
 export function measure (): Record<string, Row> {
   return {
@@ -118,5 +130,6 @@ export function measure (): Record<string, Row> {
     'the same; the lost device fetches first': writtenDuringTheChange(RULES, true),
     'the same; the owner drops the old receive path at once': writtenDuringTheChange(v({ keepOldUntilAck: false }), false),
     'an answer after the change, from both own devices': answerAfterTheChange(RULES),
+    'a sibling that was offline during the change comes back': siblingComesBack(),
   }
 }

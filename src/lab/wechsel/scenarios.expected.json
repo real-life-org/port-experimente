@@ -87,5 +87,9 @@
     "the laptop's answer under the old key is taken": false,
     "the laptop is told its state is stale": true,
     "the laptop sees that the counterpart holds an entry it does not know": true
+  },
+  "a sibling that was offline during the change comes back": {
+    "syncing from the laptop leaves the phone's newer log as it is": true,
+    "syncing from the phone brings the laptop to the same head": true
   }
 }
