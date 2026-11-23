@@ -99,8 +99,19 @@ Measured 2026-11-23, library 0.19.0, second device 13 s late:
 |---|---|
 | both devices get the invitation, the phone accepts | both devices `member`, the laptop's card is gone, the friend's log holds two members |
 | only the phone is reached by the carrier | the laptop takes the join over from the phone and stands at `joining`; it is `member` once the carrier reaches it and its own request for the group's log is answered |
-| apart: the phone accepts, the laptop declines | the issued accept stands: both devices `member` |
-| apart: both devices accept | the log names the accept that stands, only that one goes to the carrier: both devices `member` |
+| apart: the phone accepts and the accept leaves for the carrier, the laptop declines | the accept stands: both devices `member` |
+| apart: the phone accepts offline, the accept has not left it, the laptop declines | the decline wins on both devices, the accept is never handed over, the friend's log holds one member |
+| apart: both accept, the devices hear of each other first | one accept leaves: both devices `member` |
+| apart: both accept and both accepts leave | the friend takes the first and refuses the second: both devices `member` |
+
+**The rule between two answers of one person** (decided 2026-11-23): what
+the counterpart took first holds, proven by its answer; what has not left
+the own device may be taken back. In the layer, in this order: a confirmed
+accept stands; else an accept that left a device stands; else a decline on
+any device wins and an accept still in the house is never handed over; else
+one of the issued accepts may leave. For that the log carries two more
+entries: `handed` (the accept left the device) and `confirmed` (the
+counterpart's answer names the accept it took).
 
 **What the library lacks, and the stand-in for it.** A device cannot take
 a sister's decision over: the welcome is bound to the digest of the accept
@@ -130,7 +141,7 @@ refuses is recorded and the log moves on.
   person's devices; a device that the carrier does not reach stays at
   `joining`.
 
-**A rule that is a decision, not a measurement.** "An issued accept
-stands, whatever else was decided" follows the earlier multi-device bench
-(what has reached the counterpart holds). The other choice, that a decline
-wins, would make the accepting device leave the group.
+**Limits of the rule.** It needs an arbiter: here the one counterpart and
+in the end the group's log. A profile has none; two friends can take
+different versions first. And the human has to be told: who declines on the
+laptop and is a member all the same needs to read that the phone accepted.

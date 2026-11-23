@@ -24,7 +24,7 @@ async function carry (B: Person, devices: Device[], reach: Device[], first: any[
   for (let r = 0; r < rounds; r++) {
     const t = tick()
     await sort((await B.h.resume(clk(B, t))).outbound)
-    for (const D of reach) await sort((await D.P.h.resume(clk(D.P, t))).outbound.filter((o: any) => !D.withheld.some((w) => w.digest === o.digest)))
+    for (const D of reach) await sort(D.toCarrier((await D.P.h.resume(clk(D.P, t))).outbound))
     if (!toA.length && !toB.length) break
     const [a, b] = [toA, toB]; toA = []; toB = []
     for (const o of b) {
@@ -32,7 +32,7 @@ async function carry (B: Person, devices: Device[], reach: Device[], first: any[
       if (got.disposition === 'unique' || got.disposition === 'duplicate-known') await sort(got.outbound)
       else refusedByB.push(`${short(o.type)}: ${got.reason ?? got.disposition}`)
     }
-    for (const o of a) for (const D of reach) await sort(await D.receive(o.envelope, t))
+    for (const o of a) for (const D of reach) await sort(D.toCarrier(await D.receive(o.envelope, t)))
     void devices
   }
   return [...new Set(refusedByB)].sort()
@@ -55,7 +55,7 @@ describe('a group invitation through the layer', () => {
     const acted = await T.decide(g, 'accept')
     expect(acted.stoppedAt).toBe(null)
     expect((await L.syncFrom(T)).stoppedAt).toBe(null)
-    const late = await carry(B, [T, L], [T, L], acted.outbound)
+    const late = await carry(B, [T, L], [T, L], T.toCarrier(acted.outbound))
     await L.syncFrom(T); await T.syncFrom(L)
     expect({ phone: await phase(T, g), laptop: await phase(L, g), cardOnLaptop: await card(L, g), atB: await members(B, g) })
       .toEqual({ phone: 'member', laptop: 'member', cardOnLaptop: false, atB: 2 })
@@ -68,7 +68,7 @@ describe('a group invitation through the layer', () => {
     const { T, L, B, b, g } = await world(0x63)
     await carry(B, [T, L], [T], await invite(B, b, g))
     const acted = await T.decide(g, 'accept')
-    const refused = await carry(B, [T, L], [T], acted.outbound)
+    const refused = await carry(B, [T, L], [T], T.toCarrier(acted.outbound))
     const learned = await L.syncFrom(T)
     expect(learned.stoppedAt).toBe(null)
     // the join is taken over; the group's log is not part of the personal log,
@@ -76,34 +76,63 @@ describe('a group invitation through the layer', () => {
     expect({ phone: await phase(T, g), laptop: await phase(L, g), cardOnLaptop: await card(L, g), atB: await members(B, g), refused, notTaken: [...new Set(L.notTaken)] })
       .toEqual({ phone: 'member', laptop: 'joining', cardOnLaptop: false, atB: 2, refused: [], notTaken: ['x-access-page/0.1: validation-failed'] })
     // the laptop's own request for the log, once the carrier reaches it
-    await carry(B, [T, L], [T, L], learned.outbound)
+    await carry(B, [T, L], [T, L], L.toCarrier(learned.outbound))
     expect(await phase(L, g)).toBe('member')
   })
 
-  test('apart: the phone accepts, the laptop declines: the issued accept stands on both devices', async () => {
+  test('apart: the phone accepts and its accept leaves for the carrier, the laptop declines: the accept stands on both devices', async () => {
     const { T, L, B, b, g } = await world(0x65)
     await carry(B, [T, L], [T, L], await invite(B, b, g))
     const accepted = await T.decide(g, 'accept')
+    const leaving = T.toCarrier(accepted.outbound)            // it is out of the house before the devices hear of each other
     const declined = await L.decide(g, 'decline')
     expect([accepted.stoppedAt, declined.stoppedAt]).toEqual([null, null])
     await L.syncFrom(T); await T.syncFrom(L)
-    const refused = await carry(B, [T, L], [T, L], accepted.outbound)
+    const refused = await carry(B, [T, L], [T, L], leaving)
     await L.syncFrom(T); await T.syncFrom(L)
     expect({ phone: await phase(T, g), laptop: await phase(L, g), cardOnLaptop: await card(L, g), atB: await members(B, g), refused })
       .toEqual({ phone: 'member', laptop: 'member', cardOnLaptop: false, atB: 2, refused: SECOND_PRODUCER })
   })
 
-  test('apart: both devices accept: one accept reaches the friend, both devices are members', async () => {
+  test('apart: the phone accepts offline, the accept has not left it; the laptop declines: the decline wins and nothing reaches the friend', async () => {
+    const { T, L, B, b, g } = await world(0x69)
+    await carry(B, [T, L], [T, L], await invite(B, b, g))
+    const accepted = await T.decide(g, 'accept')              // still in the house
+    await L.decide(g, 'decline')
+    await L.syncFrom(T); await T.syncFrom(L)
+    const cred = async (D: Device): Promise<string> => Object.keys((await D.P.read()).joining.invites)[0] as string
+    expect([T.verdict(await cred(T)), L.verdict(await cred(L))]).toEqual(['declined', 'declined'])
+    expect(T.toCarrier(accepted.outbound)).toEqual([])
+    const refused = await carry(B, [T, L], [T, L], [])
+    const status = async (D: Device): Promise<string[]> => Object.values((await D.P.read()).joining.invites).map((i: any) => i.status)
+    expect({ phone: [await phase(T, g), await status(T), await card(T, g)], laptop: [await phase(L, g), await status(L), await card(L, g)], atB: await members(B, g), refused })
+      .toEqual({ phone: [undefined, ['declined'], false], laptop: [undefined, ['declined'], false], atB: 1, refused: ['membership-prelude-reply/0.1: validation-failed'] })
+  })
+
+  test('apart: both devices accept, the devices hear of each other first: one accept leaves, both devices are members', async () => {
     const { T, L, B, b, g } = await world(0x67)
     await carry(B, [T, L], [T, L], await invite(B, b, g))
     const onPhone = await T.decide(g, 'accept')
     const onLaptop = await L.decide(g, 'accept')
     await L.syncFrom(T); await T.syncFrom(L)
-    // the log names the accept that stands; only that one is handed to the carrier
-    const standing = [...T.entries.values()].filter((e) => e.body.kind === 'issued').map((e) => e.id).sort()[0] as string
-    const refused = await carry(B, [T, L], [T, L], standing.startsWith('phone') ? onPhone.outbound : onLaptop.outbound)
+    const leaving = [...T.toCarrier(onPhone.outbound), ...L.toCarrier(onLaptop.outbound)]
+    expect(leaving).toHaveLength(1)
+    const refused = await carry(B, [T, L], [T, L], leaving)
     await L.syncFrom(T); await T.syncFrom(L)
     expect({ phone: await phase(T, g), laptop: await phase(L, g), atB: await members(B, g), refused })
       .toEqual({ phone: 'member', laptop: 'member', atB: 2, refused: SECOND_PRODUCER })
+  })
+
+  test('apart: both devices accept and both accepts leave: the friend takes the first, both devices are members', async () => {
+    const { T, L, B, b, g } = await world(0x6b)
+    await carry(B, [T, L], [T, L], await invite(B, b, g))
+    const leaving = [...T.toCarrier((await T.decide(g, 'accept')).outbound), ...L.toCarrier((await L.decide(g, 'accept')).outbound)]
+    expect(leaving).toHaveLength(2)
+    const refused = await carry(B, [T, L], [T, L], leaving)
+    await L.syncFrom(T); await T.syncFrom(L)
+    await carry(B, [T, L], [T, L], [])
+    await L.syncFrom(T); await T.syncFrom(L)
+    expect({ phone: await phase(T, g), laptop: await phase(L, g), atB: await members(B, g) }).toEqual({ phone: 'member', laptop: 'member', atB: 2 })
+    expect(refused).toContain('membership-accept/0.2: validation-failed')
   })
 })

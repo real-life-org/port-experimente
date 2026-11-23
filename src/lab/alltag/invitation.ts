@@ -3,9 +3,19 @@
 //
 // Entries: `received` (a document a device accepted, passed on as input),
 // `decided` (the human's answer to one invitation, recorded with the
-// invitation's credential digest before anything is done about it), and
-// `issued` (the proof that a device produced the document a decision calls
-// for: here the accept and its digest).
+// invitation's credential digest before anything is done about it),
+// `issued` (a device produced the accept; it is still in the house),
+// `handed` (the accept left the device for the carrier) and `confirmed`
+// (the counterpart's answer names the accept it took).
+//
+// The rule between two answers of one person (Anton, 2026-11-23): what the
+// counterpart took first holds, proven by its answer; what has not left the
+// own device may be taken back. In order:
+//   1. a confirmed accept stands;
+//   2. else an accept that left a device stands (it cannot be called back);
+//   3. else a decline on any device wins, and an accept still in the house
+//      is never handed over;
+//   4. else, of the accepts issued, one may leave (the first by entry id).
 //
 // The library has no way to take a sister device's decision over: its
 // welcome is bound to the digest of the accept this holder issued. `adopt`
@@ -25,6 +35,8 @@ export type Body =
   | { kind: 'received', envelope: any, type: string }
   | { kind: 'decided', credDigest: string, groupId: string, choice: 'accept' | 'decline' }
   | { kind: 'issued', cause: string, credDigest: string, acceptDigest: string }
+  | { kind: 'handed', credDigest: string, acceptDigest: string }
+  | { kind: 'confirmed', credDigest: string, acceptDigest: string }
 export type Entry = { id: string, deps: string[], body: Body }
 export type Progress = { outbound: any[], stoppedAt: string | null }
 
@@ -75,9 +87,21 @@ export class Device {
     return Object.values((await this.P.read()).joining.invites).find((i: any) => i.group === groupId)
   }
 
+  /** The counterpart's answer took an accept of this person: the library joined on it. */
+  private async noteConfirmed (): Promise<void> {
+    const state = await this.P.read()
+    for (const inv of Object.values(state.joining.invites) as any[]) {
+      const g = state.groups[inv.group]
+      if (!g?.acceptDigest) continue
+      const known = [...this.entries.values()].some((e) => e.body.kind === 'confirmed' && e.body.credDigest === inv.credDigest)
+      if (!known) this.write({ kind: 'confirmed', credDigest: inv.credDigest, acceptDigest: g.acceptDigest }, true)
+    }
+  }
+
   /** A document arrives from the carrier. Returns what the library answers. */
   async receive (envelope: any, t = tick()): Promise<any[]> {
     const got = await this.P.h.receive(envelope, clk(this.P, t))
+    await this.noteConfirmed()
     // an acknowledgement settles a document only its issuer holds: it is not passed on
     if (got.disposition === 'unique' && !PRIVATE.has(short(got.type))) this.write({ kind: 'received', envelope, type: short(got.type) }, true)
     const more = await this.applyOpen(t)
@@ -104,12 +128,46 @@ export class Device {
     return this.applyOpen(t)
   }
 
-  /** The accept the log proves issued for an invitation, by the rule: an
-   *  issued accept stands, whatever else was decided; of two, the one whose
-   *  entry id sorts first. */
-  private issuedFor (credDigest: string): { cause: string, acceptDigest: string } | undefined {
-    return [...this.entries.values()].filter((e) => e.body.kind === 'issued' && e.body.credDigest === credDigest)
-      .sort((x, y) => (x.id < y.id ? -1 : 1)).map((e) => e.body as any)[0]
+  /** What holds for an invitation by the entries this device knows. */
+  verdict (credDigest: string): { accept: string } | 'declined' | 'open' {
+    const of = (kind: string): any[] => [...this.entries.values()].filter((e) => e.body.kind === kind && (e.body as any).credDigest === credDigest)
+      .sort((x, y) => (x.id < y.id ? -1 : 1)).map((e) => e.body)
+    const [confirmed] = of('confirmed'); if (confirmed) return { accept: confirmed.acceptDigest }
+    const [handed] = of('handed'); if (handed) return { accept: handed.acceptDigest }
+    if (of('decided').some((d) => d.choice === 'decline')) return 'declined'
+    const [issued] = of('issued'); return issued ? { accept: issued.acceptDigest } : 'open'
+  }
+
+  /** Brings this device's library in line with what holds for the invitation. */
+  private async settle (credDigest: string): Promise<void> {
+    const v = this.verdict(credDigest)
+    const state = (await this.P.read()).joining.invites[credDigest]
+    if (!state || v === 'open') return
+    const standing = v === 'declined' ? null : v.accept
+    if (state.status !== 'joined') {
+      if (standing === null && state.status !== 'declined') await adopt(this.P, credDigest, { status: 'declined' })
+      if (standing !== null && state.acceptDigest !== standing) await adopt(this.P, credDigest, { status: 'accepted', acceptDigest: standing })
+    }
+    // an accept of this device that does not stand never reaches the carrier (again)
+    for (const x of this.entries.values()) {
+      if (x.body.kind === 'issued' && x.body.credDigest === credDigest && x.body.acceptDigest !== standing) this.withheld.push(...(this.produced.get(x.body.cause) ?? []))
+    }
+  }
+
+  /** What of `docs` may go to the carrier now. An accept that leaves is recorded as handed. */
+  toCarrier (docs: any[]): any[] {
+    const out: any[] = []
+    for (const o of docs) {
+      if (this.withheld.some((w) => w.digest === o.digest)) continue
+      for (const [cause, made] of this.produced) {
+        if (!made.some((m) => m.digest === o.digest)) continue
+        const issued = [...this.entries.values()].map((e) => e.body).find((b) => b.kind === 'issued' && b.cause === cause) as any
+        const known = [...this.entries.values()].some((e) => e.body.kind === 'handed' && e.body.acceptDigest === issued.acceptDigest)
+        if (!known) this.write({ kind: 'handed', credDigest: issued.credDigest, acceptDigest: issued.acceptDigest }, true)
+      }
+      out.push(o)
+    }
+    return out
   }
 
   private async applyOpen (t: number): Promise<Progress> {
@@ -139,25 +197,16 @@ export class Device {
             if (own && state.status === 'open') {
               const prompt = (await this.P.h.prompts()).find((p: any) => p.id === state.promptId)
               const r = ok(await this.P.h.decide(prompt.id, e.body.choice, { when: clk(this.P, t), actId: `${e.id}-decide` }))
-              outbound.push(...r.outbound)
-              this.produced.set(e.id, r.outbound)
               if (e.body.choice === 'accept') {
                 const acceptDigest = (await this.P.read()).joining.invites[e.body.credDigest].acceptDigest
+                this.produced.set(e.id, r.outbound)
                 this.write({ kind: 'issued', cause: e.id, credDigest: e.body.credDigest, acceptDigest }, true)
               }
-            } else if (!own && e.body.choice === 'decline' && state.status === 'open') {
-              await adopt(this.P, e.body.credDigest, { status: 'declined' })
+              outbound.push(...r.outbound)
             }
-            // a sister's accept is taken over by its `issued` entry, not here
+            await this.settle(e.body.credDigest)
           } else {
-            const winner = this.issuedFor(e.body.credDigest)!
-            const state = (await this.P.read()).joining.invites[e.body.credDigest]
-            if (!state) return { outbound, stoppedAt: e.id }
-            if (state.status !== 'joined' && state.acceptDigest !== winner.acceptDigest) await adopt(this.P, e.body.credDigest, { status: 'accepted', acceptDigest: winner.acceptDigest })
-            // an accept of this device that does not stand is not handed to the carrier (any more)
-            for (const x of this.entries.values()) {
-              if (x.body.kind === 'issued' && x.body.credDigest === e.body.credDigest && x.body.acceptDigest !== winner.acceptDigest) this.withheld.push(...(this.produced.get(x.body.cause) ?? []))
-            }
+            await this.settle(e.body.credDigest)
           }
         } catch (err) {
           return { outbound, stoppedAt: `${e.id}: ${(err as Error).message}` }
