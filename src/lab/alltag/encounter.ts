@@ -34,6 +34,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { createHolder, randomEntropy, seedKeys } from 'rltp-lib'
 import { InMemoryStore } from 'rltp-lib/testing'
 import { clk, ev, short, tick, LATE, type Person } from './fixture'
+import { rule, Sync, type Progress, type Step } from './core'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -97,10 +98,7 @@ export type Act =
 export type Body =
   | { kind: 'received', envelope: any, type: string, when: number }   // a document a device accepted, with the device's time then
   | ({ kind: 'act', seed: string, when: number } & Act)
-  | { kind: 'handed', contactId: string, cause: string }     // the accept of entry `cause` left its device for the carrier
-  | { kind: 'void', cause: string, code: string }            // the library refused the act of entry `cause` on its device: nothing happened
-export type Entry = { id: string, deps: string[], body: Body }
-export type Progress = { outbound: any[], stoppedAt: string | null }
+export type { Progress } from './core'
 type Confirm = Extract<Body, { act: 'confirm' }>
 
 /** Stand-in for a library entry point that does not exist: this device
@@ -112,15 +110,7 @@ async function reopen (P: Person, prompt: any): Promise<void> {
   if (!(r as any).ok) throw new Error('reopen: the store moved')
 }
 
-export class Device {
-  readonly entries = new Map<string, Entry>()
-  private readonly applied = new Set<string>()
-  private heads: string[] = []
-  private n = 0
-  /** documents this device's library produced that must not reach the
-   *  carrier: its copy of a sister's act or answer, and an accept the rule
-   *  does not let stand */
-  readonly withheld: any[] = []
+export class Device extends Sync<Body, Seeded> {
   /** passed-on documents this device's library did not accept, with its verdict */
   readonly notTaken: string[] = []
   /** what the library returned for each act entry on this device */
@@ -129,22 +119,6 @@ export class Device {
   private readonly prompts = new Map<string, any>()
   /** where this device stands with a rule it cannot follow (pinned as measured) */
   readonly stuck: string[] = []
-  /** acts the library refused for good on this device, with its code: they are closed, not retried */
-  readonly refused: string[] = []
-
-  constructor (readonly name: string, readonly P: Seeded) {}
-
-  private know (e: Entry): void {
-    this.entries.set(e.id, e)
-    this.heads = [...this.heads.filter((h) => !e.deps.includes(h)), e.id]
-  }
-
-  private write (body: Body, done: boolean): Entry {
-    const e: Entry = { id: `${this.name}#${++this.n}`, deps: [...this.heads], body }
-    this.know(e)
-    if (done) this.applied.add(e.id)
-    return e
-  }
 
   /** A document arrives from the carrier. Returns what the library answers. */
   async receive (envelope: any, t = tick()): Promise<any[]> {
@@ -164,63 +138,27 @@ export class Device {
     return { ...p, result: this.results.get(e.id) }
   }
 
-  async syncFrom (from: Device, t = tick()): Promise<Progress> {
-    let moved = true
-    while (moved) {
-      moved = false
-      for (const e of from.entries.values()) {
-        if (this.entries.has(e.id) || !e.deps.every((d) => this.entries.has(d))) continue
-        this.know(e); moved = true
-      }
-    }
-    return this.applyOpen(t)
-  }
-
-  /** What of `docs` may go to the carrier now. An accept that leaves is
-   *  recorded as handed.
-   *
-   *  The rule is asked here, at the door, from the entries this device
-   *  knows, and not from what an earlier application managed to do: an
-   *  accept leaves for the first time only while no decline is known. The
-   *  handover is what gives an accept its standing; it must not be what
-   *  decides whether it may be handed over. */
-  toCarrier (docs: any[]): any[] {
-    const out: any[] = []
-    next: for (const o of docs) {
-      if (this.withheld.some((w) => w.digest === o.digest)) continue
-      for (const [cause, r] of this.results) {
-        const b = this.entries.get(cause)!.body as any
-        if (b.act !== 'confirm' || b.choice !== 'accept' || !cause.startsWith(this.name + '#') || !(r.outbound ?? []).some((m: any) => m.digest === o.digest)) continue
-        const known = [...this.entries.values()].some((e) => e.body.kind === 'handed' && e.body.cause === cause)
-        if (!known) {
-          if (this.verdict(b.contactId)?.body.choice === 'decline') { this.withheld.push(o); continue next }
-          this.write({ kind: 'handed', contactId: b.contactId, cause }, true)
-        }
-      }
-      out.push(o)
-    }
-    return out
-  }
-
-  /** The library refused the act of this entry on its device: it had no effect, anywhere. */
-  private voided (id: string): boolean {
-    return [...this.entries.values()].some((x) => x.body.kind === 'void' && x.body.cause === id)
-  }
-
-  /** The answers to a request that took effect, by the entries this device
-   *  knows. The one evaluation behind the sync, what a device shows and the
-   *  door to the carrier: an answer the library refused on its device
-   *  (`void`) counts nowhere. */
+  /** The answers to a request that took effect, by the entries this device knows. */
   private confirms (contactId: string): Array<{ id: string, body: Confirm }> {
-    return [...this.entries.values()].filter((e) => e.body.kind === 'act' && e.body.act === 'confirm' && e.body.contactId === contactId && !this.voided(e.id))
-      .sort((x, y) => (x.id < y.id ? -1 : 1)) as any
+    return this.effective(this.of('act').filter((e) => e.body.act === 'confirm' && e.body.contactId === contactId)) as any
   }
 
   /** What holds for a request by the entries this device knows: the entry whose answer stands. */
   verdict (contactId: string): { id: string, body: Confirm } | null {
     const all = this.confirms(contactId)
-    const handed = [...this.entries.values()].flatMap((e) => (e.body.kind === 'handed' && e.body.contactId === contactId ? [e.body.cause] : [])).sort()
-    return all.find((c) => c.id === handed[0]) ?? all.find((c) => c.body.choice === 'decline') ?? all[0] ?? null
+    const accepts = all.filter((c) => c.body.choice === 'accept').map((c) => c.id)
+    const v = rule({ handed: this.handed(contactId).filter((c) => accepts.includes(c)), declined: all.some((c) => c.body.choice === 'decline'), first: accepts[0] })
+    if (v === 'open') return null
+    return (v === 'declined' ? all.find((c) => c.body.choice === 'decline') : all.find((c) => c.id === v.accepts[0])) ?? null
+  }
+
+  protected subjectOf (body: Body): string | undefined {
+    return body.kind === 'act' && body.act === 'confirm' ? body.contactId : undefined
+  }
+
+  /** At the door: the accept of this device's answer `cause` may leave while it is the answer that stands. */
+  protected mayLeave (contactId: string, cause: string): boolean {
+    return this.verdict(contactId)?.id === cause
   }
 
   private async prompt (contactId: string): Promise<any | undefined> {
@@ -238,7 +176,7 @@ export class Device {
    *  took place, or the counterpart's answer from that moment no longer
    *  fits. The library never lets a holder's time fall: where this device
    *  has already been active later, it raises the act to that time. */
-  private async run (id: string, b: Extract<Body, { kind: 'act' }>, _t: number): Promise<any> {
+  private async run (id: string, b: Extract<Body, { kind: 'act' }>): Promise<any> {
     const o = { when: b.when, actId: id }
     const r = await this.P.under(b.seed, async () => {
       if (b.act === 'show') return this.P.h.show({ ...o, ...(b.name ? { name: b.name } : {}) })
@@ -251,7 +189,7 @@ export class Device {
   }
 
   /** Brings this device's library in line with what holds for a request. */
-  private async settle (contactId: string, t: number): Promise<void> {
+  protected async settle (contactId: string): Promise<void> {
     const v = this.verdict(contactId)
     const contact = await this.P.h.contact(contactId)
     if (!v || !contact) return
@@ -261,11 +199,11 @@ export class Device {
       if (accepted) return
       // declined here, and the sister's accept left: take the decline back and accept
       if (!open) { const kept = this.prompts.get(contactId); if (!kept) return; await reopen(this.P, kept) }
-      const r = await this.run(v.id, v.body, t)
+      const r = await this.run(v.id, v.body)
       // this device's copy of a sister's accept stays in the house; its own accept goes through the door (toCarrier)
-      if (r.ok && !v.id.startsWith(this.name + '#')) this.withheld.push(...r.outbound)
+      if (r.ok && !this.own(v.id)) this.withheld.push(...r.outbound)
     } else {
-      if (open) await this.run(v.id, v.body, t)
+      if (open) await this.run(v.id, v.body)
       // every accept of this device stays in the house
       for (const c of this.confirms(contactId)) if (c.body.choice === 'accept') this.withheld.push(...(this.results.get(c.id)?.outbound ?? []))
       const note = `${contactId}: accepted here, the decline holds; the library cannot take the accept back`
@@ -273,73 +211,39 @@ export class Device {
     }
   }
 
-  /** The library refused an act for good. On the acting device nothing
-   *  happened: it says so in the log, and the entry is closed. A sister that
-   *  knows this never runs the act; one that ran it first got the library's
-   *  own verdict. Returns true: the entry is done with. */
-  private close (e: Entry, code: string, own: boolean): true {
-    this.refused.push(`${e.id}: ${code}`)
-    if (own && !this.voided(e.id)) this.write({ kind: 'void', cause: e.id, code }, true)
-    return true
-  }
-
-  /** Applies every open entry whose dependencies are applied.
-   *
-   *  Two kinds of failure are kept apart. A step that breaks off (an
-   *  exception: the store, a crash) leaves the entry open, and the next call
-   *  tries it again. A refusal by the library (`ok: false` with a code) is
-   *  its verdict on the act: the entry is closed as refused and the log moves
-   *  on, so an act that can never succeed does not hold up what follows. */
-  private async applyOpen (t: number): Promise<Progress> {
+  protected async apply (e: { id: string, body: Body }, own: boolean): Promise<Step> {
     const outbound: any[] = []
-    let moved = true
-    while (moved) {
-      moved = false
-      for (const e of [...this.entries.values()]) {
-        if (this.applied.has(e.id) || !e.deps.every((d) => this.applied.has(d))) continue
-        const own = e.id.startsWith(this.name + '#')
-        try {
-          if (e.body.kind === 'received') {
-            // at the time the receiving device took it, like an act (the library raises it where this device was active later)
-            const got = await this.P.h.receive(e.body.envelope, e.body.when)
-            if (got.disposition === 'unique') {
-              for (const o of got.outbound) (TOLERATED.has(short(o.type)) ? outbound : this.withheld).push(o)
-              // the library takes a credential it cannot place (the ceremony stands at another time here) without a word: say so
-              if (e.body.type.startsWith('encounter-credential-delivery/') && !ev(got, 'encounter.accepted').length) this.notTaken.push(`${e.body.type}: taken without effect`)
-            } else if (got.disposition !== 'duplicate-known') {
-              this.notTaken.push(`${e.body.type}: ${got.reason ?? got.disposition}`)
-            }
-          } else if (e.body.kind === 'handed') {
-            await this.settle(e.body.contactId, t)
-          } else if (e.body.kind === 'void') {
-            // the act it names is skipped where it has not run; an answer it names no longer counts, so what holds is settled again
-            const cause = this.entries.get(e.body.cause)?.body as any
-            if (cause?.act === 'confirm') await this.settle(cause.contactId, t)
-          } else if (this.voided(e.id)) {
-            // the acting device was refused: nothing happened there, nothing happens here
-          } else if (e.body.act === 'confirm') {
-            // the request has not reached this device yet: the entry waits
-            if (!(await this.P.h.contact(e.body.contactId))) return { outbound, stoppedAt: `${e.id}: the request is not here yet` }
-            // the acting device answers its own prompt; what then holds is settled for every device alike
-            if (own && (await this.prompt(e.body.contactId))) {
-              const r = await this.run(e.id, e.body, t)
-              if (r.ok) outbound.push(...r.outbound)
-              else this.close(e, r.code, own)
-            }
-            await this.settle(e.body.contactId, t)
-          } else {
-            const r = await this.run(e.id, e.body, t)
-            if (r.ok) (own ? outbound : this.withheld).push(...r.outbound)
-            else this.close(e, r.code, own)
-          }
-        } catch (err) {
-          return { outbound, stoppedAt: `${e.id}: ${(err as Error).message}` }
-        }
-        this.applied.add(e.id)
-        moved = true
+    if (e.body.kind === 'received') {
+      // at the time the receiving device took it, like an act (the library raises it where this device was active later)
+      const got = await this.P.h.receive(e.body.envelope, e.body.when)
+      if (got.disposition === 'unique') {
+        for (const o of got.outbound) (TOLERATED.has(short(o.type)) ? outbound : this.withheld).push(o)
+        // the library takes a credential it cannot place (the ceremony stands at another time here) without a word: say so
+        if (e.body.type.startsWith('encounter-credential-delivery/') && !ev(got, 'encounter.accepted').length) this.notTaken.push(`${e.body.type}: taken without effect`)
+      } else if (got.disposition !== 'duplicate-known') {
+        this.notTaken.push(`${e.body.type}: ${got.reason ?? got.disposition}`)
       }
+      return { outbound }
     }
-    return { outbound, stoppedAt: null }
+    if (e.body.act === 'confirm') {
+      // the request has not reached this device yet: the entry waits
+      if (!(await this.P.h.contact(e.body.contactId))) return { wait: 'the request is not here yet' }
+      // the acting device answers its own prompt; what then holds is settled for every device alike
+      if (own && (await this.prompt(e.body.contactId))) {
+        const r = await this.run(e.id, e.body)
+        if (!r.ok) this.refuse(e, r.code)
+        else {
+          if (e.body.choice === 'accept') this.leaves(e.id, e.body.contactId, r.outbound)
+          outbound.push(...r.outbound)
+        }
+      }
+      await this.settle(e.body.contactId)
+      return { outbound }
+    }
+    const r = await this.run(e.id, e.body)
+    if (!r.ok) this.refuse(e, r.code)
+    else (own ? outbound : this.withheld).push(...r.outbound)
+    return { outbound }
   }
 }
 

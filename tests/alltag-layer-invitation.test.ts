@@ -131,4 +131,43 @@ describe('a group invitation through the layer', () => {
       expect([T.verdict(cred), L.verdict(cred)].map((v) => (typeof v === 'string' ? v : v.accepts.length))).toEqual([1, 1])
     })
   }
+
+  const credOf = async (D: Device): Promise<string> => Object.keys((await D.P.read()).joining.invites)[0] as string
+  // The counter-cases the review of the encounter cut found there (port-experimente#105), for the invitation.
+  test('the phone accepted offline, the laptop declined, the phone\'s sync breaks off: at the door the accept does not leave', async () => {
+    const { T, L, B, b, g } = await world(0x81)
+    await carry(B, [T, L], [T, L], await invite(B, b, g))
+    const accepted = await T.decide(g, 'accept')
+    await L.decide(g, 'decline')
+    const real = T.P.h
+    T.P.h = Object.create(real, { prompts: { value: async () => { throw new Error('store unavailable') } }, decide: { value: async () => { throw new Error('store unavailable') } } })
+    const snapRead = T.P.read
+    T.P.read = async () => { throw new Error('store unavailable') }
+    expect((await T.syncFrom(L)).stoppedAt).toMatch(/store unavailable/)
+    T.P.h = real; T.P.read = snapRead
+    expect(T.verdict(await credOf(T))).toBe('declined')
+    expect(T.toCarrier(accepted.outbound).filter((o: any) => o.type.includes('membership-accept'))).toEqual([])
+    await carry(B, [T, L], [T, L], [])
+    await L.syncFrom(T); await T.syncFrom(L)
+    expect({ atB: await members(B, g), verdict: [T.verdict(await credOf(T)), L.verdict(await credOf(L))] }).toEqual({ atB: 1, verdict: ['declined', 'declined'] })
+  })
+
+  test('the library refuses the laptop\'s answer for good: the entry is closed, it counts nowhere, and the phone\'s accept leaves', async () => {
+    const { T, L, B, b, g } = await world(0x85)
+    await carry(B, [T, L], [T, L], await invite(B, b, g))
+    const accepted = await T.decide(g, 'accept')
+    const real = L.P.h
+    L.P.h = Object.create(real, { decide: { value: async () => ({ ok: false, code: 'refused-here' }) } })
+    const declined = await L.decide(g, 'decline')
+    L.P.h = real
+    expect(declined.stoppedAt).toBe(null)
+    expect((await T.syncFrom(L)).stoppedAt).toBe(null)
+    expect((await L.syncFrom(T)).stoppedAt).toBe(null)
+    expect([T.verdict(await credOf(T)), L.verdict(await credOf(L))].map((v) => (typeof v === 'string' ? v : 'accept'))).toEqual(['accept', 'accept'])
+    const leaving = T.toCarrier(accepted.outbound)
+    expect(leaving.some((o: any) => o.type.includes('membership-accept'))).toBe(true)
+    await carry(B, [T, L], [T, L], leaving)
+    await L.syncFrom(T); await T.syncFrom(L)
+    expect({ phone: await phase(T, g), laptop: await phase(L, g), atB: await members(B, g) }).toEqual({ phone: 'member', laptop: 'member', atB: 2 })
+  })
 })

@@ -40,6 +40,38 @@ Not measured: whether a real mediator hands a document to every device of
 an address; whether two accepted credential deliveries make two
 relationships.
 
+## The common core of the layer (`core.ts`)
+
+The three cuts below each built their own log, their own loop over open
+entries and their own handover to the carrier, and the reviews of all three
+found faults in exactly those parts. They now share one core
+(`tests/alltag-core.test.ts` tests it without the library, with a toy cut).
+A cut supplies its kinds of entry, how one is applied, and what holds for a
+subject. The core holds five rules:
+
+1. **First record, then act.** What the human did is an entry before
+   anything is done about it; every device, the acting one included,
+   applies it by the same routine.
+2. **A break leaves an entry open, a refusal closes it.** An exception is
+   tried again by the next call. A refusal by the library is its verdict:
+   the acting device notes in the log that nothing happened (`void`), the
+   entry is closed, what follows runs.
+3. **One evaluation of what took effect.** A `void` entry counts nowhere:
+   not in the sync, not in what holds, not at the door.
+4. **The rule is asked at the door.** Whether an answer may leave is
+   decided from the entries the device knows at the first handover.
+5. **Between two answers of one person**: a confirmed accept stands; else
+   every accept that left a device; else a decline; else the first accept.
+
+Moving the invitation cut onto the core closed two faults it had and the
+encounter review had found there: an accept left the device although a
+decline was known when the sync had broken off, and an answer the library
+refused held up everything after it. Both are tests of the invitation now.
+
+Not unified: the time an entry is applied at. The encounter cut runs acts
+and passed-on documents at the time of the device that acted or received;
+messages and invitations still use the time of the replay.
+
 ## Messages through a layer above the library (`layer.ts`)
 
 The first vertical cut of the build the design review proposed for device
