@@ -1,0 +1,91 @@
+{
+  "two own devices change apart": {
+    "the two devices wrote the same entry": false,
+    "the counterpart refused a continuation": true,
+    "the counterpart shows a warning": true,
+    "the laptop's first message arrived": false,
+    "the laptop learned it lost": true,
+    "after taking the phone's state the laptop is heard": true
+  },
+  "two own devices change apart; the next state is derived, not drawn": {
+    "the two devices wrote the same entry": true,
+    "the counterpart refused a continuation": false,
+    "the counterpart shows a warning": false,
+    "the laptop's first message arrived": true,
+    "the laptop learned it lost": false,
+    "after taking the phone's state the laptop is heard": true
+  },
+  "a lost device that holds an update key changes first": {
+    "the lost device could change the keys": true,
+    "the counterpart heard the lost device": true,
+    "the counterpart heard the owner": false,
+    "the owner learned that its continuation was refused": true,
+    "the counterpart shows a warning": true,
+    "the counterpart's next message is read by": "the lost device"
+  },
+  "the same; a refusal is answered to the address the counterpart holds": {
+    "the lost device could change the keys": true,
+    "the counterpart heard the lost device": true,
+    "the counterpart heard the owner": false,
+    "the owner learned that its continuation was refused": false,
+    "the counterpart shows a warning": true,
+    "the counterpart's next message is read by": "the lost device"
+  },
+  "a lost device without an update key": {
+    "the lost device could change the keys": false,
+    "the counterpart heard the lost device": false,
+    "the counterpart heard the owner": true,
+    "the owner learned that its continuation was refused": false,
+    "the counterpart shows a warning": false,
+    "the counterpart's next message is read by": "the owner"
+  },
+  "the counterpart's second device is behind": {
+    "b's laptop's message reached a": false,
+    "documents left at a's old address": 3,
+    "b's laptop read \"two\"": false,
+    "b's laptop asked for the log": true,
+    "b's laptop read \"three\"": false
+  },
+  "the same; documents carry no log heads": {
+    "b's laptop's message reached a": true,
+    "documents left at a's old address": 0,
+    "b's laptop read \"two\"": true,
+    "b's laptop asked for the log": false,
+    "b's laptop read \"three\"": true
+  },
+  "the same; the counterpart's devices synced first": {
+    "b's laptop's message reached a": true,
+    "documents left at a's old address": 0,
+    "b's laptop read \"two\"": true,
+    "b's laptop asked for the log": false,
+    "b's laptop read \"three\"": true
+  },
+  "the same; a keeps the old receive path open after the acknowledgement": {
+    "b's laptop's message reached a": true,
+    "documents left at a's old address": 0,
+    "b's laptop read \"two\"": false,
+    "b's laptop asked for the log": true,
+    "b's laptop read \"three\"": true
+  },
+  "the counterpart writes during the change; the owner fetches first": {
+    "\"written before b knew\" is read by": "the owner",
+    "\"written after b knew\" is read by": "the owner",
+    "the lost device can still fetch at an address of the owner": false
+  },
+  "the same; the lost device fetches first": {
+    "\"written before b knew\" is read by": "the lost device",
+    "\"written after b knew\" is read by": "the owner",
+    "the lost device can still fetch at an address of the owner": false
+  },
+  "the same; the owner drops the old receive path at once": {
+    "\"written before b knew\" is read by": "the lost device",
+    "\"written after b knew\" is read by": "the owner",
+    "the lost device can still fetch at an address of the owner": false
+  },
+  "an answer after the change, from both own devices": {
+    "the phone's answer under the new key is taken": true,
+    "the laptop's answer under the old key is taken": false,
+    "the laptop is told its state is stale": true,
+    "the laptop sees that the counterpart holds an entry it does not know": true
+  }
+}
