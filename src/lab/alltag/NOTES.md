@@ -40,6 +40,42 @@ Not measured: whether a real mediator hands a document to every device of
 an address; whether two accepted credential deliveries make two
 relationships.
 
+## What is left afterwards (`aftermath.ts`)
+
+The table above says what the counterpart answers to the second document.
+This says whether that answer leaves damage. Seven scenarios, each with two
+devices and with one, settled, then five more days of delivery. Measured
+2026-11-23, library 0.19.0; the full table is `aftermath.expected.json`.
+
+| Scenario | The friend shows | The two devices show | Still sent and refused days later |
+|---|---|---|---|
+| the friend trusts; each device takes the star | as with one device | the same | the laptop's `star`, once a day (RLTP-TRU-5150) |
+| the friend writes a message | as with one device | the same | nothing |
+| the friend sets a profile | as with one device | the same | nothing |
+| the friend invites; each device answers the prelude; the phone accepts | as with one device | differ: the laptop is no member | the laptop's `membership-prelude-reply` (RLTP-MT-3965) |
+| the friend invites; both devices accept apart | as with one device | differ: the laptop is no member | the laptop's `membership-prelude-reply` and `membership-accept` (RLTP-MT-3270) |
+| trust is given on both devices apart | as with one device | differ in the profile section | the laptop's `anchor-mapping` (RLTP-TRU-6270) |
+| nothing happens for a week | as with one device | the same | nothing |
+
+Three findings:
+
+1. **The counterpart is never damaged.** In every scenario the friend shows
+   what it shows with one device. A refusal of the second document costs
+   the counterpart nothing but the refusal.
+2. **The refused device never learns.** A refusal carries no reason and no
+   acknowledgement, so the laptop offers the same document again, once a
+   day, for as long as measured. What would end it is an acknowledgement
+   "taken, without effect" where the counterpart refuses today.
+3. **A device refuses the answer to its sibling's document.** The laptop
+   refuses the friend's `delivery-ack`, `x-membership-welcome` and
+   `x-access-page` that answer the phone's documents (`validation-failed`),
+   and so stays outside the group the person joined. That is the person's
+   own side: the laptop would need the phone's sent documents.
+
+Without a second device the same scenarios send acknowledgements for days
+as well (24 to 60 in five days); that is the library's own repetition and
+no effect of the second device.
+
 ## The common core of the layer (`core.ts`)
 
 The three cuts below each built their own log, their own loop over open
