@@ -51,6 +51,36 @@ counterpart acknowledged the change.
    only ever lets a device's own log grow; a shorter log changes nothing.
    Giving up one's own continuation after a fork is a step of its own.
 
+## The same question in a group (`group.ts`)
+
+Candidate: in each group a person has one key that all its devices hold;
+removing a device is a change of that key, written into the group's log.
+Person A with phone, laptop and a lost tablet, and a member B. Measured
+2026-11-24; the table is `group-scenarios.expected.json`.
+
+1. **The other member sees one writer for A**, whichever device wrote.
+2. **A change removes the lost device.** It reads nothing written after
+   the change, and what it writes under the old key after seeing the
+   change does not count.
+3. **What was written beside the change is a choice.** If an entry counts
+   by its place alone, the other member takes what the lost device wrote
+   beside the change, and also what the honest laptop wrote offline. If a
+   change seals only what it saw, both are left out, and the laptop has to
+   write its entry again under the new key.
+4. **Two own devices that change apart do not break the group.** Everyone
+   computes the same key for A; the device whose change lost is not read
+   until it took the other's keys. With a derived next key both write the
+   same change and both are read.
+5. **Who may write a change decides the theft case.** If the key every
+   device holds may write it, or the lost device holds the update key, the
+   lost device changes first, is taken as A, and the owner cannot change
+   afterwards. Without the update key the lost device can change nothing.
+6. **A sibling without the new keys reads nothing after the change**: the
+   keys have to reach it through the person's own devices.
+
+Not modelled: the group's key agreement (the new epoch is sealed to a list
+of receive keys), votes, joining, the personal group.
+
 ## What the switches cover
 
 Every document is signed under the head of the sender's log and checked

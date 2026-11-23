@@ -1,0 +1,50 @@
+{
+  "a device is removed by a change of the person's key": {
+    "writers the other member saw for A before the change (two devices wrote)": 1,
+    "the phone could change the key": true,
+    "the other member reads the phone after the change": true,
+    "the other member takes what the tablet wrote beside the change": false,
+    "the other member takes what the tablet wrote after seeing the change": false,
+    "the other member takes what the laptop wrote offline under the old key": false,
+    "the tablet reads what the phone wrote after the change": false,
+    "the laptop, without the new keys, reads it": false
+  },
+  "the same; an entry counts by its place alone": {
+    "writers the other member saw for A before the change (two devices wrote)": 1,
+    "the phone could change the key": true,
+    "the other member reads the phone after the change": true,
+    "the other member takes what the tablet wrote beside the change": true,
+    "the other member takes what the tablet wrote after seeing the change": false,
+    "the other member takes what the laptop wrote offline under the old key": true,
+    "the tablet reads what the phone wrote after the change": false,
+    "the laptop, without the new keys, reads it": false
+  },
+  "two own devices change apart": {
+    "everyone computes the same key for A": true,
+    "the other member reads the phone": false,
+    "the other member reads the laptop": true
+  },
+  "two own devices change apart; the next key is derived, not drawn": {
+    "everyone computes the same key for A": true,
+    "the other member reads the phone": true,
+    "the other member reads the laptop": true
+  },
+  "a lost device changes first; the key every device holds may write a change": {
+    "the lost device could change the key": true,
+    "the other member takes the lost device as A": true,
+    "the owner could change the key afterwards": false,
+    "the other member reads the owner": false
+  },
+  "a lost device changes first; it holds the update key": {
+    "the lost device could change the key": true,
+    "the other member takes the lost device as A": true,
+    "the owner could change the key afterwards": false,
+    "the other member reads the owner": false
+  },
+  "a lost device without the update key": {
+    "the lost device could change the key": false,
+    "the other member takes the lost device as A": false,
+    "the owner could change the key afterwards": true,
+    "the other member reads the owner": true
+  }
+}
