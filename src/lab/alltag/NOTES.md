@@ -103,13 +103,18 @@ Measured 2026-11-23, library 0.19.0, second device 13 s late:
 | apart: the phone accepts offline, the accept has not left it, the laptop declines | the decline wins on both devices, the accept is never handed over, the friend's log holds one member |
 | apart: both accept, the devices hear of each other first | one accept leaves: both devices `member` |
 | apart: both accept and both accepts leave | the friend takes the first and refuses the second: both devices `member` |
+| apart: both accepts leave and the devices sync before the friend answers (either accept delivered first) | both stay candidates until the welcome names one: both devices `member` |
 
 **The rule between two answers of one person** (decided 2026-11-23): what
 the counterpart took first holds, proven by its answer; what has not left
 the own device may be taken back. In the layer, in this order: a confirmed
 accept stands; else an accept that left a device stands; else a decline on
 any device wins and an accept still in the house is never handed over; else
-one of the issued accepts may leave. For that the log carries two more
+one of the issued accepts may leave. Where two accepts left their
+devices, neither device gives its accept up for the sister's: both stay
+candidates until the counterpart's answer names one. The library holds one
+accept digest per invitation, so a device whose library refuses an answer
+tries it under the other candidate. For that the log carries two more
 entries: `handed` (the accept left the device) and `confirmed` (the
 counterpart's answer names the accept it took).
 

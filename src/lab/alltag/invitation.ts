@@ -13,6 +13,7 @@
 // own device may be taken back. In order:
 //   1. a confirmed accept stands;
 //   2. else an accept that left a device stands (it cannot be called back);
+//      where two left, both stay candidates until the answer names one;
 //   3. else a decline on any device wins, and an accept still in the house
 //      is never handed over;
 //   4. else, of the accepts issued, one may leave (the first by entry id).
@@ -100,7 +101,7 @@ export class Device {
 
   /** A document arrives from the carrier. Returns what the library answers. */
   async receive (envelope: any, t = tick()): Promise<any[]> {
-    const got = await this.P.h.receive(envelope, clk(this.P, t))
+    const got = await this.takeTrying(envelope, t)
     await this.noteConfirmed()
     // an acknowledgement settles a document only its issuer holds: it is not passed on
     if (got.disposition === 'unique' && !PRIVATE.has(short(got.type))) this.write({ kind: 'received', envelope, type: short(got.type) }, true)
@@ -129,29 +130,55 @@ export class Device {
   }
 
   /** What holds for an invitation by the entries this device knows. */
-  verdict (credDigest: string): { accept: string } | 'declined' | 'open' {
+verdict (credDigest: string): { accepts: string[] } | 'declined' | 'open' {
     const of = (kind: string): any[] => [...this.entries.values()].filter((e) => e.body.kind === kind && (e.body as any).credDigest === credDigest)
       .sort((x, y) => (x.id < y.id ? -1 : 1)).map((e) => e.body)
-    const [confirmed] = of('confirmed'); if (confirmed) return { accept: confirmed.acceptDigest }
-    const [handed] = of('handed'); if (handed) return { accept: handed.acceptDigest }
+    const [confirmed] = of('confirmed'); if (confirmed) return { accepts: [confirmed.acceptDigest] }
+    // every accept that left a device may be the one the counterpart takes:
+    // all of them stay candidates until its answer names one
+    const handed = [...new Set(of('handed').map((h) => h.acceptDigest as string))]; if (handed.length) return { accepts: handed }
     if (of('decided').some((d) => d.choice === 'decline')) return 'declined'
-    const [issued] = of('issued'); return issued ? { accept: issued.acceptDigest } : 'open'
+    const [issued] = of('issued'); return issued ? { accepts: [issued.acceptDigest] } : 'open'
   }
 
-  /** Brings this device's library in line with what holds for the invitation. */
+  /** Brings this device's library in line with what holds for the
+   *  invitation. The library holds one accept digest per invitation; while
+   *  several accepts are candidates, a device keeps its own if it is one of
+   *  them, and `takeTrying` tries the others when an answer does not fit. */
   private async settle (credDigest: string): Promise<void> {
     const v = this.verdict(credDigest)
     const state = (await this.P.read()).joining.invites[credDigest]
     if (!state || v === 'open') return
-    const standing = v === 'declined' ? null : v.accept
+    const candidates = v === 'declined' ? [] : v.accepts
     if (state.status !== 'joined') {
-      if (standing === null && state.status !== 'declined') await adopt(this.P, credDigest, { status: 'declined' })
-      if (standing !== null && state.acceptDigest !== standing) await adopt(this.P, credDigest, { status: 'accepted', acceptDigest: standing })
+      if (v === 'declined' && state.status !== 'declined') await adopt(this.P, credDigest, { status: 'declined' })
+      if (v !== 'declined' && !candidates.includes(state.acceptDigest)) await adopt(this.P, credDigest, { status: 'accepted', acceptDigest: candidates[0] as string })
     }
-    // an accept of this device that does not stand never reaches the carrier (again)
+    // an accept of this device that cannot stand never reaches the carrier (again)
     for (const x of this.entries.values()) {
-      if (x.body.kind === 'issued' && x.body.credDigest === credDigest && x.body.acceptDigest !== standing) this.withheld.push(...(this.produced.get(x.body.cause) ?? []))
+      if (x.body.kind === 'issued' && x.body.credDigest === credDigest && !candidates.includes(x.body.acceptDigest)) this.withheld.push(...(this.produced.get(x.body.cause) ?? []))
     }
+  }
+
+  /** Hands a document to the library. Where it is refused while an
+   *  invitation still has several candidate accepts, the document may be the
+   *  counterpart's answer to another candidate than the one this device
+   *  holds: each is tried, and the one the library takes the answer under
+   *  stays. Otherwise the device is left as it was. */
+  private async takeTrying (envelope: any, t: number): Promise<any> {
+    let got = await this.P.h.receive(envelope, clk(this.P, t))
+    if (got.disposition === 'unique' || got.disposition === 'duplicate-known') return got
+    for (const inv of Object.values((await this.P.read()).joining.invites) as any[]) {
+      const v = this.verdict(inv.credDigest)
+      if (inv.status !== 'accepted' || v === 'declined' || v === 'open' || v.accepts.length < 2) continue
+      for (const candidate of v.accepts.filter((d) => d !== inv.acceptDigest)) {
+        await adopt(this.P, inv.credDigest, { status: 'accepted', acceptDigest: candidate })
+        got = await this.P.h.receive(envelope, clk(this.P, t))
+        if (got.disposition === 'unique' || got.disposition === 'duplicate-known') return got
+      }
+      await adopt(this.P, inv.credDigest, { status: 'accepted', acceptDigest: inv.acceptDigest })
+    }
+    return got
   }
 
   /** What of `docs` may go to the carrier now. An accept that leaves is recorded as handed. */
@@ -180,7 +207,8 @@ export class Device {
         const own = e.id.startsWith(this.name + '#')
         try {
           if (e.body.kind === 'received') {
-            const got = await this.P.h.receive(e.body.envelope, clk(this.P, t))
+            const got = await this.takeTrying(e.body.envelope, t)
+            await this.noteConfirmed()
             if (got.disposition === 'unique') {
               // a sister took this document from the carrier and answered it. This
               // device's own answer goes out only where a counterpart takes a
