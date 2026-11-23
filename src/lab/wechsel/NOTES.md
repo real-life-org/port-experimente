@@ -67,6 +67,37 @@ of the old laptop and a sync in both directions, phone and laptop both use
 the new path only (or both the new and the old, under the rule that keeps
 it open), although the laptop still holds the old address as material.
 
+## A change secret
+
+The rule `deterministic` is built out: the devices that may change keys
+share a random change secret. The key that writes the next entry is
+derived from the secret the head committed under; the new state and the
+next commitment are derived from the newest secret a device holds. When a
+device is removed, the devices that stay get a new secret, and each
+relationship changes once: that one change is written with a key from the
+old secret and commits to a key from the new one.
+
+| Case | The counterpart follows | Warning at the counterpart | The laptop |
+|---|---|---|---|
+| the lost device is locked | the owner | none | writes the same entry as the phone, is heard |
+| the lost device is unlocked and changes after the owner | the owner | yes | the same entry, is heard |
+| the lost device is unlocked and changes before the owner | the lost device | yes | not heard; the owner learns of the refusal |
+| the laptop was offline and changes on the old secret | the owner | yes | another entry, refused |
+| phone and laptop each remove the tablet, apart | the owner | yes | another entry, refused |
+
+1. **Devices that hold the same secrets write the same entry**, byte for
+   byte: no fork, no warning.
+2. **After the owner's change stands, the lost device can write nothing
+   more**, even when it is handed that entry: the next key comes from a
+   secret it never held.
+3. **The one change after a removal is a race** against a lost device that
+   someone unlocked: whoever reaches the counterpart first is followed.
+   A locked device takes no part.
+4. **A sibling on the old secret forks**, and so do two siblings that each
+   made a new secret: the entry depends on the newest secret. Both are the
+   case of finding 1 above, settled the same way (the first stands, the
+   other takes it over).
+
 ## The same question in a group (`group.ts`)
 
 Candidate: in each group a person has one key that all its devices hold;

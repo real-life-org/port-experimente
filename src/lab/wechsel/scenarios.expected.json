@@ -88,6 +88,51 @@
     "the laptop is told its state is stale": true,
     "the laptop sees that the counterpart holds an entry it does not know": true
   },
+  "with a change secret: a device is removed, the lost one is locked": {
+    "the lost device wrote a change": false,
+    "the counterpart follows": "the owner",
+    "the counterpart shows a warning": false,
+    "the owner learned that its continuation was refused": false,
+    "the laptop wrote the same entry as the phone": true,
+    "the laptop is heard": true,
+    "the lost device can write the change after the owner's": false
+  },
+  "with a change secret: the lost device is unlocked and changes after the owner": {
+    "the lost device wrote a change": true,
+    "the counterpart follows": "the owner",
+    "the counterpart shows a warning": true,
+    "the owner learned that its continuation was refused": false,
+    "the laptop wrote the same entry as the phone": true,
+    "the laptop is heard": true,
+    "the lost device can write the change after the owner's": false
+  },
+  "with a change secret: the lost device is unlocked and changes before the owner": {
+    "the lost device wrote a change": true,
+    "the counterpart follows": "the lost device",
+    "the counterpart shows a warning": true,
+    "the owner learned that its continuation was refused": true,
+    "the laptop wrote the same entry as the phone": true,
+    "the laptop is heard": false,
+    "the lost device can write the change after the owner's": "not applicable"
+  },
+  "with a change secret: the laptop was offline and changes on the old secret": {
+    "the lost device wrote a change": false,
+    "the counterpart follows": "the owner",
+    "the counterpart shows a warning": true,
+    "the owner learned that its continuation was refused": false,
+    "the laptop wrote the same entry as the phone": false,
+    "the laptop is heard": false,
+    "the lost device can write the change after the owner's": false
+  },
+  "with a change secret: phone and laptop each remove the tablet, apart": {
+    "the lost device wrote a change": false,
+    "the counterpart follows": "the owner",
+    "the counterpart shows a warning": true,
+    "the owner learned that its continuation was refused": false,
+    "the laptop wrote the same entry as the phone": false,
+    "the laptop is heard": false,
+    "the lost device can write the change after the owner's": false
+  },
   "a sibling that was offline during the change comes back": {
     "the phone uses, before the acknowledgement": "new+old",
     "the phone uses, after the acknowledgement": "new",

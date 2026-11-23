@@ -1,9 +1,10 @@
 // Scenarios for the model of model.ts. Each returns plain facts; the rules
 // under discussion are switched per variant so that the table shows what
 // each rule buys. A measurement of the model, not of the library.
-import { Carrier, RULES, change, device, headId, met, paths, receive, send, share, takeOver, type Device, type Rules } from './model'
+import { Carrier, RULES, change, device, headId, met, paths, receive, renew, send, share, takeOver, type Device, type Rules } from './model'
 
 export type Row = Record<string, string | number | boolean>
+const v = (r: Partial<Rules>): Rules => ({ ...RULES, ...r })
 const settle = (c: Carrier, rules: Rules, devs: Device[], rounds = 6): void => { for (let i = 0; i < rounds; i++) for (const d of devs) receive(d, c, rules) }
 const has = (d: Device, part: string): boolean => d.notices.some((n) => n.includes(part))
 const reads = (d: Device, text: string): boolean => d.inbox.includes(text)
@@ -11,7 +12,7 @@ const reads = (d: Device, text: string): boolean => d.inbox.includes(text)
 /** Phone and laptop of A are apart and both change the relationship's keys. */
 function twoOwnDevices (rules: Rules): Row {
   const c = new Carrier(), [phone, laptop, b] = [device('phone'), device('laptop'), device('b')] as [Device, Device, Device]
-  met([phone, laptop], [b], [phone, laptop], [b])
+  met([phone, laptop], [b], [phone, laptop], [b], rules)
   change(phone, rules, [phone, laptop]); change(laptop, rules, [phone, laptop])
   const same = headId(phone.own.log) === headId(laptop.own.log)
   send(phone, c, rules, 'message', 'from the phone'); send(laptop, c, rules, 'message', 'from the laptop')
@@ -128,7 +129,38 @@ function siblingComesBack (rules: Rules): Row {
   }
 }
 
-const v = (r: Partial<Rules>): Rules => ({ ...RULES, ...r })
+/** With a change secret. The tablet is lost; the phone removes it: a new
+ *  secret for the devices that stay, then one change of the relationship.
+ *  `tablet` says what the lost device does, `laptop` what the sibling does. */
+function removedWithASecret (tablet: 'locked' | 'changes first' | 'changes second', laptop: 'has the new secret' | 'offline, old secret' | 'removes the tablet too'): Row {
+  const rules = v({ deterministic: true })
+  const c = new Carrier(), [phone, lap, tab, b] = [device('phone'), device('laptop'), device('tablet'), device('b')] as [Device, Device, Device, Device]
+  tab.lost = true
+  met([phone, lap, tab], [b], [phone, lap, tab], [b], rules)
+  renew(laptop === 'has the new secret' ? [phone, lap] : [phone])
+  if (laptop === 'removes the tablet too') renew([lap])
+  let tabletWrote = false
+  if (tablet === 'changes first') { tabletWrote = change(tab, rules, []); send(tab, c, rules, 'message', 'from the lost device'); settle(c, rules, [b]) }
+  change(phone, rules, []); send(phone, c, rules, 'message', 'from the phone'); settle(c, rules, [b, phone])
+  if (tablet === 'changes second') { tabletWrote = change(tab, rules, []); send(tab, c, rules, 'message', 'from the lost device'); settle(c, rules, [b, phone]) }
+  change(lap, rules, [])
+  const sameAsPhone = headId(lap.own.log) === headId(phone.own.log)
+  send(lap, c, rules, 'message', 'from the laptop'); settle(c, rules, [b, phone, lap])
+  // worst case for what comes after: the lost device is handed the entry that stands at the counterpart
+  if (b.peer.log.length > 1 && headId(b.peer.log) === headId(phone.own.log)) { tab.own.log = [...phone.own.log] }
+  const again = b.peer.log.length > 1 && headId(b.peer.log) === headId(phone.own.log) ? change(tab, rules, []) : 'not applicable'
+  return {
+    'the lost device wrote a change': tabletWrote,
+    'the counterpart follows': headId(b.peer.log) === headId(phone.own.log) ? 'the owner' : b.inbox.includes('from the lost device') ? 'the lost device' : 'another continuation',
+    'the counterpart shows a warning': has(b, 'second continuation'),
+    'the owner learned that its continuation was refused': has(phone, 'refused this device'),
+    'the laptop wrote the same entry as the phone': sameAsPhone,
+    'the laptop is heard': reads(b, 'from the laptop'),
+    'the lost device can write the change after the owner\'s': again,
+  }
+}
+
+
 export function measure (): Record<string, Row> {
   return {
     'two own devices change apart': twoOwnDevices(RULES),
@@ -144,6 +176,11 @@ export function measure (): Record<string, Row> {
     'the same; the lost device fetches first': writtenDuringTheChange(RULES, true),
     'the same; the owner drops the old receive path at once': writtenDuringTheChange(v({ keepOldUntilAck: false }), false),
     'an answer after the change, from both own devices': answerAfterTheChange(RULES),
+    'with a change secret: a device is removed, the lost one is locked': removedWithASecret('locked', 'has the new secret'),
+    'with a change secret: the lost device is unlocked and changes after the owner': removedWithASecret('changes second', 'has the new secret'),
+    'with a change secret: the lost device is unlocked and changes before the owner': removedWithASecret('changes first', 'has the new secret'),
+    'with a change secret: the laptop was offline and changes on the old secret': removedWithASecret('locked', 'offline, old secret'),
+    'with a change secret: phone and laptop each remove the tablet, apart': removedWithASecret('locked', 'removes the tablet too'),
     'a sibling that was offline during the change comes back': siblingComesBack(RULES),
     'the same; the old receive path stays open for a while': siblingComesBack(v({ graceAfterAck: true })),
   }

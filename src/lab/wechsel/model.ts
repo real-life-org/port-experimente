@@ -17,7 +17,7 @@
 //
 // Signatures are real (Ed25519). Encryption is modelled as possession: a
 // device opens a document sealed to a receive key if it holds that key.
-import { createHash, generateKeyPairSync, sign, verify, randomBytes, type KeyObject } from 'node:crypto'
+import { createHash, createHmac, createPrivateKey, createPublicKey, generateKeyPairSync, sign, verify, randomBytes, type KeyObject } from 'node:crypto'
 
 const h = (s: string): string => createHash('sha256').update(s).digest('base64url').slice(0, 22)
 type Pair = { pub: string, priv: KeyObject }
@@ -25,6 +25,12 @@ const pair = (): Pair => {
   const { publicKey, privateKey } = generateKeyPairSync('ed25519')
   return { pub: publicKey.export({ type: 'spki', format: 'der' }).toString('base64url'), priv: privateKey }
 }
+/** A key pair from 32 bytes, so that two devices that derive the same bytes hold the same key. */
+const pairFrom = (seed: Buffer): Pair => {
+  const priv = createPrivateKey({ key: Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), seed]), format: 'der', type: 'pkcs8' })
+  return { pub: createPublicKey(priv).export({ type: 'spki', format: 'der' }).toString('base64url'), priv }
+}
+const kdf = (w: Buffer, rel: string, n: number, label: string): Buffer => createHmac('sha256', w).update(JSON.stringify([rel, n, label])).digest()
 const pubKey = (pub: string): Parameters<typeof verify>[2] => ({ key: Buffer.from(pub, 'base64url'), format: 'der', type: 'spki' })
 
 export type State = { sig: string, enc: string, addr: string }
@@ -47,6 +53,8 @@ export type Own = {
   enc: Set<string>                // receive keys it holds (material; what it may use is `paths`)
   addr: Set<string>               // addresses it holds the access to
   acked: number                   // the newest entry of its own log the counterpart acknowledged
+  rel: string                     // a name of the relationship that goes into every derivation
+  secrets: Buffer[]               // the change secrets it holds, oldest first (rule `deterministic`)
   update: Map<string, KeyObject>  // update keys it holds, by public key
   owed: Entry[]                   // entries the counterpart has not acknowledged
 }
@@ -59,7 +67,7 @@ export type Rules = {
   heads: boolean            // documents carry both log heads
   replyToSender: boolean    // a refusal is answered to the address in the refused entry, not to the held one
   keepOldUntilAck: boolean  // after a change a device keeps the old receive key and address until the counterpart acknowledged
-  deterministic: boolean    // the next state is derived from a secret the update holders share
+  deterministic: boolean    // the next state is derived from a change secret the holders share, not drawn
   graceAfterAck: boolean    // the old receive key and address stay open for a while after the acknowledgement
 }
 export const RULES: Rules = { heads: true, replyToSender: true, keepOldUntilAck: true, deterministic: false, graceAfterAck: false }
@@ -91,16 +99,21 @@ export function paths (dev: Device, rules: Rules): State[] {
 }
 const newState = (): { st: State, sigPair: Pair } => { const sigPair = pair(); return { st: { sig: sigPair.pub, enc: 'enc-' + randomBytes(6).toString('hex'), addr: 'addr-' + randomBytes(6).toString('hex') }, sigPair } }
 
-/** A relationship's first entry, written on `dev`; the next update key is
- *  made at once and handed to `holders` (the devices that may change keys). */
-export function open (dev: Device, holders: Device[]): void {
-  const up = pair(), nextUp = pair(), { st, sigPair } = newState()
+/** A relationship's first entry, written on `dev`. The key that may write
+ *  the next entry is drawn and handed to `holders`, or, with a change
+ *  secret, derived from the newest one `dev` holds. */
+export function open (dev: Device, holders: Device[], rules: Rules = RULES): void {
+  const rel = 'rel-' + randomBytes(6).toString('hex'), w = dev.own.secrets[dev.own.secrets.length - 1]
+  const derived = rules.deterministic && w !== undefined
+  const up = pair(), nextUp = derived ? pairFrom(kdf(w, rel, 1, 'update')) : pair(), { st, sigPair } = newState()
   const b = { n: 0, prev: null, update: up.pub, next: h(nextUp.pub), state: st }
   const proof = sign(null, Buffer.from(body(b)), up.priv).toString('base64url')
   const e: Entry = { ...b, proof, id: h(body(b) + proof) }
-  dev.own.log = [e]; dev.own.sig.set(st.sig, sigPair.priv); dev.own.enc.add(st.enc); dev.own.addr.add(st.addr); dev.own.owed = [e]; dev.own.acked = 0
-  for (const x of holders) x.own.update.set(nextUp.pub, nextUp.priv)
+  dev.own.log = [e]; dev.own.sig.set(st.sig, sigPair.priv); dev.own.enc.add(st.enc); dev.own.addr.add(st.addr); dev.own.owed = [e]; dev.own.acked = 0; dev.own.rel = rel
+  if (!derived) for (const x of holders) x.own.update.set(nextUp.pub, nextUp.priv)
 }
+/** A fresh change secret for these devices: at the start, and again when a device is removed. */
+export function renew (devs: Device[]): void { const w = randomBytes(32); for (const d of devs) d.own.secrets.push(w) }
 const extendsLog = (longer: Entry[], shorter: Entry[]): boolean => shorter.length === 0 || (longer.length > shorter.length && longer.some((e) => e.id === head(shorter).id))
 /** A sibling device gets what `from` holds of the relationship (the
  *  personal group's doing); update keys only if it is a holder. The own
@@ -116,6 +129,7 @@ export function share (from: Device, to: Device, holder: boolean): void {
   for (const x of from.own.enc) to.own.enc.add(x)
   for (const x of from.own.addr) to.own.addr.add(x)
   if (holder) for (const [k, v] of from.own.update) to.own.update.set(k, v)
+  to.own.rel ||= from.own.rel
   if (extendsLog(from.peer.log, to.peer.log)) to.peer.log = [...from.peer.log]
   for (const e of from.peer.evidence) if (!to.peer.evidence.some((x) => x.id === e.id)) to.peer.evidence.push(e)
 }
@@ -128,24 +142,37 @@ export function takeOver (from: Device, to: Device, holder: boolean): void {
 
 /** `dev` writes the next entry of its own log: new everyday key, new
  *  receive key, new address, a new commitment. Returns false if it holds
- *  no key the head committed to. `seed` makes two devices write the same
- *  entry (rule `deterministic`); the model then reuses one prepared entry. */
-const prepared = new Map<string, { e: Entry, sigPair: Pair, nextUp: Pair }>()
+ *  no key the head committed to.
+ *
+ *  Drawn: all of it is random, the next update key goes to `holders`.
+ *  Derived: the key that writes is derived from the secret the head
+ *  committed under; the new state and the next commitment are derived from
+ *  the newest secret the device holds. Two devices that hold the same
+ *  secrets write the same entry, byte for byte. */
 export function change (dev: Device, rules: Rules, holders: Device[]): boolean {
-  const hd = head(dev.own.log)
-  const up = [...dev.own.update].find(([pub]) => h(pub) === hd.next)
-  if (!up) return false
-  let made = rules.deterministic ? prepared.get(hd.id) : undefined
-  if (!made) {
-    const nextUp = pair(), { st, sigPair } = newState()
-    const b = { n: hd.n + 1, prev: hd.id, update: up[0], next: h(nextUp.pub), state: st }
+  const hd = head(dev.own.log), n = hd.n + 1
+  let e: Entry, sigPair: Pair
+  if (rules.deterministic) {
+    const rel = dev.own.rel, up = dev.own.secrets.map((w) => pairFrom(kdf(w, rel, n, 'update'))).find((p) => h(p.pub) === hd.next)
+    const w = dev.own.secrets[dev.own.secrets.length - 1]
+    if (!up || !w) return false
+    sigPair = pairFrom(kdf(w, rel, n, 'sig'))
+    const st: State = { sig: sigPair.pub, enc: 'enc-' + h(kdf(w, rel, n, 'enc').toString('hex')), addr: 'addr-' + h(kdf(w, rel, n, 'addr').toString('hex')) }
+    const b = { n, prev: hd.id, update: up.pub, next: h(pairFrom(kdf(w, rel, n + 1, 'update')).pub), state: st }
+    const proof = sign(null, Buffer.from(body(b)), up.priv).toString('base64url')
+    e = { ...b, proof, id: h(body(b) + proof) }
+  } else {
+    const up = [...dev.own.update].find(([pub]) => h(pub) === hd.next)
+    if (!up) return false
+    const nextUp = pair(), made = newState()
+    sigPair = made.sigPair
+    const b = { n, prev: hd.id, update: up[0], next: h(nextUp.pub), state: made.st }
     const proof = sign(null, Buffer.from(body(b)), up[1]).toString('base64url')
-    made = { e: { ...b, proof, id: h(body(b) + proof) }, sigPair, nextUp }
-    if (rules.deterministic) prepared.set(hd.id, made)
+    e = { ...b, proof, id: h(body(b) + proof) }
+    for (const x of holders) if (!x.lost) x.own.update.set(nextUp.pub, nextUp.priv)
   }
-  dev.own.log.push(made.e); dev.own.owed.push(made.e)
-  dev.own.sig.set(made.e.state.sig, made.sigPair.priv); dev.own.enc.add(made.e.state.enc); dev.own.addr.add(made.e.state.addr)
-  for (const x of holders) if (!x.lost) x.own.update.set(made.nextUp.pub, made.nextUp.priv)
+  dev.own.log.push(e); dev.own.owed.push(e)
+  dev.own.sig.set(e.state.sig, sigPair.priv); dev.own.enc.add(e.state.enc); dev.own.addr.add(e.state.addr)
   return true
 }
 
@@ -213,10 +240,11 @@ export function receive (dev: Device, c: Carrier, rules: Rules): void {
   }
 }
 
-export const device = (name: string): Device => ({ name, own: { log: [], sig: new Map(), enc: new Set(), addr: new Set(), update: new Map(), owed: [], acked: 0 }, peer: { log: [], evidence: [] }, notices: [], inbox: [] })
+export const device = (name: string): Device => ({ name, own: { log: [], sig: new Map(), enc: new Set(), addr: new Set(), update: new Map(), owed: [], acked: 0, rel: '', secrets: [] }, peer: { log: [], evidence: [] }, notices: [], inbox: [] })
 /** Two persons who met: A's devices and B's devices each know the other's first entry. */
-export function met (as: Device[], bs: Device[], holdersA: Device[], holdersB: Device[]): void {
-  open(as[0] as Device, holdersA); open(bs[0] as Device, holdersB)
+export function met (as: Device[], bs: Device[], holdersA: Device[], holdersB: Device[], rules: Rules = RULES): void {
+  if (rules.deterministic) { renew(holdersA); renew(holdersB) }
+  open(as[0] as Device, holdersA, rules); open(bs[0] as Device, holdersB, rules)
   ;(as[0] as Device).peer.log = [...(bs[0] as Device).own.log]; (bs[0] as Device).peer.log = [...(as[0] as Device).own.log]
   ;(as[0] as Device).own.owed = []; (bs[0] as Device).own.owed = []
   for (const x of as.slice(1)) share(as[0] as Device, x, holdersA.includes(x))
