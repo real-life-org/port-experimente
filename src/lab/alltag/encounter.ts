@@ -86,6 +86,16 @@ export async function second (P: Person): Promise<Seeded> {
   return holderOver(P.fill, store, LATE)
 }
 
+/** What the library issues by itself once an entry is applied (its duties:
+ *  the continuity probe and the stars after an encounter, the anchor mapping
+ *  after trust was given) is drawn under the entry's id and at the entry's
+ *  time, on every device, right after the entry. Two devices that apply the
+ *  same entry on the same state then issue the same document, byte for
+ *  byte, and the counterpart sees one. */
+export async function follows (P: Seeded, id: string, when: number): Promise<any[]> {
+  return (await P.under(`follows|${id}`, async () => P.h.resume(when))).outbound
+}
+
 /** Answers a counterpart takes from a second device as well (two-producers.expected.json). */
 const TOLERATED = new Set(['delivery-ack/0.1'])
 /** Documents that concern only the device they reach. */
@@ -125,9 +135,12 @@ export class Device extends Sync<Body, Seeded> {
     return this.exclusive(async () => {
       const when = clk(this.P, t)
       const got = await this.P.h.receive(envelope, when)
-      if (got.disposition === 'unique' && !PRIVATE.has(short(got.type))) this.write({ kind: 'received', envelope, type: short(got.type), when }, true)
+      const mine: any[] = got.disposition === 'unique' || got.disposition === 'duplicate-known' ? [...got.outbound] : []
+      // recorded as open: what follows the document is issued by the routine every device runs for the entry,
+      // so a break there leaves the entry open here as well
+      if (got.disposition === 'unique' && !PRIVATE.has(short(got.type))) this.write({ kind: 'received', envelope, type: short(got.type), when }, false)
       const more = await this.applyOpen(t)
-      return [...(got.disposition === 'unique' || got.disposition === 'duplicate-known' ? got.outbound : []), ...more.outbound]
+      return [...mine, ...more.outbound]
     })
   }
 
@@ -159,6 +172,9 @@ export class Device extends Sync<Body, Seeded> {
 
   /** The credential delivery is the document that proves the person's answer to a request. */
   protected carriesAnswer (doc: any): boolean { return short(doc.type).startsWith('encounter-credential-delivery/') }
+
+  /** Every entry of this cut carries its time: what the library owes after it is drawn from the entry. */
+  protected issues (id: string, body: Body): Promise<any[]> { return follows(this.P, id, body.when) }
 
   protected subjectOf (body: Body): string | undefined {
     return body.kind === 'act' && body.act === 'confirm' ? body.contactId : undefined

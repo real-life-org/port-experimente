@@ -1,5 +1,5 @@
 // The scenarios of the everyday baseline that the layer prototype covers,
-// run through the layer (`layer.ts`, `invitation.ts`, `encounter.ts`), for the conformance
+// run through the layer (`layer.ts`, `invitation.ts`, `encounter.ts`, `trust.ts`), for the conformance
 // matrix. Same ids and same expectations as the baseline; a scenario the
 // prototype does not cover is not listed and shows as not run.
 import { at, clk, copyOf, ev, met, mk, ok, tick, type Person } from './fixture'
@@ -7,6 +7,7 @@ import { Device as Msg } from './layer'
 import { Device as Inv } from './invitation'
 import { carry } from './carrier'
 import { Device as Enc, cardOf, first, second } from './encounter'
+import { Device as Trust } from './trust'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export interface LayerRow { id: string, status: 'green' | 'red', note?: string }
@@ -104,6 +105,25 @@ export async function runLayer (): Promise<LayerRow[]> {
     const notTaken = [...new Set(L.notTaken)]
     rows.push(verdict('K3', n[0] === 1 && n[1] === 1 && n[2] === 1,
       `lines for B: phone ${n[0]}, laptop ${n[1]}; lines for A at B: ${n[2]}${notTaken.length ? `; the laptop did not take: ${notTaken.join(', ')}` : ''}`))
+  }
+  {
+    // K4: A trusts B on the phone; K5: apart, on the phone and on the laptop
+    for (const [id, apart] of [['K4', false], ['K5', true]] as const) {
+      const { T, L, B } = await encounter(id === 'K4' ? 0xc1 : 0xc5)
+      await scans(T, B)
+      await L.syncFrom(T); await T.syncFrom(L)
+      const [a, b] = [(await T.P.h.contacts())[0].id, (await B.h.contacts())[0].id]
+      // each cut of the prototype keeps its own log: other names, so the entry ids (the library's act ids) do not repeat those of the encounter
+      const [t, l] = [new Trust('phone-trust', T.P), new Trust('laptop-trust', L.P)]
+      const out = t.toCarrier((await t.act('trust', a)).outbound)
+      if (apart) out.push(...l.toCarrier((await l.act('trust', a)).outbound))
+      await l.syncFrom(t); await t.syncFrom(l)
+      const refused = await carry(B, [], [t, l], out, 20)
+      await l.syncFrom(t); await t.syncFrom(l)
+      const given = [(await T.P.h.contact(a)).trust.given, (await L.P.h.contact(a)).trust.given, (await B.h.contact(b)).trust.received]
+      rows.push(verdict(id, given.every(Boolean) && !refused.length && !t.notTaken.length && !l.notTaken.length,
+        `given: phone ${given[0]}, laptop ${given[1]}; received at B: ${given[2]}; B refuses: ${refused.join(', ') || 'nothing'}`))
+    }
   }
   return rows
 }
