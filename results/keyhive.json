@@ -1,0 +1,284 @@
+{
+ "id": "keyhive",
+ "kind": "group",
+ "at": "2026-11-23T07:20:09.563Z",
+ "scenarios": [
+  {
+   "scenario": "S1",
+   "title": "Gründen, zwei Mitglieder aufnehmen, Inhalte tauschen",
+   "ms": 97,
+   "outcome": "bestanden",
+   "authority": "alle sehen {alice, bob, carol}",
+   "keys": "alle lesen alle drei Einträge"
+  },
+  {
+   "scenario": "S2",
+   "title": "Mitglied entfernen; Entfernter liest Neues nicht mehr",
+   "ms": 31.6,
+   "outcome": "bestanden",
+   "authority": "alle sehen {alice, bob}",
+   "keys": "Carol liest Neues: nein; Alice/Bob lesen: ja"
+  },
+  {
+   "scenario": "S3",
+   "title": "Offline schreiben, danach konvergieren",
+   "ms": 23.2,
+   "outcome": "bestanden",
+   "authority": "alle sehen {alice, bob, carol}",
+   "keys": "alle lesen beide Einträge"
+  },
+  {
+   "scenario": "S4a",
+   "title": "Alice entfernt Bob, während Bob schreibt",
+   "ms": 24.7,
+   "outcome": "bestanden",
+   "authority": "alle sehen {alice, carol}; Bobs gleichzeitiger Eintrag: alice:sieht carol:sieht",
+   "keys": "Bob liest Einträge nach dem Zusammenführen: nein"
+  },
+  {
+   "scenario": "S4b",
+   "title": "Zwei Admins entfernen gleichzeitig verschiedene Personen",
+   "ms": 39.6,
+   "outcome": "bestanden",
+   "authority": "alle sehen {alice, bob}; Zustand ausstehend=0",
+   "keys": "Bob liest Neues: ja; Entfernte lesen Neues: niemand"
+  },
+  {
+   "scenario": "S4c",
+   "title": "Gegenseitige Entfernung zweier Admins",
+   "ms": 21.9,
+   "outcome": "bestanden",
+   "authority": "alle sehen {alice, carol}; bob (entfernt) sieht {alice, carol}; Zustand ausstehend=0; bob entfernt alice: Proof missing to authorize revocation",
+   "keys": "—"
+  },
+  {
+   "scenario": "S4c2",
+   "title": "Gegenseitige Entfernung: beide sind draußen, keiner liest Neues",
+   "ms": 23.3,
+   "outcome": "nicht bestanden",
+   "authority": "Carol sieht {alice, carol}; alice sieht {alice, carol}, bob sieht {alice, carol}; Zustand ausstehend=0; bob entfernt alice: Proof missing to authorize revocation",
+   "keys": "LECK: alice lesen Carols Eintrag"
+  },
+  {
+   "scenario": "S4d",
+   "title": "Entfernung neben Rotation eines anderen Mitglieds",
+   "ms": 19.8,
+   "outcome": "bestanden",
+   "authority": "alle sehen {alice, bob}; Zustand ausstehend=0",
+   "keys": "Alice liest Neues: ja; Carol liest Neues: nein"
+  },
+  {
+   "scenario": "S4e",
+   "title": "Zwei gleichzeitige Änderungen der Gruppenregeln",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: policy",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "S4j",
+   "title": "Regeländerung neben Entfernung: Fork, Ende durch eine Regeländerung auf beide Zweige",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: policy",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "S4f",
+   "title": "Entfernte lädt gleichzeitig ein, Eingeladener lädt weiter ein",
+   "ms": 74.4,
+   "outcome": "nicht bestanden",
+   "authority": "alle sehen {alice, bob, carol, x, y}; übrig aus Mallorys Kette: x,y; x lädt y ein",
+   "keys": "LECK: x,y lesen neuen Inhalt"
+  },
+  {
+   "scenario": "S5",
+   "title": "Zweites Gerät derselben Person",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: multi-device",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "S5b",
+   "title": "Gerät verloren: Person entfernt ihr eigenes Gerät, der Finder liest nicht weiter",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: multi-device, device-remove",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "S5c",
+   "title": "Person mit zwei Geräten wird entfernt; keines liest Neues",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: multi-device",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "S6",
+   "title": "Neues Mitglied liest die Historie",
+   "ms": 36.6,
+   "outcome": "nicht bestanden",
+   "authority": "Dave Mitglied: ja",
+   "keys": "Dave liest {}"
+  },
+  {
+   "scenario": "S6b",
+   "title": "Neues Mitglied liest die Historie nach dem nächsten Eintrag",
+   "ms": 44.7,
+   "outcome": "bestanden",
+   "authority": "Dave Mitglied: ja",
+   "keys": "direkt nach Aufnahme 0 Einträge; nach neuem Eintrag {alt-1, alt-2, alt-bob, neu}"
+  },
+  {
+   "scenario": "S7",
+   "title": "Gerät erbeutet, danach Rotation: liest der Angreifer weiter?",
+   "ms": 30.1,
+   "outcome": "bestanden",
+   "authority": "—",
+   "keys": "Angreifer liest vor der Rotation: ja; nach der Rotation: nein; Alice/Carol lesen nach der Rotation: ja"
+  },
+  {
+   "scenario": "S11",
+   "title": "Schlüsseloperation ohne Logeintrag: ein entferntes Gerät nimmt ein neues Blatt in den Baum",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: forge-key-op",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "S8",
+   "title": "Ersteller fällt weg, Gruppe bleibt handlungsfähig",
+   "ms": 37.8,
+   "outcome": "bestanden",
+   "authority": "Carol sieht {alice, bob, carol}; Zustand ausstehend=0",
+   "keys": "Bob liest Neues: ja; Dave liest Neues: nein"
+  },
+  {
+   "scenario": "S10a",
+   "title": "Dienst: Entfernter schreibt gleichzeitig, das Relay verwirft (kein Residual)",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: service",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "S10b",
+   "title": "Dienst: Entfernung ohne Relay, der Entfernte schreibt am Relay weiter (veraltete Sicht)",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: service",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "S10c",
+   "title": "Dienst: gegenseitige Entfernung lässt nur ein Mitglied, Quorum der Sicht",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: service",
+   "keys": "—",
+   "ms": 0
+  }
+ ],
+ "carrier": [
+  {
+   "scenario": "T1",
+   "title": "Träger verliert einen Rahmen still",
+   "door": "DV2 nichts endet still · I12 Lückenreparatur",
+   "ms": 26.3,
+   "outcome": "nicht abbildbar",
+   "authority": "der Träger hat keinen Rahmen dieser Art gesehen (Autoritätsrahmen von alice); der Kandidat nennt seine Rahmen anders",
+   "keys": "—"
+  },
+  {
+   "scenario": "T2",
+   "title": "Träger ordnet um",
+   "door": "I2 kausale Anwendung",
+   "ms": 50.4,
+   "outcome": "bestanden",
+   "authority": "alice {alice, bob, dave} bob {alice, bob, dave} dave {alice, bob, dave}",
+   "keys": "alice:{drei, eins, zwei} bob:{drei, eins, zwei} dave:{drei, eins, zwei}"
+  },
+  {
+   "scenario": "T3",
+   "title": "Träger liefert doppelt",
+   "door": "DV3 / 6.3 idempotent über den Inhalt",
+   "ms": 27,
+   "outcome": "bestanden",
+   "authority": "alice {alice, bob} bob {alice, bob}; carol liest {}; Zustand bob: ausstehend=0",
+   "keys": "Einträge: {einmal} {einmal}"
+  },
+  {
+   "scenario": "T4",
+   "title": "Träger spielt eine alte Entfernung erneut ein",
+   "door": "I8 Zustand, nicht Kante · RLTP-ACC-3475",
+   "ms": 16.3,
+   "outcome": "nicht abbildbar",
+   "authority": "der Träger hat keinen Rahmen dieser Art gesehen (Autoritätsrahmen von alice); der Kandidat nennt seine Rahmen anders",
+   "keys": "—"
+  },
+  {
+   "scenario": "T5",
+   "title": "Träger verändert einen Rahmen",
+   "door": "D1 signierter DAG · Form vor Inhalt",
+   "ms": 46.9,
+   "outcome": "nicht abbildbar",
+   "authority": "der Träger hat keinen Rahmen dieser Art gesehen (Autoritätsrahmen von alice); der Kandidat nennt seine Rahmen anders",
+   "keys": "—"
+  },
+  {
+   "scenario": "T6",
+   "title": "Träger hält einem Gerät gezielt einen Eintrag vor",
+   "door": "D5 beglaubigtes Konvergenzziel · I5",
+   "ms": 28.9,
+   "outcome": "nicht abbildbar",
+   "authority": "der Träger hat keinen Rahmen dieser Art gesehen (Autoritätsrahmen von alice); der Kandidat nennt seine Rahmen anders",
+   "keys": "—"
+  },
+  {
+   "scenario": "T6b",
+   "title": "Träger friert ein Gerät ein (alles vorgehalten)",
+   "door": "D5 beglaubigtes Konvergenzziel · I5",
+   "ms": 29.4,
+   "outcome": "nicht bestanden",
+   "authority": "Carol sieht {alice, bob, carol}; bemerkt: nein; Zustand: ausstehend=0",
+   "keys": "Carol liest Daves Eintrag: nein"
+  },
+  {
+   "scenario": "T7",
+   "title": "Entferntes Gerät fragt weiter",
+   "door": "Dienstklassen §9.3 · KV1",
+   "ms": 25,
+   "outcome": "bestanden",
+   "authority": "Carol wird bedient (blind); Zustand: ausstehend=1",
+   "keys": "Carol liest nach der Entfernung: nein"
+  },
+  {
+   "scenario": "T8",
+   "title": "Trägerwechsel mitten im Leben",
+   "door": "I15 Rebinding · Portabilität",
+   "ms": 0,
+   "outcome": "nicht abbildbar",
+   "authority": "der Träger kennt keinen Wechsel (ein Prüfstand-Relay)",
+   "keys": "—"
+  },
+  {
+   "scenario": "T11",
+   "title": "Zwei Gruppen auf einem Träger",
+   "door": "DV4/DV6 Pseudonym je Gruppe",
+   "ms": 0,
+   "outcome": "nicht abbildbar",
+   "authority": "ein Kandidat trägt genau eine Gruppe; Verknüpfung über Gruppen hinweg braucht zwei Gruppen auf einem Träger",
+   "keys": "—"
+  },
+  {
+   "scenario": "T12",
+   "title": "Versiegelter Eintrag: was der Träger liest",
+   "door": "I6 key-blindness · Access-Envelope",
+   "ms": 17.2,
+   "outcome": "bestanden",
+   "authority": "nur Chiffretext",
+   "keys": "Inhalt versiegelt"
+  }
+ ]
+}

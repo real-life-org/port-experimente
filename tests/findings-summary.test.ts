@@ -1,6 +1,8 @@
-// The summary table in public/findings.html must match the cells in public/matrix.html.
+// The summary table in public/findings.html must match the cells of the matrix assembled from the result files (results/).
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
+import { assemble, readRuns } from '../src/lab/report-files'
+import { reportCandidates as knownCandidates } from '../src/candidates/report'
 
 type Cell = { status: string }
 type Matrix = { cands: { id: string }[]; families: { cands: string[]; ports: { rows: { cells: Record<string, Cell> }[] }[] }[] }
@@ -10,10 +12,7 @@ type Row = { cands: string[]; kept: number; partial: number; notKept: number; na
 const read = (p: string) => readFileSync(new URL(`../public/${p}`, import.meta.url), 'utf8')
 
 function countsFromMatrix(): Map<string, Counts> {
-  const html = read('matrix.html')
-  const start = html.indexOf('const D = ') + 'const D = '.length
-  const end = html.indexOf(';\n', start)
-  const D = JSON.parse(html.slice(start, end)) as Matrix
+  const D: Matrix = assemble(readRuns(knownCandidates)).page
   const out = new Map<string, Counts>()
   for (const c of D.cands) {
     const n: Counts = { kept: 0, partial: 0, notKept: 0, na: 0, untested: 0 }
@@ -53,7 +52,8 @@ describe('findings summary', () => {
     for (const r of rows) for (const id of r.cands) {
       const n = counts.get(id)
       if (!n) throw new Error(`candidate ${id} not in the matrix`)
-      expect({ id, kept: n.kept, partial: n.partial, notKept: n.notKept, na: n.na })
+      // Weicht eine Zahl ab: `pnpm matrix` schreibt die Zusammenfassung aus den Ergebnisdateien neu; public/findings.html mitcommitten.
+      expect({ id, kept: n.kept, partial: n.partial, notKept: n.notKept, na: n.na }, 'public/findings.html is behind results/: run `pnpm matrix` and commit it')
         .toEqual({ id, kept: r.kept, partial: r.partial, notKept: r.notKept, na: r.na })
     }
   })

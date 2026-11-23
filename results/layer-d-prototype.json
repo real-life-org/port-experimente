@@ -1,0 +1,56 @@
+{
+ "id": "layer-d-prototype",
+ "kind": "everyday",
+ "at": "2026-11-23T08:15:36.527Z",
+ "scenarios": [],
+ "carrier": [
+  {
+   "scenario": "XA-N1",
+   "title": "B writes to A: the message is on the phone and the laptop",
+   "outcome": "bestanden",
+   "authority": "holds",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "XA-N3",
+   "title": "A takes a message over on the phone: the laptop no longer offers it as new",
+   "outcome": "bestanden",
+   "authority": "holds",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "XA-N2",
+   "title": "A writes from the phone: the message is in the conversation on the laptop",
+   "outcome": "bestanden",
+   "authority": "holds",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "XA-M1",
+   "title": "an invitation to G arrives: the card is on the phone and the laptop",
+   "outcome": "bestanden",
+   "authority": "holds",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "XA-M2",
+   "title": "A accepts on the phone: the laptop is in G without an act of its own, its card is decided",
+   "outcome": "bestanden",
+   "authority": "holds",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "XA-M3",
+   "title": "apart: accept on the phone, decline on the laptop: one outcome on both devices and in the log",
+   "outcome": "bestanden",
+   "authority": "holds",
+   "keys": "—",
+   "ms": 0
+  }
+ ]
+}
