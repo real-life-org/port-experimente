@@ -356,6 +356,25 @@ Otherwise a device that broke off while taking a document would let the
 library issue the owed star by itself, with its own time and fresh
 randomness, and its sister would derive another one from the entry.
 
+Two rules for what the library issues by itself:
+
+- **One entry, one duty, one document.** A shared entry yields the same
+  document, by digest, for the same duty on every device: also after a
+  break, and whether the carrier's pass or the sync comes first. A repeat
+  uses the document already issued.
+- **A difference between devices needs a named reason.** After an
+  encounter the credential, the star, the group star and the first probe
+  agree by digest; the laptop holds exactly one probe more, because the
+  acknowledgement of the first reached only the phone.
+
+A limit of the layer, and what the library would need: one call of
+`resume` hands out several things at once (what follows an answer, a
+probe that fell due, a repeat), and the layer cannot tell from the call
+which duty a document comes from. It draws them all under the entry it
+just applied. To decide per document what to pass on or hold back, the
+holder would have to name the duty behind each document it issues;
+guessing it from the turn that happens to run brings the same fault back.
+
 What is left of the two-producer question after this cut:
 
 - an acknowledgement reaches only the device the carrier reaches and is
