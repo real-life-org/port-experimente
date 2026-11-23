@@ -13,13 +13,18 @@
 //      off (an exception) is tried again by the next call. A refusal by the
 //      library is its verdict: the acting device notes in the log that
 //      nothing happened (`void`), the entry is closed, what follows runs.
-//   3. One evaluation of what took effect. An entry that is `void` counts
-//      nowhere: not in the sync, not in what holds, not at the door
-//      (`effective`).
-//   4. The rule is asked at the door. Whether a document that gives an
-//      answer its standing may leave is decided from the entries the device
-//      knows at the moment of the first handover (`toCarrier`), not from
-//      what an earlier application managed to do.
+//   3. Three facts about an answer, each its own entry. The person chose
+//      (the answer's entry): the decision is running. The library applied
+//      it (`took`) or refused it for good (`void`): only now does it count,
+//      or stop counting. An accept that took effect was handed to the
+//      carrier (`handed`). A sister device sees a running answer and one
+//      that took effect apart: until `took`, it keeps its prompt and changes
+//      nothing in its library; a competing accept only waits.
+//   4. One evaluation of what took effect (`effective`), and it is asked
+//      every time: by the sync, by what holds, and at the door. Whether a
+//      document may leave is computed from the entries the device knows at
+//      that moment (`toCarrier`), never from a list an earlier application
+//      left behind, so a later `void` lifts what a running decline held up.
 //   5. Between two answers of one person (Anton, 2026-11-23): what the
 //      counterpart took first holds, proven by its answer; what has not left
 //      the own device may be taken back (`rule`).
@@ -33,6 +38,7 @@ import { tick, type Person } from './fixture'
 
 /** The entries every cut has. `subject` is what an answer is about (an invitation, a request). */
 export type CoreBody =
+  | { kind: 'took', cause: string }                     // the library applied the answer of entry `cause` on its device: it took effect
   | { kind: 'void', cause: string, code: string }       // the library refused the act of entry `cause` on its device: nothing happened
   | { kind: 'handed', subject: string, cause: string }  // the answer of entry `cause` left its device for the carrier
 export type Entry<B> = { id: string, deps: string[], body: B | CoreBody }
@@ -58,7 +64,8 @@ export abstract class Sync<B extends { kind: string }, P extends Person = Person
   protected readonly applied = new Set<string>()
   private heads: string[] = []
   private n = 0
-  /** documents this device's library produced that must not reach the carrier */
+  /** documents this device's library produced that never reach the carrier: its copy of a sister's act or answer.
+   *  What the rule holds back is not listed here; the door computes it. */
   readonly withheld: any[] = []
   /** acts the library refused for good on this device, with its code: closed, not retried */
   readonly refused: string[] = []
@@ -112,23 +119,34 @@ export abstract class Sync<B extends { kind: string }, P extends Person = Person
     return [...this.entries.values()].some((x) => x.body.kind === 'void' && (x.body as any).cause === id)
   }
 
-  /** Of the given entries those that took effect, by entry id. */
+  /** The library applied the answer of this entry on its device. */
+  took (id: string): boolean {
+    return [...this.entries.values()].some((x) => x.body.kind === 'took' && (x.body as any).cause === id)
+  }
+
+  /** Of the given answers those that took effect, by entry id. */
   protected effective<E extends { id: string }> (entries: E[]): E[] {
-    return entries.filter((e) => !this.voided(e.id)).sort((x, y) => (x.id < y.id ? -1 : x.id > y.id ? 1 : 0))
+    return entries.filter((e) => this.took(e.id) && !this.voided(e.id)).sort((x, y) => (x.id < y.id ? -1 : x.id > y.id ? 1 : 0))
+  }
+
+  /** Of the given answers those still running: chosen, neither applied nor refused yet. */
+  protected running<E extends { id: string }> (entries: E[]): E[] {
+    return entries.filter((e) => !this.took(e.id) && !this.voided(e.id))
   }
 
   /** The entries whose answer about `subject` left a device, by entry id. */
   protected handed (subject: string): string[] {
     const causes = [...this.entries.values()].flatMap((e) => (e.body.kind === 'handed' && (e.body as any).subject === subject ? [(e.body as any).cause as string] : []))
-    return [...new Set(causes)].filter((c) => !this.voided(c)).sort()
+    return [...new Set(causes)].filter((c) => this.took(c) && !this.voided(c)).sort()
   }
 
   // ---- applying (rules 1 and 2)
 
   /** Applies one entry of the cut's own kinds. Throwing means the step broke off. */
   protected abstract apply (e: { id: string, body: B }, own: boolean, t: number): Promise<Step>
-  /** What holds for `subject` may have changed (a handover, a refused answer): bring the library in line. */
-  protected async settle (_subject: string, _t: number): Promise<void> {}
+  /** What holds for `subject` may have changed (an answer took effect or was refused, a handover): bring the
+   *  library in line with it. Returns a reason when that has to wait (the subject has not reached this device). */
+  protected async settle (_subject: string, _t: number): Promise<string | void> {}
   /** The subject an entry of the cut answers, if it is an answer. */
   protected subjectOf (_body: B): string | undefined { return undefined }
   /** Runs after every pass over the open entries. */
@@ -139,7 +157,14 @@ export abstract class Sync<B extends { kind: string }, P extends Person = Person
   /** The library refused the act of `e` for good: closed here, and noted in the log by the acting device. */
   protected refuse (e: { id: string }, code: string): void {
     this.refused.push(`${e.id}: ${code}`)
-    if (this.own(e.id) && !this.voided(e.id)) this.write({ kind: 'void', cause: e.id, code }, true)
+    if (this.own(e.id) && !this.voided(e.id) && !this.took(e.id)) this.write({ kind: 'void', cause: e.id, code }, true)
+  }
+
+  /** The subject of the answer a `took`, `void` or `handed` entry names. */
+  private about (body: CoreBody): string | undefined {
+    if (body.kind === 'handed') return body.subject
+    const cause = this.entries.get(body.cause)
+    return cause && !['took', 'void', 'handed'].includes(cause.body.kind) ? this.subjectOf(cause.body as B) : undefined
   }
 
   /** Applies every open entry whose dependencies are applied, in order.
@@ -154,18 +179,24 @@ export abstract class Sync<B extends { kind: string }, P extends Person = Person
       for (const e of [...this.entries.values()]) {
         if (this.applied.has(e.id) || !e.deps.every((d) => this.applied.has(d))) continue
         try {
-          if (e.body.kind === 'handed') {
-            await this.settle((e.body as any).subject, t)
-          } else if (e.body.kind === 'void') {
-            // the act it names is skipped where it has not run; an answer it names no longer counts: what holds is settled again
-            const cause = this.entries.get((e.body as any).cause)
-            const subject = cause && cause.body.kind !== 'void' && cause.body.kind !== 'handed' ? this.subjectOf(cause.body as B) : undefined
-            if (subject !== undefined) await this.settle(subject, t)
+          if (e.body.kind === 'took' || e.body.kind === 'void' || e.body.kind === 'handed') {
+            // a sister's answer took effect, was refused, or left its device: what holds may have changed
+            const subject = this.about(e.body as CoreBody)
+            const wait = subject !== undefined ? await this.settle(subject, t) : undefined
+            if (wait !== undefined) return { outbound, stoppedAt: this.stopped(e.id, wait) }
           } else if (!this.voided(e.id)) {
             // (an entry that is void: the acting device was refused, nothing happened there, nothing happens here)
-            const step = await this.apply(e as { id: string, body: B }, this.own(e.id), t)
+            const own = this.own(e.id)
+            const step = await this.apply(e as { id: string, body: B }, own, t)
             if (step?.outbound) outbound.push(...step.outbound)
             if (step?.wait !== undefined) return { outbound, stoppedAt: this.stopped(e.id, step.wait) }
+            // the acting device says what became of its answer, and brings itself in line with what now holds.
+            // A break before this note leaves the entry open: the next call completes the same act.
+            const subject = own ? this.subjectOf(e.body as B) : undefined
+            if (subject !== undefined) {
+              if (!this.voided(e.id) && !this.took(e.id)) this.write({ kind: 'took', cause: e.id }, true)
+              await this.settle(subject, t)
+            }
           }
         } catch (err) {
           return { outbound, stoppedAt: this.stopped(e.id, (err as Error).message) }
@@ -192,18 +223,21 @@ export abstract class Sync<B extends { kind: string }, P extends Person = Person
   protected abstract mayLeave (subject: string, cause: string): boolean
 
   /** What of `docs` may go to the carrier now. An answer that leaves is
-   *  recorded as handed. Before the first handover the rule is asked, from
-   *  the entries: the handover gives an answer its standing, so it must not
-   *  be what decides whether it may be handed over. */
+   *  recorded as handed.
+   *
+   *  The rule is asked every time, from the entries this device knows now:
+   *  the handover gives an answer its standing, so it must not be what
+   *  decides whether it may be handed over; and what a running decline holds
+   *  up today may leave tomorrow, when the decline turned out void. A
+   *  document held back is offered again by the library's next resume. */
   toCarrier (docs: any[]): any[] {
     const out: any[] = []
     next: for (const o of docs) {
       if (this.withheld.some((w) => w.digest === o.digest)) continue
       for (const [cause, s] of this.standing) {
         if (!s.docs.some((m) => m.digest === o.digest)) continue
-        if (this.handed(s.subject).includes(cause)) continue
-        if (this.voided(cause) || !this.mayLeave(s.subject, cause)) { this.withheld.push(o); continue next }
-        this.write({ kind: 'handed', subject: s.subject, cause }, true)
+        if (!this.took(cause) || this.voided(cause) || !this.mayLeave(s.subject, cause)) continue next
+        if (!this.handed(s.subject).includes(cause)) this.write({ kind: 'handed', subject: s.subject, cause }, true)
       }
       out.push(o)
     }

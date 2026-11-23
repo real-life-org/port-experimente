@@ -56,12 +56,24 @@ subject. The core holds five rules:
    tried again by the next call. A refusal by the library is its verdict:
    the acting device notes in the log that nothing happened (`void`), the
    entry is closed, what follows runs.
-3. **One evaluation of what took effect.** A `void` entry counts nowhere:
-   not in the sync, not in what holds, not at the door.
-4. **The rule is asked at the door.** Whether an answer may leave is
-   decided from the entries the device knows at the first handover.
+3. **Three facts about an answer, each its own entry.** The person chose
+   (the answer's entry): the decision is running. The library applied it
+   (`took`) or refused it for good (`void`). An accept that took effect was
+   handed to the carrier (`handed`). A sister device tells a running answer
+   from one that took effect: until `took` it keeps its prompt and changes
+   nothing in its library, and a competing accept only waits.
+4. **One evaluation of what took effect, asked every time.** The sync, what
+   holds and the door ask the same function. Whether a document may leave
+   is computed from the entries known at that moment, not from a list an
+   earlier application left behind: what a running decline holds up leaves
+   once the decline turned out void. A handover stays binding.
 5. **Between two answers of one person**: a confirmed accept stands; else
    every accept that left a device; else a decline; else the first accept.
+
+The test for rule 3 and 4: whether a decision and what became of it reach
+a sister in one sync or in two, the sister ends with the same verdict, the
+same prompt and the same answer at the door (core, invitation and
+encounter each have this test).
 
 Moving the invitation cut onto the core closed two faults it had and the
 encounter review had found there: an accept left the device although a

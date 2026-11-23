@@ -216,7 +216,7 @@ describe('an encounter through the layer', () => {
     // the phone learns the decline, but applying it breaks off before anything is settled
     const h = T.P.h
     T.P.h = { ...h, contact: async () => { throw new Error('crash') } }
-    expect((await T.syncFrom(L)).stoppedAt).toBe('laptop#1: crash')
+    expect((await T.syncFrom(L)).stoppedAt).toBe('laptop#2: crash')   // while taking over that the decline took effect
     T.P.h = h
     expect(T.verdict(contactId)!.body.choice).toBe('decline')
     // at the door the rule is asked again: nothing leaves, and no handover is recorded
@@ -263,6 +263,64 @@ describe('an encounter through the layer', () => {
     expect({ phone: await lines(T.P), laptop: await lines(L.P), atB: await lines(B) }).toEqual({ phone: ['Bea mutual'], laptop: ['Bea outgoing'], atB: ['Al mutual'] })
     expect(await ids(L)).toEqual(await ids(T))
     expect(L.notTaken).toContain('encounter-credential-delivery/0.1: taken without effect')
+  })
+
+  // Review of #105/#106: a sister sees a running answer and one that took effect apart.
+  const only = (D: Device, ...ids: string[]): { entries: Device['entries'] } => ({ entries: new Map([...D.entries].filter(([id]) => ids.includes(id))) })
+
+  test('the phone syncs while the laptop\'s decline is still running, the library then refuses it: the phone\'s accept waited and leaves', async () => {
+    const { T, L, B } = await world(0x65)
+    await shows(T, B, [T]); await L.syncFrom(T)
+    const contactId = (await request(T))!
+    const d1 = await T.act({ act: 'confirm', contactId, choice: 'accept' })
+    const h = L.P.h
+    L.P.h = { ...h, decide: async () => ({ ok: false, code: 'refused-here' }) }
+    await L.act({ act: 'confirm', contactId, choice: 'decline' })
+    L.P.h = h
+    // round one: only the laptop's choice has reached the phone
+    expect((await T.syncFrom(only(L, 'laptop#1'))).stoppedAt).toBe(null)
+    expect({ holds: T.verdict(contactId)!.body.choice, declining: T.declining(contactId), leaves: T.toCarrier(d1.outbound) }).toEqual({ holds: 'accept', declining: true, leaves: [] })
+    // round two: the library refused the decline
+    expect((await T.syncFrom(L)).stoppedAt).toBe(null)
+    expect({ holds: T.verdict(contactId)!.body.choice, declining: T.declining(contactId) }).toEqual({ holds: 'accept', declining: false })
+    const leaving = T.toCarrier(d1.outbound)
+    expect(leaving.map((o: any) => short(o.type))).toEqual(['encounter-credential-delivery/0.1'])
+    await carry(B, [], [T], leaving); await both(T, L)
+    expect({ phone: await lines(T.P), laptop: await lines(L.P), atB: await lines(B) }).toEqual({ phone: ['Bea mutual'], laptop: ['Bea mutual'], atB: ['Al mutual'] })
+  })
+
+  test('a decline that reaches the phone in two rounds or in one gives the same: what holds, the request on the phone, the door', async () => {
+    const run = async (fill: number, rounds: 1 | 2, fate: 'took' | 'void'): Promise<unknown> => {
+      const { T, L, B } = await world(fill)
+      await shows(T, B, [T]); await L.syncFrom(T)
+      const contactId = (await request(T))!
+      const d1 = await T.act({ act: 'confirm', contactId, choice: 'accept' })
+      const h = L.P.h
+      if (fate === 'void') L.P.h = { ...h, decide: async () => ({ ok: false, code: 'refused-here' }) }
+      await L.act({ act: 'confirm', contactId, choice: 'decline' })
+      L.P.h = h
+      if (rounds === 2) { await T.syncFrom(only(L, 'laptop#1')); T.toCarrier(d1.outbound) }
+      await T.syncFrom(L)
+      return { holds: T.verdict(contactId)!.body.choice, declining: T.declining(contactId), leaves: T.toCarrier(d1.outbound).length, phone: await lines(T.P) }
+    }
+    expect(await run(0x69, 2, 'void')).toEqual(await run(0x6d, 1, 'void'))
+    expect(await run(0x71, 2, 'took')).toEqual(await run(0x75, 1, 'took'))
+    expect(await run(0x79, 2, 'void')).toEqual({ holds: 'accept', declining: false, leaves: 1, phone: ['Bea mutual'] })
+    expect(await run(0x7d, 2, 'took')).toEqual({ holds: 'decline', declining: false, leaves: 0, phone: ['Bea mutual'] })
+  })
+
+  test('no competing accept: while the laptop\'s decline is running and after the library refused it, the request stays open on the phone', async () => {
+    const { T, L, B } = await world(0x81)
+    await shows(T, B, [T]); await L.syncFrom(T)
+    const contactId = (await request(T))!
+    const h = L.P.h
+    L.P.h = { ...h, decide: async () => ({ ok: false, code: 'refused-here' }) }
+    await L.act({ act: 'confirm', contactId, choice: 'decline' })
+    L.P.h = h
+    await T.syncFrom(only(L, 'laptop#1'))
+    expect({ holds: T.verdict(contactId), declining: T.declining(contactId), open: await request(T) }).toEqual({ holds: null, declining: true, open: contactId })
+    await T.syncFrom(L)
+    expect({ holds: T.verdict(contactId), declining: T.declining(contactId), open: await request(T), laptop: await request(L) }).toEqual({ holds: null, declining: false, open: contactId, laptop: contactId })
   })
 
   test('a card the library refuses for good: the act is closed as refused, a later act runs, and the laptop does not hang on it', async () => {

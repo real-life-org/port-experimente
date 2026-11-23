@@ -18,7 +18,11 @@ class Toy extends Sync<Body> {
   }
   doc = (id: string): any => ({ digest: 'doc-of-' + id })
   protected subjectOf (b: Body): string { return b.subject }
-  protected mayLeave (subject: string, cause: string): boolean { const v = this.holds(subject); return typeof v !== 'string' && v.accepts.includes(cause) }
+  declining (subject: string): boolean { return this.running(this.of('answer').filter((e) => e.body.subject === subject)).some((e) => e.body.choice === 'decline') }
+  protected mayLeave (subject: string, cause: string): boolean {
+    const v = this.holds(subject)
+    return typeof v !== 'string' && v.accepts.includes(cause) && (this.handed(subject).includes(cause) || !this.declining(subject))
+  }
   protected async apply (e: { id: string, body: Body }, own: boolean): Promise<Step> {
     if (!own) return
     if (this.fate === 'breaks') throw new Error('crash')
@@ -59,7 +63,7 @@ describe('applying entries', () => {
     expect((await T.answer('s', 'decline')).stoppedAt).toBe(null)
     T.fate = 'works'
     expect((await T.answer('t', 'accept')).stoppedAt).toBe(null)
-    expect(kinds(T)).toEqual(['phone#1 answer', 'phone#2 void', 'phone#3 answer'])
+    expect(kinds(T)).toEqual(['phone#1 answer', 'phone#2 void', 'phone#3 answer', 'phone#4 took'])
     expect({ refused: T.refused, ran: T.ran, voided: T.voided('phone#1') }).toEqual({ refused: ['phone#1: no'], ran: ['phone#3'], voided: true })
   })
 })
@@ -74,7 +78,7 @@ describe('what took effect, and the door', () => {
     await T.syncFrom(L)
     expect(T.holds('s')).toEqual({ accepts: ['phone#1'] })
     expect(T.toCarrier(out)).toEqual(out)
-    expect(kinds(T)).toContain('phone#2 handed')
+    expect(kinds(T)).toEqual(['phone#1 answer', 'phone#2 took', 'laptop#1 answer', 'laptop#2 void', 'phone#3 handed'])
   })
 
   test('the rule is asked at the door: a decline learned before the first handover keeps the accept in the house, even when applying it broke off', async () => {
@@ -108,7 +112,66 @@ describe('what took effect, and the door', () => {
     expect([T.toCarrier(a), L.toCarrier(b)]).toEqual([[], b])   // the first by entry id: the laptop's
   })
 
-  test('the accept of a refused act never leaves', async () => {
+test('three facts, each its own entry: chosen, took effect, handed', async () => {
+    const T = new Toy('phone')
+    const out = (await T.answer('s', 'accept')).outbound
+    T.toCarrier(out)
+    expect(kinds(T)).toEqual(['phone#1 answer', 'phone#2 took', 'phone#3 handed'])
+  })
+
+  // What a sync brought that broke off after entry `id`.
+  const upTo = (D: Toy, id: string): { entries: Toy['entries'] } => { const all = [...D.entries]; return { entries: new Map(all.slice(0, all.findIndex(([x]) => x === id) + 1)) } }
+
+  test('a running decline is not a decline: it counts nowhere, a competing accept only waits, and a later void lifts the wait', async () => {
+    const T = new Toy('phone'), L = new Toy('laptop')
+    const out = (await T.answer('s', 'accept')).outbound
+    L.fate = 'refused'
+    await L.answer('s', 'decline')
+    await T.syncFrom(upTo(L, 'laptop#1'))                    // the choice, not yet what became of it
+    expect({ holds: T.holds('s'), declining: T.declining('s'), leaves: T.toCarrier(out) }).toEqual({ holds: { accepts: ['phone#1'] }, declining: true, leaves: [] })
+    await T.syncFrom(L)                                      // the library refused it
+    expect({ holds: T.holds('s'), declining: T.declining('s'), leaves: T.toCarrier(out) }).toEqual({ holds: { accepts: ['phone#1'] }, declining: false, leaves: out })
+  })
+
+  test('the same after two rounds as after one, for a decline that took effect and for one that was refused', async () => {
+    const run = async (rounds: 1 | 2, fate: 'works' | 'refused'): Promise<unknown> => {
+      const T = new Toy('phone'), L = new Toy('laptop')
+      const out = (await T.answer('s', 'accept')).outbound
+      L.fate = fate
+      await L.answer('s', 'decline')
+      if (rounds === 2) { await T.syncFrom(upTo(L, 'laptop#1')); T.toCarrier(out) }
+      await T.syncFrom(L)
+      return { holds: T.holds('s'), declining: T.declining('s'), leaves: T.toCarrier(out).length }
+    }
+    expect(await run(2, 'refused')).toEqual(await run(1, 'refused'))
+    expect(await run(2, 'works')).toEqual(await run(1, 'works'))
+    expect(await run(2, 'refused')).toEqual({ holds: { accepts: ['phone#1'] }, declining: false, leaves: 1 })
+    expect(await run(2, 'works')).toEqual({ holds: 'declined', declining: false, leaves: 0 })
+  })
+
+  test('a handover stays binding: an accept that left stands against a decline that is running or took effect', async () => {
+    const T = new Toy('phone'), L = new Toy('laptop')
+    const out = (await T.answer('s', 'accept')).outbound
+    expect(T.toCarrier(out)).toEqual(out)
+    await L.answer('s', 'decline')
+    await T.syncFrom(upTo(L, 'laptop#1'))
+    expect(T.toCarrier(out)).toEqual(out)                    // running decline: the accept already left
+    await T.syncFrom(L)
+    expect({ holds: T.holds('s'), leaves: T.toCarrier(out) }).toEqual({ holds: { accepts: ['phone#1'] }, leaves: out })
+  })
+
+  test('a break between the library and bringing the device in line: the next call completes the same act, with one note', async () => {
+    class Breaking extends Toy {
+      broke = false
+      protected async settle (): Promise<void> { if (!this.broke) { this.broke = true; throw new Error('crash') } }
+    }
+    const T = new Breaking('phone')
+    expect((await T.answer('s', 'accept')).stoppedAt).toBe('phone#1: crash')
+    expect((await T.syncFrom(T)).stoppedAt).toBe(null)
+    expect(kinds(T)).toEqual(['phone#1 answer', 'phone#2 took'])
+  })
+
+    test('the accept of a refused act never leaves', async () => {
     const T = new Toy('phone')
     const out = (await T.answer('s', 'accept')).outbound
     ;(T as any).write({ kind: 'void', cause: 'phone#1', code: 'late' }, true)

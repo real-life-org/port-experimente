@@ -156,9 +156,16 @@ export class Device extends Sync<Body, Seeded> {
     return body.kind === 'act' && body.act === 'confirm' ? body.contactId : undefined
   }
 
-  /** At the door: the accept of this device's answer `cause` may leave while it is the answer that stands. */
+  /** A decline of the request is running on some device: chosen, neither applied nor refused yet. */
+  declining (contactId: string): boolean {
+    return this.running(this.of('act').filter((e) => e.body.act === 'confirm' && e.body.contactId === contactId)).some((e) => (e.body as Confirm).choice === 'decline')
+  }
+
+  /** At the door: the accept of this device's answer `cause` may leave while it is the answer that stands.
+   *  While a decline is still running, an accept that has not left yet waits for what becomes of it. */
   protected mayLeave (contactId: string, cause: string): boolean {
-    return this.verdict(contactId)?.id === cause
+    if (this.verdict(contactId)?.id !== cause) return false
+    return this.handed(contactId).includes(cause) || !this.declining(contactId)
   }
 
   private async prompt (contactId: string): Promise<any | undefined> {
@@ -181,7 +188,9 @@ export class Device extends Sync<Body, Seeded> {
     const r = await this.P.under(b.seed, async () => {
       if (b.act === 'show') return this.P.h.show({ ...o, ...(b.name ? { name: b.name } : {}) })
       if (b.act === 'scan') return this.P.h.scan(b.card, { ...o, ...(b.name ? { name: b.name } : {}) })
-      const prompt = await this.prompt(b.contactId)
+      // the prompt as it is, or as this device last saw it: a repeat after a break completes the same act under
+      // its act id, and an answer to a request that is closed here is the library's to refuse
+      const prompt = (await this.prompt(b.contactId)) ?? this.prompts.get(b.contactId)
       return prompt ? this.P.h.decide(prompt.id, b.choice, o) : { ok: false, code: 'no-prompt' }
     })
     this.results.set(id, r)
@@ -189,10 +198,11 @@ export class Device extends Sync<Body, Seeded> {
   }
 
   /** Brings this device's library in line with what holds for a request. */
-  protected async settle (contactId: string): Promise<void> {
+  protected async settle (contactId: string): Promise<string | void> {
     const v = this.verdict(contactId)
     const contact = await this.P.h.contact(contactId)
-    if (!v || !contact) return
+    if (!contact) return 'the request is not here yet'
+    if (!v) return
     const open = await this.prompt(contactId)
     const accepted = contact.verification === 'mutual'
     if (v.body.choice === 'accept') {
@@ -204,8 +214,7 @@ export class Device extends Sync<Body, Seeded> {
       if (r.ok && !this.own(v.id)) this.withheld.push(...r.outbound)
     } else {
       if (open) await this.run(v.id, v.body)
-      // every accept of this device stays in the house
-      for (const c of this.confirms(contactId)) if (c.body.choice === 'accept') this.withheld.push(...(this.results.get(c.id)?.outbound ?? []))
+      // (an accept of this device stays in the house: the door asks the rule)
       const note = `${contactId}: accepted here, the decline holds; the library cannot take the accept back`
       if (accepted && !this.stuck.includes(note)) this.stuck.push(note)
     }
@@ -226,19 +235,13 @@ export class Device extends Sync<Body, Seeded> {
       return { outbound }
     }
     if (e.body.act === 'confirm') {
-      // the request has not reached this device yet: the entry waits
+      // a sister's answer: nothing happens here until its device says what became of it (`took`, `void`)
+      if (!own) return
       if (!(await this.P.h.contact(e.body.contactId))) return { wait: 'the request is not here yet' }
-      // the acting device answers its own prompt; what then holds is settled for every device alike
-      if (own && (await this.prompt(e.body.contactId))) {
-        const r = await this.run(e.id, e.body)
-        if (!r.ok) this.refuse(e, r.code)
-        else {
-          if (e.body.choice === 'accept') this.leaves(e.id, e.body.contactId, r.outbound)
-          outbound.push(...r.outbound)
-        }
-      }
-      await this.settle(e.body.contactId)
-      return { outbound }
+      const r = await this.run(e.id, e.body)
+      if (!r.ok) { this.refuse(e, r.code); return }
+      if (e.body.choice === 'accept') this.leaves(e.id, e.body.contactId, r.outbound)
+      return { outbound: r.outbound }
     }
     const r = await this.run(e.id, e.body)
     if (!r.ok) this.refuse(e, r.code)

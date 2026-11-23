@@ -104,10 +104,11 @@ export class Device extends Sync<Body> {
    *  that took effect count (the core's one evaluation). */
   verdict (credDigest: string): { accepts: string[] } | 'declined' | 'open' {
     const decided = this.effective(this.of('decided').filter((e) => e.body.credDigest === credDigest))
-    const issued = this.effective(this.of('issued').filter((e) => e.body.credDigest === credDigest)).filter((e) => !this.voided(e.body.cause))
+    const issued = this.of('issued').filter((e) => e.body.credDigest === credDigest && decided.some((d) => d.id === e.body.cause))
+      .sort((x, y) => (x.id < y.id ? -1 : 1))
     const handed = [...new Set(this.handed(credDigest).flatMap((cause) => this.acceptOf(cause) ?? []))]
     return rule({
-      confirmed: this.effective(this.of('confirmed').filter((e) => e.body.credDigest === credDigest))[0]?.body.acceptDigest,
+      confirmed: this.of('confirmed').find((e) => e.body.credDigest === credDigest)?.body.acceptDigest,
       handed,
       declined: decided.some((d) => d.body.choice === 'decline'),
       first: issued[0]?.body.acceptDigest,
@@ -118,28 +119,32 @@ export class Device extends Sync<Body> {
     return body.kind === 'decided' ? body.credDigest : undefined
   }
 
-  /** At the door: the accept of this device's answer `cause` may leave while it is one of the accepts that stand. */
+  /** A decline of the invitation is running on some device: chosen, neither applied nor refused yet. */
+  declining (credDigest: string): boolean {
+    return this.running(this.of('decided').filter((e) => e.body.credDigest === credDigest)).some((e) => e.body.choice === 'decline')
+  }
+
+  /** At the door: the accept of this device's answer `cause` may leave while it is one of the accepts that
+   *  stand. While a decline is still running, an accept that has not left yet waits for what becomes of it. */
   protected mayLeave (credDigest: string, cause: string): boolean {
     const v = this.verdict(credDigest), mine = this.acceptOf(cause)
-    return typeof v !== 'string' && mine !== undefined && v.accepts.includes(mine)
+    if (typeof v === 'string' || mine === undefined || !v.accepts.includes(mine)) return false
+    return this.handed(credDigest).includes(cause) || !this.declining(credDigest)
   }
 
   /** Brings this device's library in line with what holds for the
    *  invitation. The library holds one accept digest per invitation; while
    *  several accepts are candidates, a device keeps its own if it is one of
    *  them, and `takeTrying` tries the others when an answer does not fit. */
-  protected async settle (credDigest: string): Promise<void> {
+  protected async settle (credDigest: string): Promise<string | void> {
     const v = this.verdict(credDigest)
     const state = (await this.P.read()).joining.invites[credDigest]
-    if (!state || v === 'open') return
+    if (!state) return 'the invitation has not reached this device yet'
+    if (v === 'open') return
     const candidates = v === 'declined' ? [] : v.accepts
     if (state.status !== 'joined') {
       if (v === 'declined' && state.status !== 'declined') await adopt(this.P, credDigest, { status: 'declined' })
       if (v !== 'declined' && !candidates.includes(state.acceptDigest)) await adopt(this.P, credDigest, { status: 'accepted', acceptDigest: candidates[0] as string })
-    }
-    // an accept of this device that cannot stand never reaches the carrier (again)
-    for (const x of this.of('issued')) {
-      if (x.body.credDigest === credDigest && !candidates.includes(x.body.acceptDigest)) this.withheld.push(...this.producedBy(x.body.cause))
     }
   }
 
@@ -182,22 +187,22 @@ export class Device extends Sync<Body> {
       return { outbound }
     }
     if (e.body.kind === 'decided') {
+      // a sister's answer: nothing happens here until its device says what became of it (`took`, `void`)
+      if (!own) return
       const state = (await this.P.read()).joining.invites[e.body.credDigest]
       if (!state) return { wait: 'the invitation has not reached this device yet' }
-      if (own && state.status === 'open') {
-        const prompt = (await this.P.h.prompts()).find((p: any) => p.id === state.promptId)
-        const r = await this.P.h.decide(prompt.id, e.body.choice, { when: clk(this.P, t), actId: `${e.id}-decide` })
-        // the library's refusal is its verdict on the answer: closed, noted in the log, and it counts nowhere
-        if (!r.ok) { this.refuse(e, r.code); await this.settle(e.body.credDigest); return }
-        if (e.body.choice === 'accept') {
-          const acceptDigest = (await this.P.read()).joining.invites[e.body.credDigest].acceptDigest
-          this.leaves(e.id, e.body.credDigest, r.outbound)
-          this.write({ kind: 'issued', cause: e.id, credDigest: e.body.credDigest, acceptDigest }, true)
-        }
-        outbound.push(...r.outbound)
+      // always through the library, under the entry's act id: a repeat after a break completes the same act,
+      // and an answer to an invitation that is no longer open here is the library's to refuse
+      const r = await this.P.h.decide(state.promptId, e.body.choice, { when: clk(this.P, t), actId: `${e.id}-decide` })
+      if (!r.ok) { this.refuse(e, r.code); return }
+      if (e.body.choice === 'accept' && !this.acceptOf(e.id)) {
+        const acceptDigest = (await this.P.read()).joining.invites[e.body.credDigest].acceptDigest
+        this.leaves(e.id, e.body.credDigest, r.outbound)
+        this.write({ kind: 'issued', cause: e.id, credDigest: e.body.credDigest, acceptDigest }, true)
       }
+      return { outbound: r.outbound }
     }
-    await this.settle(e.body.credDigest)
-    return { outbound }
+    const wait = await this.settle(e.body.credDigest)
+    return wait !== undefined ? { wait } : { outbound }
   }
 }
