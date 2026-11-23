@@ -53,7 +53,9 @@ subject. The core holds five rules:
    anything is done about it; every device, the acting one included,
    applies it by the same routine.
 2. **A break leaves an entry open, a refusal closes it.** An exception is
-   tried again by the next call. A refusal by the library is its verdict:
+   tried again by the next call, and until it is done the library gets no
+   turn of its own (`resume`): what the entry still owes must come from
+   the entry. A refusal by the library is its verdict:
    the acting device notes in the log that nothing happened (`void`), the
    entry is closed, what follows runs.
 3. **Three facts about an answer, each its own entry.** The person chose
@@ -347,8 +349,22 @@ cut, where the three refusals after every encounter are gone.
 
 Baseline scenarios through the layer: K4 passes, K5 stays open.
 
+Where the documents are issued: by the core, after every application of
+an entry of any kind, on every device (`issues`). The library's own turn
+first completes what is open, and gets no turn while an entry is broken.
+Otherwise a device that broke off while taking a document would let the
+library issue the owed star by itself, with its own time and fresh
+randomness, and its sister would derive another one from the entry.
+
 What is left of the two-producer question after this cut:
 
+- an acknowledgement reaches only the device the carrier reaches and is
+  not passed on. The sister's library then still owes what the
+  acknowledgement settled: measured after an encounter, the laptop issues
+  one continuity probe more than the phone. With the same documents on
+  both devices an acknowledgement would fit the sister as well; passing
+  it on was tried and changes several pinned outcomes, so it is left for
+  its own step;
 - the same act on two devices apart (K5): needs numbers per writer on the
   wire, or a counterpart that takes the second document of the same
   meaning;

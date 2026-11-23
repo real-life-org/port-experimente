@@ -13,6 +13,9 @@ async function world (fill: number): Promise<{ T: Device, L: Device, B: Person }
 const lines = async (P: Person): Promise<string[]> => (await P.h.contacts()).map((c: any) => `${c.displayName} ${c.verification}`)
 const ids = async (D: Device): Promise<string[]> => (await D.P.h.contacts()).map((c: any) => c.id).sort()
 const request = async (D: Device): Promise<string | undefined> => (await D.P.h.prompts()).find((p: any) => p.kind === 'encounter-confirm')?.contactId
+/** The credential deliveries among documents: the document that proves an answer. An act's output also carries
+ *  what the library owed after it (acknowledgements, the probe, the stars). */
+const creds = (docs: any[]): any[] => docs.filter((o) => short(o.type) === 'encounter-credential-delivery/0.1')
 const both = async (T: Device, L: Device): Promise<void> => { await L.syncFrom(T); await T.syncFrom(L) }
 
 /** B shows its card, device D of A scans it, B confirms; the carrier reaches `reach`. */
@@ -83,7 +86,7 @@ describe('an encounter through the layer', () => {
     expect((await L.syncFrom(T)).stoppedAt).toBe(null)
     expect(await request(L)).toBe(await request(T))
     const d = await L.act({ act: 'confirm', contactId: (await request(L))!, choice: 'accept' })
-    expect(d.outbound.map((o: any) => short(o.type))).toEqual(['encounter-credential-delivery/0.1'])
+    expect(creds(d.outbound)).toHaveLength(1)
     // the friend takes the laptop's credential and what follows the encounter
     expect(await carry(B, [], [L], L.toCarrier(d.outbound), 20)).toEqual(NOTHING)
     expect((await T.syncFrom(L)).stoppedAt).toBe(null)
@@ -91,8 +94,16 @@ describe('an encounter through the layer', () => {
       .toEqual({ phone: ['Bea mutual'], laptop: ['Bea mutual'], atB: ['Al mutual'], open: [undefined, undefined] })
     expect(await ids(L)).toEqual(await ids(T))
     // the phone's copy of the same answer is the same document, and it stays in the house
-    expect(T.withheld.map((o: any) => short(o.type))).toEqual(['encounter-credential-delivery/0.1'])
-    expect(T.withheld[0].digest).toBe(d.outbound[0].digest)
+    expect(creds(T.withheld).map((o) => o.digest)).toEqual(creds(d.outbound).map((o) => o.digest))
+    // and so is everything the library issued by itself along the way: each document in the phone's outbox is in
+    // the laptop's under the same digest (the stars, the probe, the credential)
+    const box = async (D: Device): Promise<Record<string, string>> => Object.fromEntries(Object.entries((await D.P.read()).outbox).map(([digest, o]: any) => [digest, short(o.type)]))
+    const [phone, laptop] = [await box(T), await box(L)]
+    expect(Object.values(phone).sort()).toEqual(['continuity-probe/0.1', 'encounter-credential-delivery/0.1', 'group-star/0.1', 'star/0.2'])
+    expect(Object.keys(phone).filter((digest) => !(digest in laptop))).toEqual([])
+    // open, as measured: the laptop holds one probe more. The friend's acknowledgement of the first probe reached
+    // only the phone (an acknowledgement is not passed on), so the laptop's library still owed a probe and issued another
+    expect(Object.keys(laptop).filter((digest) => !(digest in phone)).map((digest) => laptop[digest])).toEqual(['continuity-probe/0.1'])
   })
 
   test('both devices get the request from the carrier, the phone answers: the request closes on the laptop', async () => {
@@ -135,7 +146,7 @@ describe('an encounter through the layer', () => {
     await shows(T, B, [T]); await L.syncFrom(T)
     const d1 = await T.act({ act: 'confirm', contactId: (await request(T))!, choice: 'accept' })
     const d2 = await L.act({ act: 'confirm', contactId: (await request(L))!, choice: 'decline' })
-    expect(d2.outbound).toEqual([])                          // a decline is no document
+    expect(creds(d2.outbound)).toEqual([])                   // a decline is no document
     await carry(B, [], [T], T.toCarrier(d1.outbound))
     expect(await lines(L.P)).toEqual(['Bea incoming'])
     await both(T, L)
@@ -246,7 +257,7 @@ describe('an encounter through the layer', () => {
     expect((await T.syncFrom(L)).stoppedAt).toBe(null)
     expect(T.verdict(contactId)!.body.choice).toBe('accept')
     const leaving = T.toCarrier(d1.outbound)
-    expect(leaving.map((o: any) => short(o.type))).toEqual(['encounter-credential-delivery/0.1'])
+    expect(creds(leaving)).toHaveLength(1)
     await carry(B, [], [T], leaving)
     await both(T, L)
     expect({ phone: await lines(T.P), laptop: await lines(L.P), atB: await lines(B), open: await request(L) })
@@ -286,7 +297,7 @@ describe('an encounter through the layer', () => {
     expect((await T.syncFrom(L)).stoppedAt).toBe(null)
     expect({ holds: T.verdict(contactId)!.body.choice, declining: T.declining(contactId) }).toEqual({ holds: 'accept', declining: false })
     const leaving = T.toCarrier(d1.outbound)
-    expect(leaving.map((o: any) => short(o.type))).toEqual(['encounter-credential-delivery/0.1'])
+    expect(creds(leaving)).toHaveLength(1)
     await carry(B, [], [T], leaving); await both(T, L)
     expect({ phone: await lines(T.P), laptop: await lines(L.P), atB: await lines(B) }).toEqual({ phone: ['Bea mutual'], laptop: ['Bea mutual'], atB: ['Al mutual'] })
   })
@@ -362,11 +373,11 @@ describe('an encounter through the layer', () => {
     await shows(T, B, [T]); await L.syncFrom(T)
     const contactId = (await request(T))!
     const [d1, d2] = [await T.act({ act: 'confirm', contactId, choice: 'accept' }), await L.act({ act: 'confirm', contactId, choice: 'accept' })]
-    expect([T.toCarrier(d1.outbound).length, L.toCarrier(d2.outbound).length]).toEqual([1, 1])   // both left, neither arrived
+    expect([creds(T.toCarrier(d1.outbound)).length, creds(L.toCarrier(d2.outbound)).length]).toEqual([1, 1])   // both left, neither arrived
     await both(T, L)
     expect([T.verdict(contactId)!.id, L.verdict(contactId)!.id]).toEqual(['laptop#1', 'laptop#1'])
     // the phone's accept is not the one counted first, but it left: the library's repeat goes through the door
-    expect(T.toCarrier(d1.outbound).map((o: any) => short(o.type))).toEqual(['encounter-credential-delivery/0.1'])
+    expect(creds(T.toCarrier(d1.outbound))).toHaveLength(1)
     await carry(B, [], [T], T.toCarrier(d1.outbound)); await both(T, L)
     expect({ phone: await lines(T.P), laptop: await lines(L.P), atB: await lines(B) }).toEqual({ phone: ['Bea mutual'], laptop: ['Bea mutual'], atB: ['Al mutual'] })
   })

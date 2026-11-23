@@ -10,7 +10,9 @@
 //      anything is done about it, and every device, the acting one
 //      included, applies it by the same routine (`applyOpen`).
 //   2. A break leaves an entry open, a refusal closes it. A step that breaks
-//      off (an exception) is tried again by the next call. A refusal by the
+//      off (an exception) is tried again by the next call, and until it is
+//      done the library gets no turn of its own (`resume`): what the entry
+//      still owes must come from the entry. A refusal by the
 //      library is its verdict: the acting device notes in the log that
 //      nothing happened (`void`), the entry is closed, what follows runs.
 //   3. Three facts about an answer, each its own entry. The person chose
@@ -46,7 +48,8 @@ export type CoreBody =
   | { kind: 'void', cause: string, code: string }       // the library refused the act of entry `cause` on its device: nothing happened
   | { kind: 'handed', subject: string, cause: string }  // the answer of entry `cause` left its device for the carrier
 export type Entry<B> = { id: string, deps: string[], body: B | CoreBody }
-export type Progress = { outbound: any[], stoppedAt: string | null }
+/** `broke`: the stop is a step that broke off (not an entry that waits for something to arrive). */
+export type Progress = { outbound: any[], stoppedAt: string | null, broke?: boolean }
 /** What applying one entry gave: documents for the carrier, or a reason the entry has to wait. */
 export type Step = { outbound?: any[], wait?: string } | void
 
@@ -130,9 +133,20 @@ export abstract class Sync<B extends { kind: string }, P extends Person = Person
     })
   }
 
-  /** The library's own turn (retries, duties): what it hands out goes through the door. */
+  /** The library's own turn (retries, duties): what it hands out goes through the door.
+   *
+   *  Open entries come first. An entry that broke off may owe a document
+   *  the library would otherwise issue now, by itself, with this device's
+   *  time and fresh randomness, and no longer the document its sisters
+   *  derive from the entry. So the turn completes what is open through the
+   *  entries' own routine, and while an entry is still broken the library
+   *  does not get its turn at all. */
   resume (t = tick()): Promise<any[]> {
-    return this.exclusive(async () => this.toCarrier((await this.P.h.resume(clk(this.P, t))).outbound))
+    return this.exclusive(async () => {
+      const open = await this.applyOpen(t)
+      if (open.broke) return this.toCarrier(open.outbound)
+      return this.toCarrier([...open.outbound, ...(await this.P.h.resume(clk(this.P, t))).outbound])
+    })
   }
 
   // ---- what took effect (rule 3)
@@ -172,6 +186,9 @@ export abstract class Sync<B extends { kind: string }, P extends Person = Person
   protected async settle (_subject: string, _t: number): Promise<string | void> {}
   /** The subject an entry of the cut answers, if it is an answer. */
   protected subjectOf (_body: B): string | undefined { return undefined }
+  /** What the library issues by itself once the entry `id` (with body `body`) is applied: its duties. A cut
+   *  whose entries carry a time draws them from the entry, so every device issues the same document. */
+  protected async issues (_id: string, _body: B): Promise<any[]> { return [] }
   /** Runs after every pass over the open entries. */
   protected async after (_t: number): Promise<void> {}
   /** How a stop is named in the progress. */
@@ -221,8 +238,18 @@ export abstract class Sync<B extends { kind: string }, P extends Person = Person
               await this.settle(subject, t)
             }
           }
+          // Every application of an entry ends the same way, on every device and for every kind of entry: what
+          // the library owes after it is issued now, from the entry (for a note about an answer: from the answer).
+          // Left to the library's next turn, it would be drawn with this device's time and fresh randomness.
+          const of = e.body.kind === 'took' || e.body.kind === 'void' || e.body.kind === 'handed' ? this.entries.get((e.body as any).cause) : e
+          // (a sister's answer that is still running is not applied yet: its turn comes with the note that it took effect)
+          const running = of === e && !this.own(e.id) && this.subjectOf(e.body as B) !== undefined
+          if (of && !running && !['took', 'void', 'handed'].includes(of.body.kind)) {
+            const docs = await this.issues(of.id, of.body as B)
+            ;(this.own(of.id) ? outbound : this.withheld).push(...docs)
+          }
         } catch (err) {
-          return { outbound, stoppedAt: this.stopped(e.id, (err as Error).message) }
+          return { outbound, stoppedAt: this.stopped(e.id, (err as Error).message), broke: true }
         }
         this.applied.add(e.id)
         moved = true

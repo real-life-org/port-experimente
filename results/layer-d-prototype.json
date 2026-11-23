@@ -1,7 +1,7 @@
 {
  "id": "layer-d-prototype",
  "kind": "everyday",
- "at": "2026-11-23T13:10:21.903Z",
+ "at": "2026-11-23T13:25:55.294Z",
  "scenarios": [],
  "carrier": [
   {
@@ -72,7 +72,7 @@
    "scenario": "XA-K3",
    "title": "B meets the phone, later and apart the laptop: one line for B on both devices, one line for A at B",
    "outcome": "nicht bestanden",
-   "authority": "lines for B: phone 1, laptop 2; lines for A at B: 2; the laptop did not take: continuity-mapping/0.1: validation-failed",
+   "authority": "lines for B: phone 1, laptop 2; lines for A at B: 1; the laptop did not take: continuity-mapping/0.1: validation-failed",
    "keys": "—",
    "ms": 0
   },

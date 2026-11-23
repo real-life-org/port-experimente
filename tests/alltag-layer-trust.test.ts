@@ -83,6 +83,26 @@ describe('trust through the layer', () => {
     expect(await carry(B, [], [T, L], [], 20)).toEqual([])
   })
 
+  test('the same break, then the carrier\'s regular pass on the phone before any sync: the star comes from the entry, the same document as on the laptop', async () => {
+    const { T, L, B, a, b } = await world(0x41)
+    ok(await B.h.trust(b, at(B)))
+    const theirs = (await B.h.resume(clk(B, tick()))).outbound.find((o: any) => short(o.type) === 'anchor-mapping/0.3')
+    const h = T.P.h
+    T.P.h = { ...h, resume: async () => { throw new Error('crash') } }
+    await T.receive(theirs.envelope)
+    // the pass while the device is still broken: the library gets no turn of its own
+    expect(await T.resume()).toEqual([])
+    T.P.h = h
+    const star = (docs: any[]): string[] => [...new Set(docs.filter((o) => short(o.type).startsWith('star/')).map((o) => o.digest as string))]
+    // the regular pass, a while later: it completes the open entry first
+    const passed = await T.resume(tick(600_000))
+    expect(star(passed)).toHaveLength(1)
+    await L.syncFrom(T)
+    expect(star(L.withheld)).toEqual(star(passed))
+    expect(await carry(B, [], [T, L], passed, 20)).toEqual([])
+    expect([await trust(T.P, a), await trust(L.P, a)]).toEqual(['given false, received true', 'given false, received true'])
+  })
+
   test('open, as measured: apart, both devices give trust: one effect at the friend, the devices agree, the friend refuses the second mapping', async () => {
     const { T, L, B, a, b } = await world(0x31)
     const [t, l] = [await T.act('trust', a), await L.act('trust', a)]

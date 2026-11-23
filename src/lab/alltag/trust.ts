@@ -51,6 +51,9 @@ export class Device extends Sync<Body, Seeded> {
     })
   }
 
+  /** Every entry of this cut carries its time: what the library owes after it is drawn from the entry. */
+  protected issues (id: string, body: Body): Promise<any[]> { return follows(this.P, id, body.when) }
+
   /** Trust is no answer to a request: nothing waits for a rule at the door. */
   protected mayLeave (): boolean { return true }
   protected carriesAnswer (): boolean { return false }
@@ -64,8 +67,6 @@ export class Device extends Sync<Body, Seeded> {
       } else if (got.disposition !== 'duplicate-known') {
         this.notTaken.push(`${e.body.type}: ${got.reason ?? got.disposition}`)
       }
-      // what follows: this device's own goes out, its copy of a sister's stays (it is the same document)
-      ;(own ? outbound : this.withheld).push(...await follows(this.P, e.id, e.body.when))
       return { outbound }
     }
     const b = e.body
@@ -73,7 +74,7 @@ export class Device extends Sync<Body, Seeded> {
     const r = await this.P.under(b.seed, async () => (b.act === 'trust' ? this.P.h.trust(b.contactId, o) : this.P.h.untrust(b.contactId, o)))
     this.results.set(e.id, r)
     if (!r.ok) this.refuse(e, r.code)
-    else (own ? outbound : this.withheld).push(...r.outbound, ...await follows(this.P, e.id, b.when))
+    else (own ? outbound : this.withheld).push(...r.outbound)
     return { outbound }
   }
 }

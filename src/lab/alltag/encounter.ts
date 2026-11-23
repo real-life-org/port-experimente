@@ -173,6 +173,9 @@ export class Device extends Sync<Body, Seeded> {
   /** The credential delivery is the document that proves the person's answer to a request. */
   protected carriesAnswer (doc: any): boolean { return short(doc.type).startsWith('encounter-credential-delivery/') }
 
+  /** Every entry of this cut carries its time: what the library owes after it is drawn from the entry. */
+  protected issues (id: string, body: Body): Promise<any[]> { return follows(this.P, id, body.when) }
+
   protected subjectOf (body: Body): string | undefined {
     return body.kind === 'act' && body.act === 'confirm' ? body.contactId : undefined
   }
@@ -255,8 +258,6 @@ export class Device extends Sync<Body, Seeded> {
       } else if (got.disposition !== 'duplicate-known') {
         this.notTaken.push(`${e.body.type}: ${got.reason ?? got.disposition}`)
       }
-      // what follows: this device's own goes out, its copy of a sister's stays (it is the same document)
-      ;(own ? outbound : this.withheld).push(...await follows(this.P, e.id, e.body.when))
       return { outbound }
     }
     if (e.body.act === 'confirm') {
@@ -270,7 +271,7 @@ export class Device extends Sync<Body, Seeded> {
     }
     const r = await this.run(e.id, e.body)
     if (!r.ok) this.refuse(e, r.code)
-    else (own ? outbound : this.withheld).push(...r.outbound, ...await follows(this.P, e.id, e.body.when))
+    else (own ? outbound : this.withheld).push(...r.outbound)
     return { outbound }
   }
 }

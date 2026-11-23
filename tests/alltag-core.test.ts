@@ -9,7 +9,8 @@ type Body = { kind: 'answer', subject: string, choice: 'accept' | 'decline' }
 class Toy extends Sync<Body> {
   fate: 'works' | 'refused' | 'breaks' = 'works'
   ran: string[] = []
-  constructor (name: string) { super(name, {} as any) }
+  turns = 0
+  constructor (name: string) { super(name, { store: {} } as any); (this.P as any).h = { resume: async () => { this.turns++; return { outbound: [{ digest: 'duty', type: 'ack' }] } } } }
   answer (subject: string, choice: 'accept' | 'decline'): Promise<any> { this.write({ kind: 'answer', subject, choice }, false); return this.applyOpen(0) }
   holds (subject: string): ReturnType<typeof rule<string>> {
     const all = this.effective(this.of('answer').filter((e) => e.body.subject === subject))
@@ -69,6 +70,22 @@ describe('applying entries', () => {
     expect((await T.answer('t', 'accept')).stoppedAt).toBe(null)
     expect(kinds(T)).toEqual(['phone#1 answer', 'phone#2 void', 'phone#3 answer', 'phone#4 took'])
     expect({ refused: T.refused, ran: T.ran, voided: T.voided('phone#1') }).toEqual({ refused: ['phone#1: no'], ran: ['phone#3'], voided: true })
+  })
+})
+
+describe('the library\'s own turn', () => {
+  test('open entries come first; while one is broken the library gets no turn; an entry that only waits does not hold it up', async () => {
+    const T = new Toy('phone')
+    T.fate = 'breaks'
+    await T.answer('s', 'accept')
+    expect([await T.resume(0), T.turns]).toEqual([[], 0])    // broken: nothing leaves, the library is not asked
+    T.fate = 'works'
+    expect(await T.resume(0)).toEqual([T.doc('phone#1'), { digest: 'duty', type: 'ack' }])   // the entry's document, then the library's
+    expect(T.turns).toBe(1)
+    class Waiting extends Toy { protected async apply (): Promise<any> { return { wait: 'not here yet' } } }
+    const W = new Waiting('phone')
+    await W.answer('s', 'accept')
+    expect([await W.resume(0), W.turns]).toEqual([[{ digest: 'duty', type: 'ack' }], 1])
   })
 })
 
