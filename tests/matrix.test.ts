@@ -1,3 +1,4 @@
+import { everydayScenarioIds } from '../src/candidates/alltag'
 import { describe, expect, it } from 'vitest'
 import { buildMatrix, promises, toMarkdown, type CandidateRun } from '../src/lab/matrix'
 import { runScenario, scenarios } from '../src/lab/scenarios'
@@ -130,7 +131,7 @@ describe('Mehrgerät im Alltag: Alltags-Kandidaten neben den Modell-Kandidaten',
   const y = (scenario: string, outcome: ScenarioResult['outcome']): ScenarioResult => ({ scenario, title: scenario, outcome, authority: '', keys: '', ms: 0 })
   const runs: CandidateRun[] = [
     { id: 'k2-device-keys', scenarios: [], carrier: [y('X7', 'nicht bestanden'), y('X7b', 'bestanden'), y('X14', 'bestanden'), y('X15', 'bestanden'), y('X8', 'bestanden')] },
-    { id: 'lib-one-writer', scenarios: [], carrier: [y('XA-K3', 'nicht bestanden'), y('XA-G1', 'nicht bestanden'), y('XA-G2', 'nicht bestanden'), y('XA-M7', 'nicht bestanden'), y('XA-N1', 'bestanden'), y('XA-N2', 'nicht abbildbar'), y('XA-N3', 'nicht bestanden')] },
+    { id: 'lib-one-writer', scenarios: [], carrier: [y('XA-K3', 'nicht bestanden'), y('XA-G1', 'nicht bestanden'), y('XA-G2a', 'nicht bestanden'), y('XA-M7', 'nicht bestanden'), y('XA-N1', 'bestanden'), y('XA-N2', 'nicht abbildbar'), y('XA-N3', 'nicht bestanden')] },
     { id: 'layer-d-prototype', scenarios: [], carrier: [y('XA-N1', 'bestanden'), y('XA-N2', 'bestanden'), y('XA-N3', 'bestanden')] },
   ]
   const mg = buildMatrix(runs).ports.find((p) => p.port === 'mehrgerät')!
@@ -142,7 +143,7 @@ describe('Mehrgerät im Alltag: Alltags-Kandidaten neben den Modell-Kandidaten',
   it('eine gemeinsame Zusage: der Modell-Kandidat wird an den X-Szenarien gemessen, der Alltags-Kandidat an den Alltagsszenarien', () => {
     expect(cellOf('MG8', 'k2-device-keys').evidence.map((e) => e.scenario)).toEqual(['X8'])
     expect(cellOf('MG8', 'k2-device-keys').status).toBe('bestanden')
-    expect(cellOf('MG8', 'lib-one-writer').evidence.map((e) => e.scenario)).toEqual(['XA-G1', 'XA-G2', 'XA-M7'])
+    expect(cellOf('MG8', 'lib-one-writer').evidence.map((e) => e.scenario)).toEqual(['XA-G1', 'XA-G2a', 'XA-M7'])
     expect(cellOf('MG8', 'lib-one-writer').status).toBe('nicht bestanden')
     expect(cellOf('MG7', 'k2-device-keys').status).toBe('nicht bestanden')
     expect(cellOf('MG7', 'lib-one-writer').evidence.map((e) => e.scenario)).toEqual(['XA-K3'])
@@ -152,6 +153,29 @@ describe('Mehrgerät im Alltag: Alltags-Kandidaten neben den Modell-Kandidaten',
     expect(cellOf('MG13', 'lib-one-writer').status).toBe('nicht bestanden')
     expect(cellOf('MG13', 'layer-d-prototype').status).toBe('bestanden')
     expect(cellOf('MG1', 'lib-one-writer')).toEqual({ status: 'nicht geprüft', evidence: [] })
+  })
+  it('jede Zusage wird nur an der Beobachtung gemessen, die sie prüft: Lesen gesperrt und Senden noch möglich hält MG9 und bricht MG21; umgekehrt bricht nur MG9', () => {
+    const judge = (carrier: ScenarioResult[]) => {
+      const rows = buildMatrix([{ id: 'lib-one-writer', scenarios: [], carrier }]).ports.find((p) => p.port === 'mehrgerät')!.rows
+      return (id: string) => rows.find((r) => r.promise.id === id)!.cells['lib-one-writer']!
+    }
+    const readBlocked = judge([y('XA-M8b', 'bestanden'), y('XA-M8a', 'bestanden'), y('XA-G3', 'nicht bestanden'), y('XA-G2b', 'nicht bestanden')])
+    expect(readBlocked('MG9')).toEqual({ status: 'bestanden', evidence: [{ scenario: 'XA-M8b', outcome: 'bestanden', crashed: undefined, promiseChanged: undefined }] })
+    expect(readBlocked('MG21').status).toBe('nicht bestanden')
+    const sendBlocked = judge([y('XA-M8b', 'nicht bestanden'), y('XA-M8a', 'bestanden'), y('XA-G3', 'bestanden'), y('XA-G2b', 'bestanden')])
+    expect(sendBlocked('MG9').status).toBe('nicht bestanden')
+    expect(sendBlocked('MG21').status).toBe('bestanden')
+  })
+  it('Nummernsicherheit (MG6) bleibt für den Alltag offen: kein Alltagsszenario vergleicht vergebene Nummern; der Restore zählt zur Konvergenz (MG11)', () => {
+    const rows = buildMatrix([{ id: 'lib-one-writer', scenarios: [], carrier: [y('XA-G5', 'nicht bestanden'), y('XA-G6', 'bestanden')] }]).ports.find((p) => p.port === 'mehrgerät')!.rows
+    const c = (id: string) => rows.find((r) => r.promise.id === id)!.cells['lib-one-writer']!
+    expect(c('MG6')).toEqual({ status: 'nicht geprüft', evidence: [] })
+    expect(c('MG11').status).toBe('nicht bestanden')
+    expect(c('MG11').evidence.map((e) => e.scenario)).toEqual(['XA-G5', 'XA-G6'])
+  })
+  it('jedes Alltagsszenario steht bei genau einer Zusage', () => {
+    const mapped = promises.flatMap((p) => p.everyday ?? [])
+    expect([...mapped].sort()).toEqual([...everydayScenarioIds].sort())
   })
   it('was der Prototyp nicht abdeckt, ist nicht gelaufen und nie bestanden', () => {
     expect(cellOf('MG8', 'layer-d-prototype').status).toBe('nicht geprüft')

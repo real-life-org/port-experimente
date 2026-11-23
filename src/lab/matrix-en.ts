@@ -330,6 +330,11 @@ export const promiseEn: Record<string, { title: string; ref: string; gap: string
     "title": "What others learn: the number of devices can be told, devices cannot be linked across relationships, no device list",
     "ref": "requirement of 2026-11-22 (S1)",
     "gap": "no scenario in the E15 model bench; checked only against the published library (everyday candidates)"
+  },
+  "MG21": {
+    "title": "Device revocation toward others: a removed device speaks to no friend any more; the person stays a member with the remaining devices and reads on",
+    "ref": "Identity §5.5 revocation; everyday scenarios G2, G3, M8",
+    "gap": "no scenario in the E15 model bench (X9 tests reading only); checked only against the published library (everyday candidates)"
   }
 }
 
@@ -389,7 +394,8 @@ export const scenarioEn: Record<string, string> = {
   "X18": "A1 and A2, separated, consent to the same act and each produce a card: two cards of one act, what B sees (8325.A4, 8910.7, 8910.8)",
   "X21": "Journal duplicated, reordered, incomplete: completed batches after an old and a double restore, concurrent requests, crashes before and after commit; loss of request, answer, batches alone (reply head delivered) and receipt, each for more than 12 rounds; repair ends only with no pending catch-up (HSC-440, reviews 9 and 11)",
   "XA-G1": "Everyday, published library: A adds the laptop next to the phone: the laptop shows the same contacts, trust, profile and groups",
-  "XA-G2": "Everyday, published library: a new phone while the old one is still there, then A removes the old one: the new phone shows the same, the old one speaks to no friend any more",
+  "XA-G2a": "Everyday, published library: a new phone while the old one is still there: the new phone shows the same",
+  "XA-G2b": "Everyday, published library: A removes the old phone from the new one: the old one speaks to no friend any more",
   "XA-G3": "Everyday, published library: the phone is lost, A removes it from the laptop: the phone speaks to no friend any more",
   "XA-G4": "Everyday, published library: every device is lost, A has the recovery words: contacts, trust, profile, groups and messages come back",
   "XA-G5": "Everyday, published library: A restores an old image while the laptop goes on: the restored device catches up",
@@ -413,7 +419,8 @@ export const scenarioEn: Record<string, string> = {
   "XA-M5": "Everyday, published library: apart: the phone invites C, the laptop leaves G: one outcome, A is not half a member",
   "XA-M6": "Everyday, published library: A leaves G on the phone: the laptop shows G as left",
   "XA-M7": "Everyday, published library: A adds the laptop while a member of G: the laptop has G with its members and their provenance",
-  "XA-M8": "Everyday, published library: A removes the lost phone: A stays a member, the phone reads nothing new from G",
+  "XA-M8a": "Everyday, published library: A removes the lost phone: A stays a member and reads on with the laptop",
+  "XA-M8b": "Everyday, published library: A removes the lost phone: the phone reads nothing new from G",
   "XA-S1": "Everyday, published library: others can tell that A has several devices, cannot link them across relationships, and see no device list"
 }
 

@@ -46,7 +46,7 @@ describe('Matrixseite aus dem Report', () => {
     expect(d.scen.X5).toContain('A1 ends the relationship with B')
     const html = renderPage(d)
     expect(html).toContain('run of 17 October 2026')
-    expect(html).toContain('Two tables: two candidate stacks as rows, 61 promises across four ports as columns.')
+    expect(html).toContain('Two tables: two candidate stacks as rows, 62 promises across four ports as columns.')
     expect(html).toContain('const D = {"at":')
     expect(html).not.toContain('__DATA__')
     expect(html).toContain('⚠ run crashed')
