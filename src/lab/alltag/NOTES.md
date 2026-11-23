@@ -272,13 +272,15 @@ What the library would need:
   store.
 - **Withdrawing an accept** that has not left the device (the same need as
   in the invitation cut).
-- **One producer, or the same bytes, for what follows an encounter.** Once
-  both devices hold the contact, each issues the continuity probe, the star
-  and the group star of the personal community under the number the other
-  used; the friend refuses the second (`validation-failed`, RLTP-TRU-6700,
-  RLTP-TRU-5150). In the last scenario this decides the outcome: the
-  friend's continuity mapping answers the probe of one device, and the
-  other device refuses it.
+- **The same bytes for what follows an encounter** (closed in the layer,
+  see the trust cut below). Once both devices hold the contact, each issues
+  the continuity probe, the star and the group star of the personal
+  community. Drawn by each device on its own, the friend refused the second
+  of each (`validation-failed`, RLTP-TRU-6700, RLTP-TRU-5150). Drawn under
+  the entry they follow and at its time, they are the same documents, and
+  the friend refuses nothing. The last scenario stays open all the same:
+  there the two devices met B in two acts, and the friend's continuity
+  mapping answers the probe of one of them.
 - **Taking over a ceremony that is already verified.** Running the act at
   its original time works only while the sister's holder has seen no later
   time; the library never lets a holder's time fall. A sister that was
@@ -313,3 +315,51 @@ every cut:
 The seed in an entry is as secret as the keys derived from it; in this
 prototype the log is in memory and unsealed.
 
+## Trust through the layer (`trust.ts`)
+
+The fourth cut, measured 2026-11-23, library 0.19.0. Tests:
+`tests/alltag-layer-trust.test.ts`. Giving and withdrawing trust are acts
+of the person, not answers to a request: no prompt, nothing to decline,
+nothing that waits at the door.
+
+The act itself produces no document. The anchor mapping is issued by the
+library's own turn (`resume`) afterwards, and the star by the turn after
+trust was received. Left to each device, that is two producers under one
+number: the friend refused the second mapping (RLTP-TRU-6270) in every
+case, also when the laptop had only taken the phone's act over.
+
+What closes it: **what the library issues by itself once an entry is
+applied is drawn under the entry's id and at the entry's time, on every
+device, right after the entry** (`follows` in `encounter.ts`). Two devices
+that apply the same entry on the same state issue the same document, byte
+for byte; the counterpart sees one. The same now holds in the encounter
+cut, where the three refusals after every encounter are gone.
+
+| Scenario | Result |
+|---|---|
+| the phone gives trust, the laptop learns it | given on both devices, one effect at the friend, the same anchor mapping on both, nobody refuses anything |
+| the friend gives trust, only the phone is reached | received on both devices; the star that follows is one document |
+| the phone withdraws trust | withdrawn on both devices, nobody refuses anything |
+| applying the phone's act breaks off on the laptop | the next sync completes it with the same document |
+| apart: both devices give trust | **open**: one effect at the friend, the devices agree, the friend refuses the second mapping: two acts are two documents under one number |
+| the friend's trust reaches both devices from the carrier | **open**: each device takes it at its own time and issues its own star; the friend refuses the second |
+| the laptop was active itself the next day before it learns of the trust | **open**: its mapping is another document (a holder's time never falls) |
+
+Baseline scenarios through the layer: K4 passes, K5 stays open.
+
+What is left of the two-producer question after this cut:
+
+- the same act on two devices apart (K5): needs numbers per writer on the
+  wire, or a counterpart that takes the second document of the same
+  meaning;
+- a document both devices take from the carrier themselves: the entry and
+  its time differ per device, so what follows differs;
+- a sister whose time has moved past the entry.
+
+Not a matter of devices: after trust is withdrawn, the friend keeps
+showing it as received, on one device as on two.
+
+A trap of the prototype: each cut keeps its own log, and an entry's id is
+the library's act id. Two cuts on one holder must not use the same device
+name, or the library replays the journal of the other cut's act. A real
+personal log is one log per device.

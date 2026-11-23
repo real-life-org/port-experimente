@@ -32,11 +32,13 @@ async function shows (D: Device, B: Person, reach: Device[], sync?: () => Promis
   return carry(B, [], reach, ok(await B.h.scan(cardOf(a.result), at(B, { name: 'Bea' }))).outbound)
 }
 
-/** Open, as measured: once both devices hold the contact, each issues the
- *  documents that follow an encounter on its own (the continuity probe, the
- *  star, the group star of the personal community) under the number the
- *  other used, and the friend refuses the second. */
-const SECOND_PRODUCER = ['continuity-probe/0.1: validation-failed', 'group-star/0.1: validation-failed', 'star/0.2: validation-failed']
+/** Once both devices hold the contact, each issues the documents that
+ *  follow an encounter (the continuity probe, the star, the group star of
+ *  the personal community). Drawn under the entry they follow and at its
+ *  time, they are the same documents on both devices: the friend refuses
+ *  nothing. (Before that each device drew them on its own, and the friend
+ *  refused the second of each with `validation-failed`.) */
+const NOTHING: string[] = []
 
 describe('what the library does without the layer (measured)', () => {
   test('a sister device cannot open what the scanning device received, and scanning the same card itself makes another contact the friend refuses', async () => {
@@ -70,8 +72,8 @@ describe('an encounter through the layer', () => {
     expect(L.withheld.find((o: any) => short(o.type) === 'encounter-bundle/0.1').digest).toBe(sent[0].digest)
     expect(refused).toEqual([])
     expect([L.notTaken, T.notTaken]).toEqual([[], []])
-    // open: the documents that follow the encounter, from both devices
-    expect(await carry(B, [], [T, L], [])).toEqual(SECOND_PRODUCER)
+    // the documents that follow the encounter, from both devices
+    expect(await carry(B, [], [T, L], [], 20)).toEqual(NOTHING)
   })
 
   test('the phone shows its card and B scans it; only the phone is reached: the request stands on the laptop, and the laptop answers it', async () => {
@@ -82,8 +84,8 @@ describe('an encounter through the layer', () => {
     expect(await request(L)).toBe(await request(T))
     const d = await L.act({ act: 'confirm', contactId: (await request(L))!, choice: 'accept' })
     expect(d.outbound.map((o: any) => short(o.type))).toEqual(['encounter-credential-delivery/0.1'])
-    // the friend takes the laptop's credential; what it refuses is what follows the encounter, from the second device
-    expect(await carry(B, [], [L], L.toCarrier(d.outbound))).toEqual(SECOND_PRODUCER)
+    // the friend takes the laptop's credential and what follows the encounter
+    expect(await carry(B, [], [L], L.toCarrier(d.outbound), 20)).toEqual(NOTHING)
     expect((await T.syncFrom(L)).stoppedAt).toBe(null)
     expect({ phone: await lines(T.P), laptop: await lines(L.P), atB: await lines(B), open: [await request(T), await request(L)] })
       .toEqual({ phone: ['Bea mutual'], laptop: ['Bea mutual'], atB: ['Al mutual'], open: [undefined, undefined] })
@@ -124,8 +126,8 @@ describe('an encounter through the layer', () => {
     expect([s1.stoppedAt, s2.stoppedAt]).toEqual([null, null])
     expect({ phone: await lines(T.P), laptop: await lines(L.P), atB: await lines(B) }).toEqual({ phone: ['Bea mutual'], laptop: ['Bea mutual'], atB: ['Al mutual'] })
     expect((await B.h.contacts())[0].relationships).toHaveLength(1)
-    // the friend takes both credentials; what it refuses is what follows the encounter
-    expect(refused).toEqual(SECOND_PRODUCER)
+    // the friend takes both credentials and what follows the encounter
+    expect(refused).toEqual(NOTHING)
   })
 
   test('apart: the phone accepts and its accept leaves, the laptop declines: the accept stands on both devices', async () => {
