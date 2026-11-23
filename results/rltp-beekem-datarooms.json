@@ -1,0 +1,8 @@
+{
+ "id": "rltp-beekem-datarooms",
+ "kind": "group",
+ "at": "2026-11-23T07:34:11.704Z",
+ "notRun": "Cannot find module '/src/candidates/datarooms/pkg/vti_rooms_wasm.js' imported from src/candidates/datarooms/index.ts",
+ "scenarios": [],
+ "carrier": []
+}

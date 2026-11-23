@@ -1,0 +1,224 @@
+{
+ "id": "lib-one-writer",
+ "kind": "everyday",
+ "at": "2026-11-23T07:33:31.142Z",
+ "scenarios": [],
+ "carrier": [
+  {
+   "scenario": "XA-G1",
+   "title": "A adds the laptop next to the phone: the laptop shows the same contacts, trust, profile and groups",
+   "outcome": "nicht bestanden",
+   "authority": "the devices differ in: contacts, profile",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "XA-G2",
+   "title": "a new phone while the old one is still there, then A removes the old one: the new phone shows the same, the old one speaks to no friend any more",
+   "outcome": "nicht bestanden",
+   "authority": "the devices differ in: contacts, profile; the new phone cannot remove the old one: unknown-device; B accepts a message of the old phone",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "XA-G3",
+   "title": "the phone is lost, A removes it from the laptop: the phone speaks to no friend any more",
+   "outcome": "nicht bestanden",
+   "authority": "B accepts a message of the removed device",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "XA-G4",
+   "title": "every device is lost, A has the recovery words: contacts, trust, profile, groups and messages come back",
+   "outcome": "nicht bestanden",
+   "authority": "the devices differ in: contacts, groups, profile, inbox",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "XA-G5",
+   "title": "A restores an old image while the laptop goes on: the restored device catches up",
+   "outcome": "nicht bestanden",
+   "authority": "the devices differ in: contacts",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "XA-G6",
+   "title": "the laptop was off for 30 days: it catches up",
+   "outcome": "nicht bestanden",
+   "authority": "the devices differ in: contacts",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "XA-K1",
+   "title": "A meets B with the phone: B is on the laptop too",
+   "outcome": "nicht bestanden",
+   "authority": "the devices differ in: contacts",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "XA-K2",
+   "title": "apart: the phone meets B, the laptop meets C: both devices show B and C",
+   "outcome": "nicht bestanden",
+   "authority": "the devices differ in: contacts",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "XA-K3",
+   "title": "B meets the phone, later and apart the laptop: one line for B on both devices, one line for A at B",
+   "outcome": "nicht bestanden",
+   "authority": "the devices differ in: contacts",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "XA-K4",
+   "title": "A trusts B on the phone: it holds on the laptop, B sees one effect and no device refuses anything",
+   "outcome": "nicht bestanden",
+   "authority": "the devices differ in: contacts; laptop refuses delivery-ack/0.1 (validation-failed)",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "XA-K5",
+   "title": "apart: A trusts B on the phone and on the laptop: one effect at B, nobody refuses anything",
+   "outcome": "nicht bestanden",
+   "authority": "friend refuses anchor-mapping/0.3 (validation-failed); laptop refuses delivery-ack/0.1 (validation-failed)",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "XA-K6",
+   "title": "A removes B on the phone and, apart, writes to B on the laptop: B is gone on both devices",
+   "outcome": "nicht bestanden",
+   "authority": "the devices differ in: contacts",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "XA-P1",
+   "title": "A changes the profile on the phone: the laptop and the friends show it",
+   "outcome": "nicht bestanden",
+   "authority": "the devices differ in: profile",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "XA-P2",
+   "title": "apart: the profile changed on the phone and on the laptop: both devices and every friend end on the same",
+   "outcome": "nicht bestanden",
+   "authority": "phone shows Ada, laptop Ada L., B Ada; friend refuses profile/0.1 (validation-failed); laptop refuses delivery-ack/0.1 (validation-failed)",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "XA-P3",
+   "title": "A gives B another of its profiles on the phone: the laptop knows the assignment",
+   "outcome": "nicht abbildbar",
+   "authority": "one profile per sender (Trust 6b); no profile is assigned per contact",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "XA-N1",
+   "title": "B writes to A: the message is on the phone and the laptop",
+   "outcome": "bestanden",
+   "authority": "holds",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "XA-N2",
+   "title": "A writes from the phone: the message is in the conversation on the laptop",
+   "outcome": "nicht abbildbar",
+   "authority": "the library holds no record of sent messages; the conversation is the application's",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "XA-N3",
+   "title": "A takes a message over on the phone: the laptop no longer offers it as new",
+   "outcome": "nicht bestanden",
+   "authority": "the laptop still offers 1",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "XA-M1",
+   "title": "an invitation to G arrives: the card is on the phone and the laptop",
+   "outcome": "bestanden",
+   "authority": "holds",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "XA-M2",
+   "title": "A accepts on the phone: the laptop is in G without an act of its own, its card is decided",
+   "outcome": "nicht bestanden",
+   "authority": "phase: phone member, laptop undefined",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "XA-M3",
+   "title": "apart: accept on the phone, decline on the laptop: one outcome on both devices and in the log",
+   "outcome": "nicht bestanden",
+   "authority": "phase: phone member, laptop undefined; B's log holds 2 members",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "XA-M4",
+   "title": "A founds G on the phone and invites B from the laptop: B joins, both devices show B as a member",
+   "outcome": "nicht bestanden",
+   "authority": "the laptop cannot invite: unknown-group",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "XA-M5",
+   "title": "apart: the phone invites C, the laptop leaves G: one outcome, A is not half a member",
+   "outcome": "nicht bestanden",
+   "authority": "phase: phone member, laptop left, C member",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "XA-M6",
+   "title": "A leaves G on the phone: the laptop shows G as left",
+   "outcome": "nicht bestanden",
+   "authority": "phase: phone left, laptop member",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "XA-M7",
+   "title": "A adds the laptop while a member of G: the laptop has G with its members and their provenance",
+   "outcome": "nicht bestanden",
+   "authority": "the laptop does not hold G",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "XA-M8",
+   "title": "A removes the lost phone: A stays a member, the phone reads nothing new from G",
+   "outcome": "nicht bestanden",
+   "authority": "the removed phone reads the new member (3 members)",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "XA-S1",
+   "title": "others can tell that A has several devices, cannot link them across relationships, and see no device list",
+   "outcome": "nicht abbildbar",
+   "authority": "a device has no identity on the wire: every device of a seed presents the same keys",
+   "keys": "—",
+   "ms": 0
+  }
+ ]
+}

@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { buildMatrix, promises, type CandidateRun } from '../src/lab/matrix'
-import { pageData, renderPage, updateFindingsSummary } from '../src/lab/matrix-page'
+import { pageData, renderPage, summaryCounts, updateFindingsSummary } from '../src/lab/matrix-page'
+import { assemble, readRuns, writeResult } from '../src/lab/report-files'
+import { knownCandidates } from '../src/candidates/known'
 import { candidateEn, promiseEn, scenarioEn } from '../src/lab/matrix-en'
 import { candidates } from '../src/candidates/index'
 import { nodeCandidates } from '../src/candidates/node-only'
@@ -11,7 +17,7 @@ import { carrierScenarios } from '../src/lab/traeger'
 import { x15 } from '../src/lab/mehrgeraet/scenarios'
 import type { ScenarioResult } from '../src/lab/types'
 
-// Die Seite public/matrix.html entsteht aus dem Report-Lauf (Anton, 17.10.: alle Ports, auch Zustellung und Mehrgerät).
+// Die Seite public/matrix.html entsteht aus den Ergebnisdateien des Reports (Anton, 17.10.: alle Ports, auch Zustellung und Mehrgerät).
 // Sie darf nicht driften: jede Zusage, jedes Szenario und jeder Kandidat des Codes braucht seinen englischen Text.
 
 const r = (scenario: string, outcome: ScenarioResult['outcome'], extra: Partial<ScenarioResult> = {}): ScenarioResult => ({ scenario, title: scenario, outcome, authority: 'a', keys: 'k', ms: 1, ...extra })
@@ -21,6 +27,36 @@ describe('Matrixseite aus dem Report', () => {
     for (const p of promises) expect(promiseEn[p.id], p.id).toBeDefined()
     for (const s of [...scenarios.map((s) => s.id), ...carrierScenarios.map((s) => s.id), ...x15.map((s) => s.id), ...everydayScenarioIds]) expect(scenarioEn[s], s).toBeDefined()
     for (const c of [...candidates.map((c) => c.id), ...nodeCandidates.map((c) => c.id), ...multiDeviceCandidates.map((c) => c.id), ...everydayCandidates.map((c) => c.id)]) expect(candidateEn[c], c).toBeDefined()
+  })
+
+  it('die Liste ohne Code (known.ts) nennt genau die Kandidaten des Berichts, je mit ihrer Familie', () => {
+    const fromCode = [
+      ...[...candidates.filter((c) => c.make).map((c) => c.id), ...nodeCandidates.map((c) => c.id)].map((id) => `${id}:group`),
+      ...multiDeviceCandidates.map((c) => `${c.id}:multidevice`),
+      ...everydayCandidates.map((c) => `${c.id}:everyday`),
+    ]
+    expect(knownCandidates.map((c) => `${c.id}:${c.kind}`).sort()).toEqual([...new Set(fromCode)].sort())
+  })
+
+  it('ein Kandidat ohne Lauf steht mit Grund in seiner Familie, alle Zellen „not run“; die Seite trägt das Datum des jüngsten Laufs', () => {
+    const runs: CandidateRun[] = [
+      { id: 'klartext', kind: 'group', at: '2026-10-17T12:00:00.000Z', scenarios: [r('S1', 'bestanden')], carrier: [] },
+      { id: 'rltp-beekem-datarooms', kind: 'group', at: '2026-11-23T09:00:00.000Z', notRun: 'no local stack', scenarios: [], carrier: [] },
+      { id: 'layer-d-prototype', kind: 'everyday', scenarios: [], carrier: [], notRun: 'no result file results/layer-d-prototype.json' },
+    ]
+    const { page } = assemble(runs)
+    expect(page.at).toBe('2026-11-23T09:00:00.000Z')
+    expect(page.families[0]!.cands).toEqual(['klartext', 'rltp-beekem-datarooms'])
+    expect(page.families[1]!.cands).toEqual(['layer-d-prototype'])
+    expect(page.cands.find((c) => c.id === 'rltp-beekem-datarooms')).toMatchObject({ notRun: 'no local stack', at: '2026-11-23T09:00:00.000Z' })
+    const a1 = page.families[0]!.ports[0]!.rows.find((x) => x.id === 'A1')!
+    expect(a1.cells['rltp-beekem-datarooms']).toEqual({ status: 'not run', ev: [{ s: 'S1', o: 'nicht gelaufen' }] })
+    expect(a1.cells.klartext!.status).toBe('kept')
+    // Der Alltags-Kandidat ohne Datei behält seine Alltagsszenarien, obwohl sein Lauf keine Ergebnisse hat.
+    const mg13 = page.families[1]!.ports[0]!.rows.find((x) => x.id === 'MG13')!
+    expect(mg13.cells['layer-d-prototype']!.status).toBe('not run')
+    expect(mg13.cells['layer-d-prototype']!.ev.map((e) => e.s)).toEqual(['XA-N1', 'XA-N2', 'XA-N3'])
+    expect(summaryCounts(page).get('rltp-beekem-datarooms')!.kept).toBe(0)
   })
 
   it('zwei Familien: Gruppen-Kandidaten in drei Ports, Mehrgeräte-Kandidaten im vierten; alle Zusagen, Marken erhalten', () => {
@@ -45,11 +81,32 @@ describe('Matrixseite aus dem Report', () => {
     expect(d.res.klartext!.S2).toEqual({ o: 'nicht bestanden', a: 'a', k: 'k', ms: '1.0 ms' })
     expect(d.scen.X5).toContain('A1 ends the relationship with B')
     const html = renderPage(d)
-    expect(html).toContain('run of 17 October 2026')
+    expect(html).toContain('latest run 17 October 2026')
     expect(html).toContain('Two tables: two candidate stacks as rows, 61 promises across four ports as columns.')
     expect(html).toContain('const D = {"at":')
     expect(html).not.toContain('__DATA__')
     expect(html).toContain('⚠ run crashed')
+  })
+
+  it('Ergebnisdateien: je Kandidat eine Datei; eine fehlende zeigt sich als nicht gelaufen; ein gescheiterter Lauf ersetzt keine Messung', () => {
+    const dir = pathToFileURL(mkdtempSync(join(tmpdir(), 'results-')) + '/')
+    const known = [{ id: 'klartext', kind: 'group' as const }, { id: 'gen2', kind: 'group' as const }]
+    writeResult({ id: 'klartext', kind: 'group', at: '2026-10-17T12:00:00.000Z', scenarios: [r('S1', 'bestanden', { ms: 1.2345 })], carrier: [] }, dir)
+    let runs = readRuns(known, dir)
+    expect(runs.map((x) => x.id)).toEqual(['gen2', 'klartext']) // Reihenfolge der Seite, nicht der Liste
+    expect(runs[0]).toMatchObject({ kind: 'group', notRun: 'no result file results/gen2.json', scenarios: [] })
+    expect(runs[1]!.scenarios[0]!.ms).toBe(1.2)
+    // Ein Lauf, der hier scheitert, lässt die Messung stehen …
+    expect(writeResult({ id: 'klartext', kind: 'group', at: '2026-11-23T09:00:00.000Z', notRun: 'kein Stack', scenarios: [], carrier: [] }, dir, { keepMeasured: true })).toBe(false)
+    expect(readRuns(known, dir)[1]!.notRun).toBeUndefined()
+    // … schreibt aber, wo es noch keine gibt, und eine neue Messung ersetzt den Vermerk.
+    expect(writeResult({ id: 'gen2', kind: 'group', at: '2026-11-23T09:00:00.000Z', notRun: 'kein Stack', scenarios: [], carrier: [] }, dir, { keepMeasured: true })).toBe(true)
+    expect(readRuns(known, dir)[0]!.notRun).toBe('kein Stack')
+    writeResult({ id: 'gen2', kind: 'group', at: '2026-11-23T10:00:00.000Z', scenarios: [r('S1', 'bestanden')], carrier: [] }, dir)
+    runs = readRuns(known, dir)
+    expect(runs[0]!.notRun).toBeUndefined()
+    // Eine Datei unter falschem Namen oder mit falscher Familie bricht ab.
+    expect(() => readRuns([{ id: 'gen2', kind: 'multidevice' }], dir)).toThrow(/kind group/)
   })
 
   it('Messausgaben kommen unverändert in die Seite, auch mit $& und </script> (Issue #62)', () => {

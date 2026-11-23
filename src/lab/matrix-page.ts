@@ -2,8 +2,9 @@
 // matrix.md, in English, as one table per candidate family (group
 // candidates in the three group ports, multi-device candidates in the
 // multi-device port), with the recorded bench output behind every cell.
-// Written by `REPORT=1 pnpm vitest run report`; the page is never edited
-// by hand, the English text lives in matrix-en.ts.
+// Assembled from the result files (results/<id>.json, src/lab/report-files.ts)
+// by `pnpm matrix`; the page is not in the repository and never edited by
+// hand, the English text lives in matrix-en.ts.
 
 import { readFileSync } from 'node:fs'
 import { isEveryday, scenariosFor, type CandidateRun, type Matrix, type CellStatus } from './matrix'
@@ -27,7 +28,8 @@ export interface PageRow {
 }
 export interface PageData {
   at: string
-  cands: Array<{ id: string; name: string; desc: string }>
+  /** `at`: when this candidate ran; `notRun`: why it could not run. */
+  cands: Array<{ id: string; name: string; desc: string; at?: string; notRun?: string }>
   families: Array<{ id: string; title: string; cands: string[]; ports: Array<{ id: string; title: string; rows: PageRow[] }> }>
   /** Candidate → scenario → what the bench recorded (German, shown as such). */
   res: Record<string, Record<string, { o: string; a: string; k: string; ms: string }>>
@@ -45,7 +47,7 @@ function need<T>(table: Record<string, T>, key: string, what: string): T {
 
 /** The page data from a matrix and its runs. Throws when an English text is missing, so the page cannot drift. */
 export function pageData(m: Matrix, runs: readonly CandidateRun[], at: string): PageData {
-  const cands = runs.map((r) => ({ id: r.id, ...need(candidateEn, r.id, 'candidate') }))
+  const cands = runs.map((r) => ({ id: r.id, ...need(candidateEn, r.id, 'candidate'), ...(r.at ? { at: r.at } : {}), ...(r.notRun ? { notRun: r.notRun } : {}) }))
   const res: PageData['res'] = {}
   const scen: Record<string, string> = {}
   for (const r of runs) {

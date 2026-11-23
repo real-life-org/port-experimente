@@ -7,8 +7,9 @@ src/candidates/rltp-beekem/pkg
 src/candidates/rltp-mls/pkg
 .cache
 
-# Berichtsausgabe (REPORT=1 pnpm test report)
+# Aus den Ergebnisdateien (results/) zusammengesetzt: pnpm matrix
 matrix.md
+public/matrix.html
 src/candidates/rltp-mls/pkg
 src/candidates/datarooms/pkg/*
 !src/candidates/datarooms/pkg/*.d.ts

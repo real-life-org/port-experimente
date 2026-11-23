@@ -128,6 +128,10 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/port-experimente/subduction
+          key: subduction-${{ runner.os }}-${{ hashFiles('scripts/fetch-subduction.sh') }}
       - name: Subduction-Server für den Keyhive-Lauf a (ARK)
         run: sh scripts/fetch-subduction.sh
       - run: pnpm exec vitest run --shard=${{ matrix.shard }}/4 --exclude tests/mehrgeraet-k2.test.ts --exclude tests/keyhive-ark.test.ts
@@ -162,6 +166,11 @@ jobs:
           cache: pnpm
       - if: matrix.run == 'true'
         run: pnpm install --frozen-lockfile
+      - if: matrix.run == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/port-experimente/subduction
+          key: subduction-${{ runner.os }}-${{ hashFiles('scripts/fetch-subduction.sh') }}
       - name: Subduction-Server für den Keyhive-Lauf a (ARK)
         if: matrix.run == 'true'
         run: sh scripts/fetch-subduction.sh

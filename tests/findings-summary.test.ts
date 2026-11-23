@@ -1,6 +1,8 @@
-// The summary table in public/findings.html must match the cells in public/matrix.html.
+// The summary table in public/findings.html must match the cells of the matrix assembled from the result files (results/).
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
+import { assemble, readRuns } from '../src/lab/report-files'
+import { knownCandidates } from '../src/candidates/known'
 
 type Cell = { status: string }
 type Matrix = { cands: { id: string }[]; families: { cands: string[]; ports: { rows: { cells: Record<string, Cell> }[] }[] }[] }
@@ -10,10 +12,7 @@ type Row = { cands: string[]; kept: number; partial: number; notKept: number; na
 const read = (p: string) => readFileSync(new URL(`../public/${p}`, import.meta.url), 'utf8')
 
 function countsFromMatrix(): Map<string, Counts> {
-  const html = read('matrix.html')
-  const start = html.indexOf('const D = ') + 'const D = '.length
-  const end = html.indexOf(';\n', start)
-  const D = JSON.parse(html.slice(start, end)) as Matrix
+  const D: Matrix = assemble(readRuns(knownCandidates)).page
   const out = new Map<string, Counts>()
   for (const c of D.cands) {
     const n: Counts = { kept: 0, partial: 0, notKept: 0, na: 0, untested: 0 }

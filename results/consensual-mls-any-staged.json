@@ -1,0 +1,284 @@
+{
+ "id": "consensual-mls-any-staged",
+ "kind": "group",
+ "at": "2026-11-23T07:20:32.938Z",
+ "scenarios": [
+  {
+   "scenario": "S1",
+   "title": "Gründen, zwei Mitglieder aufnehmen, Inhalte tauschen",
+   "ms": 30.6,
+   "outcome": "bestanden",
+   "authority": "alle sehen {alice, bob, carol}",
+   "keys": "alle lesen alle drei Einträge"
+  },
+  {
+   "scenario": "S2",
+   "title": "Mitglied entfernen; Entfernter liest Neues nicht mehr",
+   "ms": 29.1,
+   "outcome": "bestanden",
+   "authority": "alle sehen {alice, bob}",
+   "keys": "Carol liest Neues: nein; Alice/Bob lesen: ja"
+  },
+  {
+   "scenario": "S3",
+   "title": "Offline schreiben, danach konvergieren",
+   "ms": 44.3,
+   "outcome": "bestanden",
+   "authority": "alle sehen {alice, bob, carol}",
+   "keys": "alle lesen beide Einträge"
+  },
+  {
+   "scenario": "S4a",
+   "title": "Alice entfernt Bob, während Bob schreibt",
+   "ms": 31.3,
+   "outcome": "bestanden",
+   "authority": "alle sehen {alice, carol}; Bobs gleichzeitiger Eintrag: alice:sieht carol:sieht",
+   "keys": "Bob liest Einträge nach dem Zusammenführen: nein"
+  },
+  {
+   "scenario": "S4b",
+   "title": "Zwei Admins entfernen gleichzeitig verschiedene Personen",
+   "ms": 123.2,
+   "outcome": "bestanden",
+   "authority": "in jedem Zweig (2 Zweige, Hash-Gleichstand): [früherer gewinnt] alle sehen {alice, bob}; Zustand epoche=5; baum=2; schlüssel=ja; eingestellt=4 · [späterer gewinnt] alle sehen {alice, bob}; Zustand epoche=5; baum=2; schlüssel=ja; eingestellt=4; Tiebreak verloren: eigener Commit zurückgerollt; 1 Absicht(en) neu eingestellt",
+   "keys": "Bob liest Neues: ja; Entfernte lesen Neues: niemand"
+  },
+  {
+   "scenario": "S4c",
+   "title": "Gegenseitige Entfernung zweier Admins",
+   "ms": 76.1,
+   "outcome": "bestanden",
+   "authority": "in jedem Zweig (2 Zweige, Hash-Gleichstand): [früherer gewinnt] alle sehen {alice, carol}; bob (entfernt) sieht {}; Zustand epoche=3; baum=2; schlüssel=ja · [späterer gewinnt] alle sehen {bob, carol}; alice (entfernt) sieht {}; Zustand epoche=3; baum=2; schlüssel=ja; Tiebreak verloren: eigener Commit zurückgerollt",
+   "keys": "—"
+  },
+  {
+   "scenario": "S4c2",
+   "title": "Gegenseitige Entfernung: beide sind draußen, keiner liest Neues",
+   "ms": 85.9,
+   "outcome": "nicht bestanden",
+   "authority": "in keinem Zweig bestanden (2 Zweige, Hash-Gleichstand): [früherer gewinnt] Carol sieht {alice, carol}; alice sieht {alice, carol}, bob sieht {}; Zustand epoche=3; baum=2; schlüssel=ja · [späterer gewinnt] Carol sieht {bob, carol}; alice sieht {}, bob sieht {bob, carol}; Zustand epoche=3; baum=2; schlüssel=ja; Tiebreak verloren: eigener Commit zurückgerollt",
+   "keys": "[früherer gewinnt] LECK: alice lesen Carols Eintrag · [späterer gewinnt] LECK: bob lesen Carols Eintrag"
+  },
+  {
+   "scenario": "S4d",
+   "title": "Entfernung neben Rotation eines anderen Mitglieds",
+   "ms": 76.6,
+   "outcome": "bestanden",
+   "authority": "in jedem Zweig (2 Zweige, Hash-Gleichstand): [früherer gewinnt] alle sehen {alice, bob}; Zustand epoche=3; baum=2; schlüssel=ja; eingestellt=3 · [späterer gewinnt] alle sehen {alice, bob}; Zustand epoche=4; baum=2; schlüssel=ja; eingestellt=3; Tiebreak verloren: eigener Commit zurückgerollt; 1 Absicht(en) neu eingestellt",
+   "keys": "Alice liest Neues: ja; Carol liest Neues: nein"
+  },
+  {
+   "scenario": "S4e",
+   "title": "Zwei gleichzeitige Änderungen der Gruppenregeln",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: policy",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "S4j",
+   "title": "Regeländerung neben Entfernung: Fork, Ende durch eine Regeländerung auf beide Zweige",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: policy",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "S4f",
+   "title": "Entfernte lädt gleichzeitig ein, Eingeladener lädt weiter ein",
+   "ms": 344.8,
+   "outcome": "nicht bestanden",
+   "authority": "abhängig von: Hash-Gleichstand, Zweig späterer gewinnt → früherer gewinnt, späterer gewinnt → späterer gewinnt verletzt (2/3): alle sehen {alice, bob, carol, x, y}; übrig aus Mallorys Kette: x,y; x lädt y ein; bestanden in früherer gewinnt",
+   "keys": "LECK: x,y lesen neuen Inhalt"
+  },
+  {
+   "scenario": "S5",
+   "title": "Zweites Gerät derselben Person",
+   "ms": 45.9,
+   "outcome": "nicht bestanden",
+   "authority": "Mitglieder laut Alice: {alice, bob, carol}",
+   "keys": "bob-2 liest {}"
+  },
+  {
+   "scenario": "S5b",
+   "title": "Gerät verloren: Person entfernt ihr eigenes Gerät, der Finder liest nicht weiter",
+   "ms": 58.6,
+   "outcome": "bestanden",
+   "authority": "Bob bleibt Mitglied: ja; Mitglieder laut Alice: {alice, bob, carol}",
+   "keys": "Finder liest vor dem Entfernen: ja; danach: nein; Bobs erstes Gerät liest weiter: ja"
+  },
+  {
+   "scenario": "S5c",
+   "title": "Person mit zwei Geräten wird entfernt; keines liest Neues",
+   "ms": 55.2,
+   "outcome": "bestanden",
+   "authority": "alle sehen {alice, carol}",
+   "keys": "beide Geräte lasen vorher: ja; lesen Neues: keines"
+  },
+  {
+   "scenario": "S6",
+   "title": "Neues Mitglied liest die Historie",
+   "ms": 50.2,
+   "outcome": "nicht bestanden",
+   "authority": "Dave Mitglied: ja",
+   "keys": "Dave liest {}"
+  },
+  {
+   "scenario": "S6b",
+   "title": "Neues Mitglied liest die Historie nach dem nächsten Eintrag",
+   "ms": 51.6,
+   "outcome": "nicht bestanden",
+   "authority": "Dave Mitglied: ja",
+   "keys": "direkt nach Aufnahme 0 Einträge; nach neuem Eintrag {}"
+  },
+  {
+   "scenario": "S7",
+   "title": "Gerät erbeutet, danach Rotation: liest der Angreifer weiter?",
+   "ms": 33.3,
+   "outcome": "bestanden",
+   "authority": "—",
+   "keys": "Angreifer liest vor der Rotation: ja; nach der Rotation: nein; Alice/Carol lesen nach der Rotation: ja"
+  },
+  {
+   "scenario": "S11",
+   "title": "Schlüsseloperation ohne Logeintrag: ein entferntes Gerät nimmt ein neues Blatt in den Baum",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: forge-key-op",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "S8",
+   "title": "Ersteller fällt weg, Gruppe bleibt handlungsfähig",
+   "ms": 45.3,
+   "outcome": "bestanden",
+   "authority": "Carol sieht {alice, bob, carol}; Zustand epoche=4; baum=3; schlüssel=ja; eingestellt=1",
+   "keys": "Bob liest Neues: ja; Dave liest Neues: nein"
+  },
+  {
+   "scenario": "S10a",
+   "title": "Dienst: Entfernter schreibt gleichzeitig, das Relay verwirft (kein Residual)",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: service",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "S10b",
+   "title": "Dienst: Entfernung ohne Relay, der Entfernte schreibt am Relay weiter (veraltete Sicht)",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: service",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "S10c",
+   "title": "Dienst: gegenseitige Entfernung lässt nur ein Mitglied, Quorum der Sicht",
+   "outcome": "nicht abbildbar",
+   "authority": "fehlt: service",
+   "keys": "—",
+   "ms": 0
+  }
+ ],
+ "carrier": [
+  {
+   "scenario": "T1",
+   "title": "Träger verliert einen Rahmen still",
+   "door": "DV2 nichts endet still · I12 Lückenreparatur",
+   "ms": 42.4,
+   "outcome": "nicht bestanden",
+   "authority": "Lücke bleibt: alice {alice, bob, carol, dave}, bob {alice, bob, carol}; verschluckt 1 Rahmen; Zustand bob: epoche=2; baum=3; schlüssel=ja; ungeöffnet=1",
+   "keys": "Dave liest: ja"
+  },
+  {
+   "scenario": "T2",
+   "title": "Träger ordnet um",
+   "door": "I2 kausale Anwendung",
+   "ms": 118.3,
+   "outcome": "nicht bestanden",
+   "authority": "abhängig von: Hash-Gleichstand, Zweig späterer gewinnt verletzt (1/2): alice {alice, bob, dave} bob {alice, bob, dave} dave {alice, bob, dave}; bestanden in früherer gewinnt",
+   "keys": "alice:{drei, eins, zwei} bob:{drei} dave:{drei, eins, zwei}"
+  },
+  {
+   "scenario": "T3",
+   "title": "Träger liefert doppelt",
+   "door": "DV3 / 6.3 idempotent über den Inhalt",
+   "ms": 43.1,
+   "outcome": "bestanden",
+   "authority": "alice {alice, bob} bob {alice, bob}; carol liest {}; Zustand bob: epoche=3; baum=2; schlüssel=ja",
+   "keys": "Einträge: {einmal} {einmal}"
+  },
+  {
+   "scenario": "T4",
+   "title": "Träger spielt eine alte Entfernung erneut ein",
+   "door": "I8 Zustand, nicht Kante · RLTP-ACC-3475",
+   "ms": 55.5,
+   "outcome": "bestanden",
+   "authority": "bob {alice, bob, carol}",
+   "keys": "Alice liest Carols Eintrag: ja"
+  },
+  {
+   "scenario": "T5",
+   "title": "Träger verändert einen Rahmen",
+   "door": "D1 signierter DAG · Form vor Inhalt",
+   "ms": 56.4,
+   "outcome": "nicht bestanden",
+   "authority": "bob {alice, bob, carol} carol {alice, bob, carol}; Müll notiert: ja; zerstörte Rahmen repariert: nein; Zustand bob: epoche=2; baum=3; schlüssel=ja; ungeöffnet=1; verworfen: Rahmen beschädigt; verworfen: Rahmen beschädigt",
+   "keys": "—"
+  },
+  {
+   "scenario": "T6",
+   "title": "Träger hält einem Gerät gezielt einen Eintrag vor",
+   "door": "D5 beglaubigtes Konvergenzziel · I5",
+   "ms": 61.9,
+   "outcome": "nicht bestanden",
+   "authority": "Carol sieht {alice, bob, carol} (zurück: ja); bemerkt: nein; Zustand: epoche=2; baum=3; schlüssel=ja; ungeöffnet=1",
+   "keys": "Carol liest Daves Eintrag: nein"
+  },
+  {
+   "scenario": "T6b",
+   "title": "Träger friert ein Gerät ein (alles vorgehalten)",
+   "door": "D5 beglaubigtes Konvergenzziel · I5",
+   "ms": 57.1,
+   "outcome": "nicht bestanden",
+   "authority": "Carol sieht {alice, bob, carol}; bemerkt: nein; Zustand: epoche=2; baum=3; schlüssel=ja",
+   "keys": "Carol liest Daves Eintrag: nein"
+  },
+  {
+   "scenario": "T7",
+   "title": "Entferntes Gerät fragt weiter",
+   "door": "Dienstklassen §9.3 · KV1",
+   "ms": 35,
+   "outcome": "bestanden",
+   "authority": "Carol wird bedient (blind); Zustand: epoche=3; baum=0; schlüssel=nein; ungeöffnet=1",
+   "keys": "Carol liest nach der Entfernung: nein"
+  },
+  {
+   "scenario": "T8",
+   "title": "Trägerwechsel mitten im Leben",
+   "door": "I15 Rebinding · Portabilität",
+   "ms": 0,
+   "outcome": "nicht abbildbar",
+   "authority": "der Träger kennt keinen Wechsel (ein Prüfstand-Relay)",
+   "keys": "—"
+  },
+  {
+   "scenario": "T11",
+   "title": "Zwei Gruppen auf einem Träger",
+   "door": "DV4/DV6 Pseudonym je Gruppe",
+   "ms": 0,
+   "outcome": "nicht abbildbar",
+   "authority": "ein Kandidat trägt genau eine Gruppe; Verknüpfung über Gruppen hinweg braucht zwei Gruppen auf einem Träger",
+   "keys": "—"
+  },
+  {
+   "scenario": "T12",
+   "title": "Versiegelter Eintrag: was der Träger liest",
+   "door": "I6 key-blindness · Access-Envelope",
+   "ms": 30.3,
+   "outcome": "bestanden",
+   "authority": "nur Chiffretext",
+   "keys": "Inhalt versiegelt"
+  }
+ ]
+}

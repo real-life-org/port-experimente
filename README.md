@@ -15,13 +15,23 @@ workshop repository (`rltp/design/port-experimente-2026-10.md`).
   stand beside the published library as it is and under the layer prototype
   of `src/lab/alltag`), every cell with its scenarios and
   the recorded result:
-  https://real-life.org/port-experimente/matrix.html. The page and the
-  Markdown matrix (`matrix.md`) are both written by
-  `REPORT=1 pnpm vitest run report` (`src/lab/matrix-page.ts`; the English
-  text of ports, promises, scenarios and candidates in `src/lab/matrix-en.ts`,
-  a test fails when one is missing); never edit `public/matrix.html` by
-  hand. The browser page
-  renders it at the end of a run.
+  https://real-life.org/port-experimente/matrix.html.
+- **Where the matrix comes from.** Every candidate has one result file,
+  `results/<id>.json`, with its scenarios as the bench recorded them and
+  the date of its run. `pnpm report` measures all candidates;
+  `REPORT=1 REPORT_ONLY=<id>,<id> pnpm vitest run report` measures only the
+  named ones and leaves the other files alone. A candidate that cannot run
+  on the machine at hand (no local stack, no server binary) is recorded as
+  not run with the reason, the report goes on, and a measurement already in
+  the file is kept. `pnpm matrix` assembles the page
+  (`public/matrix.html`), the Markdown matrix (`matrix.md`) and the summary
+  table of `public/findings.html` from the result files without loading a
+  candidate; it runs before every build, so the page and `matrix.md` are
+  build output and not in the repository. After changing a candidate,
+  re-run it and commit its result file. The English text of ports,
+  promises, scenarios and candidates is in `src/lab/matrix-en.ts`; a test
+  fails when one is missing. The browser page renders the matrix at the end
+  of a run.
 - **How to read it.** A promise is kept only if every scenario mapped to it
   passes. "Not applicable" means the candidate has no capability for the
   scenario, or the carrier fault never touched a frame of that kind. That
@@ -128,9 +138,17 @@ pnpm wasm                       # build the Rust wrappers (Rust 1.96, wasm-bindg
 pnpm server:fetch               # Subduction server (Rust binary) for Keyhive over ARK
 pnpm test                       # bench tests
 pnpm test:rust                  # native tests of the Rust wrappers
-REPORT=1 pnpm vitest run report # result table of all candidates and matrix.md
+pnpm report                     # measure all candidates into results/<id>.json
+pnpm matrix                     # matrix.md and public/matrix.html from the result files
 pnpm dev                        # browser run, local
 ```
+
+`pnpm wasm` and `pnpm server:fetch` keep what they built or fetched in a
+cache shared by all checkouts and worktrees (`$PORT_EXPERIMENTE_CACHE`,
+default `$XDG_CACHE_HOME/port-experimente`, else `~/.cache/port-experimente`): the server binary by release, a
+WebAssembly package by the content of its wrapper, the toolchain and the
+`wasm-bindgen` version. A second worktree with the same sources copies
+instead of building. `WASM_CACHE=off pnpm wasm` always builds.
 
 ### Live probe against the VTI mediator (E11b)
 
