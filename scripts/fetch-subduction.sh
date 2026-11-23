@@ -16,7 +16,6 @@ case "$(uname -s)-$(uname -m)" in
   *) echo "keine Binary für $(uname -s)-$(uname -m)" >&2; exit 1 ;;
 esac
 OUT=".cache/subduction-$VERSION"
-if [ -x "$OUT" ]; then echo "$OUT vorhanden"; exit 0; fi
 SHARED="${PORT_EXPERIMENTE_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/port-experimente}"
 # Der Tag gehört zum Namen: dieselbe Version aus einem anderen Release ist ein anderes Binary.
 BIN="$SHARED/subduction/$TAG/$ASSET"
@@ -27,6 +26,9 @@ if [ ! -x "$BIN" ]; then
 else
   echo "aus dem Zwischenspeicher: $BIN"
 fi
+# Der Verweis im Checkout wird bei jedem Aufruf neu gesetzt: er zeigt auf genau das angeforderte Release und Asset,
+# auch wenn vorher ein anderes Release derselben Version hier lag.
 mkdir -p .cache
-ln -sf "$BIN" "$OUT" 2>/dev/null || cp "$BIN" "$OUT"
+rm -f "$OUT"
+ln -s "$BIN" "$OUT" 2>/dev/null || cp "$BIN" "$OUT"
 "$OUT" --version

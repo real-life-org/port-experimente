@@ -1,7 +1,7 @@
 {
  "id": "lib-one-writer",
  "kind": "everyday",
- "at": "2026-11-23T07:33:31.142Z",
+ "at": "2026-11-23T08:15:06.327Z",
  "scenarios": [],
  "carrier": [
   {
@@ -13,10 +13,18 @@
    "ms": 0
   },
   {
-   "scenario": "XA-G2",
-   "title": "a new phone while the old one is still there, then A removes the old one: the new phone shows the same, the old one speaks to no friend any more",
+   "scenario": "XA-G2a",
+   "title": "a new phone while the old one is still there: the new phone shows the same",
    "outcome": "nicht bestanden",
-   "authority": "the devices differ in: contacts, profile; the new phone cannot remove the old one: unknown-device; B accepts a message of the old phone",
+   "authority": "the devices differ in: contacts, profile",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "XA-G2b",
+   "title": "A removes the old phone from the new one: the old one speaks to no friend any more",
+   "outcome": "nicht bestanden",
+   "authority": "the new phone cannot remove the old one: unknown-device; B accepts a message of the old phone",
    "keys": "—",
    "ms": 0
   },
@@ -205,8 +213,16 @@
    "ms": 0
   },
   {
-   "scenario": "XA-M8",
-   "title": "A removes the lost phone: A stays a member, the phone reads nothing new from G",
+   "scenario": "XA-M8a",
+   "title": "A removes the lost phone: A stays a member and reads on with the laptop",
+   "outcome": "bestanden",
+   "authority": "holds",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "XA-M8b",
+   "title": "A removes the lost phone: the phone reads nothing new from G",
    "outcome": "nicht bestanden",
    "authority": "the removed phone reads the new member (3 members)",
    "keys": "—",

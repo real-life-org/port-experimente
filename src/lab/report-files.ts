@@ -71,3 +71,34 @@ export function assemble(runs: readonly CandidateRun[]): { matrix: Matrix; page:
   const at = runs.map((r) => r.at).filter((x): x is string => !!x).sort().at(-1) ?? new Date(0).toISOString()
   return { matrix, page: pageData(matrix, runs, at) }
 }
+
+/**
+ * Measures the selected candidates, one after the other, each on its own:
+ * a candidate is loaded only when selected, and a failure to load or to run
+ * it is recorded for that candidate alone (not run, with the reason; a
+ * measurement already on file stays unless `overwrite`). Returns what did
+ * not run.
+ */
+export async function measure(
+  candidates: ReadonlyArray<{ id: string; kind: RunKind; load: () => Promise<() => Promise<{ scenarios: ScenarioResult[]; carrier: ScenarioResult[] }>> }>,
+  opts: { only?: readonly string[]; dir?: URL; overwrite?: boolean; now?: () => string } = {},
+): Promise<Array<{ id: string; why: string }>> {
+  const only = new Set(opts.only ?? [])
+  const unknown = [...only].filter((id) => !candidates.some((c) => c.id === id))
+  if (unknown.length) throw new Error(`unknown candidates selected: ${unknown.join(', ')}`)
+  const dir = opts.dir ?? resultsDir
+  const notRun: Array<{ id: string; why: string }> = []
+  for (const c of candidates) {
+    if (only.size && !only.has(c.id)) continue
+    const at = (opts.now ?? (() => new Date().toISOString()))()
+    try {
+      const run = await c.load()
+      writeResult({ id: c.id, kind: c.kind, at, ...(await run()) }, dir)
+    } catch (err) {
+      const why = reason(err)
+      notRun.push({ id: c.id, why })
+      writeResult({ id: c.id, kind: c.kind, at, notRun: why, scenarios: [], carrier: [] }, dir, { keepMeasured: !opts.overwrite })
+    }
+  }
+  return notRun
+}

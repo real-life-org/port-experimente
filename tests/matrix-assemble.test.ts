@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { toMarkdown } from '../src/lab/matrix'
 import { renderPage, updateFindingsSummary } from '../src/lab/matrix-page'
 import { assemble, readRuns } from '../src/lab/report-files'
-import { knownCandidates } from '../src/candidates/known'
+import { reportCandidates as knownCandidates } from '../src/candidates/report'
 
 // Setzt Matrix und Seite aus den Ergebnisdateien (results/<id>.json) zusammen, ohne einen Kandidaten zu laden:
 //   pnpm matrix          (matrix.md, public/matrix.html, Zusammenfassung in public/findings.html)

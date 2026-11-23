@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { assemble, readRuns } from '../src/lab/report-files'
-import { knownCandidates } from '../src/candidates/known'
+import { reportCandidates as knownCandidates } from '../src/candidates/report'
 
 type Cell = { status: string }
 type Matrix = { cands: { id: string }[]; families: { cands: string[]; ports: { rows: { cells: Record<string, Cell> }[] }[] }[] }

@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url'
 import { buildMatrix, promises, type CandidateRun } from '../src/lab/matrix'
 import { pageData, renderPage, summaryCounts, updateFindingsSummary } from '../src/lab/matrix-page'
 import { assemble, readRuns, writeResult } from '../src/lab/report-files'
-import { knownCandidates } from '../src/candidates/known'
+import { reportCandidates as knownCandidates } from '../src/candidates/report'
 import { candidateEn, promiseEn, scenarioEn } from '../src/lab/matrix-en'
 import { candidates } from '../src/candidates/index'
 import { nodeCandidates } from '../src/candidates/node-only'
@@ -29,7 +29,7 @@ describe('Matrixseite aus dem Report', () => {
     for (const c of [...candidates.map((c) => c.id), ...nodeCandidates.map((c) => c.id), ...multiDeviceCandidates.map((c) => c.id), ...everydayCandidates.map((c) => c.id)]) expect(candidateEn[c], c).toBeDefined()
   })
 
-  it('die Liste ohne Code (known.ts) nennt genau die Kandidaten des Berichts, je mit ihrer Familie', () => {
+  it('die Liste des Berichts (report.ts) nennt genau die Kandidaten des Berichts, je mit ihrer Familie', () => {
     const fromCode = [
       ...[...candidates.filter((c) => c.make).map((c) => c.id), ...nodeCandidates.map((c) => c.id)].map((id) => `${id}:group`),
       ...multiDeviceCandidates.map((c) => `${c.id}:multidevice`),
@@ -82,7 +82,7 @@ describe('Matrixseite aus dem Report', () => {
     expect(d.scen.X5).toContain('A1 ends the relationship with B')
     const html = renderPage(d)
     expect(html).toContain('latest run 17 October 2026')
-    expect(html).toContain('Two tables: two candidate stacks as rows, 61 promises across four ports as columns.')
+    expect(html).toContain('Two tables: two candidate stacks as rows, 62 promises across four ports as columns.')
     expect(html).toContain('const D = {"at":')
     expect(html).not.toContain('__DATA__')
     expect(html).toContain('⚠ run crashed')

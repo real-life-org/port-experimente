@@ -102,6 +102,11 @@ async function differ (X, Y) {
 const green = { status: 'green' }
 const red = (note) => ({ status: 'red', note })
 const inexpressible = (note) => ({ status: 'inexpressible', note })
+/** A scenario with two observations: the row is red when one is, and carries both, so a promise can be judged by the one that tests it. */
+const both = (parts) => {
+  const reds = Object.values(parts).filter((x) => x.status === 'red')
+  return { ...(reds.length ? red(reds.map((x) => x.note).join('; ')) : green), parts }
+}
 /** green when both devices show the same, and `also` holds */
 async function same (T, L, also = true, what = '') {
   const d = await differ(T, L)
@@ -150,14 +155,15 @@ const SCENARIOS = {
     const { a } = await met(T, B)
     ok(await T.h.addDevice('phone-2', at(T)))
     const N = await fromSeed(T)
-    const notes = []
+    // Two observations: what the new phone shows, and whether the removed one still speaks.
     const d = await differ(T, N)
-    if (d.length) notes.push('the devices differ in: ' + d.join(', '))
+    const shows = d.length ? red('the devices differ in: ' + d.join(', ')) : green
+    const notes = []
     const gone = await N.h.revokeDevice('phone', at(N))
     if (!gone.ok) notes.push('the new phone cannot remove the old one: ' + gone.code)
     await route([T, N, B], ok(await T.h.sendMessage(a.id, 'still here', at(T))).outbound)
     if ((await B.h.inbox()).length) notes.push('B accepts a message of the old phone')
-    return notes.length ? red(notes.join('; ')) : green
+    return both({ a: shows, b: notes.length ? red(notes.join('; ')) : green })
   }],
   G3: ['the phone is lost, A removes it from the laptop: the phone speaks to no friend any more', async () => {
     const T = await mk(0x25), B = await mk(0x26)
@@ -376,9 +382,11 @@ const SCENARIOS = {
     await route([T, L, B, C], ok(await C.h.decide((await invitePrompt(C, g)).id, 'accept', at(C))).outbound)
     const count = async (P) => (await P.h.groups()).find((x) => x.id === g).members.length
     assert.equal(await count(B), 3, 'C joined')
-    if ((await phaseOf(L, g)) !== 'member') return red('the laptop is no member')
-    if ((await count(L)) !== 3) return red(`the laptop does not read the new member (${await count(L)} members)`)
-    return (await count(T)) === 2 ? green : red(`the removed phone reads the new member (${await count(T)} members)`)
+    // Two observations: A stays a member and reads on with the laptop; the removed phone reads nothing new.
+    const stays = (await phaseOf(L, g)) !== 'member' ? red('the laptop is no member')
+      : (await count(L)) !== 3 ? red(`the laptop does not read the new member (${await count(L)} members)`) : green
+    const reads = (await count(T)) === 2 ? green : red(`the removed phone reads the new member (${await count(T)} members)`)
+    return both({ a: stays, b: reads })
   }],
 
   // ---- what others learn
@@ -386,7 +394,7 @@ const SCENARIOS = {
     inexpressible('a device has no identity on the wire: every device of a seed presents the same keys')],
 }
 
-export interface BaselineRow { id: string, title: string, status: 'green' | 'red' | 'inexpressible', note?: string }
+export interface BaselineRow { id: string, title: string, status: 'green' | 'red' | 'inexpressible', note?: string, parts?: Record<string, { status: 'green' | 'red', note?: string }> }
 
 /** Runs every scenario. A scenario that throws did not reach its observation and throws here too. */
 export async function runBaseline (): Promise<BaselineRow[]> {
@@ -394,7 +402,7 @@ export async function runBaseline (): Promise<BaselineRow[]> {
   for (const [id, [title, run]] of Object.entries(SCENARIOS)) {
     let r
     try { r = await run() } catch (e) { e.message = `${id}: ${e.message}`; throw e }
-    out.push({ id, title, status: r.status, ...(r.note ? { note: r.note } : {}) })
+    out.push({ id, title, status: r.status, ...(r.note ? { note: r.note } : {}), ...(r.parts ? { parts: r.parts } : {}) })
   }
   return out
 }
