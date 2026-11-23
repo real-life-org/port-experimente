@@ -1,9 +1,10 @@
 // The carrier and the friend for the invitation cut: hands documents on
 // between the person's devices and one counterpart until nothing moves.
 import { clk, short, tick, type Person } from './fixture'
-import type { Device } from './invitation'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+/** What the carrier needs of a device of the layer (invitation.ts, encounter.ts). */
+export interface Device { P: Person, receive: (envelope: any, t?: number) => Promise<any[]>, toCarrier: (docs: any[]) => any[] }
 /** The carrier and the friend: hands documents on until nothing moves.
  *  `reach`: which of A's devices the carrier reaches. Returns what B refused. */
 export async function carry (B: Person, _devices: Device[], reach: Device[], first: any[], rounds = 10): Promise<string[]> {

@@ -1,7 +1,7 @@
 {
  "id": "layer-d-prototype",
  "kind": "everyday",
- "at": "2026-11-23T08:15:36.527Z",
+ "at": "2026-11-23T10:14:23.264Z",
  "scenarios": [],
  "carrier": [
   {
@@ -49,6 +49,30 @@
    "title": "apart: accept on the phone, decline on the laptop: one outcome on both devices and in the log",
    "outcome": "bestanden",
    "authority": "holds",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "XA-K1",
+   "title": "A meets B with the phone: B is on the laptop too",
+   "outcome": "bestanden",
+   "authority": "holds",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "XA-K2",
+   "title": "apart: the phone meets B, the laptop meets C: both devices show B and C",
+   "outcome": "bestanden",
+   "authority": "holds",
+   "keys": "—",
+   "ms": 0
+  },
+  {
+   "scenario": "XA-K3",
+   "title": "B meets the phone, later and apart the laptop: one line for B on both devices, one line for A at B",
+   "outcome": "nicht bestanden",
+   "authority": "lines for B: phone 1, laptop 2; the laptop refuses the friend's continuity mapping (it answers the other device's probe); lines for A at B: one or two, by chance",
    "keys": "—",
    "ms": 0
   }

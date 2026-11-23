@@ -155,3 +155,63 @@ and "what the counterpart took first" has twenty answers. There the devices
 agree on one version after their sync and send it to all as a newer one.
 And the human has to be told: who declines on the laptop and is a member
 all the same needs to read that the phone accepted.
+
+## An encounter through the layer (`encounter.ts`)
+
+The third cut, measured 2026-11-23, library 0.19.0. Tests:
+`tests/alltag-layer-encounter.test.ts`.
+
+What is new against messages and invitations: the human's act creates
+secrets. Showing or scanning a card draws a fresh pair label, from which
+the library derives the relationship's keys, its address and the contact's
+id, and a fresh challenge. Measured without the layer:
+
+| | Result |
+|---|---|
+| the documents the scanning device received, passed on to the sister | `malformed`: sealed to an address the sister never derived |
+| the sister scans the same card itself | another contact id; the friend refuses the second bundle (`consumed-challenge`) |
+
+So "what a device received travels as an input" is not enough for an act
+that draws randomness. The `act` entry carries a seed, drawn before
+anything is done; the library's entropy for that act is a stream derived
+from the seed, on every device, the acting one included. No stand-in is
+needed for this: entropy is a port of the library
+(`createHolder({ entropy })`).
+
+| Scenario | Result |
+|---|---|
+| the phone scans B's card, the laptop learns it | the same contact id on both devices, verified on both sides; the laptop's own bundle (other bytes: its clock) stays in the house |
+| the phone shows its card, only the phone is reached, the laptop answers the request | verified on both devices and at B; the phone's credential for the same answer stays in the house |
+| both devices get the request, the phone answers | the request closes on the laptop |
+| the request reaches the laptop before it learns of the show | refused once; open after the show is applied and the friend's library sends again |
+| apart: both devices accept | one relationship on every side; B takes both credentials |
+| apart: the phone's accept left, the laptop declined | the accept stands on both devices |
+| apart: the phone's accept has not left, the laptop declined | nothing reaches B; **open**: the phone keeps showing the contact as verified, the library cannot take an accept back |
+| the laptop declines before the phone looks | the request closes on the phone |
+| apart: the phone meets B, the laptop meets C | both devices hold both under the same ids |
+| applying a scan breaks off on the laptop | the entry stays open, the next sync applies it, one contact |
+| B meets the phone and later, apart, the laptop | **open**: the phone ends with one line for B, the laptop with two; B with one or two, by chance (10 and 10 in 20 runs) |
+
+What the library would need:
+
+- **Taking a decline back.** Declining a request only closes the prompt.
+  A device that declined and then learns that the sister's accept left has
+  no way to accept. The stand-in `reopen` puts the prompt back into the
+  store.
+- **Withdrawing an accept** that has not left the device (the same need as
+  in the invitation cut).
+- **One producer, or the same bytes, for what follows an encounter.** Once
+  both devices hold the contact, each issues the continuity probe, the star
+  and the group star of the personal community under the number the other
+  used; the friend refuses the second (`validation-failed`, RLTP-TRU-6700,
+  RLTP-TRU-5150). In the last scenario this decides the outcome: the
+  friend's continuity mapping answers the probe of one device, and the
+  other device refuses it.
+- **Time in the act.** Under the same seed the two devices produce the
+  same labels, keys and challenges, but not the same bytes: the document
+  carries the device's time. Whether the same bytes from each device would
+  be a way out for documents with a counter was not tried.
+
+The seed in an entry is as secret as the keys derived from it; in this
+prototype the log is in memory and unsealed.
+
