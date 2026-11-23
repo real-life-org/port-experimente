@@ -7,6 +7,12 @@
 // same afterwards, does the counterpart show what it shows with one device,
 // and what is still being sent and refused days later.
 //
+// "Shows the same" compares what `sig` reads: per contact the name, the
+// verification, the trust flags and whether it can be messaged; per group
+// name, phase and the numbers of members and pending; the profile; the
+// number of inbox items; the kinds of open prompts. Counters, revisions and
+// message contents are not compared.
+//
 // The second device is the stand-in of fixture.ts (same seed, a copy of the
 // store, a late clock); the carrier stand-in hands an envelope to every
 // device that holds its address.
@@ -22,7 +28,7 @@ const DAYS = 5
 const sig = async (P: Person): Promise<any> => ({
   contacts: (await P.h.contacts()).map((c: any) => ({ name: c.displayName, verification: c.verification, trust: c.trust, canMessage: c.canMessage })),
   groups: (await P.h.groups()).map((g: any) => ({ name: g.name, phase: g.phase, members: g.members.length, pending: g.pending.length })),
-  profile: await P.h.profile(),
+  profile: { ...(await P.h.profile()), commitSeq: undefined },   // a store's own counter, not something a device shows
   inbox: (await P.h.inbox()).length,
   prompts: (await P.h.prompts()).map((p: any) => p.kind).sort(),
 })
@@ -98,7 +104,8 @@ const SCENARIOS: Record<string, Run> = {
     await settle(c, acts, log)
   },
   'nothing happens for a week': async (c, _a, _b, log) => {
-    await settle(c, [], log, 3, 7 * DAY)
+    tick(7 * DAY)
+    await settle(c, [], log, 3, 0)
   },
 }
 
@@ -112,7 +119,10 @@ async function run (name: string, fill: number, two: boolean): Promise<Row> {
   if (!scenario) throw new Error('no scenario ' + name)
   await scenario(c, a, b, now)
   const later = { sent: [] as string[], refused: [] as string[] }
-  for (let d = 0; d < DAYS; d++) await settle(c, [], later, 6, DAY)
+  // one step of the clock per day; what falls due is delivered at that instant
+  const start = tick(0)
+  for (let d = 0; d < DAYS; d++) { tick(DAY); await settle(c, [], later, 6, 0) }
+  if (tick(0) - start !== DAYS * DAY) throw new Error(`observed ${(tick(0) - start) / DAY} days, not ${DAYS}`)
   const [t, l, f] = [await sig(T), await sig(L), await sig(B)]
   return {
     'refused while settling': count(now.refused),
