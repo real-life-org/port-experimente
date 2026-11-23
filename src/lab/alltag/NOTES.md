@@ -85,3 +85,73 @@ is not answered here.
 Not covered: the personal log here is the smallest thing that orders
 entries, in memory and unsealed; it stands in for the exchange and is no
 proposal for it. Nothing here concerns who may write an entry.
+
+## A group invitation through the layer (`invitation.ts`)
+
+The second vertical cut: a friend invites the person into a group; the
+person answers on one device or on both. Entries: `received`, `decided`
+(the answer to one invitation, recorded with the invitation's credential
+digest before anything is done), `issued` (the proof that a device
+produced the document a decision calls for: the accept and its digest).
+Measured 2026-11-23, library 0.19.0, second device 13 s late:
+
+| Scenario | Result |
+|---|---|
+| both devices get the invitation, the phone accepts | both devices `member`, the laptop's card is gone, the friend's log holds two members |
+| only the phone is reached by the carrier | the laptop takes the join over from the phone and stands at `joining`; it is `member` once the carrier reaches it and its own request for the group's log is answered |
+| apart: the phone accepts and the accept leaves for the carrier, the laptop declines | the accept stands: both devices `member` |
+| apart: the phone accepts offline, the accept has not left it, the laptop declines | the decline wins on both devices, the accept is never handed over, the friend's log holds one member |
+| apart: both accept, the devices hear of each other first | one accept leaves: both devices `member` |
+| apart: both accept and both accepts leave | the friend takes the first and refuses the second: both devices `member` |
+| apart: both accepts leave and the devices sync before the friend answers (either accept delivered first) | both stay candidates until the welcome names one: both devices `member` |
+
+**The rule between two answers of one person** (decided 2026-11-23): what
+the counterpart took first holds, proven by its answer; what has not left
+the own device may be taken back. In the layer, in this order: a confirmed
+accept stands; else an accept that left a device stands; else a decline on
+any device wins and an accept still in the house is never handed over; else
+one of the issued accepts may leave. Where two accepts left their
+devices, neither device gives its accept up for the sister's: both stay
+candidates until the counterpart's answer names one. The library holds one
+accept digest per invitation, so a device whose library refuses an answer
+tries it under the other candidate. For that the log carries two more
+entries: `handed` (the accept left the device) and `confirmed` (the
+counterpart's answer names the accept it took).
+
+**What the library lacks, and the stand-in for it.** A device cannot take
+a sister's decision over: the welcome is bound to the digest of the accept
+this holder issued. `adopt` in `invitation.ts` writes the one fact the
+library checks into the store (the invitation's status and the accept's
+digest) and closes the prompt. With that single fact the library's own
+reception of the welcome does the rest. This is the shape of the entry
+point the library would need: "this invitation was accepted with the accept
+of digest X", or "declined".
+
+**Rules the layer needed per kind of document** (from the two-producer
+table): an acknowledgement is not passed on; an answer this device's
+library produces while taking a sister's input over goes out only where the
+counterpart takes a second one (`delivery-ack`, `x-access-sync`); an accept
+that does not stand is withheld; a passed-on document this device's library
+refuses is recorded and the log moves on.
+
+**Open, pinned as measured.**
+
+- The friend refuses the laptop's `membership-prelude-reply` (both devices
+  answered the prelude before they could know of each other) and the laptop
+  keeps repeating it: the library cannot withdraw an issued document.
+- The friend refuses the laptop's `group-star`: once a member, the laptop
+  issues its own under the salt the phone used.
+- The laptop does not take the phone's `x-access-page` over: it answers a
+  request only the phone made. The group's log does not travel between the
+  person's devices; a device that the carrier does not reach stays at
+  `joining`.
+
+**Limits of the rule.** It works where there is one counterpart whose
+answer counts: the inviter's welcome names the accept it took, both devices
+read that one answer, and the group's log keeps the same fact. It does not
+work for what goes to many at once. A profile changed apart on two devices
+reaches twenty friends in either order; each keeps the one that came first,
+and "what the counterpart took first" has twenty answers. There the devices
+agree on one version after their sync and send it to all as a newer one.
+And the human has to be told: who declines on the laptop and is a member
+all the same needs to read that the phone accepted.
