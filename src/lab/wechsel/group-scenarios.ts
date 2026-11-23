@@ -47,8 +47,8 @@ function twoChangeApart (rules: GRules): Row {
   const atB = reads(b, rules)
   return {
     'everyone computes the same key for A': keyOf(b, rules, 'A') === keyOf(phone, rules, 'A') && keyOf(phone, rules, 'A') === keyOf(laptop, rules, 'A'),
-    'the other member reads the phone': atB.includes('phone under its new key'),
-    'the other member reads the laptop': atB.includes('laptop under its new key'),
+    // which of the two changes stands is decided by the entries' ids, so it is not fixed which device it is
+    'own devices the other member reads afterwards': [atB.includes('phone under its new key'), atB.includes('laptop under its new key')].filter(Boolean).length,
   }
 }
 

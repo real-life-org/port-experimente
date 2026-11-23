@@ -21,13 +21,11 @@
   },
   "two own devices change apart": {
     "everyone computes the same key for A": true,
-    "the other member reads the phone": false,
-    "the other member reads the laptop": true
+    "own devices the other member reads afterwards": 1
   },
   "two own devices change apart; the next key is derived, not drawn": {
     "everyone computes the same key for A": true,
-    "the other member reads the phone": true,
-    "the other member reads the laptop": true
+    "own devices the other member reads afterwards": 2
   },
   "a lost device changes first; the key every device holds may write a change": {
     "the lost device could change the key": true,

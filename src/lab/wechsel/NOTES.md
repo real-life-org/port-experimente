@@ -68,8 +68,9 @@ Person A with phone, laptop and a lost tablet, and a member B. Measured
    change seals only what it saw, both are left out, and the laptop has to
    write its entry again under the new key.
 4. **Two own devices that change apart do not break the group.** Everyone
-   computes the same key for A; the device whose change lost is not read
-   until it took the other's keys. With a derived next key both write the
+   computes the same key for A; one of the two is read, the device whose
+   change lost is not until it took the other's keys (which of them loses
+   is decided by the entries' ids). With a derived next key both write the
    same change and both are read.
 5. **Who may write a change decides the theft case.** If the key every
    device holds may write it, or the lost device holds the update key, the
