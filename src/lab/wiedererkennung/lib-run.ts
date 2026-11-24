@@ -8,9 +8,15 @@
 // person acts on one device can run; the others are reported as not
 // runnable. How a step of a trace is done with the library:
 //
-//   open t on X       the first opening of t: the other person shows a
-//                     card, X scans it. The second opening: X is handed the
-//                     bundle and accepts the encounter.
+//   open t on X       with `encounter-scan`: the first opening of t is a
+//                     scan of the card the other person shows; the second
+//                     is the bundle handed over and the encounter accepted.
+//                     With `shared-connect` (the ceremony the app uses):
+//                     the other person shows a link, X proposes, the other
+//                     accepts, both issue; X's tuple opens when the other's
+//                     issue reaches it. The second opening is X's receipt
+//                     of that issue handed to the other, whose tuple opens
+//                     then.
 //   fetchProbe t on X X is handed the counterpart's continuity probe on t.
 //   fetchMapping on X X is handed a continuity mapping of the counterpart.
 //   sync              skipped (to a device that never acts).
@@ -35,7 +41,10 @@ const BUNDLE = 'https://real-life.org/trust-tasks/spec/encounter-bundle/0.1'
  *  `differsAt`: the steps (counted from 1) after which the two differ. */
 export type LibRun = { runnable: boolean, why?: string, notFollowed: string[], afterStep: Array<{ step: number, library: string, rule: string }>, differsAt: number[], contacts: { a: number, b: number }, expected: { a: number, b: number }, asExpected: boolean }
 
-export async function runOnLibrary (t: Trace): Promise<LibRun> {
+export type Ceremony = 'encounter-scan' | 'shared-connect'
+const RELAYS = [{ kind: 'tsp-mediator', address: 'did:web:mediator.example' }]
+
+export async function runOnLibrary (t: Trace, ceremony: Ceremony = 'shared-connect'): Promise<LibRun> {
   // the devices that act (a sync is no act of the person): a trace can run where each person acts on one, whatever its name
   const acting = { a: new Set<string>(), b: new Set<string>() }
   for (const s of t.steps) if (!('sync' in s)) acting[s.on[0]].add(s.on)
@@ -75,6 +84,22 @@ export async function runOnLibrary (t: Trace): Promise<LibRun> {
   }
   /** let both libraries do what they do on their own */
   async function turn (): Promise<void> { for (const p of ['a', 'b']) await take(p, (await P[p].h.resume(now())).outbound) }
+  // shared-connect: its documents travel outside the library's outbox, as events
+  const messaging: Record<string, Record<string, string>> = {}        // enactment → person → the identity it speaks as
+  const receipts = new Map<string, { to: string, from: string, id: string, doc: unknown }>()   // tuple → the receipt that opens it on the second side
+  const kindOf = (doc: any): string => String(doc?.type ?? '').split('/spec/')[1] ?? ''
+  /** Carry what `from` sends in the ceremony. The receipt of the issue that completed `from` is kept for the second opening of `tuple`. */
+  async function carry (from: string, result: any, tuple: string): Promise<void> {
+    await take(from, result.outbound)
+    for (const e of (result.events ?? []).filter((x) => x.type === 'sharedconnect.send')) for (const doc of e.docs) {
+      const completed = (result.events ?? []).some((x) => x.type === 'sharedconnect.complete')
+      if (kindOf(doc) === 'vrc/relationships/issue/0.1#response' && completed && !receipts.has(tuple)) { receipts.set(tuple, { to: other(from), from, id: e.id, doc }); continue }
+      const got = await P[other(from)].h.sharedConnectReceive(doc, messaging[e.id][from], now())
+      const prompt = (await P[other(from)].h.prompts()).find((x) => x.kind === 'shared-connect-confirm')
+      await carry(other(from), got, tuple)
+      if (prompt) await carry(other(from), await P[other(from)].h.decide(prompt.id, 'accept', at()), tuple)
+    }
+  }
   const pull = (to: string, type: string, tuple?: string) => { const i = held.findIndex((d) => d.to === to && d.type === type && (tuple === undefined || d.tuple === tuple)); return i < 0 ? null : held.splice(i, 1)[0] }
 
   const notFollowed: string[] = []
@@ -92,7 +117,20 @@ export async function runOnLibrary (t: Trace): Promise<LibRun> {
     async function act (): Promise<void> {
     if ('open' in s) {
       opening = s.open
-      if (!opened.has(s.open)) {
+      if (ceremony === 'shared-connect' && !opened.has(s.open)) {
+        const shown = await P[other(me)].h.sharedConnectShow({ relays: RELAYS, name: other(me) }, at())
+        const link = shown.events.find((e) => e.type === 'sharedconnect.shown')
+        const proposed = await P[me].h.sharedConnectPropose({ link: link.link, relays: RELAYS, channel: 'scan', name: me }, at())
+        if (!proposed.ok) { notFollowed.push(`${label}: propose refused (${proposed.code})`); return }
+        messaging[link.id] = { [other(me)]: link.did, [me]: proposed.events.find((e) => e.type === 'sharedconnect.proposed').did }
+        await carry(me, proposed, s.open)
+        if (!receipts.has(s.open)) notFollowed.push(`${label}: the ceremony did not complete on this side`)
+        opened.add(s.open)
+      } else if (ceremony === 'shared-connect') {
+        const r = receipts.get(s.open)
+        if (!r || r.to !== me) { notFollowed.push(`${label}: no receipt to open on`); return }
+        await carry(me, await P[me].h.sharedConnectReceive(r.doc, messaging[r.id][r.from], now()), s.open)
+      } else if (!opened.has(s.open)) {
         const shown = await P[other(me)].h.show(at({ name: other(me) }))
         const card = shown.events.find((e) => e.type === 'encounter.shown').card
         const scanned = await P[me].h.scan(card, at({ name: me }))
