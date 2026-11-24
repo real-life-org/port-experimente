@@ -218,7 +218,9 @@ export function rule (setup: Setup) {
       dev.united = add(dev.united, e.fetchMapping)
       owe(dev, e.fetchMapping, travelsOn(s, otherPerson(me), e.fetchMapping))   // the answer travels on the tuple the mapping came on
       n.people[otherPerson(me)].acknowledged = add(n.people[otherPerson(me)].acknowledged, e.fetchMapping)
-      if (setup.admitProvenHead && !setup.readOnce) read(n, e.on)   // a pair became proven or a head changed: a kept probe may hit now
+      // a pair became proven or a head changed: a kept probe may hit now. On this device, which verified, and on the
+      // counterpart's, whose acknowledgement just arrived (the model keeps it per person, so both its devices read again).
+      if (setup.admitProvenHead && !setup.readOnce) for (const d of [e.on, ...both(otherPerson(me))]) read(n, d)
       return { state: n, effect: true }
     }
     const from = n.devices[e.sync], to = n.devices[e.to]
