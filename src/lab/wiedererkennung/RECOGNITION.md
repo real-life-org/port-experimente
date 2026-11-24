@@ -118,6 +118,26 @@ anchors; the record anchor of a tuple is the smaller, by the bytes of the
 *Pinned by:* the pair `traces/stale-device-apart.json` and
 `traces/stale-device-joined.json` (same steps, other rank, other end).
 
+## A variant under trial
+
+`admitProvenHead` in `rule.ts`, not part of the rule. It is aimed at the
+second case of P2. After its sync, the device with the older state reads
+the other person's kept probe again; the probe names that person's head.
+The device takes it where the named tuple is the head of its own
+relationship now and is joined directly to its candidate by a pair this
+person verified and had acknowledged; and it verifies the answer over a
+pair it already owes. The other person follows the unchanged rule.
+*Pinned by:* the variant test in `tests/wiedererkennung-traces.test.ts`
+(`stale-device-apart` ends in one relationship on every device, every
+other trace ends as under the rule) and the variant walks in
+`tests/wiedererkennung-enumerate.test.ts`.
+
+A wider form (any tuple of the relationship of a candidate) was tried and
+dropped after a security review: it would let the copied key of a replaced
+tuple bring a new contact into the relationship. In the narrow form a
+tuple that is no head never qualifies. That the narrow form holds against
+such a key is argued, not modelled: the model has no forged mapping.
+
 ## Stated, not pinned
 
 - R6 and R7 say a device must **admit** the pair to verify a mapping. In

@@ -34,11 +34,11 @@ test('the page names every trace, and only traces that exist', () => {
   expect(named).toEqual(files)
 })
 
-// A variant under trial (rule.ts, `admitWithinRelationship`): a pair is also admitted where one tuple is in one
-// relationship with a candidate of the other. Not the rule; pinned so that what it changes is on record.
+// A variant under trial (rule.ts, `admitProvenHead`): a kept probe may hit the head a proven pair joins to a
+// candidate. Not the rule; pinned so that what it changes is on record.
 test('variant: the device with an older state ends in one relationship, whatever the rank; the other traces end as before', () => {
   for (const t of traces) {
-    const c = { ...t.setup, admitWithinRelationship: true }, end = rule(c).settle(replay(c, t.steps as Event[], true).state).state
+    const c = { ...t.setup, admitProvenHead: true }, end = rule(c).settle(replay(c, t.steps as Event[], true).state).state
     const shown = DEVICES.map((d) => relationships(end.devices[d].tuples, end.devices[d].united))
     if (t.name === 'stale-device-apart') for (const g of shown) expect(g).toEqual([['t1', 't2', 't3']])
     else for (const [i, d] of DEVICES.entries()) expect(shown[i]).toEqual(t.expect.relationships[d])
