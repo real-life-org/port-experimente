@@ -12,7 +12,9 @@
 //      anyone else it is a random value. For a fresh tuple the proofs go out
 //      on that tuple, for every tuple the side holds then; for a pair it
 //      learns of later (a sibling device made the other tuple), when it
-//      learns of it.
+//      learns of it. Every tuple gets a second document some time after
+//      its first, whether or not there is anything more to prove: so its
+//      coming says nothing.
 //   2. A side that holds the other side's proof for a pair unites the two
 //      tuples, if on its own side the tuple the proof stands under is the
 //      head of its relationship (or the two are united already). The sender
@@ -33,8 +35,8 @@ export type Side = 'a' | 'b'
 export type End = { id: string, key: string, side: Side }
 /** Values for pairs {x, on}, sent on `on` by the end `from`; filled up and sorted. Its name follows from its content. */
 export type Doc = { id: string, on: string, from: Side, tags: string[] }
-/** What a person sent: on which end, for which ends. Enough for a sibling to make the same document again. */
-export type Sent = { on: string, xs: string[] }
+/** What a person sent: on which end, for which ends, as which document of that tuple (0 the first, 1 the second, …). Enough for a sibling to make the same document again. */
+export type Sent = { on: string, xs: string[], n: number }
 export type Device = {
   name: string
   person: string                   // a secret of the person, the same on all its devices
@@ -99,16 +101,18 @@ const heads = (dev: Device): Set<string> => new Set(relationships(dev).map(head)
 /** The document for the pairs {x, on}: the values, filled up with values
  *  derived from the person's secret, so that every device of the person
  *  makes the same bytes and a repeat shows nothing a first sending did not. */
-function make (dev: Device, on: End, xs: End[]): Doc {
+function make (dev: Device, on: End, xs: End[], n: number): Doc {
   const tags = xs.map((x) => tag(x, x.side, on, on.side))
   const names = xs.map((x) => endKey(x.id, x.side)).sort()
-  for (let i = 0; tags.length === 0 || tags.length % STEP; i++) tags.push(mac(dev.person, ['fill', on.id, on.side, names, i]).slice(0, 43))
+  for (let i = 0; tags.length === 0 || tags.length % STEP; i++) tags.push(mac(dev.person, ['fill', on.id, on.side, names, n, i]).slice(0, 43))
   tags.sort()
   return { id: createHash('sha256').update(JSON.stringify([on.id, on.side, tags])).digest('hex').slice(0, 16), on: on.id, from: on.side, tags }
 }
+/** How many documents this person sent on the end `on`. */
+const sentOn = (dev: Device, on: End): number => [...dev.sent.values()].filter((v) => v.on === endKey(on.id, on.side)).length
 function prove (dev: Device, c: Carrier, on: End, xs: End[]): void {
-  const d = make(dev, on, xs)
-  dev.sent.set(d.id, { on: endKey(on.id, on.side), xs: xs.map((x) => endKey(x.id, x.side)).sort() })
+  const n = sentOn(dev, on), d = make(dev, on, xs, n)
+  dev.sent.set(d.id, { on: endKey(on.id, on.side), xs: xs.map((x) => endKey(x.id, x.side)).sort(), n })
   c.put(other(on.side), d)
 }
 const proved = (dev: Device): Set<string> => { const s = new Set<string>(); for (const v of dev.sent.values()) for (const x of v.xs) s.add(pairOf(x.split('/')[0] as string, v.on.split('/')[0] as string)); return s }
@@ -135,15 +139,17 @@ export function sendAgain (dev: Device, c: Carrier): number {
   for (const [id, s] of dev.sent) {
     if (dev.acked.has(id)) continue
     const on = dev.ends.get(s.on), xs = s.xs.map((k) => dev.ends.get(k))
-    if (on && xs.every((x) => x)) { c.put(other(on.side), make(dev, on, xs as End[])); docs++ }
+    if (on && xs.every((x) => x)) { c.put(other(on.side), make(dev, on, xs as End[], s.n)); docs++ }
   }
   return docs
 }
 
 /** Sentence 1, second half: a device sends the proofs its person has not
  *  sent yet, for pairs it learned of through a sync. The pair travels
- *  under the tuple of the smaller name on the tuple of the larger. Returns
- *  how many documents went out. */
+ *  under the tuple of the smaller name on the tuple of the larger. And
+ *  every tuple that has had one document only gets its second now, with
+ *  those proofs or with filling alone. Returns how many documents went
+ *  out. */
 export function catchUp (dev: Device, c: Carrier): number {
   let docs = 0
   // owed: every pair of heads, and every pair this person united on the other side's proof without having proved it itself
@@ -151,7 +157,7 @@ export function catchUp (dev: Device, c: Carrier): number {
   const all = endsOf(dev).sort((p, q) => (p.id < q.id ? -1 : 1))
   for (const on of all) {
     const xs = all.filter((x) => x.id < on.id && !done.has(pairOf(x.id, on.id)) && ((hs.has(x.id) && hs.has(on.id)) || dev.united.has(pairOf(x.id, on.id))))
-    if (xs.length) { prove(dev, c, on, xs); docs++ }
+    if (xs.length || sentOn(dev, on) < 2) { prove(dev, c, on, xs); docs++ }
   }
   return docs
 }

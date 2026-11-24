@@ -23,7 +23,9 @@ The candidate has one document and three sentences.
    other end of x and the other end of y can check it; to anyone else it is
    a random value. For a fresh tuple the proofs go out on that tuple, for
    every tuple the side holds then. For a pair it learns of later, because
-   a sibling device made the other tuple: when it learns of it.
+   a sibling device made the other tuple: when it learns of it. Every tuple
+   gets a second document some time after its first, whether or not there
+   is anything more to prove, so that its coming says nothing.
 2. **A side that holds the other side's proof for a pair unites the two
    tuples**, if on its own side the tuple the proof stands under is the head
    of its relationship (or the two are united already). The sender proves
@@ -41,12 +43,13 @@ There is no answer to a proof, no number and no chooser.
 |---|---|
 | Two strangers meet | two new contacts; of the 256 values a sent (it holds 5 other contacts) the stranger can read none; nothing goes out on any other tuple |
 | Two who know each other meet again | one contact on both sides after one delivery each way; two documents; no act of a user |
-| A's laptop, which knows the relationship, meets B again | one contact on the laptop, on the phone after the sync, and at B; A sends nothing after the sync |
-| A's laptop, which has not heard of the relationship yet, meets B again | B holds two contacts until A's devices sync; then A's devices hold one (from B's proof, which the laptop kept unread) and send one document; B holds one. No second meeting |
+| A's laptop, which knows the relationship, meets B again | one contact on the laptop, on the phone after the sync, and at B; after the sync A sends the fresh tuple's second document |
+| A's laptop, which has not heard of the relationship yet, meets B again | B holds two contacts until A's devices sync; then A's devices hold one (from B's proof, which the laptop kept unread) and send two documents, the second of each tuple, one of them with the proof; B holds one. No second meeting |
 | Both have two devices and meet crosswise, all four apart | after A's devices synced A holds two; after B's devices synced B holds one; then A holds one. No second meeting |
-| A's two devices, apart, each meet someone else | two contacts; after the sync A sends one document of 256 values on one of the two tuples; neither stranger can read a value of it |
+| A's two devices, apart, each meet someone else | two contacts; after the sync A sends the second document on each of the two tuples, 256 values each, one of them with the proof for the pair; neither stranger can read a value |
+| The second document of every tuple | a stranger holds two documents of 256 values from a person with one device, and two of 256 from a person whose two devices each met someone apart; it can read none of them |
 | One proof is lost on the way | one-sided (the side that got a proof holds one contact, the other two) until a sibling of the sender sends the same document again |
-| A device fetches the other side's proof and is lost before it shares it | one-sided, and neither side sends anything more: A's remaining device holds two contacts, B one. The next encounter joins them |
+| A device fetches the other side's proof and is lost before it shares it | one-sided, also after both sides sent all they owe: A's remaining device holds two contacts, B one. The next encounter joins them |
 | A contact hands in a value on a tuple that is not its own | no effect: it cannot make the value without the secret of that tuple |
 | A's own devices scan each other | the contacts they share stay apart: a device cannot prove as the other end of a tuple it holds one end of |
 | A copied key of the head of a relationship | the holder of the copy, meeting A as a new contact, is counted as B |
@@ -118,7 +121,8 @@ sendings gave the exact count; it is derived now and the step is 256.
   it (inventory 6815).
 - Sizes on the wire, a person with thousands of tuples, and what the
   carrier sees.
-- The late proof as a signal: it goes to one of the two people of the pair,
-  comes only when there is something to prove, and its time shows that the
-  sender's devices synced.
+- When the second document goes out. Here it goes with the first catching
+  up after the tuple was made; the delay, and whether its time still shows
+  a sync, are for the design. A pair learned of after the second document
+  takes a third, and that one comes only when there is something to prove.
 - A third party that relays the ceremony between two ends in real time.

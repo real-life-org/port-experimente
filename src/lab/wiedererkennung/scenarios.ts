@@ -111,6 +111,19 @@ function twoStrangersApart (): Row {
   }
 }
 
+/** What a stranger gets from someone with one device and from someone whose two devices each met somebody apart. */
+function secondDocument (): Row {
+  const c = new Carrier(), one = device('one'), phone = device('phone'), laptop = device('laptop', phone), x = device('x'), y = device('y'), z = device('z')
+  const t1 = meet(one, x, c), t2 = meet(phone, y, c); meet(laptop, z, c); settle(c, [one, phone, laptop, x, y, z])
+  catchUp(one, c); sync(c, [phone, laptop]); settle(c, [x, y, z])
+  const shape = (d: Device, t: string): string => [...d.got.values()].filter((p) => p.on === t).map((p) => p.tags.length).join(' and ')
+  return {
+    'documents the stranger holds from the person with one device, by values': shape(x, t1),
+    'and from the person with two devices that met someone else apart': shape(y, t2),
+    'values of all of it either stranger can read': readable(x) + readable(y),
+  }
+}
+
 /** A re-encounter where A's proof is lost on the way; the device that sent it is gone, its sibling sends it again. */
 function lost (): Row {
   const c = new Carrier(), a1 = device('a1'), a2 = device('a2', a1), b = device('b')
@@ -134,13 +147,12 @@ function fetchedAndLost (): Row {
   meet(a1, b, c); settle(c, [a1, b]); sync(c, [a1, a2])
   meet(a2, b, c); receive(b, c)
   share(a2, a1); receive(a1, c)                            // a1 fetches b's proof for the fresh tuple; then a1 is gone
-  const owed = catchUp(a2, c) + sendAgain(a2, c) + catchUp(b, c) + sendAgain(b, c)
+  for (let i = 0; i < 3; i++) { catchUp(a2, c); sendAgain(a2, c); catchUp(b, c); sendAgain(b, c); settle(c, [a2, b]) }   // both sides send all they owe
   const stuck = [contacts(a2), contacts(b)]
   meet(a2, b, c); settle(c, [a2, b])                       // the next encounter
   return {
-    'a\'s remaining device holds of b': stuck[0] as number,
-    'b holds of a': stuck[1] as number,
-    'documents either side still sends': owed,
+    'after both sides sent all they owe, a\'s remaining device holds of b': stuck[0] as number,
+    'and b holds of a': stuck[1] as number,
     'after the next encounter a holds of b': contacts(a2),
   }
 }
@@ -245,6 +257,7 @@ export const measure = (): Record<string, Row> => ({
   'a\'s laptop, which has not heard of the relationship yet, meets b again': ownDevices(false),
   'both have two devices and meet crosswise, all four apart': crossed(),
   'a\'s two devices, apart, each meet someone else': twoStrangersApart(),
+  'the second document of every tuple': secondDocument(),
   'one proof is lost on the way': lost(),
   'a device fetches the other side\'s proof and is lost before it shares it': fetchedAndLost(),
   'a contact hands in a value on a tuple that is not its own': onAForeignTuple(),

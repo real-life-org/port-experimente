@@ -18,7 +18,7 @@
     "and b holds of a": 1,
     "after a's devices synced, the phone holds of b": 1,
     "and the laptop": 1,
-    "documents a sent after the sync": 0,
+    "documents a sent after the sync": 1,
     "then b holds of a": 1,
     "another meeting was needed": false
   },
@@ -27,7 +27,7 @@
     "and b holds of a": 2,
     "after a's devices synced, the phone holds of b": 1,
     "and the laptop": 1,
-    "documents a sent after the sync": 1,
+    "documents a sent after the sync": 2,
     "then b holds of a": 1,
     "another meeting was needed": false
   },
@@ -40,9 +40,14 @@
   },
   "a's two devices, apart, each meet someone else": {
     "contacts of a afterwards": "2 and 2",
-    "documents a sent after the sync": 1,
-    "values in it": 256,
+    "documents a sent after the sync": 2,
+    "values in it": 512,
     "values of it the two strangers can read": 0
+  },
+  "the second document of every tuple": {
+    "documents the stranger holds from the person with one device, by values": "256 and 256",
+    "and from the person with two devices that met someone else apart": "256 and 256",
+    "values of all of it either stranger can read": 0
   },
   "one proof is lost on the way": {
     "with a's proof lost, a holds of b": 1,
@@ -51,9 +56,8 @@
     "then b holds of a": 1
   },
   "a device fetches the other side's proof and is lost before it shares it": {
-    "a's remaining device holds of b": 2,
-    "b holds of a": 1,
-    "documents either side still sends": 0,
+    "after both sides sent all they owe, a's remaining device holds of b": 2,
+    "and b holds of a": 1,
     "after the next encounter a holds of b": 1
   },
   "a contact hands in a value on a tuple that is not its own": {
