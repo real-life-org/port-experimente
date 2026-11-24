@@ -2,8 +2,8 @@
   "two strangers meet": {
     "contacts of a afterwards": 6,
     "contacts of the stranger afterwards": 4,
-    "tags of a's proof the stranger can read": 0,
-    "tags the stranger got from a (a holds 5 other contacts)": 8,
+    "values of a's proof the stranger can read": 0,
+    "values the stranger got from a (a holds 5 other contacts)": 256,
     "documents the encounter put on other tuples than the fresh one": 0
   },
   "two who know each other meet again": {
@@ -41,18 +41,35 @@
   "a's two devices, apart, each meet someone else": {
     "contacts of a afterwards": "2 and 2",
     "documents a sent after the sync": 1,
-    "tags of them the two strangers can read": 0
+    "values in it": 256,
+    "values of it the two strangers can read": 0
   },
   "one proof is lost on the way": {
     "with a's proof lost, a holds of b": 1,
     "and b holds of a": 2,
-    "after it was sent again, b holds of a": 1
+    "documents the sibling sends again": 1,
+    "then b holds of a": 1
   },
-  "a copied key that is still in use": {
+  "a device fetches the other side's proof and is lost before it shares it": {
+    "a's remaining device holds of b": 2,
+    "b holds of a": 1,
+    "documents either side still sends": 0,
+    "after the next encounter a holds of b": 1
+  },
+  "a contact hands in a value on a tuple that is not its own": {
+    "a counts the other person as b": false,
+    "contacts of a": 2
+  },
+  "a's own devices scan each other": {
+    "contacts before": 2,
+    "contacts of other people afterwards": 2,
+    "b and c fell into one": false
+  },
+  "a copied key of the head of a relationship": {
     "a counts the newcomer as b": true,
     "contacts of a": 1
   },
-  "a copied key that was given up": {
+  "a copied key of an older tuple of a relationship": {
     "a counts the newcomer as b": false,
     "contacts of a": 2
   },
@@ -60,14 +77,19 @@
     "a holds of b": 2,
     "b holds of a": 1
   },
-  "order of arrival": {
-    "a holds of b": 1,
-    "a device that got the same facts in the opposite order shows the same": true
+  "the same proof sent twice": {
+    "documents a handed in on the fresh tuple": 2,
+    "different documents the stranger holds afterwards": 1,
+    "different values it holds": 256
   },
-  "cost with 200 contacts": {
-    "tags a sends on the fresh tuple": 200,
-    "bytes of them (22 characters each)": 4400,
+  "random schedules": {
+    "runs": 60,
+    "devices that show more or fewer contacts than people they know": 0,
+    "contacts that hold tuples of two people": 0
+  },
+  "cost with 300 contacts": {
+    "values a sends on the fresh tuple": 512,
     "documents on other tuples": 0,
-    "step of the filling": 8
+    "step of the filling": 256
   }
 }
