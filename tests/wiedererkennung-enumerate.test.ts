@@ -43,3 +43,10 @@ test.each([[['t1', 't2'], 199, 164], [['t1', 't2', 't3'], 62755, 60676]] as cons
 test('three tuples, two devices each, drawn at random: every schedule ends as the candidate relations say', () => {
   expect(draw({ tuples: ['t1', 't2', 't3'] }, 300).problems).toEqual([])
 }, 240_000)
+
+test('variant (a pair admitted within a relationship): two tuples walk as the rule; three tuples on one device each end in one relationship', () => {
+  const two = walk({ tuples: ['t1', 't2'], admitWithinRelationship: true })
+  expect(two.problems).toEqual([])
+  expect(two.atRest).toEqual({ 'both relations give 1, devices show 1111': 45376, 'both relations give 2, devices show 2222': 12096 })
+  expect(walk({ tuples: ['t1', 't2', 't3'], single: true, admitWithinRelationship: true }).problems).toEqual([])
+}, 400_000)

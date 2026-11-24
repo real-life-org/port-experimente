@@ -98,6 +98,9 @@ export type Setup = {
   noForward?: boolean
   /** one device per person: only a1 and b1 act, nothing is synced */
   single?: boolean
+  /** a variant under trial: a pair is also admitted where one tuple is, for the judging device, in one relationship with a
+   *  candidate of the other (the two sides may then name different tuples of the same relationship) */
+  admitWithinRelationship?: boolean
 }
 
 const add = <T>(xs: T[], x: T): T[] => (xs.includes(x) ? xs : [...xs, x].sort())
@@ -130,8 +133,16 @@ export function rule (setup: Setup) {
   /** the head of every relationship of a device */
   const heads = (d: DeviceState): Tuple[] => relationships(d.tuples, d.united).map((g) => g.reduce(higher)).sort()
 
-  const admitted = (s: State, p: Person, x: Tuple, y: Tuple): boolean =>
+  const listed = (s: State, p: Person, x: Tuple, y: Tuple): boolean =>
     (s.people[p].candidates[x] ?? []).includes(y) || (s.people[p].candidates[y] ?? []).includes(x)
+  /** `groups`: the relationships of whoever judges (a device's own; for the expectation, the ones both people end with) */
+  const admitted = (s: State, p: Person, x: Tuple, y: Tuple, groups?: Tuple[][]): boolean => {
+    if (listed(s, p, x, y)) return true
+    if (!setup.admitWithinRelationship || !groups) return false
+    const together = (u: Tuple, v: Tuple): boolean => groups.some((g) => g.includes(u) && g.includes(v))
+    return (s.people[p].candidates[x] ?? []).some((c) => together(c, y)) || (s.people[p].candidates[y] ?? []).some((c) => together(c, x))
+  }
+  const own = (dev: DeviceState): Tuple[][] => relationships(dev.tuples, dev.united)
 
   /** The person owes its mapping over `p`; it travels on `on` unless the device already knows another tuple for it (one intent per pair). */
   const owe = (dev: DeviceState, p: Pair, on: Tuple): void => { dev.owed = add(dev.owed, p); if (!(p in dev.via)) dev.via[p] = on }
@@ -141,8 +152,8 @@ export function rule (setup: Setup) {
     const me = personOf(d), dev = s.devices[d]
     for (const t of dev.probes) {
       if (only !== undefined && t !== only) continue
-      for (const listed of s.people[otherPerson(me)].candidates[t] ?? []) {
-        if (listed !== t && dev.tuples.includes(listed) && admitted(s, me, t, listed)) owe(dev, pairOf(t, listed), t)
+      for (const named of s.people[otherPerson(me)].candidates[t] ?? []) {
+        if (named !== t && dev.tuples.includes(named) && admitted(s, me, t, named, own(dev))) owe(dev, pairOf(t, named), t)
       }
     }
   }
@@ -202,10 +213,11 @@ export function rule (setup: Setup) {
     if ('fetchMapping' in e) {
       const me = personOf(e.on), dev = n.devices[e.on], [x, y] = tuplesOf(e.fetchMapping)
       // cannot verify: it does not hold both tuples, or its person does not admit the pair. No acknowledgement, nothing changes.
-      if (!dev.tuples.includes(x) || !dev.tuples.includes(y) || !admitted(s, me, x, y)) return { state: s, effect: false }
+      if (!dev.tuples.includes(x) || !dev.tuples.includes(y) || !admitted(s, me, x, y, own(dev))) return { state: s, effect: false }
       dev.united = add(dev.united, e.fetchMapping)
       owe(dev, e.fetchMapping, travelsOn(s, otherPerson(me), e.fetchMapping))   // the answer travels on the tuple the mapping came on
       n.people[otherPerson(me)].acknowledged = add(n.people[otherPerson(me)].acknowledged, e.fetchMapping)
+      if (setup.admitWithinRelationship && !setup.readOnce) read(n, e.on)   // its relationships grew: a kept probe may hit now
       return { state: n, effect: true }
     }
     const from = n.devices[e.sync], to = n.devices[e.to]
@@ -242,11 +254,16 @@ export function rule (setup: Setup) {
     }
   }
 
-  /** What the two relations give: the tuples grouped by the pairs both people admit. */
+  /** What the two relations give: the tuples grouped by the pairs both people admit (under the variant: to a fixed point,
+   *  because a relationship that forms can admit further pairs). */
   const expected = (s: State): Tuple[][] => {
-    const joint: Pair[] = []
-    for (const x of setup.tuples) for (const y of setup.tuples) if (x < y && admitted(s, 'a', x, y) && admitted(s, 'b', x, y)) joint.push(pairOf(x, y))
-    return relationships(setup.tuples, joint)
+    let joint: Pair[] = []
+    for (;;) {
+      const groups = relationships(setup.tuples, joint), next: Pair[] = []
+      for (const x of setup.tuples) for (const y of setup.tuples) if (x < y && admitted(s, 'a', x, y, groups) && admitted(s, 'b', x, y, groups)) next.push(pairOf(x, y))
+      if (next.length === joint.length) return relationships(setup.tuples, next)
+      joint = next
+    }
   }
   const allOpen = (s: State): boolean => sameSet(s.people.a.opened, setup.tuples) && sameSet(s.people.b.opened, setup.tuples)
 
