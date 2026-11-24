@@ -3,7 +3,7 @@
 // of 24 November, each as plain facts. A measurement of the model, not of
 // the library.
 import { randomInt } from 'node:crypto'
-import { Carrier, STEP, catchUp, contacts, device, forge, headOf, image, meet, readable, receive, relationships, sendAgain, share, type Device, type End } from './model'
+import { Carrier, STEP, catchUp, contacts, device, forge, headOf, image, knock, meet, readable, receive, relationships, sendAgain, share, type Device, type End } from './model'
 
 export type Row = Record<string, string | number | boolean>
 const settle = (c: Carrier, devs: Device[]): void => { for (const d of devs) receive(d, c) }
@@ -142,13 +142,18 @@ function lost (): Row {
 }
 
 /** A device fetches the other side's proof and is lost before it shares it. `proveWith`: what b proves with at the next encounter. */
-function fetchedAndLost (proveWith: 'all' | 'heads' = 'all'): Row {
+function fetchedAndLost (proveWith: 'all' | 'heads' | 'no encounter' = 'all'): Row {
   const c = new Carrier(), a1 = device('a1'), a2 = device('a2', a1), b = device('b')
   meet(a1, b, c); settle(c, [a1, b]); sync(c, [a1, a2])
   meet(a2, b, c); receive(b, c)
   share(a2, a1); receive(a1, c)                            // a1 fetches b's proof for the fresh tuple; then a1 is gone
   for (let i = 0; i < 3; i++) { catchUp(a2, c); sendAgain(a2, c); catchUp(b, c); sendAgain(b, c); settle(c, [a2, b]) }   // both sides send all they owe
   const stuck = [contacts(a2), contacts(b)]
+  if (proveWith === 'no encounter') {                      // instead, a writes to b on the tuple that is no head at b any more
+    const tuples = relationships(b)[0] as string[], again = knock(b, c, tuples.find((t) => headOf(b, t) !== t) as string)
+    settle(c, [a2])
+    return { 'documents b sends again when a writes on the tuple that is no head at b': again, 'then a holds of b': contacts(a2) }
+  }
   meet(a2, b, c, proveWith); settle(c, [a2, b])            // the next encounter
   if (proveWith === 'heads') return { 'after the next encounter a holds of b': contacts(a2) }
   return {
@@ -327,6 +332,7 @@ export const measure = (): Record<string, Row> => ({
   'one proof is lost on the way': lost(),
   'a device fetches the other side\'s proof and is lost before it shares it': fetchedAndLost(),
   'the same, but at the next encounter b proves with its heads only (Trust 6750)': fetchedAndLost('heads'),
+  'the same, with no further encounter: a writes to b on the older tuple': fetchedAndLost('no encounter'),
   'a contact hands in a value on a tuple that is not its own': onAForeignTuple(),
   'a\'s own devices scan each other': ownDevicesScan(),
   'a copied key of the head of a relationship': copied('the head', 'on the fresh tuple'),

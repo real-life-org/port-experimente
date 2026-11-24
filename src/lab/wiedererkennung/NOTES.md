@@ -57,6 +57,7 @@ There is no answer to a proof, no number and no chooser.
 | One proof is lost on the way | one-sided (the side that got a proof holds one contact, the other two) until a sibling of the sender sends the same document again |
 | A device fetches the other side's proof and is lost before it shares it | one-sided, also after both sides sent all they owe: A's remaining device holds two contacts, B one. The next encounter joins them |
 | The same, but at the next encounter B proves with the heads of its relationships only (the sender of Trust 6750) | A's remaining device still holds two contacts: B's one head meets one of A's two parts |
+| The same, with no further encounter: A writes to B on the tuple that is no head at B any more, and B sends its proofs for that tuple again | one document, the same bytes as before; A's remaining device holds one contact |
 | A contact hands in a value on a tuple that is not its own | no effect: it cannot make the value without the secret of that tuple |
 | A's own devices scan each other | the contacts they share stay apart: a device cannot prove as the other end of a tuple it holds one end of |
 | A copied key of the head of a relationship | the holder of the copy, meeting A as a new contact, is counted as B |
@@ -103,6 +104,11 @@ There is no answer to a proof, no number and no chooser.
 7. **What is left of a duty per pair is "sent, not yet acknowledged".** It
    needs no hit and no time limit, and any device of the person can
    discharge it.
+8. **Traffic on a tuple that is no head any more says what the carrier's
+   word cannot: the other side has not united.** A side that is written to
+   on such a tuple sends its proofs for it again, and the side that fell
+   behind catches up without a further encounter. The model has no
+   messages; the scenario calls the rule directly.
 
 ## What the reviews changed
 

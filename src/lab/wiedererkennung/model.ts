@@ -167,6 +167,22 @@ export function sendAgain (dev: Device, c: Carrier): number {
   return docs
 }
 
+/** A person is written to on a tuple that is not the head of its
+ *  relationship here: the other side has not united yet, whatever the
+ *  carrier said. The device sends again every document of its person that
+ *  proves a pair with that tuple, acknowledged or not: the same bytes.
+ *  Returns how many documents went out. */
+export function knock (dev: Device, c: Carrier, id: string): number {
+  if (headOf(dev, id) === id) return 0
+  let docs = 0
+  for (const s of dev.sent.values()) {
+    const on = dev.ends.get(s.on), xs = s.xs.map((k) => dev.ends.get(k))
+    if (!on || !xs.every((x) => x) || !(on.id === id || xs.some((x) => x?.id === id)) || !xs.length) continue
+    c.put(other(on.side), make(dev, on, xs as End[], s.n)); docs++
+  }
+  return docs
+}
+
 /** Sentence 1, second half: a device sends the proofs its person has not
  *  sent yet, for pairs it learned of through a sync. The pair travels
  *  under the tuple of the smaller name on the tuple of the larger. And

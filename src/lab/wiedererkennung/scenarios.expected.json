@@ -63,6 +63,10 @@
   "the same, but at the next encounter b proves with its heads only (Trust 6750)": {
     "after the next encounter a holds of b": 2
   },
+  "the same, with no further encounter: a writes to b on the older tuple": {
+    "documents b sends again when a writes on the tuple that is no head at b": 1,
+    "then a holds of b": 1
+  },
   "a contact hands in a value on a tuple that is not its own": {
     "a counts the other person as b": false,
     "contacts of a": 2
