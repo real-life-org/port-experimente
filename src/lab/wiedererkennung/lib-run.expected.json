@@ -1,349 +1,4 @@
 {
-  "encounter-scan": {
-    "crossed-opening": {
-      "runnable": true,
-      "notFollowed": [
-        "step 10 {\"fetchMapping\":\"t1+t2\",\"on\":\"a1\"}: the library has no such document waiting",
-        "step 12 {\"fetchMapping\":\"t1+t2\",\"on\":\"b1\"}: the library has no such document waiting"
-      ],
-      "afterStep": [
-        {
-          "step": 1,
-          "library": "1/0",
-          "rule": "1/0"
-        },
-        {
-          "step": 2,
-          "library": "2/0",
-          "rule": "2/0"
-        },
-        {
-          "step": 3,
-          "library": "2/1",
-          "rule": "2/1"
-        },
-        {
-          "step": 4,
-          "library": "2/2",
-          "rule": "2/2"
-        },
-        {
-          "step": 5,
-          "library": "2/2",
-          "rule": "2/2"
-        },
-        {
-          "step": 6,
-          "library": "2/2",
-          "rule": "2/2"
-        },
-        {
-          "step": 8,
-          "library": "2/2",
-          "rule": "2/2"
-        },
-        {
-          "step": 9,
-          "library": "2/2",
-          "rule": "2/2"
-        },
-        {
-          "step": 10,
-          "library": "2/2",
-          "rule": "1/2"
-        },
-        {
-          "step": 12,
-          "library": "2/2",
-          "rule": "1/1"
-        }
-      ],
-      "differsAt": [
-        10,
-        12
-      ],
-      "contacts": {
-        "a": 2,
-        "b": 2
-      },
-      "expected": {
-        "a": 1,
-        "b": 1
-      },
-      "asExpected": false
-    },
-    "joined-by-a-third": {
-      "runnable": false,
-      "why": "a person acts on two devices; the library has one device per holder",
-      "notFollowed": [],
-      "afterStep": [],
-      "differsAt": [],
-      "contacts": {
-        "a": 0,
-        "b": 0
-      },
-      "expected": {
-        "a": 1,
-        "b": 1
-      },
-      "asExpected": false
-    },
-    "mapping-not-verifiable": {
-      "runnable": false,
-      "why": "a person acts on two devices; the library has one device per holder",
-      "notFollowed": [],
-      "afterStep": [],
-      "differsAt": [],
-      "contacts": {
-        "a": 0,
-        "b": 0
-      },
-      "expected": {
-        "a": 1,
-        "b": 1
-      },
-      "asExpected": false
-    },
-    "met-again": {
-      "runnable": true,
-      "notFollowed": [],
-      "afterStep": [
-        {
-          "step": 1,
-          "library": "1/0",
-          "rule": "1/0"
-        },
-        {
-          "step": 2,
-          "library": "2/0",
-          "rule": "2/0"
-        },
-        {
-          "step": 3,
-          "library": "2/1",
-          "rule": "2/1"
-        },
-        {
-          "step": 4,
-          "library": "2/2",
-          "rule": "2/2"
-        },
-        {
-          "step": 5,
-          "library": "2/2",
-          "rule": "2/2"
-        },
-        {
-          "step": 6,
-          "library": "2/2",
-          "rule": "2/2"
-        },
-        {
-          "step": 8,
-          "library": "2/2",
-          "rule": "2/2"
-        },
-        {
-          "step": 9,
-          "library": "2/2",
-          "rule": "2/2"
-        },
-        {
-          "step": 10,
-          "library": "1/2",
-          "rule": "1/2"
-        },
-        {
-          "step": 12,
-          "library": "1/1",
-          "rule": "1/1"
-        }
-      ],
-      "differsAt": [],
-      "contacts": {
-        "a": 1,
-        "b": 1
-      },
-      "expected": {
-        "a": 1,
-        "b": 1
-      },
-      "asExpected": true
-    },
-    "probe-read-again": {
-      "runnable": false,
-      "why": "a person acts on two devices; the library has one device per holder",
-      "notFollowed": [],
-      "afterStep": [],
-      "differsAt": [],
-      "contacts": {
-        "a": 0,
-        "b": 0
-      },
-      "expected": {
-        "a": 1,
-        "b": 1
-      },
-      "asExpected": false
-    },
-    "settled-by-a-path": {
-      "runnable": true,
-      "notFollowed": [
-        "step 10 {\"fetchMapping\":\"t2+t3\",\"on\":\"b1\"}: the library answered failed (validation-failed)",
-        "step 12 {\"fetchMapping\":\"t2+t3\",\"on\":\"a1\"}: the library has no such document waiting",
-        "step 13 {\"fetchProbe\":\"t1\",\"on\":\"a1\"}: the library answered failed (validation-failed)",
-        "step 14 {\"fetchProbe\":\"t1\",\"on\":\"b1\"}: the library answered failed (validation-failed)"
-      ],
-      "afterStep": [
-        {
-          "step": 1,
-          "library": "1/0",
-          "rule": "1/0"
-        },
-        {
-          "step": 2,
-          "library": "1/1",
-          "rule": "1/1"
-        },
-        {
-          "step": 3,
-          "library": "2/1",
-          "rule": "2/1"
-        },
-        {
-          "step": 4,
-          "library": "2/2",
-          "rule": "2/2"
-        },
-        {
-          "step": 5,
-          "library": "3/2",
-          "rule": "3/2"
-        },
-        {
-          "step": 6,
-          "library": "3/3",
-          "rule": "3/3"
-        },
-        {
-          "step": 7,
-          "library": "3/3",
-          "rule": "3/3"
-        },
-        {
-          "step": 8,
-          "library": "3/3",
-          "rule": "3/3"
-        },
-        {
-          "step": 9,
-          "library": "3/2",
-          "rule": "3/2"
-        },
-        {
-          "step": 10,
-          "library": "3/2",
-          "rule": "3/1"
-        },
-        {
-          "step": 11,
-          "library": "2/2",
-          "rule": "2/1"
-        },
-        {
-          "step": 12,
-          "library": "2/2",
-          "rule": "1/1"
-        },
-        {
-          "step": 13,
-          "library": "2/2",
-          "rule": "1/1"
-        },
-        {
-          "step": 14,
-          "library": "2/2",
-          "rule": "1/1"
-        },
-        {
-          "step": 15,
-          "library": "2/2",
-          "rule": "1/1"
-        },
-        {
-          "step": 16,
-          "library": "2/2",
-          "rule": "1/1"
-        }
-      ],
-      "differsAt": [
-        10,
-        11,
-        12,
-        13,
-        14,
-        15,
-        16
-      ],
-      "contacts": {
-        "a": 1,
-        "b": 1
-      },
-      "expected": {
-        "a": 1,
-        "b": 1
-      },
-      "asExpected": false
-    },
-    "stale-device-apart": {
-      "runnable": false,
-      "why": "a person acts on two devices; the library has one device per holder",
-      "notFollowed": [],
-      "afterStep": [],
-      "differsAt": [],
-      "contacts": {
-        "a": 0,
-        "b": 0
-      },
-      "expected": {
-        "a": 2,
-        "b": 2
-      },
-      "asExpected": false
-    },
-    "stale-device-joined": {
-      "runnable": false,
-      "why": "a person acts on two devices; the library has one device per holder",
-      "notFollowed": [],
-      "afterStep": [],
-      "differsAt": [],
-      "contacts": {
-        "a": 0,
-        "b": 0
-      },
-      "expected": {
-        "a": 1,
-        "b": 1
-      },
-      "asExpected": false
-    },
-    "two-devices-apart": {
-      "runnable": false,
-      "why": "a person acts on two devices; the library has one device per holder",
-      "notFollowed": [],
-      "afterStep": [],
-      "differsAt": [],
-      "contacts": {
-        "a": 0,
-        "b": 0
-      },
-      "expected": {
-        "a": 2,
-        "b": 2
-      },
-      "asExpected": false
-    }
-  },
   "shared-connect": {
     "crossed-opening": {
       "runnable": true,
@@ -534,8 +189,353 @@
     "settled-by-a-path": {
       "runnable": true,
       "notFollowed": [
-        "step 10 {\"fetchMapping\":\"t2+t3\",\"on\":\"b1\"}: the library answered failed (validation-failed)",
-        "step 12 {\"fetchMapping\":\"t2+t3\",\"on\":\"a1\"}: the library has no such document waiting",
+        "step 10 {\"fetchMapping\":\"t2+t3\",\"on\":\"b1\"}: the library has no such document waiting (mappings waiting for b: t1+t3 on t3, t1+t2 on t2)",
+        "step 12 {\"fetchMapping\":\"t2+t3\",\"on\":\"a1\"}: the library has no such document waiting (mappings waiting for a: t1+t2 on t2)",
+        "step 13 {\"fetchProbe\":\"t1\",\"on\":\"a1\"}: the library answered failed (validation-failed)",
+        "step 14 {\"fetchProbe\":\"t1\",\"on\":\"b1\"}: the library answered failed (validation-failed)"
+      ],
+      "afterStep": [
+        {
+          "step": 1,
+          "library": "1/0",
+          "rule": "1/0"
+        },
+        {
+          "step": 2,
+          "library": "1/1",
+          "rule": "1/1"
+        },
+        {
+          "step": 3,
+          "library": "2/1",
+          "rule": "2/1"
+        },
+        {
+          "step": 4,
+          "library": "2/2",
+          "rule": "2/2"
+        },
+        {
+          "step": 5,
+          "library": "3/2",
+          "rule": "3/2"
+        },
+        {
+          "step": 6,
+          "library": "3/3",
+          "rule": "3/3"
+        },
+        {
+          "step": 7,
+          "library": "3/3",
+          "rule": "3/3"
+        },
+        {
+          "step": 8,
+          "library": "3/3",
+          "rule": "3/3"
+        },
+        {
+          "step": 9,
+          "library": "3/2",
+          "rule": "3/2"
+        },
+        {
+          "step": 10,
+          "library": "3/2",
+          "rule": "3/1"
+        },
+        {
+          "step": 11,
+          "library": "2/2",
+          "rule": "2/1"
+        },
+        {
+          "step": 12,
+          "library": "2/2",
+          "rule": "1/1"
+        },
+        {
+          "step": 13,
+          "library": "2/2",
+          "rule": "1/1"
+        },
+        {
+          "step": 14,
+          "library": "2/2",
+          "rule": "1/1"
+        },
+        {
+          "step": 15,
+          "library": "2/2",
+          "rule": "1/1"
+        },
+        {
+          "step": 16,
+          "library": "2/2",
+          "rule": "1/1"
+        }
+      ],
+      "differsAt": [
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16
+      ],
+      "contacts": {
+        "a": 1,
+        "b": 1
+      },
+      "expected": {
+        "a": 1,
+        "b": 1
+      },
+      "asExpected": false
+    },
+    "stale-device-apart": {
+      "runnable": false,
+      "why": "a person acts on two devices; the library has one device per holder",
+      "notFollowed": [],
+      "afterStep": [],
+      "differsAt": [],
+      "contacts": {
+        "a": 0,
+        "b": 0
+      },
+      "expected": {
+        "a": 2,
+        "b": 2
+      },
+      "asExpected": false
+    },
+    "stale-device-joined": {
+      "runnable": false,
+      "why": "a person acts on two devices; the library has one device per holder",
+      "notFollowed": [],
+      "afterStep": [],
+      "differsAt": [],
+      "contacts": {
+        "a": 0,
+        "b": 0
+      },
+      "expected": {
+        "a": 1,
+        "b": 1
+      },
+      "asExpected": false
+    },
+    "two-devices-apart": {
+      "runnable": false,
+      "why": "a person acts on two devices; the library has one device per holder",
+      "notFollowed": [],
+      "afterStep": [],
+      "differsAt": [],
+      "contacts": {
+        "a": 0,
+        "b": 0
+      },
+      "expected": {
+        "a": 2,
+        "b": 2
+      },
+      "asExpected": false
+    }
+  },
+  "encounter-scan": {
+    "crossed-opening": {
+      "runnable": true,
+      "notFollowed": [
+        "step 10 {\"fetchMapping\":\"t1+t2\",\"on\":\"a1\"}: the library has no such document waiting",
+        "step 12 {\"fetchMapping\":\"t1+t2\",\"on\":\"b1\"}: the library has no such document waiting"
+      ],
+      "afterStep": [
+        {
+          "step": 1,
+          "library": "1/0",
+          "rule": "1/0"
+        },
+        {
+          "step": 2,
+          "library": "2/0",
+          "rule": "2/0"
+        },
+        {
+          "step": 3,
+          "library": "2/1",
+          "rule": "2/1"
+        },
+        {
+          "step": 4,
+          "library": "2/2",
+          "rule": "2/2"
+        },
+        {
+          "step": 5,
+          "library": "2/2",
+          "rule": "2/2"
+        },
+        {
+          "step": 6,
+          "library": "2/2",
+          "rule": "2/2"
+        },
+        {
+          "step": 8,
+          "library": "2/2",
+          "rule": "2/2"
+        },
+        {
+          "step": 9,
+          "library": "2/2",
+          "rule": "2/2"
+        },
+        {
+          "step": 10,
+          "library": "2/2",
+          "rule": "1/2"
+        },
+        {
+          "step": 12,
+          "library": "2/2",
+          "rule": "1/1"
+        }
+      ],
+      "differsAt": [
+        10,
+        12
+      ],
+      "contacts": {
+        "a": 2,
+        "b": 2
+      },
+      "expected": {
+        "a": 1,
+        "b": 1
+      },
+      "asExpected": false
+    },
+    "joined-by-a-third": {
+      "runnable": false,
+      "why": "a person acts on two devices; the library has one device per holder",
+      "notFollowed": [],
+      "afterStep": [],
+      "differsAt": [],
+      "contacts": {
+        "a": 0,
+        "b": 0
+      },
+      "expected": {
+        "a": 1,
+        "b": 1
+      },
+      "asExpected": false
+    },
+    "mapping-not-verifiable": {
+      "runnable": false,
+      "why": "a person acts on two devices; the library has one device per holder",
+      "notFollowed": [],
+      "afterStep": [],
+      "differsAt": [],
+      "contacts": {
+        "a": 0,
+        "b": 0
+      },
+      "expected": {
+        "a": 1,
+        "b": 1
+      },
+      "asExpected": false
+    },
+    "met-again": {
+      "runnable": true,
+      "notFollowed": [],
+      "afterStep": [
+        {
+          "step": 1,
+          "library": "1/0",
+          "rule": "1/0"
+        },
+        {
+          "step": 2,
+          "library": "2/0",
+          "rule": "2/0"
+        },
+        {
+          "step": 3,
+          "library": "2/1",
+          "rule": "2/1"
+        },
+        {
+          "step": 4,
+          "library": "2/2",
+          "rule": "2/2"
+        },
+        {
+          "step": 5,
+          "library": "2/2",
+          "rule": "2/2"
+        },
+        {
+          "step": 6,
+          "library": "2/2",
+          "rule": "2/2"
+        },
+        {
+          "step": 8,
+          "library": "2/2",
+          "rule": "2/2"
+        },
+        {
+          "step": 9,
+          "library": "2/2",
+          "rule": "2/2"
+        },
+        {
+          "step": 10,
+          "library": "1/2",
+          "rule": "1/2"
+        },
+        {
+          "step": 12,
+          "library": "1/1",
+          "rule": "1/1"
+        }
+      ],
+      "differsAt": [],
+      "contacts": {
+        "a": 1,
+        "b": 1
+      },
+      "expected": {
+        "a": 1,
+        "b": 1
+      },
+      "asExpected": true
+    },
+    "probe-read-again": {
+      "runnable": false,
+      "why": "a person acts on two devices; the library has one device per holder",
+      "notFollowed": [],
+      "afterStep": [],
+      "differsAt": [],
+      "contacts": {
+        "a": 0,
+        "b": 0
+      },
+      "expected": {
+        "a": 1,
+        "b": 1
+      },
+      "asExpected": false
+    },
+    "settled-by-a-path": {
+      "runnable": true,
+      "notFollowed": [
+        "step 10 {\"fetchMapping\":\"t2+t3\",\"on\":\"b1\"}: the library has no such document waiting (mappings waiting for b: t1+t3 on t3, t1+t2 on t2)",
+        "step 12 {\"fetchMapping\":\"t2+t3\",\"on\":\"a1\"}: the library has no such document waiting (mappings waiting for a: t1+t2 on t2)",
         "step 13 {\"fetchProbe\":\"t1\",\"on\":\"a1\"}: the library answered failed (validation-failed)",
         "step 14 {\"fetchProbe\":\"t1\",\"on\":\"b1\"}: the library answered failed (validation-failed)"
       ],

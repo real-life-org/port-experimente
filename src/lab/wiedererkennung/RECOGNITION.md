@@ -179,7 +179,7 @@ The outcome is the same under both ceremonies:
 |---|---|
 | `met-again` | after every step each person holds as many contacts as the rule gives there (the receiver goes from two to one at the step it is handed the mapping); one contact on both sides at the end |
 | `crossed-opening` | issues no mapping: differs from the rule at the two mapping steps and ends with two contacts on both sides; the rule gives one relationship (R3: it does not admit the pair the other way round) |
-| `settled-by-a-path` (three tuples, one device each) | ends with one contact on both sides, but not by the rule's steps: it chains, so from the second mapping on it differs at every step and four steps are not followed |
+| `settled-by-a-path` (three tuples, one device each) | ends with one contact on both sides, but not by the rule's steps: it chains, so on t3 it issues a mapping over t1+t3 where the rule asks for t2+t3 (that one is never issued, and the run leaves the other held); from there on it differs at every step and four steps are not followed |
 | the six traces with two devices of one person | not runnable |
 
 Measured on the way, for `shared-connect`: the responder's tuple opens when
