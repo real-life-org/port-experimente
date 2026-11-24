@@ -133,6 +133,43 @@
     "the laptop is heard": false,
     "the lost device can write the change after the owner's": false
   },
+  "one main device: a linked device is lost and the main device changes the keys": {
+    "the lost linked device can change the keys": false,
+    "before the change the counterpart takes what it writes as the person": true,
+    "after the change the counterpart takes what it writes": false,
+    "after the change it reads what the counterpart writes": false,
+    "the laptop is heard before it synced with the main device": false,
+    "the laptop is heard after it synced": true,
+    "the laptop holds a change secret": false
+  },
+  "one main device: the laptop meets someone with a prepared binding": {
+    "the relationship is opened": "from stock",
+    "the counterpart hears the laptop": true,
+    "the main device can change the keys later": true,
+    "the counterpart follows that change": true,
+    "bindings left on the laptop": 1,
+    "a device with neither secret nor stock opens": "unbound"
+  },
+  "one main device: the laptop meets someone without a prepared binding": {
+    "the relationship is opened": "unbound",
+    "the counterpart hears the laptop": true,
+    "the main device can change the keys later": false,
+    "the counterpart follows that change": false,
+    "bindings left on the laptop": 0,
+    "a device with neither secret nor stock opens": "unbound"
+  },
+  "the counterpart has two devices and each took another continuation": {
+    "b's phone and laptop follow different continuations before they sync": true,
+    "after syncing they follow the same one": false,
+    "both show that there are two continuations": true,
+    "both hold the other continuation as evidence": true
+  },
+  "the same; the counterpart's devices settle on one by a fixed rule": {
+    "b's phone and laptop follow different continuations before they sync": true,
+    "after syncing they follow the same one": true,
+    "both show that there are two continuations": true,
+    "both hold the other continuation as evidence": true
+  },
   "an entry that is not a valid continuation arrives for a position already held": {
     "the counterpart keeps it as evidence": false,
     "the counterpart shows the warning of a second continuation": false,

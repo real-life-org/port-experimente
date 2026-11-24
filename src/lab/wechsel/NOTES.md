@@ -98,6 +98,27 @@ old secret and commits to a key from the new one.
    case of finding 1 above, settled the same way (the first stands, the
    other takes it over).
 
+## One main device
+
+Only the main device holds the change secret, and the secret says who may
+write the next entry and nothing else: the everyday keys of a new state
+are drawn and reach the linked devices by syncing.
+
+1. **A lost linked device cannot change the keys**, with a secret in the
+   model as without. Until the main device changes them, the counterpart
+   takes what it writes as the person. After the change it is neither
+   heard nor does it read.
+2. **A linked device is silent after a change until it synced with the
+   main device**: its documents are signed under the old key.
+3. **A linked device can open a relationship with a binding the main
+   device prepared.** The main device, back later, changes the keys and
+   the counterpart follows. Without a prepared binding the relationship
+   opens unbound and its keys can never be changed.
+4. **A counterpart's two devices can follow two continuations.** When they
+   sync, both see it and both keep the other one as evidence, but each
+   keeps following its own, unless a rule every device applies alike picks
+   one (here: the lower id). Which one that is, the rule cannot know.
+
 ## The same question in a group (`group.ts`)
 
 Candidate: in each group a person has one key that all its devices hold;
@@ -146,13 +167,10 @@ path. That is the effect measured in finding 3, not a weaker check.
 
 ## What the model does not show
 
-- One main device that alone holds the change secret: in the cases with a
-  secret, phone, laptop and the lost tablet all hold it. "A lost device
-  without an update key cannot change anything" is measured with drawn
-  keys only.
-- A new relationship or a join on a device that holds no secret.
-- A counterpart with two devices under attack: one takes the owner's
-  continuation, the other the lost device's.
+- A join to a group on a device that holds no secret; how many prepared
+  bindings a device needs and how they are renewed.
+- Which of two continuations is the owner's: a counterpart's devices can
+  agree on one, not on the right one.
 - Holders, wrapping, handing the role over, recovery, time.
 
 ## Limits

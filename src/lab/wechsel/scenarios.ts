@@ -1,7 +1,7 @@
 // Scenarios for the model of model.ts. Each returns plain facts; the rules
 // under discussion are switched per variant so that the table shows what
 // each rule buys. A measurement of the model, not of the library.
-import { Carrier, RULES, change, device, headId, met, paths, receive, renew, send, share, takeOver, type Device, type Rules } from './model'
+import { Carrier, RULES, change, device, headId, met, open, paths, receive, renew, send, share, stockUp, takeOver, type Device, type Rules } from './model'
 
 export type Row = Record<string, string | number | boolean>
 const v = (r: Partial<Rules>): Rules => ({ ...RULES, ...r })
@@ -103,6 +103,81 @@ function answerAfterTheChange (rules: Rules): Row {
   }
 }
 
+// ── One main device ─────────────────────────────────────────────────────────
+// Only the main device holds the change secret. The secret says who may
+// write the next entry and nothing else; everyday keys are drawn and reach
+// the linked devices by syncing.
+const MAIN = v({ deterministic: true, stateFromSecret: false })
+
+/** A linked device is lost, unlocked. The main device changes the keys. */
+function linkedDeviceLost (): Row {
+  const c = new Carrier(), [phone, laptop, tablet, b] = [device('phone'), device('laptop'), device('tablet'), device('b')] as [Device, Device, Device, Device]
+  tablet.lost = true
+  met([phone, laptop, tablet], [b], [phone], [b], MAIN)
+  const tabletChanges = change(tablet, MAIN, [])
+  send(tablet, c, MAIN, 'message', 'tablet as the person'); settle(c, MAIN, [b, phone])
+  const heardBefore = reads(b, 'tablet as the person')
+  change(phone, MAIN, []); send(phone, c, MAIN, 'message', 'from the phone'); settle(c, MAIN, [b, phone])
+  send(laptop, c, MAIN, 'message', 'laptop, before syncing'); settle(c, MAIN, [b, laptop, phone])
+  share(phone, laptop, false)
+  send(laptop, c, MAIN, 'message', 'laptop, after syncing'); settle(c, MAIN, [b, laptop, phone])
+  send(tablet, c, MAIN, 'message', 'tablet, after the change'); settle(c, MAIN, [b, phone])
+  send(b, c, MAIN, 'message', 'for the person'); settle(c, MAIN, [tablet, phone, b])
+  return {
+    'the lost linked device can change the keys': tabletChanges,
+    'before the change the counterpart takes what it writes as the person': heardBefore,
+    'after the change the counterpart takes what it writes': reads(b, 'tablet, after the change'),
+    'after the change it reads what the counterpart writes': reads(tablet, 'for the person'),
+    'the laptop is heard before it synced with the main device': reads(b, 'laptop, before syncing'),
+    'the laptop is heard after it synced': reads(b, 'laptop, after syncing'),
+    'the laptop holds a change secret': laptop.own.secrets.length > 0,
+  }
+}
+
+/** The laptop meets someone while the main device is off, with and without prepared bindings. */
+function newContactOnALinkedDevice (stock: number): Row {
+  const c = new Carrier(), [phone, laptop, b] = [device('phone'), device('laptop'), device('b')] as [Device, Device, Device]
+  renew([phone]); renew([b])
+  stockUp(phone, laptop, stock)
+  const first = open(laptop, [], MAIN); open(b, [], MAIN)
+  laptop.peer.log = [...b.own.log]; b.peer.log = [...laptop.own.log]; laptop.own.owed = []; b.own.owed = []
+  send(laptop, c, MAIN, 'message', 'hello'); settle(c, MAIN, [b, laptop])
+  share(laptop, phone, false)                               // the main device comes back and learns of the relationship
+  const changed = change(phone, MAIN, [])
+  send(phone, c, MAIN, 'message', 'from the main device'); settle(c, MAIN, [b, phone])
+  const second = open(device('x'), [], MAIN)                 // a device with neither a secret nor a stock
+  return {
+    'the relationship is opened': first,
+    'the counterpart hears the laptop': reads(b, 'hello'),
+    'the main device can change the keys later': changed,
+    'the counterpart follows that change': changed && headId(b.peer.log) === headId(phone.own.log),
+    'bindings left on the laptop': laptop.own.stock.length,
+    'a device with neither secret nor stock opens': second,
+  }
+}
+
+/** The counterpart has two devices; an old main device in foreign hands and
+ *  the owner each write a continuation; one reaches B's phone first, the
+ *  other B's laptop. Then B's devices sync. */
+function counterpartSplit (settleRule: boolean): Row {
+  const c = new Carrier(), [phone, old, bPhone, bLaptop] = [device('phone'), device('old main'), device('b-phone'), device('b-laptop')] as [Device, Device, Device, Device]
+  old.lost = true
+  met([phone, old], [bPhone, bLaptop], [phone, old], [bPhone], MAIN)
+  renew([phone])                                            // the owner restored: a new secret the old main device never saw
+  change(old, MAIN, []); change(phone, MAIN, [])
+  send(old, c, MAIN, 'message', 'from the old main device'); receive(bPhone, c, MAIN)
+  send(phone, c, MAIN, 'message', 'from the owner'); receive(bLaptop, c, MAIN)
+  const split = headId(bPhone.peer.log) !== headId(bLaptop.peer.log)
+  share(bPhone, bLaptop, false, settleRule); share(bLaptop, bPhone, false, settleRule)
+  const same = headId(bPhone.peer.log) === headId(bLaptop.peer.log)
+  return {
+    'b\'s phone and laptop follow different continuations before they sync': split,
+    'after syncing they follow the same one': same,
+    'both show that there are two continuations': has(bPhone, 'two continuations of the counterpart') && has(bLaptop, 'two continuations of the counterpart'),
+    'both hold the other continuation as evidence': bPhone.peer.evidence.length > 0 && bLaptop.peer.evidence.length > 0,
+  }
+}
+
 /** Someone without any key sends an entry for a position the counterpart already holds. */
 function forgedEntry (): Row {
   const c = new Carrier(), [a, b] = [device('a'), device('b')] as [Device, Device]
@@ -195,6 +270,11 @@ export function measure (): Record<string, Row> {
     'with a change secret: the lost device is unlocked and changes before the owner': removedWithASecret('changes first', 'has the new secret'),
     'with a change secret: the laptop was offline and changes on the old secret': removedWithASecret('locked', 'offline, old secret'),
     'with a change secret: phone and laptop each remove the tablet, apart': removedWithASecret('locked', 'removes the tablet too'),
+    'one main device: a linked device is lost and the main device changes the keys': linkedDeviceLost(),
+    'one main device: the laptop meets someone with a prepared binding': newContactOnALinkedDevice(2),
+    'one main device: the laptop meets someone without a prepared binding': newContactOnALinkedDevice(0),
+    'the counterpart has two devices and each took another continuation': counterpartSplit(false),
+    'the same; the counterpart\'s devices settle on one by a fixed rule': counterpartSplit(true),
     'an entry that is not a valid continuation arrives for a position already held': forgedEntry(),
     'a sibling that was offline during the change comes back': siblingComesBack(RULES),
     'the same; the old receive path stays open for a while': siblingComesBack(v({ graceAfterAck: true })),
