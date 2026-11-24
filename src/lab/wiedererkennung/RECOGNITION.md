@@ -109,8 +109,8 @@ library stands, not a requirement on it.
 
 | Trace | Library |
 |---|---|
-| `met-again` | follows every step, ends with one contact on both sides, as the rule |
-| `crossed-opening` | issues no mapping (two steps not followed), ends with two contacts on both sides; the rule gives one (R3: it does not admit the pair the other way round) |
+| `met-again` | after every step each person holds as many contacts as the rule gives there (the receiver goes from two to one at the step it is handed the mapping); one contact on both sides at the end |
+| `crossed-opening` | issues no mapping: differs from the rule at the two mapping steps and ends with two contacts on both sides; the rule gives one (R3: it does not admit the pair the other way round) |
 | `two-devices-apart`, `probe-read-again`, `mapping-not-verifiable`, `joined-by-a-third` | not runnable: a person acts on two devices |
 
 ## Where this came from

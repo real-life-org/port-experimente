@@ -17,3 +17,28 @@ test('the traces against the library: what it follows and where it ends', async 
   }
   expect(got).toEqual(expected)
 }, 120_000)
+
+const read = (name: string): Trace => JSON.parse(readFileSync(new URL(`../src/lab/wiedererkennung/traces/${name}.json`, import.meta.url), 'utf8')) as Trace
+
+// "Follows every step" is checked at the step: the receiver's contacts fall
+// from two to one when it is handed the mapping, not somewhere before the end.
+test('met-again: each mapping takes effect in the library at its own step', async () => {
+  const t = read('met-again'), r = await runOnLibrary(t)
+  const at = (n: number): string => (r.afterStep.find((x) => x.step === n) as { library: string }).library
+  const mappings = t.steps.map((s, i) => ('fetchMapping' in s ? i + 1 : 0)).filter(Boolean)
+  expect(mappings).toEqual([10, 12])
+  expect([at(9), at(10), at(12)]).toEqual(['2/2', '1/2', '1/1'])
+  expect(r.differsAt).toEqual([])
+}, 120_000)
+
+// Whether a trace can run depends on how many devices of a person act, not on what they are called.
+test('a trace in which a person acts on its second device only runs like the same trace on its first', async () => {
+  const t = read('met-again')
+  const swap = (d: string): string => (d === 'a1' ? 'a2' : d === 'a2' ? 'a1' : d)
+  const swapped = JSON.parse(JSON.stringify(t)) as Trace
+  for (const s of swapped.steps as unknown as Array<Record<string, string>>) for (const k of ['on', 'sync', 'to']) if (k in s) s[k] = swap(s[k] as string)
+  const c = swapped.expect.contacts; [c.a1, c.a2] = [c.a2, c.a1]
+  const r = await runOnLibrary(swapped)
+  expect(r.runnable).toBe(true)
+  expect({ ...r }).toEqual({ ...(await runOnLibrary(t)) })
+}, 120_000)

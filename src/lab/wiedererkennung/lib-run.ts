@@ -17,22 +17,36 @@
 //
 // Probes and mappings are held back until a step asks for them; every
 // other document (acknowledgements, credentials, stars, profiles) is
-// delivered at once, because the rule says nothing about them. Type
+// delivered at once, because the rule says nothing about them. After every
+// step the contacts each person holds are compared with what the rule gives
+// at that step, so a mapping that takes effect later than its step shows.
+// Type
 // checking is off: the library's results are read loosely here.
 import { seedKeys, createHolder } from 'rltp-lib'
 import { InMemoryStore } from 'rltp-lib/testing'
+import { contacts as groups, rule, start, type Device, type Event } from './rule'
 import type { Trace } from './traces'
 
 const PROBE = 'https://real-life.org/trust-tasks/spec/continuity-probe/0.1'
 const MAPPING = 'https://real-life.org/trust-tasks/spec/continuity-mapping/0.1'
 const BUNDLE = 'https://real-life.org/trust-tasks/spec/encounter-bundle/0.1'
 
-export type LibRun = { runnable: boolean, why?: string, notFollowed: string[], contacts: { a: number, b: number }, expected: { a: number, b: number }, asExpected: boolean }
+/** `afterStep`: per step that is not a sync, the contacts each person holds then, as "a/b", in the library and by the rule;
+ *  `differsAt`: the steps (counted from 1) after which the two differ. */
+export type LibRun = { runnable: boolean, why?: string, notFollowed: string[], afterStep: Array<{ step: number, library: string, rule: string }>, differsAt: number[], contacts: { a: number, b: number }, expected: { a: number, b: number }, asExpected: boolean }
 
 export async function runOnLibrary (t: Trace): Promise<LibRun> {
-  const expected = { a: t.expect.contacts.a1.length, b: t.expect.contacts.b1.length }
-  const acting = new Set(t.steps.filter((s) => !('sync' in s)).map((s) => s.on))
-  if (acting.has('a2') || acting.has('b2')) return { runnable: false, why: 'a person acts on two devices; the library has one device per holder', notFollowed: [], contacts: { a: 0, b: 0 }, expected, asExpected: false }
+  // the devices that act (a sync is no act of the person): a trace can run where each person acts on one, whatever its name
+  const acting = { a: new Set<string>(), b: new Set<string>() }
+  for (const s of t.steps) if (!('sync' in s)) acting[s.on[0]].add(s.on)
+  const device = { a: ([...acting.a][0] ?? 'a1') as Device, b: ([...acting.b][0] ?? 'b1') as Device }
+  const expected = { a: t.expect.contacts[device.a].length, b: t.expect.contacts[device.b].length }
+  if (acting.a.size > 1 || acting.b.size > 1) return { runnable: false, why: 'a person acts on two devices; the library has one device per holder', notFollowed: [], afterStep: [], differsAt: [], contacts: { a: 0, b: 0 }, expected, asExpected: false }
+  // the rule beside the library, step by step
+  const model = rule(t.setup)
+  let byRule = start()
+  const afterStep: LibRun['afterStep'] = [], differsAt: number[] = []
+  const ruleShows = (): string => `${groups(byRule.devices[device.a].tuples, byRule.devices[device.a].united).length}/${groups(byRule.devices[device.b].tuples, byRule.devices[device.b].united).length}`
 
   let clock = Date.parse('2026-10-15T09:00:00Z'), acts = 0
   const now = (): number => (clock += 10_000)
@@ -66,9 +80,16 @@ export async function runOnLibrary (t: Trace): Promise<LibRun> {
   const notFollowed: string[] = []
   const opened = new Set<string>()
   for (const [i, s] of t.steps.entries()) {
-    const label = `step ${i + 1} ${JSON.stringify(Object.fromEntries(Object.entries(s).filter(([k]) => k !== 'effect')))}`
+    const event = Object.fromEntries(Object.entries(s).filter(([k]) => k !== 'effect')) as Event
+    const label = `step ${i + 1} ${JSON.stringify(event)}`
+    byRule = model.apply(byRule, event).state
     if ('sync' in s) continue
     const me = s.on[0]
+    await act()
+    const library = `${(await P.a.h.contacts()).length}/${(await P.b.h.contacts()).length}`
+    afterStep.push({ step: i + 1, library, rule: ruleShows() })
+    if (library !== ruleShows()) differsAt.push(i + 1)
+    async function act (): Promise<void> {
     if ('open' in s) {
       opening = s.open
       if (!opened.has(s.open)) {
@@ -80,19 +101,20 @@ export async function runOnLibrary (t: Trace): Promise<LibRun> {
         opened.add(s.open)
       } else {
         const bundle = pull(me, BUNDLE, s.open)
-        if (!bundle) { notFollowed.push(`${label}: no bundle to accept`); continue }
+        if (!bundle) { notFollowed.push(`${label}: no bundle to accept`); return }
         await hand(me, bundle.envelope)
         const prompt = (await P[me].h.prompts()).find((p) => p.kind === 'encounter-confirm')
-        if (!prompt) { notFollowed.push(`${label}: no prompt after the bundle`); continue }
+        if (!prompt) { notFollowed.push(`${label}: no prompt after the bundle`); return }
         await take(me, (await P[me].h.decide(prompt.id, 'accept', at())).outbound)
       }
       await turn(); opening = null
-      continue
+      return
     }
     const doc = 'fetchProbe' in s ? pull(me, PROBE, s.fetchProbe) : pull(me, MAPPING)
-    if (!doc) { notFollowed.push(`${label}: the library has no such document waiting`); continue }
+    if (!doc) { notFollowed.push(`${label}: the library has no such document waiting`); return }
     await hand(me, doc.envelope)
     await turn()
+    }
   }
   // to rest: deliver whatever is still held, and what that causes
   for (let round = 0; round < 12; round++) {
@@ -101,5 +123,5 @@ export async function runOnLibrary (t: Trace): Promise<LibRun> {
     for (const d of held.splice(0)) await hand(d.to, d.envelope)
   }
   const contacts = { a: (await P.a.h.contacts()).length, b: (await P.b.h.contacts()).length }
-  return { runnable: true, notFollowed, contacts, expected, asExpected: contacts.a === expected.a && contacts.b === expected.b }
+  return { runnable: true, notFollowed, afterStep, differsAt, contacts, expected, asExpected: differsAt.length === 0 && contacts.a === expected.a && contacts.b === expected.b }
 }

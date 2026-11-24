@@ -5,6 +5,62 @@
       "step 10 {\"fetchMapping\":\"t1+t2\",\"on\":\"a1\"}: the library has no such document waiting",
       "step 12 {\"fetchMapping\":\"t1+t2\",\"on\":\"b1\"}: the library has no such document waiting"
     ],
+    "afterStep": [
+      {
+        "step": 1,
+        "library": "1/0",
+        "rule": "1/0"
+      },
+      {
+        "step": 2,
+        "library": "2/0",
+        "rule": "2/0"
+      },
+      {
+        "step": 3,
+        "library": "2/1",
+        "rule": "2/1"
+      },
+      {
+        "step": 4,
+        "library": "2/2",
+        "rule": "2/2"
+      },
+      {
+        "step": 5,
+        "library": "2/2",
+        "rule": "2/2"
+      },
+      {
+        "step": 6,
+        "library": "2/2",
+        "rule": "2/2"
+      },
+      {
+        "step": 8,
+        "library": "2/2",
+        "rule": "2/2"
+      },
+      {
+        "step": 9,
+        "library": "2/2",
+        "rule": "2/2"
+      },
+      {
+        "step": 10,
+        "library": "2/2",
+        "rule": "1/2"
+      },
+      {
+        "step": 12,
+        "library": "2/2",
+        "rule": "1/1"
+      }
+    ],
+    "differsAt": [
+      10,
+      12
+    ],
     "contacts": {
       "a": 2,
       "b": 2
@@ -19,6 +75,8 @@
     "runnable": false,
     "why": "a person acts on two devices; the library has one device per holder",
     "notFollowed": [],
+    "afterStep": [],
+    "differsAt": [],
     "contacts": {
       "a": 0,
       "b": 0
@@ -33,6 +91,8 @@
     "runnable": false,
     "why": "a person acts on two devices; the library has one device per holder",
     "notFollowed": [],
+    "afterStep": [],
+    "differsAt": [],
     "contacts": {
       "a": 0,
       "b": 0
@@ -46,6 +106,59 @@
   "met-again": {
     "runnable": true,
     "notFollowed": [],
+    "afterStep": [
+      {
+        "step": 1,
+        "library": "1/0",
+        "rule": "1/0"
+      },
+      {
+        "step": 2,
+        "library": "2/0",
+        "rule": "2/0"
+      },
+      {
+        "step": 3,
+        "library": "2/1",
+        "rule": "2/1"
+      },
+      {
+        "step": 4,
+        "library": "2/2",
+        "rule": "2/2"
+      },
+      {
+        "step": 5,
+        "library": "2/2",
+        "rule": "2/2"
+      },
+      {
+        "step": 6,
+        "library": "2/2",
+        "rule": "2/2"
+      },
+      {
+        "step": 8,
+        "library": "2/2",
+        "rule": "2/2"
+      },
+      {
+        "step": 9,
+        "library": "2/2",
+        "rule": "2/2"
+      },
+      {
+        "step": 10,
+        "library": "1/2",
+        "rule": "1/2"
+      },
+      {
+        "step": 12,
+        "library": "1/1",
+        "rule": "1/1"
+      }
+    ],
+    "differsAt": [],
     "contacts": {
       "a": 1,
       "b": 1
@@ -60,6 +173,8 @@
     "runnable": false,
     "why": "a person acts on two devices; the library has one device per holder",
     "notFollowed": [],
+    "afterStep": [],
+    "differsAt": [],
     "contacts": {
       "a": 0,
       "b": 0
@@ -74,6 +189,8 @@
     "runnable": false,
     "why": "a person acts on two devices; the library has one device per holder",
     "notFollowed": [],
+    "afterStep": [],
+    "differsAt": [],
     "contacts": {
       "a": 0,
       "b": 0
