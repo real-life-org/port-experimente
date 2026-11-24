@@ -103,6 +103,20 @@ function answerAfterTheChange (rules: Rules): Row {
   }
 }
 
+/** Someone without any key sends an entry for a position the counterpart already holds. */
+function forgedEntry (): Row {
+  const c = new Carrier(), [a, b] = [device('a'), device('b')] as [Device, Device]
+  met([a], [b], [a], [b])
+  change(a, RULES, [a]); send(a, c, RULES, 'message', 'news'); settle(c, RULES, [b, a])
+  const real = a.own.log[1]
+  if (!real) throw new Error('no change')
+  const st = b.peer.log[1]?.state
+  if (!st) throw new Error('b did not take the change')
+  c.put({ from: 'x', kind: 'message', text: 'x', sigKey: 'none', sig: '', entries: [{ ...real, id: 'forged', proof: real.proof }], sealedTo: b.own.log[0]?.state.enc ?? '', to: b.own.log[0]?.state.addr ?? '' })
+  settle(c, RULES, [b, a])
+  return { 'the counterpart keeps it as evidence': b.peer.evidence.length > 0, 'the counterpart shows the warning of a second continuation': has(b, 'second continuation'), 'the counterpart still follows a': headId(b.peer.log) === headId(a.own.log) && st.sig === real.state.sig }
+}
+
 /** The whole sequence: the phone changes keys while the laptop is offline,
  *  the counterpart acknowledges, the laptop comes back, the two sync in
  *  both directions. */
@@ -181,6 +195,7 @@ export function measure (): Record<string, Row> {
     'with a change secret: the lost device is unlocked and changes before the owner': removedWithASecret('changes first', 'has the new secret'),
     'with a change secret: the laptop was offline and changes on the old secret': removedWithASecret('locked', 'offline, old secret'),
     'with a change secret: phone and laptop each remove the tablet, apart': removedWithASecret('locked', 'removes the tablet too'),
+    'an entry that is not a valid continuation arrives for a position already held': forgedEntry(),
     'a sibling that was offline during the change comes back': siblingComesBack(RULES),
     'the same; the old receive path stays open for a while': siblingComesBack(v({ graceAfterAck: true })),
   }

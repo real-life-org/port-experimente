@@ -133,6 +133,11 @@
     "the laptop is heard": false,
     "the lost device can write the change after the owner's": false
   },
+  "an entry that is not a valid continuation arrives for a position already held": {
+    "the counterpart keeps it as evidence": false,
+    "the counterpart shows the warning of a second continuation": false,
+    "the counterpart still follows a": true
+  },
   "a sibling that was offline during the change comes back": {
     "the phone uses, before the acknowledgement": "new+old",
     "the phone uses, after the acknowledgement": "new",

@@ -203,6 +203,8 @@ export function receive (dev: Device, c: Carrier, rules: Rules): void {
       const held = dev.peer.log[e.n]
       if (held) {
         if (held.id === e.id) continue
+        // only a second VALID continuation of the same predecessor is evidence; anything else is ignored
+        if (!follows(e.n > 0 ? (dev.peer.log[e.n - 1] ?? null) : null, e)) { dev.notices.push('ignored an entry that does not continue the counterpart\'s log'); continue }
         refused = e
         if (!dev.peer.evidence.some((x) => x.id === e.id)) { dev.peer.evidence.push(e); dev.notices.push('a second continuation of the counterpart\'s log was refused') }
         continue
