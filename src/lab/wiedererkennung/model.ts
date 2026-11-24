@@ -16,11 +16,11 @@
 //      its first, whether or not there is anything more to prove: so its
 //      coming says nothing.
 //   2. A side that holds the other side's proof for a pair unites the two
-//      tuples, if on its own side the tuple the proof stands under is the
-//      head of its relationship (or the two are united already). The sender
-//      proves with all it holds; the receiver decides by what it knows. The
-//      union is a fact: the person's devices share it, and nothing takes it
-//      back.
+//      tuples, if on its own side each of the two is the head of its
+//      relationship (or the two are united already): whichever of the two
+//      the proof stands under and whichever it came on. The sender proves
+//      with all it holds; the receiver decides by what it knows. The union
+//      is a fact: the person's devices share it, and nothing takes it back.
 //   3. A proof is owed until the carrier says the other side has it. Any
 //      device of the person can send it: it is the same document, byte for
 //      byte.
@@ -96,15 +96,16 @@ export function relationships (dev: Device): string[][] {
 export const contacts = (dev: Device): number => relationships(dev).length
 /** The head of a relationship: one of its tuples, the same on every device that holds the same unions (here: the largest name). */
 const head = (group: string[]): string => group[group.length - 1] as string
-const heads = (dev: Device): Set<string> => new Set(relationships(dev).map(head))
 
 /** The document for the pairs {x, on}: the values, filled up with values
- *  derived from the person's secret, so that every device of the person
- *  makes the same bytes and a repeat shows nothing a first sending did not. */
+ *  derived from the person's secret, the tuple and which document of the
+ *  tuple it is. A repeat of one sending is the same bytes. Two siblings
+ *  that make "the same" document of a tuple from different knowledge make
+ *  different documents with the same filling: where one holds a value, the
+ *  other holds a filler, and what they share is values and fillers alike. */
 function make (dev: Device, on: End, xs: End[], n: number): Doc {
   const tags = xs.map((x) => tag(x, x.side, on, on.side))
-  const names = xs.map((x) => endKey(x.id, x.side)).sort()
-  for (let i = 0; tags.length === 0 || tags.length % STEP; i++) tags.push(mac(dev.person, ['fill', on.id, on.side, names, n, i]).slice(0, 43))
+  for (let i = 0; tags.length === 0 || tags.length % STEP; i++) tags.push(mac(dev.person, ['fill', on.id, on.side, n, i]).slice(0, 43))
   tags.sort()
   return { id: createHash('sha256').update(JSON.stringify([on.id, on.side, tags])).digest('hex').slice(0, 16), on: on.id, from: on.side, tags }
 }
@@ -152,19 +153,23 @@ export function sendAgain (dev: Device, c: Carrier): number {
  *  out. */
 export function catchUp (dev: Device, c: Carrier): number {
   let docs = 0
-  // owed: every pair of heads, and every pair this person united on the other side's proof without having proved it itself
-  const hs = heads(dev), done = proved(dev)
+  // owed: every pair of own tuples that was not proved yet, whatever this side united
+  const done = proved(dev)
   const all = endsOf(dev).sort((p, q) => (p.id < q.id ? -1 : 1))
   for (const on of all) {
-    const xs = all.filter((x) => x.id < on.id && !done.has(pairOf(x.id, on.id)) && ((hs.has(x.id) && hs.has(on.id)) || dev.united.has(pairOf(x.id, on.id))))
+    const xs = all.filter((x) => x.id < on.id && !done.has(pairOf(x.id, on.id)))
     if (xs.length || sentOn(dev, on) < 2) { prove(dev, c, on, xs); docs++ }
   }
   return docs
 }
 
 /** Sentence 2. A device reads the documents it holds with the ends it
- *  holds: a value it can make itself, under an end whose tuple is the head
- *  of its relationship here, unites the two tuples. Until nothing changes. */
+ *  holds: a value it can make itself unites the two tuples, if each of them
+ *  is the head of its relationship here. Until nothing changes. Which
+ *  pairs get united depends on the order the documents are read in; which
+ *  tuples end up in one relationship does not, once a proof for every pair
+ *  has come (two parts of one person always have two heads with a proof
+ *  between them). */
 export function evaluate (dev: Device): void {
   const can = (d: Doc, tags: Set<string>, x: End, on: End): boolean => {
     const k = `${d.id}|${x.id}/${x.side}`
@@ -182,8 +187,8 @@ export function evaluate (dev: Device): void {
       const tags = new Set(d.tags)
       for (const x of endsOf(dev)) {
         if (x.id === on.id || dev.united.has(pairOf(x.id, on.id)) || !can(d, tags, x, on)) continue
-        const g = groupOf.get(x.id) as string[]
-        if (head(g) !== x.id && !g.includes(on.id)) continue                  // only the head of a relationship proves something new
+        const g = groupOf.get(x.id) as string[], go = groupOf.get(on.id) as string[]
+        if (g !== go && (head(g) !== x.id || head(go) !== on.id)) continue    // a new union takes two heads, whichever way round the proof came
         dev.united.add(pairOf(x.id, on.id)); changed = true
       }
       if (changed) break

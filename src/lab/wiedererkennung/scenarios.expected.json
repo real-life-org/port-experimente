@@ -73,9 +73,24 @@
     "a counts the newcomer as b": true,
     "contacts of a": 1
   },
-  "a copied key of an older tuple of a relationship": {
+  "a copied key of an older tuple, the proof under it": {
     "a counts the newcomer as b": false,
     "contacts of a": 2
+  },
+  "a copied key of an older tuple, the proof the other way round": {
+    "a counts the newcomer as b": false,
+    "contacts of a": 2
+  },
+  "three tuples, proofs for two pairs under the same tuple": {
+    "before b's devices synced, a holds of b at most": 2,
+    "after b's devices synced and proved the last pair, a holds of b": 1,
+    "and b holds of a": "1 and 1"
+  },
+  "two siblings make the second document of one tuple apart": {
+    "documents the stranger holds on the tuple": 3,
+    "values the two second documents share (of 256)": 255,
+    "values either shares with the first document": 0,
+    "values of all of it the stranger can read": 0
   },
   "b lost everything": {
     "a holds of b": 2,

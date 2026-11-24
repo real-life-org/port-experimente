@@ -174,15 +174,57 @@ function ownDevicesScan (): Row {
   return { 'contacts before': before, 'contacts of other people afterwards': relationships(phone).filter((g) => g.length === 1).length - 1, 'b and c fell into one': contacts(phone) < 3 }
 }
 
-/** Someone copied one end of a tuple of B's relationship with A and meets A as a new contact. `which`: the head of the relationship, or a tuple behind it. */
-function copied (which: 'the head' | 'an older tuple'): Row {
+/** Someone copied one end of a tuple of B's relationship with A and meets A
+ *  as a new contact. `which`: the head of the relationship, or a tuple
+ *  behind it. `way`: the proof stands under the copied key and comes on the
+ *  fresh tuple, or stands under the fresh tuple and comes on the old one. */
+function copied (which: 'the head' | 'an older tuple', way: 'on the fresh tuple' | 'on the old tuple'): Row {
   const c = new Carrier(), [a, b, thief] = [device('a'), device('b'), device('thief')] as [Device, Device, Device]
   const t1 = meet(a, b, c); settle(c, [a, b]); const t2 = meet(a, b, c); settle(c, [a, b])
   const h = headOf(a, t1), old = h === t1 ? t2 : t1
   const stolen = { ...endOf(b, which === 'the head' ? h : old) }
   const t = meet(a, thief, c), mine = endOf(thief, t)
-  forge(c, stolen, { id: t, from: mine.side, key: mine.key }); settle(c, [a, thief])
+  if (way === 'on the fresh tuple') forge(c, stolen, { id: t, from: mine.side, key: mine.key })
+  else forge(c, mine, { id: stolen.id, from: stolen.side, key: stolen.key })
+  settle(c, [a, thief])
   return { 'a counts the newcomer as b': relationships(a).some((g) => g.includes(t1) && g.includes(t)), 'contacts of a': contacts(a) }
+}
+
+/** Three tuples of A and B. B's second device made the third knowing the first but not the second, so A holds proofs for two pairs under the same tuple. */
+function threeTuples (): Row {
+  const c = new Carrier(), a = device('a'), b1 = device('b1'), b2 = device('b2', b1)
+  meet(a, b1, c); settle(c, [a, b1]); share(b1, b2)
+  meet(a, b1, c); meet(a, b2, c); settle(c, [a])
+  const before = contacts(a)
+  settle(c, [b1, b2]); sync(c, [b1, b2]); settle(c, [a])
+  return {
+    'before b\'s devices synced, a holds of b at most': before <= 2 ? 2 : before,
+    'after b\'s devices synced and proved the last pair, a holds of b': contacts(a),
+    'and b holds of a': [contacts(b1), contacts(b2)].join(' and '),
+  }
+}
+
+/** Two siblings each make the second document of the same tuple, one of
+ *  them knowing one tuple more. Which tuple a late pair travels on follows
+ *  the names, so the case is drawn until the two documents differ. */
+function siblingsApart (): Row {
+  for (let i = 0; i < 200; i++) {
+    const c = new Carrier(), a1 = device('a1'), a2 = device('a2', a1), a3 = device('a3', a1), x = device('x'), y = device('y'), z = device('z')
+    const t = meet(a1, x, c); settle(c, [a1, x]); share(a1, a3)
+    meet(a2, y, c); meet(a3, z, c); settle(c, [a2, a3, y, z])   // a2 has not heard of x's tuple when it meets y
+    share(a2, a1)                                          // a1 learns of y's tuple and owes the pair; a3 does not know of it
+    catchUp(a1, c); catchUp(a3, c); settle(c, [x])
+    const docs = [...x.got.values()].filter((d) => d.on === t)
+    if (docs.length !== 3) continue
+    const pairs = docs.flatMap((d, k) => docs.slice(k + 1).map((o) => o.tags.filter((v) => d.tags.includes(v)).length))
+    return {
+      'documents the stranger holds on the tuple': docs.length,
+      'values the two second documents share (of 256)': Math.max(...pairs),
+      'values either shares with the first document': Math.min(...pairs),
+      'values of all of it the stranger can read': readable(x),
+    }
+  }
+  return { 'the case did not come up in 200 draws': true }
 }
 
 /** B lost everything and meets A with a new device. */
@@ -262,8 +304,11 @@ export const measure = (): Record<string, Row> => ({
   'a device fetches the other side\'s proof and is lost before it shares it': fetchedAndLost(),
   'a contact hands in a value on a tuple that is not its own': onAForeignTuple(),
   'a\'s own devices scan each other': ownDevicesScan(),
-  'a copied key of the head of a relationship': copied('the head'),
-  'a copied key of an older tuple of a relationship': copied('an older tuple'),
+  'a copied key of the head of a relationship': copied('the head', 'on the fresh tuple'),
+  'a copied key of an older tuple, the proof under it': copied('an older tuple', 'on the fresh tuple'),
+  'a copied key of an older tuple, the proof the other way round': copied('an older tuple', 'on the old tuple'),
+  'three tuples, proofs for two pairs under the same tuple': threeTuples(),
+  'two siblings make the second document of one tuple apart': siblingsApart(),
   'b lost everything': dataLoss(),
   'the same proof sent twice': repeated(),
   'random schedules': randomSchedules(60),
