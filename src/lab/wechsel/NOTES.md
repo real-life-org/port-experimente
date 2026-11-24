@@ -117,8 +117,10 @@ Person A with phone, laptop and a lost tablet, and a member B. Measured
 4. **Two own devices that change apart do not break the group.** Everyone
    computes the same key for A; one of the two is read, the device whose
    change lost is not until it took the other's keys (which of them loses
-   is decided by the entries' ids). With a derived next key both write the
-   same change and both are read.
+   is decided by the entries' ids). If both write the same change, both
+   are read; the model does not derive it here but hands both devices one
+   prepared key, so this row shows the effect of an identical change, not
+   that a derivation produces one.
 5. **Who may write a change decides the theft case.** If the key every
    device holds may write it, or the lost device holds the update key, the
    lost device changes first, is taken as A, and the owner cannot change
@@ -127,7 +129,10 @@ Person A with phone, laptop and a lost tablet, and a member B. Measured
    keys have to reach it through the person's own devices.
 
 Not modelled: the group's key agreement (the new epoch is sealed to a list
-of receive keys), votes, joining, the personal group.
+of receive keys, and the new keys reach the chosen devices by a function
+call), two devices sending under one leaf, votes, joining, the personal
+group. The removal of one device by a change of the person's key is
+therefore shown only against this stand-in, not against a key tree.
 
 ## What the switches cover
 
@@ -138,6 +143,17 @@ check. The switch for log heads removes the two heads and nothing else;
 since the heads are also how a change is acknowledged, a variant without
 them never stops attaching the entry and never closes the old receive
 path. That is the effect measured in finding 3, not a weaker check.
+
+## What the model does not show
+
+- One main device that alone holds the change secret: in the cases with a
+  secret, phone, laptop and the lost tablet all hold it. "A lost device
+  without an update key cannot change anything" is measured with drawn
+  keys only.
+- A new relationship or a join on a device that holds no secret.
+- A counterpart with two devices under attack: one takes the owner's
+  continuation, the other the lost device's.
+- Holders, wrapping, handing the role over, recovery, time.
 
 ## Limits
 
