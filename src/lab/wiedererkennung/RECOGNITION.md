@@ -100,6 +100,19 @@ replaced tuple stops being answered); what a union sends afterwards
 (profile, anchor mapping); a tuple opened by one side only; more than one
 probe per tuple; the ceremony that opens a tuple.
 
+## Against the library
+
+`lib-run.ts` runs the same traces against the published library (0.19.0,
+which implements Trust 0.31: chaining, one device per holder) and
+`lib-run.expected.json` pins what it does. A measurement of where the
+library stands, not a requirement on it.
+
+| Trace | Library |
+|---|---|
+| `met-again` | follows every step, ends with one contact on both sides, as the rule |
+| `crossed-opening` | issues no mapping (two steps not followed), ends with two contacts on both sides; the rule gives one (R3: it does not admit the pair the other way round) |
+| `two-devices-apart`, `probe-read-again`, `mapping-not-verifiable`, `joined-by-a-third` | not runnable: a person acts on two devices |
+
 ## Where this came from
 
 The rules are the ones of the Trust 0.32 inventory for section 6a, with the

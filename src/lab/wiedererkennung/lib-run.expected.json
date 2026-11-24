@@ -1,0 +1,87 @@
+{
+  "crossed-opening": {
+    "runnable": true,
+    "notFollowed": [
+      "step 10 {\"fetchMapping\":\"t1+t2\",\"on\":\"a1\"}: the library has no such document waiting",
+      "step 12 {\"fetchMapping\":\"t1+t2\",\"on\":\"b1\"}: the library has no such document waiting"
+    ],
+    "contacts": {
+      "a": 2,
+      "b": 2
+    },
+    "expected": {
+      "a": 1,
+      "b": 1
+    },
+    "asExpected": false
+  },
+  "joined-by-a-third": {
+    "runnable": false,
+    "why": "a person acts on two devices; the library has one device per holder",
+    "notFollowed": [],
+    "contacts": {
+      "a": 0,
+      "b": 0
+    },
+    "expected": {
+      "a": 1,
+      "b": 1
+    },
+    "asExpected": false
+  },
+  "mapping-not-verifiable": {
+    "runnable": false,
+    "why": "a person acts on two devices; the library has one device per holder",
+    "notFollowed": [],
+    "contacts": {
+      "a": 0,
+      "b": 0
+    },
+    "expected": {
+      "a": 1,
+      "b": 1
+    },
+    "asExpected": false
+  },
+  "met-again": {
+    "runnable": true,
+    "notFollowed": [],
+    "contacts": {
+      "a": 1,
+      "b": 1
+    },
+    "expected": {
+      "a": 1,
+      "b": 1
+    },
+    "asExpected": true
+  },
+  "probe-read-again": {
+    "runnable": false,
+    "why": "a person acts on two devices; the library has one device per holder",
+    "notFollowed": [],
+    "contacts": {
+      "a": 0,
+      "b": 0
+    },
+    "expected": {
+      "a": 1,
+      "b": 1
+    },
+    "asExpected": false
+  },
+  "two-devices-apart": {
+    "runnable": false,
+    "why": "a person acts on two devices; the library has one device per holder",
+    "notFollowed": [],
+    "contacts": {
+      "a": 0,
+      "b": 0
+    },
+    "expected": {
+      "a": 2,
+      "b": 2
+    },
+    "asExpected": false
+  }
+}
