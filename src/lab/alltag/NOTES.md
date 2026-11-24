@@ -40,6 +40,60 @@ Not measured: whether a real mediator hands a document to every device of
 an address; whether two accepted credential deliveries make two
 relationships.
 
+## What is left afterwards (`aftermath.ts`)
+
+The table above says what the counterpart answers to the second document.
+This says whether that answer leaves damage. Seven scenarios, each with two
+devices and with one, settled, then observed for five days: the clock
+steps once per day and what falls due is delivered at that instant, so
+both runs cover the same five days. Measured 2026-11-24, library 0.19.0;
+the full table is `aftermath.expected.json`.
+
+Two comparisons, with different reach:
+
+- **The friend, with two devices against with one:** per contact the
+  verification and the trust flags (given, received, pending); per group
+  the phase and the numbers of members and of pending; the number of inbox
+  items. Not compared at the friend: names, whether a contact can be
+  messaged, the profile, open prompts, counters, revisions, message
+  contents.
+- **The phone against the laptop:** per contact the name, the
+  verification, the trust flags and whether it can be messaged; per group
+  name, phase and the two numbers; the profile; the number of inbox items;
+  the kinds of open prompts. Not compared: counters, revisions, message
+  contents.
+
+| Scenario | The friend shows | The two devices show | Sent and refused on each of the five days |
+|---|---|---|---|
+| the friend trusts; each device takes the star | as with one device | the same | the laptop's `star` (RLTP-TRU-5150) |
+| the friend writes a message | as with one device | the same | nothing |
+| the friend sets a profile | as with one device | the same | nothing |
+| the friend invites; each device answers the prelude; the phone accepts | as with one device | differ: the laptop is no member and still holds the prompt | the laptop's `membership-prelude-reply` (RLTP-MT-3965) |
+| the friend invites; both devices accept apart | as with one device | differ: the laptop is no member | the laptop's `membership-prelude-reply` and `membership-accept` (RLTP-MT-3270) |
+| trust is given on both devices apart | as with one device | the same | the laptop's `anchor-mapping` (RLTP-TRU-6270) |
+| nothing happens for a week | as with one device | the same | nothing |
+
+Three findings:
+
+1. **In what was compared, the counterpart shows no difference.** In every
+   scenario the friend's verification, trust flags, group phase, member
+   and pending numbers and inbox number are those of the run with one
+   device. An extra open prompt at the friend, or another value of
+   "can be messaged", would not show in this table.
+2. **The refused device never learns.** A refusal carries no reason and no
+   acknowledgement, so the laptop offers the same document again, once on
+   each observed day. What would end it is an answer where the counterpart
+   refuses today.
+3. **A device refuses the answer to its sibling's document.** The laptop
+   refuses the friend's `delivery-ack`, `x-membership-welcome` and
+   `x-access-page` that answer the phone's documents (`validation-failed`),
+   and so stays outside the group the person joined. That is the person's
+   own side: the laptop would need the phone's sent documents.
+
+Without a second device the same scenarios send acknowledgements on every
+observed day as well (20 to 50 in five days); that is the library's own
+repetition and no effect of the second device.
+
 ## The common core of the layer (`core.ts`)
 
 The three cuts below each built their own log, their own loop over open

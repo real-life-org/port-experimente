@@ -1,0 +1,177 @@
+{
+  "the friend trusts; each device takes the star": {
+    "two": {
+      "refused while settling": "friend refuses laptop's star/0.2 (validation-failed RLTP-TRU-5150); laptop refuses friend's delivery-ack/0.1 (validation-failed)",
+      "sent in the 5 days after": "friend delivery-ack/0.1 ×25; laptop delivery-ack/0.1 ×25; laptop star/0.2 ×5; phone delivery-ack/0.1 ×25",
+      "refused in the 5 days after": "friend refuses laptop's star/0.2 (validation-failed RLTP-TRU-5150) ×5; laptop refuses friend's delivery-ack/0.1 (validation-failed) ×5",
+      "the devices differ in": "nothing",
+      "still owing (duties and outbox)": "phone 5, laptop 5, friend 5",
+      "the friend shows": "{\"contacts\":[{\"v\":\"mutual\",\"given\":true,\"received\":false,\"pending\":false}],\"groups\":[],\"inbox\":0}",
+      "the phone shows": "{\"contacts\":[{\"name\":\"Bea\",\"v\":\"mutual\",\"given\":false,\"received\":true,\"pending\":false}],\"groups\":[],\"inbox\":0}"
+    },
+    "one": {
+      "refused while settling": "nothing",
+      "sent in the 5 days after": "friend delivery-ack/0.1 ×25; phone delivery-ack/0.1 ×25",
+      "refused in the 5 days after": "nothing",
+      "the devices differ in": "one device",
+      "still owing (duties and outbox)": "phone 5, friend 5",
+      "the friend shows": "{\"contacts\":[{\"v\":\"mutual\",\"given\":true,\"received\":false,\"pending\":false}],\"groups\":[],\"inbox\":0}",
+      "the phone shows": "{\"contacts\":[{\"name\":\"Bea\",\"v\":\"mutual\",\"given\":false,\"received\":true,\"pending\":false}],\"groups\":[],\"inbox\":0}"
+    },
+    "differs": [
+      "refused while settling",
+      "sent in the 5 days after",
+      "refused in the 5 days after",
+      "still owing (duties and outbox)"
+    ]
+  },
+  "the friend writes a message; each device takes it": {
+    "two": {
+      "refused while settling": "nothing",
+      "sent in the 5 days after": "friend delivery-ack/0.1 ×20; laptop delivery-ack/0.1 ×25; phone delivery-ack/0.1 ×25",
+      "refused in the 5 days after": "nothing",
+      "the devices differ in": "nothing",
+      "still owing (duties and outbox)": "phone 4, laptop 4, friend 5",
+      "the friend shows": "{\"contacts\":[{\"v\":\"mutual\",\"given\":false,\"received\":false,\"pending\":false}],\"groups\":[],\"inbox\":0}",
+      "the phone shows": "{\"contacts\":[{\"name\":\"Bea\",\"v\":\"mutual\",\"given\":false,\"received\":false,\"pending\":false}],\"groups\":[],\"inbox\":1}"
+    },
+    "one": {
+      "refused while settling": "nothing",
+      "sent in the 5 days after": "friend delivery-ack/0.1 ×20; phone delivery-ack/0.1 ×25",
+      "refused in the 5 days after": "nothing",
+      "the devices differ in": "one device",
+      "still owing (duties and outbox)": "phone 4, friend 5",
+      "the friend shows": "{\"contacts\":[{\"v\":\"mutual\",\"given\":false,\"received\":false,\"pending\":false}],\"groups\":[],\"inbox\":0}",
+      "the phone shows": "{\"contacts\":[{\"name\":\"Bea\",\"v\":\"mutual\",\"given\":false,\"received\":false,\"pending\":false}],\"groups\":[],\"inbox\":1}"
+    },
+    "differs": [
+      "sent in the 5 days after",
+      "still owing (duties and outbox)"
+    ]
+  },
+  "the friend sets a profile; each device takes it": {
+    "two": {
+      "refused while settling": "nothing",
+      "sent in the 5 days after": "friend delivery-ack/0.1 ×20; laptop delivery-ack/0.1 ×20; phone delivery-ack/0.1 ×20",
+      "refused in the 5 days after": "nothing",
+      "the devices differ in": "nothing",
+      "still owing (duties and outbox)": "phone 4, laptop 4, friend 4",
+      "the friend shows": "{\"contacts\":[{\"v\":\"mutual\",\"given\":false,\"received\":false,\"pending\":false}],\"groups\":[],\"inbox\":0}",
+      "the phone shows": "{\"contacts\":[{\"name\":\"Bea\",\"v\":\"mutual\",\"given\":false,\"received\":false,\"pending\":false}],\"groups\":[],\"inbox\":0}"
+    },
+    "one": {
+      "refused while settling": "nothing",
+      "sent in the 5 days after": "friend delivery-ack/0.1 ×20; phone delivery-ack/0.1 ×20",
+      "refused in the 5 days after": "nothing",
+      "the devices differ in": "one device",
+      "still owing (duties and outbox)": "phone 4, friend 4",
+      "the friend shows": "{\"contacts\":[{\"v\":\"mutual\",\"given\":false,\"received\":false,\"pending\":false}],\"groups\":[],\"inbox\":0}",
+      "the phone shows": "{\"contacts\":[{\"name\":\"Bea\",\"v\":\"mutual\",\"given\":false,\"received\":false,\"pending\":false}],\"groups\":[],\"inbox\":0}"
+    },
+    "differs": [
+      "sent in the 5 days after",
+      "still owing (duties and outbox)"
+    ]
+  },
+  "the friend invites; each device answers the prelude; the phone accepts": {
+    "two": {
+      "refused while settling": "friend refuses laptop's membership-prelude-reply/0.1 (validation-failed RLTP-MT-3965) ×2; laptop refuses friend's delivery-ack/0.1 (validation-failed) ×6; laptop refuses friend's x-access-page/0.1 (validation-failed) ×2; laptop refuses friend's x-membership-welcome/0.1 (validation-failed)",
+      "sent in the 5 days after": "friend delivery-ack/0.1 ×45; laptop delivery-ack/0.1 ×35; laptop membership-prelude-reply/0.1 ×5; phone delivery-ack/0.1 ×50",
+      "refused in the 5 days after": "friend refuses laptop's membership-prelude-reply/0.1 (validation-failed RLTP-MT-3965) ×5; laptop refuses friend's delivery-ack/0.1 (validation-failed) ×25",
+      "the devices differ in": "groups, prompts",
+      "still owing (duties and outbox)": "phone 9, laptop 5, friend 10",
+      "the friend shows": "{\"contacts\":[{\"v\":\"mutual\",\"given\":false,\"received\":false,\"pending\":false}],\"groups\":[\"member/2/0\"],\"inbox\":0}",
+      "the phone shows": "{\"contacts\":[{\"name\":\"Bea\",\"v\":\"mutual\",\"given\":false,\"received\":false,\"pending\":false}],\"groups\":[\"member/2/0\"],\"inbox\":0}"
+    },
+    "one": {
+      "refused while settling": "nothing",
+      "sent in the 5 days after": "friend delivery-ack/0.1 ×45; phone delivery-ack/0.1 ×50",
+      "refused in the 5 days after": "nothing",
+      "the devices differ in": "one device",
+      "still owing (duties and outbox)": "phone 9, friend 10",
+      "the friend shows": "{\"contacts\":[{\"v\":\"mutual\",\"given\":false,\"received\":false,\"pending\":false}],\"groups\":[\"member/2/0\"],\"inbox\":0}",
+      "the phone shows": "{\"contacts\":[{\"name\":\"Bea\",\"v\":\"mutual\",\"given\":false,\"received\":false,\"pending\":false}],\"groups\":[\"member/2/0\"],\"inbox\":0}"
+    },
+    "differs": [
+      "refused while settling",
+      "sent in the 5 days after",
+      "refused in the 5 days after",
+      "still owing (duties and outbox)"
+    ]
+  },
+  "the friend invites; both devices accept apart": {
+    "two": {
+      "refused while settling": "friend refuses laptop's membership-accept/0.2 (validation-failed RLTP-MT-3270) ×2; friend refuses laptop's membership-prelude-reply/0.1 (validation-failed RLTP-MT-3965) ×2; laptop refuses friend's delivery-ack/0.1 (validation-failed) ×10; laptop refuses friend's x-access-page/0.1 (validation-failed) ×2; laptop refuses friend's x-membership-welcome/0.1 (validation-failed)",
+      "sent in the 5 days after": "friend delivery-ack/0.1 ×45; laptop delivery-ack/0.1 ×35; laptop membership-accept/0.2 ×5; laptop membership-prelude-reply/0.1 ×5; phone delivery-ack/0.1 ×50",
+      "refused in the 5 days after": "friend refuses laptop's membership-accept/0.2 (validation-failed RLTP-MT-3270) ×5; friend refuses laptop's membership-prelude-reply/0.1 (validation-failed RLTP-MT-3965) ×5; laptop refuses friend's delivery-ack/0.1 (validation-failed) ×25",
+      "the devices differ in": "groups",
+      "still owing (duties and outbox)": "phone 9, laptop 6, friend 10",
+      "the friend shows": "{\"contacts\":[{\"v\":\"mutual\",\"given\":false,\"received\":false,\"pending\":false}],\"groups\":[\"member/2/0\"],\"inbox\":0}",
+      "the phone shows": "{\"contacts\":[{\"name\":\"Bea\",\"v\":\"mutual\",\"given\":false,\"received\":false,\"pending\":false}],\"groups\":[\"member/2/0\"],\"inbox\":0}"
+    },
+    "one": {
+      "refused while settling": "nothing",
+      "sent in the 5 days after": "friend delivery-ack/0.1 ×45; phone delivery-ack/0.1 ×50",
+      "refused in the 5 days after": "nothing",
+      "the devices differ in": "one device",
+      "still owing (duties and outbox)": "phone 9, friend 10",
+      "the friend shows": "{\"contacts\":[{\"v\":\"mutual\",\"given\":false,\"received\":false,\"pending\":false}],\"groups\":[\"member/2/0\"],\"inbox\":0}",
+      "the phone shows": "{\"contacts\":[{\"name\":\"Bea\",\"v\":\"mutual\",\"given\":false,\"received\":false,\"pending\":false}],\"groups\":[\"member/2/0\"],\"inbox\":0}"
+    },
+    "differs": [
+      "refused while settling",
+      "sent in the 5 days after",
+      "refused in the 5 days after",
+      "still owing (duties and outbox)"
+    ]
+  },
+  "trust is given on both devices apart": {
+    "two": {
+      "refused while settling": "friend refuses laptop's anchor-mapping/0.3 (validation-failed RLTP-TRU-6270) ×2; laptop refuses friend's delivery-ack/0.1 (validation-failed) ×2",
+      "sent in the 5 days after": "friend delivery-ack/0.1 ×25; laptop anchor-mapping/0.3 ×5; laptop delivery-ack/0.1 ×25; phone delivery-ack/0.1 ×25",
+      "refused in the 5 days after": "friend refuses laptop's anchor-mapping/0.3 (validation-failed RLTP-TRU-6270) ×5; laptop refuses friend's delivery-ack/0.1 (validation-failed) ×5",
+      "the devices differ in": "nothing",
+      "still owing (duties and outbox)": "phone 5, laptop 5, friend 5",
+      "the friend shows": "{\"contacts\":[{\"v\":\"mutual\",\"given\":false,\"received\":true,\"pending\":false}],\"groups\":[],\"inbox\":0}",
+      "the phone shows": "{\"contacts\":[{\"name\":\"Bea\",\"v\":\"mutual\",\"given\":true,\"received\":false,\"pending\":false}],\"groups\":[],\"inbox\":0}"
+    },
+    "one": {
+      "refused while settling": "nothing",
+      "sent in the 5 days after": "friend delivery-ack/0.1 ×25; phone delivery-ack/0.1 ×25",
+      "refused in the 5 days after": "nothing",
+      "the devices differ in": "one device",
+      "still owing (duties and outbox)": "phone 5, friend 5",
+      "the friend shows": "{\"contacts\":[{\"v\":\"mutual\",\"given\":false,\"received\":true,\"pending\":false}],\"groups\":[],\"inbox\":0}",
+      "the phone shows": "{\"contacts\":[{\"name\":\"Bea\",\"v\":\"mutual\",\"given\":true,\"received\":false,\"pending\":false}],\"groups\":[],\"inbox\":0}"
+    },
+    "differs": [
+      "refused while settling",
+      "sent in the 5 days after",
+      "refused in the 5 days after",
+      "still owing (duties and outbox)"
+    ]
+  },
+  "nothing happens for a week": {
+    "two": {
+      "refused while settling": "nothing",
+      "sent in the 5 days after": "nothing",
+      "refused in the 5 days after": "nothing",
+      "the devices differ in": "nothing",
+      "still owing (duties and outbox)": "phone 4, laptop 4, friend 4",
+      "the friend shows": "{\"contacts\":[{\"v\":\"mutual\",\"given\":false,\"received\":false,\"pending\":false}],\"groups\":[],\"inbox\":0}",
+      "the phone shows": "{\"contacts\":[{\"name\":\"Bea\",\"v\":\"mutual\",\"given\":false,\"received\":false,\"pending\":false}],\"groups\":[],\"inbox\":0}"
+    },
+    "one": {
+      "refused while settling": "nothing",
+      "sent in the 5 days after": "nothing",
+      "refused in the 5 days after": "nothing",
+      "the devices differ in": "one device",
+      "still owing (duties and outbox)": "phone 4, friend 4",
+      "the friend shows": "{\"contacts\":[{\"v\":\"mutual\",\"given\":false,\"received\":false,\"pending\":false}],\"groups\":[],\"inbox\":0}",
+      "the phone shows": "{\"contacts\":[{\"name\":\"Bea\",\"v\":\"mutual\",\"given\":false,\"received\":false,\"pending\":false}],\"groups\":[],\"inbox\":0}"
+    },
+    "differs": [
+      "still owing (duties and outbox)"
+    ]
+  }
+}
