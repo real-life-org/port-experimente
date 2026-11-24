@@ -100,6 +100,29 @@ replaced tuple stops being answered); what a union sends afterwards
 (profile, anchor mapping); a tuple opened by one side only; more than one
 probe per tuple; the ceremony that opens a tuple.
 
+## Against the library
+
+`lib-run.ts` runs the same traces against the published library (0.19.0,
+which implements Trust 0.31: chaining, one device per holder), under both
+ceremonies that open a tuple: `shared-connect` 0.1, which the app uses, and
+`encounter-scan`. `lib-run.expected.json` pins what it does. A measurement
+of where the library stands, not a requirement on it.
+
+The outcome is the same under both ceremonies:
+
+| Trace | Library |
+|---|---|
+| `met-again` | after every step each person holds as many contacts as the rule gives there (the receiver goes from two to one at the step it is handed the mapping); one contact on both sides at the end |
+| `crossed-opening` | issues no mapping: differs from the rule at the two mapping steps and ends with two contacts on both sides; the rule gives one (R3: it does not admit the pair the other way round) |
+| `two-devices-apart`, `probe-read-again`, `mapping-not-verifiable`, `joined-by-a-third` | not runnable: a person acts on two devices |
+
+Measured on the way, for `shared-connect`: the responder's tuple opens when
+the inviter's issue reaches it; the inviter's tuple opens when the receipt
+of its own issue comes back. The two sides therefore open two tuples in
+opposite order as soon as two such receipts arrive in the other order than
+the ceremonies ran; `crossed-opening` is that schedule and needs no
+scanning in both directions.
+
 ## Where this came from
 
 The rules are the ones of the Trust 0.32 inventory for section 6a, with the
