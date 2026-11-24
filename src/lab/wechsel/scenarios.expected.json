@@ -88,6 +88,163 @@
     "the laptop is told its state is stale": true,
     "the laptop sees that the counterpart holds an entry it does not know": true
   },
+  "with a change secret: a device is removed, the lost one is locked": {
+    "the lost device wrote a change": false,
+    "the counterpart follows": "the owner",
+    "the counterpart shows a warning": false,
+    "the owner learned that its continuation was refused": false,
+    "the laptop wrote the same entry as the phone": true,
+    "the laptop is heard": true,
+    "the lost device can write the change after the owner's": false
+  },
+  "with a change secret: the lost device is unlocked and changes after the owner": {
+    "the lost device wrote a change": true,
+    "the counterpart follows": "the owner",
+    "the counterpart shows a warning": true,
+    "the owner learned that its continuation was refused": false,
+    "the laptop wrote the same entry as the phone": true,
+    "the laptop is heard": true,
+    "the lost device can write the change after the owner's": false
+  },
+  "with a change secret: the lost device is unlocked and changes before the owner": {
+    "the lost device wrote a change": true,
+    "the counterpart follows": "the lost device",
+    "the counterpart shows a warning": true,
+    "the owner learned that its continuation was refused": true,
+    "the laptop wrote the same entry as the phone": true,
+    "the laptop is heard": false,
+    "the lost device can write the change after the owner's": "not applicable"
+  },
+  "with a change secret: the laptop was offline and changes on the old secret": {
+    "the lost device wrote a change": false,
+    "the counterpart follows": "the owner",
+    "the counterpart shows a warning": true,
+    "the owner learned that its continuation was refused": false,
+    "the laptop wrote the same entry as the phone": false,
+    "the laptop is heard": false,
+    "the lost device can write the change after the owner's": false
+  },
+  "with a change secret: phone and laptop each remove the tablet, apart": {
+    "the lost device wrote a change": false,
+    "the counterpart follows": "the owner",
+    "the counterpart shows a warning": true,
+    "the owner learned that its continuation was refused": false,
+    "the laptop wrote the same entry as the phone": false,
+    "the laptop is heard": false,
+    "the lost device can write the change after the owner's": false
+  },
+  "one main device: a linked device is lost and the main device changes the keys": {
+    "the lost linked device can change the keys": false,
+    "before the change the counterpart takes what it writes as the person": true,
+    "after the change the counterpart takes what it writes": false,
+    "after the change it reads what the counterpart writes": false,
+    "the laptop is heard before it synced with the main device": false,
+    "the laptop is heard after it synced": true,
+    "the laptop holds a change secret": false
+  },
+  "one main device: the laptop meets someone with a prepared binding": {
+    "the relationship is opened": "from stock",
+    "the counterpart hears the laptop": true,
+    "the main device can change the keys later": true,
+    "the counterpart follows that change": true,
+    "bindings left on the laptop": 1,
+    "a device with neither secret nor stock opens": "unbound"
+  },
+  "one main device: the laptop meets someone without a prepared binding": {
+    "the relationship is opened": "unbound",
+    "the counterpart hears the laptop": true,
+    "the main device can change the keys later": false,
+    "the counterpart follows that change": false,
+    "bindings left on the laptop": 0,
+    "a device with neither secret nor stock opens": "unbound"
+  },
+  "self-binding: the laptop meets someone, later hands the key over": {
+    "the relationship is opened": "self-bound",
+    "the main device knows of the relationship": true,
+    "the handover binds it to the main device": true,
+    "the handover changes the everyday key": false,
+    "the lost laptop wrote a continuation": false,
+    "the counterpart follows": "the owner",
+    "the relationship is contested at the counterpart": false,
+    "the main device can change the keys afterwards": true
+  },
+  "self-binding: the laptop is lost before the handover": {
+    "the relationship is opened": "self-bound",
+    "the main device knows of the relationship": false,
+    "the handover binds it to the main device": false,
+    "the handover changes the everyday key": false,
+    "the lost laptop wrote a continuation": true,
+    "the counterpart follows": "the lost laptop",
+    "the relationship is contested at the counterpart": false,
+    "the main device can change the keys afterwards": false
+  },
+  "self-binding: the laptop is lost after the handover, before the counterpart knows of it": {
+    "the relationship is opened": "self-bound",
+    "the main device knows of the relationship": true,
+    "the handover binds it to the main device": true,
+    "the handover changes the everyday key": false,
+    "the lost laptop wrote a continuation": true,
+    "the counterpart follows": "the lost laptop",
+    "the relationship is contested at the counterpart": true,
+    "the main device can change the keys afterwards": false
+  },
+  "self-binding: the laptop is lost after the counterpart knows of the handover": {
+    "the relationship is opened": "self-bound",
+    "the main device knows of the relationship": true,
+    "the handover binds it to the main device": true,
+    "the handover changes the everyday key": false,
+    "the lost laptop wrote a continuation": true,
+    "the counterpart follows": "the owner",
+    "the relationship is contested at the counterpart": true,
+    "the main device can change the keys afterwards": true
+  },
+  "the counterpart has two devices and each took another continuation": {
+    "b's phone and laptop follow different continuations before they sync": true,
+    "after syncing they follow the same one": false,
+    "both show that there are two continuations": true,
+    "both hold the other continuation as evidence": true
+  },
+  "the same; the counterpart's devices settle on one by a fixed rule": {
+    "b's phone and laptop follow different continuations before they sync": true,
+    "after syncing they follow the same one": true,
+    "both show that there are two continuations": true,
+    "both hold the other continuation as evidence": true
+  },
+  "contested: the owner reached the counterpart first": {
+    "before the meeting the counterpart follows": "the owner",
+    "the relationship is marked contested": true,
+    "a statement of trust is held back": true,
+    "a message while contested reaches": "the owner",
+    "the meeting settles it": true,
+    "after the meeting the counterpart follows the owner": true,
+    "after the meeting trust reaches the owner": true,
+    "the old main device is heard after the meeting": false,
+    "the old main device can contest it again": false
+  },
+  "contested: the old main device reached the counterpart first": {
+    "before the meeting the counterpart follows": "the old main device",
+    "the relationship is marked contested": true,
+    "a statement of trust is held back": true,
+    "a message while contested reaches": "the old main device",
+    "the meeting settles it": true,
+    "after the meeting the counterpart follows the owner": true,
+    "after the meeting trust reaches the owner": true,
+    "the old main device is heard after the meeting": false,
+    "the old main device can contest it again": false
+  },
+  "first sync, then act: a removed main device reaches an own device": {
+    "the removed main device": "was removed",
+    "it still holds a change secret": false
+  },
+  "first sync, then act: a removed main device reaches none": {
+    "the removed main device": "changed",
+    "it still holds a change secret": true
+  },
+  "an entry that is not a valid continuation arrives for a position already held": {
+    "the counterpart keeps it as evidence": false,
+    "the counterpart shows the warning of a second continuation": false,
+    "the counterpart still follows a": true
+  },
   "a sibling that was offline during the change comes back": {
     "the phone uses, before the acknowledgement": "new+old",
     "the phone uses, after the acknowledgement": "new",
