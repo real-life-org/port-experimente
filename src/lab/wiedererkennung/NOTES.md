@@ -6,6 +6,20 @@ asks whether two people who meet again end up as one contact on every
 device, with no act of the user, when each of them has several devices.
 Measured 24 November 2026.
 
+## Outcome
+
+Not taken up for Trust 0.32. A fourth review ran a schedule this table does
+not have: two people, two tuples, two devices each; A's first device opens
+x then y, B's first device opens y then x; the two probes that carry the
+proof are fetched by the two second devices, which do not hold the other
+tuple yet. After every sync and delivery all four devices hold two
+contacts and nothing is owed: a probe that was fetched and could not be
+read triggers nothing later, and change 2 does not apply, because on each
+side the second opening knew the first tuple. `meet` here opens both ends
+in one call, so the scenarios cannot draw that order. Closing it takes a
+further rule, and the attempt was bounded to these two changes. What
+stands: the proof in the probe simplifies the proving for one device.
+
 ## What is modelled
 
 The 0.32 inventory of Trust 6a, written for one device per holder: the
