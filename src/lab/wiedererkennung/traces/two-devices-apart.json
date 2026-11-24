@@ -1,0 +1,119 @@
+{
+  "name": "two-devices-apart",
+  "shows": "One person opens the second tuple on a device that has not heard of the first. Its relation does not hold the pair; it stays two contacts on both sides, also after everything is synced.",
+  "setup": {
+    "tuples": [
+      "t1",
+      "t2"
+    ]
+  },
+  "steps": [
+    {
+      "open": "t1",
+      "on": "a1",
+      "effect": true
+    },
+    {
+      "open": "t2",
+      "on": "a2",
+      "effect": true
+    },
+    {
+      "open": "t1",
+      "on": "b1",
+      "effect": true
+    },
+    {
+      "open": "t2",
+      "on": "b1",
+      "effect": true
+    },
+    {
+      "fetchProbe": "t1",
+      "on": "a1",
+      "effect": true
+    },
+    {
+      "sync": "a1",
+      "to": "a2",
+      "effect": true
+    },
+    {
+      "fetchProbe": "t2",
+      "on": "a2",
+      "effect": true
+    },
+    {
+      "sync": "a2",
+      "to": "a1",
+      "effect": true
+    },
+    {
+      "fetchProbe": "t1",
+      "on": "b1",
+      "effect": true
+    },
+    {
+      "fetchProbe": "t2",
+      "on": "b1",
+      "effect": true
+    },
+    {
+      "sync": "b1",
+      "to": "b2",
+      "effect": true
+    }
+  ],
+  "expect": {
+    "contacts": {
+      "a1": [
+        [
+          "t1"
+        ],
+        [
+          "t2"
+        ]
+      ],
+      "a2": [
+        [
+          "t1"
+        ],
+        [
+          "t2"
+        ]
+      ],
+      "b1": [
+        [
+          "t1"
+        ],
+        [
+          "t2"
+        ]
+      ],
+      "b2": [
+        [
+          "t1"
+        ],
+        [
+          "t2"
+        ]
+      ]
+    },
+    "candidates": {
+      "a": {
+        "t1": [],
+        "t2": []
+      },
+      "b": {
+        "t1": [],
+        "t2": [
+          "t1"
+        ]
+      }
+    },
+    "stillOwed": {
+      "a": [],
+      "b": []
+    }
+  }
+}

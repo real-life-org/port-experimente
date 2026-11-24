@@ -32,6 +32,10 @@ choice, any device that holds a tuple may fetch what waits on it, own
 devices sync one way at a time in any order. Every reachable state with
 all tuples opened is run to rest and checked
 (`tests/wiedererkennung-enumerate.test.ts`).
+The rule itself is `rule.ts`, a small model written to be read; the
+walk runs over it. Five cases of the walk are written out as traces
+(`traces/*.json`, from `traces.ts`), and `RECOGNITION.md` states the rule
+with what pins each statement.
 
 | | States | At rest |
 |---|---|---|
