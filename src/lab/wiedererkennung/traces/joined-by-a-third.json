@@ -1,6 +1,6 @@
 {
   "name": "joined-by-a-third",
-  "shows": "Each person opened its first two tuples on two devices that had not synced, so neither admits that pair. Both then open a third tuple on a device that knows the two. Both admit each of them with the third; the chain of the two pairs makes one contact of all three.",
+  "shows": "Each person opened its first two tuples on two devices that had not synced, so neither admits that pair. Both then open a third tuple on a device that knows the two. Both admit each of them with the third; the chain of the two pairs makes one relationship of all three.",
   "setup": {
     "tuples": [
       "t1",
@@ -12,111 +12,449 @@
     {
       "open": "t1",
       "on": "a1",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
     },
     {
       "open": "t1",
       "on": "b1",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
     },
     {
       "open": "t2",
       "on": "a2",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
     },
     {
       "open": "t2",
       "on": "b2",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
     },
     {
       "sync": "a2",
       "to": "a1",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1"
+          ],
+          [
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
     },
     {
       "sync": "b2",
       "to": "b1",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1"
+          ],
+          [
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
     },
     {
       "open": "t3",
       "on": "a1",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1"
+          ],
+          [
+            "t2"
+          ],
+          [
+            "t3"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
     },
     {
       "open": "t3",
       "on": "b1",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1"
+          ],
+          [
+            "t2"
+          ],
+          [
+            "t3"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
     },
     {
       "fetchProbe": "t1",
       "on": "a1",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1"
+          ],
+          [
+            "t2"
+          ],
+          [
+            "t3"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
     },
     {
       "fetchProbe": "t2",
       "on": "a1",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1"
+          ],
+          [
+            "t2"
+          ],
+          [
+            "t3"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
     },
     {
       "fetchProbe": "t3",
       "on": "a1",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1"
+          ],
+          [
+            "t2"
+          ],
+          [
+            "t3"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t1+t3",
+            "t2+t3"
+          ],
+          "b": []
+        }
+      }
     },
     {
       "sync": "a1",
       "to": "a2",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1"
+          ],
+          [
+            "t2"
+          ],
+          [
+            "t3"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t1+t3",
+            "t2+t3"
+          ],
+          "b": []
+        }
+      }
     },
     {
       "fetchProbe": "t1",
       "on": "b1",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1"
+          ],
+          [
+            "t2"
+          ],
+          [
+            "t3"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t1+t3",
+            "t2+t3"
+          ],
+          "b": []
+        }
+      }
     },
     {
       "fetchProbe": "t2",
       "on": "b1",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1"
+          ],
+          [
+            "t2"
+          ],
+          [
+            "t3"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t1+t3",
+            "t2+t3"
+          ],
+          "b": []
+        }
+      }
     },
     {
       "fetchProbe": "t3",
       "on": "b1",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1"
+          ],
+          [
+            "t2"
+          ],
+          [
+            "t3"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t1+t3",
+            "t2+t3"
+          ],
+          "b": [
+            "t1+t3",
+            "t2+t3"
+          ]
+        }
+      }
     },
     {
       "fetchMapping": "t1+t3",
       "on": "a1",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t3"
+          ],
+          [
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t1+t3",
+            "t2+t3"
+          ],
+          "b": [
+            "t2+t3"
+          ]
+        }
+      }
     },
     {
       "fetchMapping": "t2+t3",
       "on": "a1",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2",
+            "t3"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t1+t3",
+            "t2+t3"
+          ],
+          "b": []
+        }
+      }
     },
     {
       "sync": "a1",
       "to": "a2",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2",
+            "t3"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t1+t3",
+            "t2+t3"
+          ],
+          "b": []
+        }
+      }
     },
     {
       "fetchMapping": "t1+t3",
       "on": "b1",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t3"
+          ],
+          [
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t2+t3"
+          ],
+          "b": []
+        }
+      }
     },
     {
       "fetchMapping": "t2+t3",
       "on": "b1",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2",
+            "t3"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
     },
     {
       "sync": "b1",
       "to": "b2",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2",
+            "t3"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
     }
   ],
   "expect": {
-    "contacts": {
+    "relationships": {
       "a1": [
         [
           "t1",

@@ -25,15 +25,24 @@
 //               it, unites the two, acknowledges, and its person owes its
 //               own mapping over the pair. Any other device cannot verify
 //               it: no acknowledgement, the sender keeps owing it.
-//   contact     the tuples a device holds, grouped by the pairs it united.
-//               The head of a group is its tuple of the highest rank.
+//   relationship  the tuples a device holds, grouped by the pairs it united.
+//               The head of a relationship is its tuple of the highest rank.
+//               (Not the contact entry an app shows: a relationship can
+//               stand behind more than one entry for a while. Entries are
+//               not in this model.)
+//   rank        the order of the tuples' record anchors. The record anchor
+//               of a tuple is the smaller, by the bytes of the did:key
+//               string, of its two pair anchors; it has nothing to do with
+//               the order in which the tuples came about.
 //   sync        a device hands its sibling what it knows: tuples, united
 //               pairs, what the person owes, and the probes it fetched.
 //
-// The one rule that is there for several devices: a probe a device fetched
-// is kept and handed on, and every device reads the probes it holds again
-// whenever what it holds grows. `readOnce` turns that off, for the control
-// run that shows what it is needed for.
+// The rule that is there for several devices: a probe a device fetched is
+// kept, and the device reads the probes it holds again whenever what it
+// holds grows. It also hands them to its sibling. Two control runs take
+// this apart: `readOnce` (a probe is read when it is fetched and never
+// again, and is not handed on) and `noForward` (kept and read again by the
+// device that fetched it, but not handed on).
 
 export type Device = 'a1' | 'a2' | 'b1' | 'b2'
 export type Person = 'a' | 'b'
@@ -57,6 +66,8 @@ export type DeviceState = {
   united: Pair[]
   /** pairs over which its person owes a mapping, as far as this device knows */
   owed: Pair[]
+  /** per owed pair: the tuple its mapping travels on, the one on which the probe or mapping that caused it arrived */
+  via: Record<Pair, Tuple>
 }
 export type PersonState = {
   /** tuples the person opened, on whichever device */
@@ -81,8 +92,12 @@ export type Setup = {
   tuples: Tuple[]
   /** the tuples by rank, lowest first (the order of their record anchors); the default is the order they come about */
   rank?: Tuple[]
-  /** control run: a probe is read by the device that fetched it, when it fetches it, and never again */
+  /** control run: a probe is read by the device that fetched it, when it fetches it, and never again; it is not handed on */
   readOnce?: boolean
+  /** control run: a probe stays with the device that fetched it, which reads it again when what it holds grows */
+  noForward?: boolean
+  /** one device per person: only a1 and b1 act, nothing is synced */
+  single?: boolean
 }
 
 const add = <T>(xs: T[], x: T): T[] => (xs.includes(x) ? xs : [...xs, x].sort())
@@ -91,13 +106,13 @@ const sameSet = <T>(xs: T[], ys: T[]): boolean => xs.length === ys.length && xs.
 const within = <T>(xs: T[], ys: T[]): boolean => xs.every((x) => ys.includes(x))
 
 export const start = (): State => ({
-  devices: Object.fromEntries(DEVICES.map((d) => [d, { tuples: [], probes: [], united: [], owed: [] }])) as unknown as State['devices'],
+  devices: Object.fromEntries(DEVICES.map((d) => [d, { tuples: [], probes: [], united: [], owed: [], via: {} }])) as unknown as State['devices'],
   people: { a: { opened: [], candidates: {}, waiting: [], acknowledged: [] }, b: { opened: [], candidates: {}, waiting: [], acknowledged: [] } },
 })
 const copy = (s: State): State => JSON.parse(JSON.stringify(s)) as State
 
-/** The contacts of a device: its tuples, grouped by the pairs it united (only pairs whose two tuples it holds count). */
-export function contacts (tuples: Tuple[], united: Pair[]): Tuple[][] {
+/** The relationships of a device: its tuples, grouped by the pairs it united (only pairs whose two tuples it holds count). */
+export function relationships (tuples: Tuple[], united: Pair[]): Tuple[][] {
   const group = new Map<Tuple, Tuple>(tuples.map((t) => [t, t]))
   const find = (t: Tuple): Tuple => { const g = group.get(t) as Tuple; return g === t ? t : find(g) }
   for (const p of united) { const [x, y] = tuplesOf(p); if (tuples.includes(x) && tuples.includes(y)) group.set(find(x), find(y)) }
@@ -107,13 +122,19 @@ export function contacts (tuples: Tuple[], united: Pair[]): Tuple[][] {
 }
 
 export function rule (setup: Setup) {
+  if (setup.tuples.some((t) => t.includes('+') || t === '') || new Set(setup.tuples).size !== setup.tuples.length) throw new Error('tuple names must be distinct, not empty and without "+"')
   const rank = setup.rank ?? setup.tuples
+  if (rank.length !== setup.tuples.length || !setup.tuples.every((t) => rank.includes(t))) throw new Error('rank must order exactly the tuples')
+  const forward = !setup.readOnce && !setup.noForward
   const higher = (x: Tuple, y: Tuple): Tuple => (rank.indexOf(x) > rank.indexOf(y) ? x : y)
-  /** the head of every contact of a device */
-  const heads = (d: DeviceState): Tuple[] => contacts(d.tuples, d.united).map((g) => g.reduce(higher)).sort()
+  /** the head of every relationship of a device */
+  const heads = (d: DeviceState): Tuple[] => relationships(d.tuples, d.united).map((g) => g.reduce(higher)).sort()
 
   const admitted = (s: State, p: Person, x: Tuple, y: Tuple): boolean =>
     (s.people[p].candidates[x] ?? []).includes(y) || (s.people[p].candidates[y] ?? []).includes(x)
+
+  /** The person owes its mapping over `p`; it travels on `on` unless the device already knows another tuple for it (one intent per pair). */
+  const owe = (dev: DeviceState, p: Pair, on: Tuple): void => { dev.owed = add(dev.owed, p); if (!(p in dev.via)) dev.via[p] = on }
 
   /** A device reads probes it holds (all of them, or the one on `only`): every hit makes its person owe the mapping. */
   const read = (s: State, d: Device, only?: Tuple): void => {
@@ -121,17 +142,27 @@ export function rule (setup: Setup) {
     for (const t of dev.probes) {
       if (only !== undefined && t !== only) continue
       for (const listed of s.people[otherPerson(me)].candidates[t] ?? []) {
-        if (listed !== t && dev.tuples.includes(listed) && admitted(s, me, t, listed)) dev.owed = add(dev.owed, pairOf(t, listed))
+        if (listed !== t && dev.tuples.includes(listed) && admitted(s, me, t, listed)) owe(dev, pairOf(t, listed), t)
       }
     }
   }
 
-  /** pairs over which the person owes a mapping the counterpart has not acknowledged */
-  const outstanding = (s: State, p: Person): Pair[] =>
-    union(s.devices[`${p}1` as Device].owed, s.devices[`${p}2` as Device].owed).filter((x) => !s.people[p].acknowledged.includes(x))
+  const both = (p: Person): [Device, Device] => [`${p}1` as Device, `${p}2` as Device]
+  /** Pairs over which the person still owes a mapping: owed, not acknowledged, and not already settled by a path. A pair is
+   *  settled by a path when its two tuples are joined by pairs each of which the person verified (united) and had its own
+   *  mapping acknowledged for: the counterpart then holds the two tuples in one relationship already. */
+  const outstanding = (s: State, p: Person): Pair[] => {
+    const [d1, d2] = both(p), ack = s.people[p].acknowledged
+    const proven = union(s.devices[d1].united, s.devices[d2].united).filter((x) => ack.includes(x))
+    const joined = relationships(setup.tuples, proven)
+    return union(s.devices[d1].owed, s.devices[d2].owed).filter((x) => !ack.includes(x) && !joined.some((g) => tuplesOf(x).every((t) => g.includes(t))))
+  }
+  /** the tuple a person's mapping over `x` travels on */
+  const travelsOn = (s: State, p: Person, x: Pair): Tuple => { const [d1, d2] = both(p); return [s.devices[d1].via[x], s.devices[d2].via[x]].filter((t): t is Tuple => t !== undefined).sort()[0] as Tuple }
 
-  /** Whether the event can happen in `s`. A mapping can always be fetched by a device that holds the later of its two tuples; whether it then has an effect is `apply`'s. */
+  /** Whether the event can happen in `s`. A mapping can be fetched by any device that holds the tuple it travels on; whether it then has an effect is `apply`'s. */
   function possible (s: State, e: Event): boolean {
+    if (setup.single && ('sync' in e || e.on === 'a2' || e.on === 'b2')) return false
     if ('open' in e) {
       const me = personOf(e.on), i = setup.tuples.indexOf(e.open)
       if (i < 0 || s.people[me].opened.includes(e.open)) return false
@@ -140,12 +171,12 @@ export function rule (setup: Setup) {
     }
     if ('fetchProbe' in e) return s.people[personOf(e.on)].waiting.includes(e.fetchProbe) && s.devices[e.on].tuples.includes(e.fetchProbe)
     if ('fetchMapping' in e) {
-      const [x, y] = tuplesOf(e.fetchMapping), later = setup.tuples.indexOf(x) > setup.tuples.indexOf(y) ? x : y
-      return outstanding(s, otherPerson(personOf(e.on))).includes(e.fetchMapping) && s.devices[e.on].tuples.includes(later)
+      const sender = otherPerson(personOf(e.on))
+      return outstanding(s, sender).includes(e.fetchMapping) && s.devices[e.on].tuples.includes(travelsOn(s, sender, e.fetchMapping))
     }
     if (e.to !== siblingOf(e.sync)) return false
     const from = s.devices[e.sync], to = s.devices[e.to]
-    return !within(from.tuples, to.tuples) || !within(from.united, to.united) || !within(from.owed, to.owed) || (!setup.readOnce && !within(from.probes, to.probes))
+    return !within(from.tuples, to.tuples) || !within(from.united, to.united) || !within(from.owed, to.owed) || (forward && !within(from.probes, to.probes))
   }
 
   /** The state after the event, and whether the event changed anything. */
@@ -173,13 +204,15 @@ export function rule (setup: Setup) {
       // cannot verify: it does not hold both tuples, or its person does not admit the pair. No acknowledgement, nothing changes.
       if (!dev.tuples.includes(x) || !dev.tuples.includes(y) || !admitted(s, me, x, y)) return { state: s, effect: false }
       dev.united = add(dev.united, e.fetchMapping)
-      dev.owed = add(dev.owed, e.fetchMapping)
+      owe(dev, e.fetchMapping, travelsOn(s, otherPerson(me), e.fetchMapping))   // the answer travels on the tuple the mapping came on
       n.people[otherPerson(me)].acknowledged = add(n.people[otherPerson(me)].acknowledged, e.fetchMapping)
       return { state: n, effect: true }
     }
     const from = n.devices[e.sync], to = n.devices[e.to]
     to.tuples = union(to.tuples, from.tuples); to.united = union(to.united, from.united); to.owed = union(to.owed, from.owed)
-    if (!setup.readOnce) { to.probes = union(to.probes, from.probes); read(n, e.to) }
+    to.via = { ...from.via, ...to.via }
+    if (forward) to.probes = union(to.probes, from.probes)
+    if (!setup.readOnce) read(n, e.to)
     return { state: n, effect: true }
   }
 
@@ -211,11 +244,11 @@ export function rule (setup: Setup) {
 
   /** What the two relations give: the tuples grouped by the pairs both people admit. */
   const expected = (s: State): Tuple[][] => {
-    const both: Pair[] = []
-    for (const x of setup.tuples) for (const y of setup.tuples) if (x < y && admitted(s, 'a', x, y) && admitted(s, 'b', x, y)) both.push(pairOf(x, y))
-    return contacts(setup.tuples, both)
+    const joint: Pair[] = []
+    for (const x of setup.tuples) for (const y of setup.tuples) if (x < y && admitted(s, 'a', x, y) && admitted(s, 'b', x, y)) joint.push(pairOf(x, y))
+    return relationships(setup.tuples, joint)
   }
   const allOpen = (s: State): boolean => sameSet(s.people.a.opened, setup.tuples) && sameSet(s.people.b.opened, setup.tuples)
 
-  return { possible, apply, events, settle, expected, outstanding, allOpen, heads, admitted }
+  return { possible, apply, events, settle, expected, outstanding, travelsOn, allOpen, heads, admitted }
 }

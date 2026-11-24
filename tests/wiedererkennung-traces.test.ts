@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { expect, test } from 'vitest'
-import { DEVICES, contacts, rule, type Event } from '../src/lab/wiedererkennung/rule'
+import { DEVICES, relationships, rule, type Event } from '../src/lab/wiedererkennung/rule'
 import { build, replay, type Trace } from '../src/lab/wiedererkennung/traces'
 
 const dir = new URL('../src/lab/wiedererkennung/traces/', import.meta.url)
@@ -13,13 +13,13 @@ test.each(traces.map((t) => [t.name, t] as const))('trace %s replays to what it 
   const r = rule(t.setup), run = replay(t.setup, t.steps as Event[])
   expect(run.steps).toEqual(t.steps)
   expect([...r.events(run.state, false)].filter((e) => r.apply(run.state, e).effect)).toEqual([])   // at rest
-  for (const d of DEVICES) expect(contacts(run.state.devices[d].tuples, run.state.devices[d].united)).toEqual(t.expect.contacts[d])
+  for (const d of DEVICES) expect(relationships(run.state.devices[d].tuples, run.state.devices[d].united)).toEqual(t.expect.relationships[d])
   expect(run.state.people.a.candidates).toEqual(t.expect.candidates.a)
   expect(run.state.people.b.candidates).toEqual(t.expect.candidates.b)
   expect({ a: r.outstanding(run.state, 'a'), b: r.outstanding(run.state, 'b') }).toEqual(t.expect.stillOwed)
   if (t.readOnce) {
     const c = { ...t.setup, readOnce: true }, end = rule(c).settle(replay(c, t.steps as Event[], true).state).state
-    for (const d of DEVICES) expect(contacts(end.devices[d].tuples, end.devices[d].united)).toEqual(t.readOnce.contacts[d])
+    for (const d of DEVICES) expect(relationships(end.devices[d].tuples, end.devices[d].united)).toEqual(t.readOnce.relationships[d])
   }
 })
 

@@ -11,81 +11,259 @@
     {
       "open": "t1",
       "on": "a1",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
     },
     {
       "open": "t2",
       "on": "a1",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1"
+          ],
+          [
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
     },
     {
       "open": "t2",
       "on": "b1",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
+    },
+    {
+      "fetchProbe": "t2",
+      "on": "b1",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
     },
     {
       "sync": "b1",
       "to": "b2",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
     },
     {
       "open": "t1",
       "on": "b1",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1"
+          ],
+          [
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": [
+            "t1+t2"
+          ]
+        }
+      }
     },
     {
-      "fetchProbe": "t1",
+      "fetchMapping": "t1+t2",
       "on": "a1",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t1+t2"
+          ],
+          "b": []
+        }
+      }
     },
     {
       "fetchMapping": "t1+t2",
       "on": "b2",
-      "effect": false
+      "effect": false,
+      "after": {
+        "relationships": [
+          [
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t1+t2"
+          ],
+          "b": []
+        }
+      }
+    },
+    {
+      "fetchProbe": "t1",
+      "on": "a1",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t1+t2"
+          ],
+          "b": []
+        }
+      }
     },
     {
       "fetchProbe": "t2",
       "on": "a1",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t1+t2"
+          ],
+          "b": []
+        }
+      }
     },
     {
       "sync": "a1",
       "to": "a2",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t1+t2"
+          ],
+          "b": []
+        }
+      }
     },
     {
       "fetchProbe": "t1",
       "on": "b1",
-      "effect": true
-    },
-    {
-      "fetchProbe": "t2",
-      "on": "b1",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1"
+          ],
+          [
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t1+t2"
+          ],
+          "b": []
+        }
+      }
     },
     {
       "fetchMapping": "t1+t2",
-      "on": "a1",
-      "effect": true
-    },
-    {
-      "sync": "a1",
-      "to": "a2",
-      "effect": true
-    },
-    {
-      "fetchMapping": "t1+t2",
       "on": "b1",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
     },
     {
       "sync": "b1",
       "to": "b2",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
     }
   ],
   "expect": {
-    "contacts": {
+    "relationships": {
       "a1": [
         [
           "t1",

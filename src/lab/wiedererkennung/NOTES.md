@@ -37,18 +37,23 @@ walk runs over it. Five cases of the walk are written out as traces
 (`traces/*.json`, from `traces.ts`), and `RECOGNITION.md` states the rule
 with what pins each statement.
 
-| | States | At rest |
+| | States reached | At rest |
 |---|---|---|
-| The probe is read again from the log | 42 481 | every state ends as the candidate relations of the two sides say: one contact on all four devices where both relations hold the pair (28 992), two where they do not (12 096). Two devices of one person never differ, no mapping stays owed |
-| The probe is read once, by the device that fetched it, when it fetches it | 28 404 | 672 states end with two contacts on all four devices although both relations hold the pair: the crossed case of the fourth review |
+| The probe is kept, read again and handed to the sibling | 58 865 | every state ends as the candidate relations of the two sides say: one relationship on all four devices where both relations hold the pair (45 376), two where they do not (12 096). Two devices of one person never differ, no mapping stays owed. The same in both ranks of the two tuples |
+| The probe is kept and read again by the device that fetched it, not handed on | 31 876 | no deviation either |
+| The probe is read once, when it is fetched, and not handed on | 35 348 | 672 states end with two relationships on all four devices although both relations hold the pair: the crossed case of the fourth review |
+| One device per person, two tuples and three | 199 and 62 755 | every schedule ends with one relationship |
 
-Three tuples do not fit in memory as a full walk (more than 16 million
-states). Drawn instead: 300 000 random schedules of the same steps, with
-the probe read again: every one ends as the candidate relations say (one,
-two or three contacts), no device differs from its sibling, no mapping
-stays owed. Reading once, 1 558 of 100 000 end with more contacts
-than the relations give (a random draw; the count moves by a few dozen
-between runs).
+So what several devices need is that a fetched probe is kept and read
+again; handing it to the sibling is not needed for the outcome. The
+counts are higher than before the review round of 24 November because the
+model now keeps the tuple a mapping travels on.
+
+Three tuples with two devices each do not fit in memory as a full walk.
+Drawn instead: random schedules of the same steps, every one ending as the
+candidate relations say (300 in the test). Three hand-written traces cover
+what two tuples cannot show: a chain of pairs, a device with an older
+state, and a mapping settled by a path.
 
 Two tuples end as one contact exactly if **both** sides hold the pair in
 their relation: on each side, the device that opened the later tuple knew

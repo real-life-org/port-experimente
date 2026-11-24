@@ -5,23 +5,28 @@
 // Every reachable state with all tuples open is brought to rest
 // (everything synced, fetched and sent) and checked against what the two
 // people's relations give.
-import { DEVICES, contacts, rule, start, type Event, type Setup, type State } from './rule'
+import { DEVICES, relationships, rule, start, type Event, type Setup, type State } from './rule'
 
 /** candidates are keyed by tuple; the key of a state must not depend on the order they were written in */
 const keyOf = (s: State): string => JSON.stringify(s, (_k, v: unknown) =>
   v !== null && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.entries(v as object).sort(([a], [b]) => a.localeCompare(b))) : v)
 
-export type Outcome = { states: number, atRest: Record<string, number>, problems: string[] }
+/** `states`: reached; `judged`: of them, those with every tuple open on both sides, which are brought to rest and checked */
+export type Outcome = { states: number, judged: number, atRest: Record<string, number>, problems: string[] }
 
 function judge (setup: Setup, r: ReturnType<typeof rule>, s: State, atRest: Record<string, number>, problems: Set<string>): string {
   const rest = r.settle(s).state
   const want = JSON.stringify(r.expected(rest))
-  const shown = DEVICES.map((d) => contacts(rest.devices[d].tuples, rest.devices[d].united))
+  const shown = DEVICES.map((d) => relationships(rest.devices[d].tuples, rest.devices[d].united))
   const label = `both relations give ${r.expected(rest).length}, devices show ${shown.map((g) => g.length).join('')}`
   atRest[label] = (atRest[label] ?? 0) + 1
-  if (JSON.stringify(shown[0]) !== JSON.stringify(shown[1]) || JSON.stringify(shown[2]) !== JSON.stringify(shown[3])) problems.add('two devices of one person show different contacts at rest')
-  if (shown.some((g) => JSON.stringify(g) !== want)) problems.add('a device shows other contacts than the pairs both relations hold')
+  // with one device per person the second devices hold nothing and are not compared
+  const acting = setup.single ? [0, 2] : [0, 1, 2, 3]
+  if (!setup.single && (JSON.stringify(shown[0]) !== JSON.stringify(shown[1]) || JSON.stringify(shown[2]) !== JSON.stringify(shown[3]))) problems.add('two devices of one person show different relationships at rest')
+  if (acting.some((i) => JSON.stringify(shown[i]) !== want)) problems.add('a device shows other relationships than the pairs both relations hold')
   if (r.outstanding(rest, 'a').length || r.outstanding(rest, 'b').length) problems.add('a mapping stays owed at rest')
+  // a statement that does not read the candidates: one device per person, every tuple open on both sides, one relationship
+  if (setup.single && acting.some((i) => (shown[i] as unknown[]).length !== 1)) problems.add('one device per person, and more than one relationship at rest')
   return label
 }
 
@@ -44,7 +49,7 @@ export function walk (setup: Setup, found?: (schedule: Event[], state: State, la
     const label = judge(setup, r, s, atRest, problems)
     if (found) found(scheduleOf(k), s, label)
   }
-  return { states: seen.size, atRest, problems: [...problems].sort() }
+  return { states: seen.size, judged: Object.values(atRest).reduce((n, x) => n + x, 0), atRest, problems: [...problems].sort() }
 }
 
 /** Instead of every state: `n` random schedules (for three tuples, where the walk does not fit in memory). */
@@ -59,5 +64,5 @@ export function draw (setup: Setup, n: number): Outcome {
     }
     judge(setup, r, cur, atRest, problems)
   }
-  return { states: n, atRest, problems: [...problems].sort() }
+  return { states: n, judged: n, atRest, problems: [...problems].sort() }
 }

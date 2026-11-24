@@ -38,7 +38,7 @@ test('a trace in which a person acts on its second device only runs like the sam
   const swap = (d: string): string => (d === 'a1' ? 'a2' : d === 'a2' ? 'a1' : d)
   const swapped = JSON.parse(JSON.stringify(t)) as Trace
   for (const s of swapped.steps as unknown as Array<Record<string, string>>) for (const k of ['on', 'sync', 'to']) if (k in s) s[k] = swap(s[k] as string)
-  const c = swapped.expect.contacts; [c.a1, c.a2] = [c.a2, c.a1]
+  const c = swapped.expect.relationships; [c.a1, c.a2] = [c.a2, c.a1]
   const r = await runOnLibrary(swapped)
   expect(r.runnable).toBe(true)
   expect({ ...r }).toEqual({ ...(await runOnLibrary(t)) })
