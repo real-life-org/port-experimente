@@ -161,9 +161,26 @@ whichever continuation it followed before.
 | the old main device is heard afterwards | no | no |
 | it can contest the relationship again | no | no |
 
-One warning per position of the log: a third continuation for a position
-already contested adds evidence and no new warning, and one for a position
-settled in a meeting is dropped.
+A meeting settles a fork, not a position and not the relationship for
+good. The fork is named by the entry both continuations follow. Whether a
+relationship is contested is computed on each device: it holds a competing
+continuation for a fork that was not settled. Nothing sets or copies a flag.
+From that follows (`tests/wechsel-contested.test.ts`):
+
+- The decision of a meeting travels with the sync of the person's own
+  devices and holds there. A device that was not at the meeting takes the
+  settled branch, keeps the other one as evidence, and may state trust
+  again. A sync in the other direction changes nothing.
+- A device whose log already continues the settled branch keeps its log
+  when the settlement arrives.
+- A later fork on the settled branch is a new conflict, on the device that
+  sees it and, after a sync, on its sibling, whatever either settled
+  before.
+- One warning per fork: a third continuation of a fork already contested
+  adds evidence and no new warning; one for a settled fork is dropped, and
+  it does not cancel the answer owed for another fork in the same document.
+- An entry whose key cannot be read continues nothing, and the documents
+  fetched with it are handled.
 
 **First sync, then act.** A main device that was removed and reaches one of
 the person's devices before it changes keys learns of it, drops its secret
