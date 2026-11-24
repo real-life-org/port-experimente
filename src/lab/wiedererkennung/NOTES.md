@@ -38,6 +38,13 @@ all tuples opened is run to rest and checked
 | The probe is read again from the log | 42 481 | every state ends as the candidate relations of the two sides say: one contact on all four devices where both relations hold the pair (28 992), two where they do not (12 096). Two devices of one person never differ, no mapping stays owed |
 | The probe is read once, by the device that fetched it | 26 356 | 162 states end with two contacts on all four devices although both relations hold the pair: the crossed case of the fourth review |
 
+Three tuples do not fit in memory as a full walk (more than 16 million
+states). Drawn instead: 300 000 random schedules of the same steps, with
+the probe read again: every one ends as the candidate relations say (one,
+two or three contacts), no device differs from its sibling, no mapping
+stays owed. Without reading again, 458 of 100 000 end with more contacts
+than the relations give.
+
 Two tuples end as one contact exactly if **both** sides hold the pair in
 their relation: on each side, the device that opened the later tuple knew
 the earlier one, or the two sides opened them in opposite order. Where one

@@ -5,7 +5,8 @@
 // Two people, two devices each, two or three tuples. The two openings of
 // an encounter are separate steps, each on a device of its person's
 // choice; any device that holds a tuple may fetch what waits on it; own
-// devices sync one way at a time, in any order. Every reachable state is
+// devices sync one way at a time, in any order (for three tuples: both
+// ways at once, to keep the walk finite in memory). Every reachable state is
 // then run to rest (everything synced, fetched and sent) and checked.
 //
 // What is modelled of the inventory: the candidates of a tuple are the
@@ -32,7 +33,8 @@ type State = {
 const personOf = (d: number): P => (d < 2 ? 0 : 1)
 const bit = (i: number): number => 1 << i
 
-export function explore (tuples: number, rereadProbes: boolean): { states: number, atRest: Record<string, number>, problems: string[] } {
+/** `sample`: instead of walking every state, draw that many random schedules (for three tuples, where the walk does not fit in memory). */
+export function explore (tuples: number, rereadProbes: boolean, syncBothWays = false, sample = 0): { states: number, atRest: Record<string, number>, problems: string[] } {
   const pairs: Array<[number, number]> = []
   for (let x = 0; x < tuples; x++) for (let y = x + 1; y < tuples; y++) pairs.push([x, y])
   const pairBit = (x: number, y: number): number => bit(pairs.findIndex(([p, q]) => p === Math.min(x, y) && q === Math.max(x, y)))
@@ -97,10 +99,13 @@ export function explore (tuples: number, rereadProbes: boolean): { states: numbe
       }
       // sync to the sibling
       const sib = d ^ 1, w = s.dev[sib] as Dev
-      if ((w.has | v.has) !== w.has || (rereadProbes && (w.probe | v.probe) !== w.probe) || (w.edges | v.edges) !== w.edges || (w.owed | v.owed) !== w.owed) {
+      if (syncBothWays && (d & 1)) continue
+      const differs = syncBothWays ? (w.has !== v.has || w.probe !== v.probe || w.edges !== v.edges || w.owed !== v.owed) : ((w.has | v.has) !== w.has || (rereadProbes && (w.probe | v.probe) !== w.probe) || (w.edges | v.edges) !== w.edges || (w.owed | v.owed) !== w.owed)
+      if (differs) {
         const n = clone(s), nw = n.dev[sib] as Dev
         nw.has |= v.has; nw.edges |= v.edges; nw.owed |= v.owed
         if (rereadProbes) { nw.probe |= v.probe; read(n, sib) }
+        if (syncBothWays) { const nv = n.dev[d] as Dev; nv.has = nw.has; nv.edges = nw.edges; nv.owed = nw.owed; if (rereadProbes) { nv.probe = nw.probe; read(n, d) } }
         yield n
       }
     }
@@ -109,9 +114,18 @@ export function explore (tuples: number, rereadProbes: boolean): { states: numbe
 
   const start: State = { dev: [0, 1, 2, 3].map(() => ({ has: 0, probe: 0, edges: 0, owed: 0 })), opened: [0, 0], heads: [Array(tuples).fill(0), Array(tuples).fill(0)], inbox: [0, 0], acked: [0, 0] }
   const seen = new Set<string>([key(start)]), todo = [start], atRest: Record<string, number> = {}, problems = new Set<string>()
-  while (todo.length) {
-    const s = todo.pop() as State
-    for (const n of steps(s, true)) { const k = key(n); if (!seen.has(k)) { seen.add(k); todo.push(n) } }
+  const drawn: State[] = []
+  for (let i = 0; i < sample; i++) {
+    let cur = start
+    for (let k = 0; k < 12 * tuples; k++) { const next = [...steps(cur, true)]; if (!next.length) break; cur = next[Math.floor(Math.random() * next.length)] as State }
+    while ((cur.opened[0] as number) !== bit(tuples) - 1 || (cur.opened[1] as number) !== bit(tuples) - 1) { const next = [...steps(cur, true)]; cur = next[Math.floor(Math.random() * next.length)] as State }
+    drawn.push(cur)
+  }
+  if (sample) todo.length = 0
+  const check = sample ? drawn : todo
+  while (check.length) {
+    const s = check.pop() as State
+    if (!sample) for (const n of steps(s, true)) { const k = key(n); if (!seen.has(k)) { seen.add(k); todo.push(n) } }
     if ((s.opened[0] as number) !== bit(tuples) - 1 || (s.opened[1] as number) !== bit(tuples) - 1) continue
     // all tuples opened on both sides: run to rest and check
     const r = rest(s)
@@ -131,5 +145,5 @@ export function explore (tuples: number, rereadProbes: boolean): { states: numbe
       atRest['at rest with more than one contact'] = (atRest['at rest with more than one contact'] ?? 0) + 1
     }
   }
-  return { states: seen.size, atRest, problems: [...problems].sort() }
+  return { states: sample || seen.size, atRest, problems: [...problems].sort() }
 }
