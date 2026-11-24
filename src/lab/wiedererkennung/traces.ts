@@ -80,5 +80,10 @@ export function build (): Trace[] {
     traceOf('two-devices-apart', 'One person opens the second tuple on a device that has not heard of the first. Its relation does not hold the pair; it stays two contacts on both sides, also after everything is synced.', setup, pick.apart as Event[]),
     traceOf('probe-read-again', 'A device fetches a probe before it holds the other tuple; the tuple arrives later by sync. Reading the kept probe again gives the hit. Read once, the two people end with two contacts although both relations hold the pair.', setup, pick.readAgain as Event[], true),
     traceOf('mapping-not-verifiable', 'A mapping reaches a device that cannot verify it. Nothing changes and nothing is acknowledged; the sender keeps owing it until a device that can verify fetches it.', setup, pick.cannotVerify as Event[]),
+    // three tuples, written by hand (the full walk covers two): neither person admits t1+t2, both admit each with t3
+    traceOf('joined-by-a-third', 'Each person opened its first two tuples on two devices that had not synced, so neither admits that pair. Both then open a third tuple on a device that knows the two. Both admit each of them with the third; the chain of the two pairs makes one contact of all three.', { tuples: ['t1', 't2', 't3'] }, [
+      { open: 't1', on: 'a1' }, { open: 't1', on: 'b1' }, { open: 't2', on: 'a2' }, { open: 't2', on: 'b2' },
+      { sync: 'a2', to: 'a1' }, { sync: 'b2', to: 'b1' }, { open: 't3', on: 'a1' }, { open: 't3', on: 'b1' },
+    ]),
   ]
 }

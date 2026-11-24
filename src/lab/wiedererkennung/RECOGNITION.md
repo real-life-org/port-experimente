@@ -16,11 +16,16 @@ other.
 
 ## What is promised
 
-P1. Two tuples become one contact exactly when **both** people hold the
-pair in their relation (R3). Then every schedule ends with one contact on
-every device, once everything is synced, fetched and sent.
-*Pinned by:* the full walk, `tests/wiedererkennung-enumerate.test.ts`
-(42 481 states, no deviation).
+P1. The tuples of two people fall into contacts by the pairs **both**
+people hold in their relation (R3): a chain of such pairs joins its tuples
+into one contact. Every schedule ends with exactly these contacts on every
+device, once everything is synced, fetched and sent. For two tuples that
+is: one contact exactly when both people admit the pair.
+*Pinned by:* for two tuples the full walk,
+`tests/wiedererkennung-enumerate.test.ts` (42 481 states, no deviation);
+for a chain, `traces/joined-by-a-third.json` (neither person admits
+t1+t2, both admit each with t3, one contact of all three). Three tuples in
+general: see "Stated, not pinned".
 
 P2. Where one person opened its two tuples on two devices that had not
 synced in between, the pair is in neither that person's relation; it stays
@@ -82,8 +87,8 @@ rank.
 - The rank of a tuple is the order of its record anchor, which is not the
   order the tuples came about. The walk and the traces use one order for
   both.
-- Three tuples: checked as a random draw (`enumerate.ts`, `draw`), not as a
-  full walk and not as traces.
+- Three tuples: one trace (P1) and a random draw (`enumerate.ts`, `draw`),
+  not a full walk.
 - What a probe and a mapping are on the wire, and that a mapping proves the
   keys of both tuples: the model takes it as given.
 - R2 and R9 are used by every trace and singled out by none.
