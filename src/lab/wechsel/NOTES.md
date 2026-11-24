@@ -130,14 +130,23 @@ then on the next writer comes from the main device's secret.
 |---|---|---|---|
 | never | yes | the owner | no |
 | before the handover | no | the lost laptop | no |
-| after the handover, before the counterpart knows of it | yes | the lost laptop | yes |
+| after the handover | yes | the owner | no |
+
+An honest laptop forgets the key at the handover. Lost afterwards, it holds
+nothing to write a continuation with. Another case is a key that was copied
+off the laptop before the handover and is used after it:
+
+| The copied key is used | The main device knows of the relationship | The counterpart follows | Contested |
+|---|---|---|---|
+| after the handover, before the counterpart knows of it | yes | the holder of the copy | yes |
 | after the counterpart knows of the handover | yes | the owner | yes |
 
 1. **It works without anything prepared**, and the handover changes no
    everyday key: the counterpart has nothing to tell its person.
-2. **The window ends when the counterpart knows of the handover**, not at
-   the handover: until then the key the laptop drew still stands at the
-   counterpart.
+2. **For a copied key the window ends when the counterpart knows of the
+   handover**, not at the handover: until then the key the laptop drew
+   still stands at the counterpart. For a laptop lost after the handover
+   there is no window.
 3. **Before the first sync the relationship exists on the laptop alone.**
    Lost then, the main device never hears of it. That is a matter of
    syncing, with or without any binding.
@@ -182,10 +191,12 @@ From that follows (`tests/wechsel-contested.test.ts`):
 - An entry whose key cannot be read continues nothing, and the documents
   fetched with it are handled.
 
-**First sync, then act.** A main device that was removed and reaches one of
-the person's devices before it changes keys learns of it, drops its secret
-and changes nothing. If it reaches none, it changes as before: the rule
-binds an honest app that is online, nothing else.
+**First sync, then act.** A main device that was removed stops when it
+knows of the removal or learns of it in the sync before it changes keys:
+it drops its secret and changes nothing. That takes a device it reaches
+that knows of the removal; one that has not heard of it yet tells it
+nothing. If it reaches none that knows, it changes as before: the rule
+binds an honest app that is online with an informed device, nothing else.
 
 ## The same question in a group (`group.ts`)
 
