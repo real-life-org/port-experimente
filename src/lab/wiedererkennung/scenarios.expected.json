@@ -1,0 +1,73 @@
+{
+  "two strangers meet": {
+    "contacts of a afterwards": 6,
+    "contacts of the stranger afterwards": 4,
+    "tags of a's proof the stranger can read": 0,
+    "tags the stranger got from a (a holds 5 other contacts)": 8,
+    "documents the encounter put on other tuples than the fresh one": 0
+  },
+  "two who know each other meet again": {
+    "contacts each holds of the other before the proofs arrive": "2 and 2",
+    "after one delivery each way, a holds of b": 1,
+    "and b holds of a": 1,
+    "documents sent for it": 2,
+    "acts of the users": 0
+  },
+  "a's laptop, which knows the relationship, meets b again": {
+    "right after the encounter the laptop holds of b": 1,
+    "and b holds of a": 1,
+    "after a's devices synced, the phone holds of b": 1,
+    "and the laptop": 1,
+    "documents a sent after the sync": 0,
+    "then b holds of a": 1,
+    "another meeting was needed": false
+  },
+  "a's laptop, which has not heard of the relationship yet, meets b again": {
+    "right after the encounter the laptop holds of b": 1,
+    "and b holds of a": 2,
+    "after a's devices synced, the phone holds of b": 1,
+    "and the laptop": 1,
+    "documents a sent after the sync": 1,
+    "then b holds of a": 1,
+    "another meeting was needed": false
+  },
+  "both have two devices and meet crosswise, all four apart": {
+    "after a's devices synced, a holds of b": 2,
+    "b's devices, before they synced, each hold of a": 1,
+    "after b's devices synced, b holds of a": "1 and 1",
+    "then a holds of b": "1 and 1",
+    "another meeting was needed": false
+  },
+  "a's two devices, apart, each meet someone else": {
+    "contacts of a afterwards": "2 and 2",
+    "documents a sent after the sync": 1,
+    "tags of them the two strangers can read": 0
+  },
+  "one proof is lost on the way": {
+    "with a's proof lost, a holds of b": 1,
+    "and b holds of a": 2,
+    "after it was sent again, b holds of a": 1
+  },
+  "a copied key that is still in use": {
+    "a counts the newcomer as b": true,
+    "contacts of a": 1
+  },
+  "a copied key that was given up": {
+    "a counts the newcomer as b": false,
+    "contacts of a": 2
+  },
+  "b lost everything": {
+    "a holds of b": 2,
+    "b holds of a": 1
+  },
+  "order of arrival": {
+    "a holds of b": 1,
+    "a device that got the same facts in the opposite order shows the same": true
+  },
+  "cost with 200 contacts": {
+    "tags a sends on the fresh tuple": 200,
+    "bytes of them (22 characters each)": 4400,
+    "documents on other tuples": 0,
+    "step of the filling": 8
+  }
+}
