@@ -2,77 +2,72 @@
   "two strangers meet": {
     "contacts of a afterwards": 6,
     "contacts of the stranger afterwards": 4,
-    "values of a's proof the stranger can read": 0,
     "values the stranger got from a (a holds 5 other contacts)": 256,
-    "documents the encounter put on other tuples than the fresh one": 0
+    "of them the stranger can read": 0,
+    "documents on other tuples than the fresh one": 0,
+    "documents after the two probes": 0
   },
   "two who know each other meet again": {
-    "contacts each holds of the other before the proofs arrive": "2 and 2",
-    "after one delivery each way, a holds of b": 1,
+    "after the two probes arrived, a holds of b": 1,
     "and b holds of a": 1,
-    "documents sent for it": 2,
+    "documents in all (two probes, then each side's own proof for the pair)": 4,
+    "pairs either side still owes a proof for": 0,
     "acts of the users": 0
   },
   "a's laptop, which knows the relationship, meets b again": {
     "right after the encounter the laptop holds of b": 1,
     "and b holds of a": 1,
-    "after a's devices synced, the phone holds of b": 1,
-    "and the laptop": 1,
-    "documents a sent after the sync": 1,
-    "then b holds of a": 1,
+    "documents after a's devices synced": 0,
+    "then the phone holds of b": 1,
+    "the laptop": 1,
+    "and b of a": 1,
     "another meeting was needed": false
   },
   "a's laptop, which has not heard of the relationship yet, meets b again": {
     "right after the encounter the laptop holds of b": 1,
     "and b holds of a": 2,
-    "after a's devices synced, the phone holds of b": 1,
-    "and the laptop": 1,
-    "documents a sent after the sync": 2,
-    "then b holds of a": 1,
+    "documents after a's devices synced": 3,
+    "then the phone holds of b": 1,
+    "the laptop": 1,
+    "and b of a": 1,
     "another meeting was needed": false
   },
   "both have two devices and meet crosswise, all four apart": {
-    "after a's devices synced, a holds of b": 2,
-    "b's devices, before they synced, each hold of a": 1,
-    "after b's devices synced, b holds of a": "1 and 1",
-    "then a holds of b": "1 and 1",
+    "after a's devices synced and sent, a holds of b": 2,
+    "b's devices, not synced yet, each hold of a": 1,
+    "after b's devices synced too, a holds of b": "1 and 1",
+    "and b of a": "1 and 1",
     "another meeting was needed": false
   },
   "a's two devices, apart, each meet someone else": {
     "contacts of a afterwards": "2 and 2",
-    "documents a sent after the sync": 2,
-    "values in it": 512,
-    "values of it the two strangers can read": 0
+    "one of the two strangers gets, per sending of a, documents": 1,
+    "values in each": 1,
+    "of them the stranger can read": 0,
+    "the stranger acknowledges it": false
   },
-  "the second document of every tuple": {
-    "documents the stranger holds from the person with one device, by values": "256 and 256",
-    "and from the person with two devices that met someone else apart": "256 and 256",
-    "values of all of it either stranger can read": 0
+  "a proof is lost on the way": {
+    "documents the sibling sends for it": 1,
+    "pairs a still owes afterwards": 0,
+    "a holds of b": 1,
+    "b holds of a": 1
   },
-  "one proof is lost on the way": {
-    "with a's proof lost, a holds of b": 1,
-    "and b holds of a": 2,
-    "documents the sibling sends again": 1,
-    "then b holds of a": 1
-  },
-  "a device fetches the other side's proof and is lost before it shares it": {
-    "after both sides sent all they owe, a's remaining device holds of b": 2,
+  "a device fetches, unites and is lost before it shares it": {
+    "a's remaining device holds of b": 2,
     "and b holds of a": 1,
-    "after the next encounter a holds of b": 1
-  },
-  "the same, but at the next encounter b proves with its heads only (Trust 6750)": {
+    "after both sent all they owe, a holds of b": 2,
     "after the next encounter a holds of b": 2
   },
-  "the same, with no further encounter: a writes to b on the older tuple": {
-    "documents b sends again when a writes on the tuple that is no head at b": 1,
-    "then a holds of b": 1
+  "a device fetches a proof it cannot read": {
+    "before b's devices synced, a holds of b": 2,
+    "afterwards a holds of b": "1 and 1",
+    "and b of a": "1 and 1"
   },
   "a contact hands in a value on a tuple that is not its own": {
     "a counts the other person as b": false,
     "contacts of a": 2
   },
   "a's own devices scan each other": {
-    "contacts before": 2,
     "contacts of other people afterwards": 2,
     "b and c fell into one": false
   },
@@ -80,24 +75,22 @@
     "a counts the newcomer as b": true,
     "contacts of a": 1
   },
-  "a copied key of an older tuple, the proof under it": {
+  "a copied key of an older tuple, the value on the fresh tuple": {
     "a counts the newcomer as b": false,
     "contacts of a": 2
   },
-  "a copied key of an older tuple, the proof the other way round": {
+  "a copied key of an older tuple, the value on the old tuple": {
     "a counts the newcomer as b": false,
     "contacts of a": 2
   },
-  "three tuples, proofs for two pairs under the same tuple": {
-    "before b's devices synced, a holds of b": 1,
-    "after b's devices synced and proved the last pair, a holds of b": 1,
-    "and b holds of a": "1 and 1"
+  "a copied key of a tuple that is no head any more, met by a device that never heard of it": {
+    "a counts the newcomer as b": false,
+    "contacts of a": 2
   },
-  "two siblings make the second document of one tuple apart": {
-    "documents the stranger holds on the tuple": 3,
-    "values the two second documents share (of 256)": 255,
-    "values either shares with the first document": 0,
-    "values of all of it the stranger can read": 0
+  "three tuples, the third made by a device that knew only the first": {
+    "after the probes, before b's devices synced, a holds of b": 1,
+    "at the end a holds of b": 1,
+    "and b of a": "1 and 1"
   },
   "b lost everything": {
     "a holds of b": 2,
@@ -105,23 +98,19 @@
   },
   "a is restored from an image older than its second tuple with b; b's head is the tuple a kept": {
     "after the restore and one encounter, a holds of b": 1,
-    "and b holds of a": 1,
+    "and b of a": 1,
     "after one more encounter b holds of a": 1
   },
   "the same; b's head is the tuple a lost": {
-    "after the restore and one encounter, a holds of b": 1,
-    "and b holds of a": 2,
+    "after the restore and one encounter, a holds of b": 2,
+    "and b of a": 2,
     "after one more encounter b holds of a": 2
-  },
-  "the same proof sent twice": {
-    "documents a handed in on the fresh tuple": 2,
-    "different documents the stranger holds afterwards": 1,
-    "different values it holds": 256
   },
   "random schedules": {
     "runs": 60,
     "devices that show more or fewer contacts than people they know": 0,
-    "contacts that hold tuples of two people": 0
+    "contacts that hold tuples of two people": 0,
+    "proofs still owed between two tuples of the same two people": 0
   },
   "cost with 300 contacts": {
     "values a sends on the fresh tuple": 512,

@@ -1,19 +1,16 @@
 // Scenarios for the model of model.ts: the cases the probe of Trust 6a
-// needed rules of their own for, and the counter-runs of the design review
-// of 24 November, each as plain facts. A measurement of the model, not of
-// the library.
+// needed rules of their own for with several devices, and the counter-runs
+// of three design reviews of 24 November. A measurement of the model, not
+// of the library.
 import { randomInt } from 'node:crypto'
-import { Carrier, STEP, catchUp, contacts, device, forge, headOf, image, knock, meet, readable, receive, relationships, sendAgain, share, type Device, type End } from './model'
+import { Carrier, STEP, contacts, device, forge, headOf, image, meet, readable, receive, relationships, send, share, type Device, type End } from './model'
 
 export type Row = Record<string, string | number | boolean>
 const settle = (c: Carrier, devs: Device[]): void => { for (const d of devs) receive(d, c) }
-/** The person's devices sync with each other, and each then sends what its person owes. */
-const sync = (c: Carrier, devs: Device[]): number => {
-  for (const x of devs) for (const y of devs) if (x !== y) share(x, y)
-  let docs = 0
-  for (const d of devs) { docs += catchUp(d, c); for (const y of devs) if (y !== d) share(d, y) }
-  return docs
-}
+/** The person's devices sync with each other. */
+const sync = (devs: Device[]): void => { for (const x of devs) for (const y of devs) if (x !== y) share(x, y) }
+/** Every device fetches what waits; then every device sends what its person owes and all fetch, `n` times. Returns the documents sent. */
+const run = (c: Carrier, devs: Device[], n = 3): number => { let docs = 0; settle(c, devs); for (let i = 0; i < n; i++) { for (const d of devs) docs += send(d, c); settle(c, devs) } return docs }
 /** `dev` gets `n` contacts, each with one device, all settled. */
 function knows (dev: Device, n: number, c: Carrier): Device[] {
   const out: Device[] = []
@@ -21,20 +18,22 @@ function knows (dev: Device, n: number, c: Carrier): Device[] {
   return out
 }
 const endOf = (dev: Device, id: string): End => [...dev.ends.values()].find((e) => e.id === id) as End
-const valuesOn = (dev: Device, t: string): number => [...dev.got.values()].filter((d) => d.on === t).reduce((n, d) => n + d.tags.length, 0)
+const together = (dev: Device, ...ids: string[]): boolean => relationships(dev).some((g) => ids.every((id) => g.includes(id)))
 
 /** Two people who never met; both have other contacts. */
 function strangers (): Row {
   const c = new Carrier(), [a, x] = [device('a'), device('x')] as [Device, Device]
   knows(a, 5, c); knows(x, 3, c)
   const before = c.log.length
-  const t = meet(a, x, c); settle(c, [a, x])
+  const t = meet(a, x, c); const later = run(c, [a, x])
+  const docs = c.log.slice(before)
   return {
     'contacts of a afterwards': contacts(a),
     'contacts of the stranger afterwards': contacts(x),
-    'values of a\'s proof the stranger can read': readable(x),
-    'values the stranger got from a (a holds 5 other contacts)': valuesOn(x, t),
-    'documents the encounter put on other tuples than the fresh one': c.log.slice(before).filter((on) => on !== t).length,
+    'values the stranger got from a (a holds 5 other contacts)': docs.filter((d) => d.from === 'a').reduce((n, d) => n + d.tags.length, 0),
+    'of them the stranger can read': docs.filter((d) => d.from === 'a').reduce((n, d) => n + readable(x, d), 0),
+    'documents on other tuples than the fresh one': docs.filter((d) => d.on !== t).length,
+    'documents after the two probes': later,
   }
 }
 
@@ -42,16 +41,16 @@ function strangers (): Row {
 function again (): Row {
   const c = new Carrier(), [a, b] = [device('a'), device('b')] as [Device, Device]
   knows(a, 4, c)
-  meet(a, b, c); settle(c, [a, b])
+  meet(a, b, c); run(c, [a, b])
   const before = c.log.length
-  meet(a, b, c)
-  const apart = [contacts(a) - 4, contacts(b)]
-  settle(c, [a, b])
+  meet(a, b, c); settle(c, [a, b])
+  const afterProbes = [contacts(a) - 4, contacts(b)]
+  run(c, [a, b])
   return {
-    'contacts each holds of the other before the proofs arrive': apart.join(' and '),
-    'after one delivery each way, a holds of b': contacts(a) - 4,
-    'and b holds of a': contacts(b),
-    'documents sent for it': c.log.length - before,
+    'after the two probes arrived, a holds of b': afterProbes[0] as number,
+    'and b holds of a': afterProbes[1] as number,
+    'documents in all (two probes, then each side\'s own proof for the pair)': c.log.length - before,
+    'pairs either side still owes a proof for': [...a.owed].filter((p) => !a.done.has(p)).length + [...b.owed].filter((p) => !b.done.has(p)).length,
     'acts of the users': 0,
   }
 }
@@ -59,20 +58,19 @@ function again (): Row {
 /** A has a phone and a laptop; the laptop meets B again. `synced`: whether the laptop knows the relationship the phone made. */
 function ownDevices (synced: boolean): Row {
   const c = new Carrier(), phone = device('phone'), laptop = device('laptop', phone), b = device('b')
-  meet(phone, b, c); settle(c, [phone, b])
-  if (synced) sync(c, [phone, laptop])
-  meet(laptop, b, c); settle(c, [laptop, b])
+  meet(phone, b, c); run(c, [phone, b])
+  if (synced) sync([phone, laptop])
+  meet(laptop, b, c); run(c, [laptop, b])
   const first = { laptop: contacts(laptop), b: contacts(b) }
-  const late = sync(c, [phone, laptop])
-  const afterSync = { phone: contacts(phone), laptop: contacts(laptop) }
-  settle(c, [b, phone])
+  sync([phone, laptop])
+  const docs = run(c, [phone, laptop, b]); sync([phone, laptop])
   return {
     'right after the encounter the laptop holds of b': first.laptop,
     'and b holds of a': first.b,
-    'after a\'s devices synced, the phone holds of b': afterSync.phone,
-    'and the laptop': afterSync.laptop,
-    'documents a sent after the sync': late,
-    'then b holds of a': contacts(b),
+    'documents after a\'s devices synced': docs,
+    'then the phone holds of b': contacts(phone),
+    'the laptop': contacts(laptop),
+    'and b of a': contacts(b),
     'another meeting was needed': false,
   }
 }
@@ -80,19 +78,15 @@ function ownDevices (synced: boolean): Row {
 /** Both have two devices; A's phone meets B's phone while A's laptop meets B's laptop, all four apart. */
 function crossed (): Row {
   const c = new Carrier(), a1 = device('a1'), a2 = device('a2', a1), b1 = device('b1'), b2 = device('b2', b1)
-  meet(a1, b1, c); meet(a2, b2, c); settle(c, [a1, a2, b1, b2])
-  sync(c, [a1, a2])
-  const aAlone = contacts(a1)
-  settle(c, [b1, b2])
-  const bBefore = Math.max(contacts(b1), contacts(b2))
-  sync(c, [b1, b2])
-  const bAfter = [contacts(b1), contacts(b2)]
-  settle(c, [a1, a2]); sync(c, [a1, a2])
+  meet(a1, b1, c); meet(a2, b2, c); run(c, [a1, a2, b1, b2])
+  sync([a1, a2]); run(c, [a1, a2, b1, b2]); sync([a1, a2])
+  const half = [contacts(a1), Math.max(contacts(b1), contacts(b2))]
+  sync([b1, b2]); run(c, [a1, a2, b1, b2]); sync([a1, a2]); sync([b1, b2])
   return {
-    'after a\'s devices synced, a holds of b': aAlone,
-    'b\'s devices, before they synced, each hold of a': bBefore,
-    'after b\'s devices synced, b holds of a': bAfter.join(' and '),
-    'then a holds of b': [contacts(a1), contacts(a2)].join(' and '),
+    'after a\'s devices synced and sent, a holds of b': half[0] as number,
+    'b\'s devices, not synced yet, each hold of a': half[1] as number,
+    'after b\'s devices synced too, a holds of b': [contacts(a1), contacts(a2)].join(' and '),
+    'and b of a': [contacts(b1), contacts(b2)].join(' and '),
     'another meeting was needed': false,
   }
 }
@@ -100,66 +94,67 @@ function crossed (): Row {
 /** A's phone and laptop, apart, each meet a different person. */
 function twoStrangersApart (): Row {
   const c = new Carrier(), phone = device('phone'), laptop = device('laptop', phone), x = device('x'), y = device('y')
-  const tx = meet(phone, x, c), ty = meet(laptop, y, c); settle(c, [phone, laptop, x, y])
-  const before = [valuesOn(x, tx), valuesOn(y, ty)]
-  const late = sync(c, [phone, laptop]); settle(c, [x, y])
+  meet(phone, x, c); meet(laptop, y, c); run(c, [phone, laptop, x, y])
+  sync([phone, laptop])
+  const before = c.log.length
+  run(c, [phone, laptop, x, y], 5)
+  const late = c.log.slice(before)
   return {
     'contacts of a afterwards': [contacts(phone), contacts(laptop)].join(' and '),
-    'documents a sent after the sync': late,
-    'values in it': valuesOn(x, tx) + valuesOn(y, ty) - before[0]! - before[1]!,
-    'values of it the two strangers can read': readable(x) + readable(y),
+    'one of the two strangers gets, per sending of a, documents': late.length / 10,
+    'values in each': late[0]?.tags.length ?? 0,
+    'of them the stranger can read': late.reduce((n, d) => n + readable(x, d) + readable(y, d), 0),
+    'the stranger acknowledges it': late.some((d) => c.acked.has(d.id)),
   }
 }
 
-/** What a stranger gets from someone with one device and from someone whose two devices each met somebody apart. */
-function secondDocument (): Row {
-  const c = new Carrier(), one = device('one'), phone = device('phone'), laptop = device('laptop', phone), x = device('x'), y = device('y'), z = device('z')
-  const t1 = meet(one, x, c), t2 = meet(phone, y, c); meet(laptop, z, c); settle(c, [one, phone, laptop, x, y, z])
-  catchUp(one, c); sync(c, [phone, laptop]); settle(c, [x, y, z])
-  const shape = (d: Device, t: string): string => [...d.got.values()].filter((p) => p.on === t).map((p) => p.tags.length).join(' and ')
-  return {
-    'documents the stranger holds from the person with one device, by values': shape(x, t1),
-    'and from the person with two devices that met someone else apart': shape(y, t2),
-    'values of all of it either stranger can read': readable(x) + readable(y),
-  }
-}
-
-/** A re-encounter where A's proof is lost on the way; the device that sent it is gone, its sibling sends it again. */
+/** A re-encounter where one side's own proof is lost on the way; the device that sent it is gone, its sibling sends it again. */
 function lost (): Row {
   const c = new Carrier(), a1 = device('a1'), a2 = device('a2', a1), b = device('b')
-  meet(a1, b, c); settle(c, [a1, b]); sync(c, [a1, a2])
-  c.drop = 1                                               // a1's proof on the fresh tuple
+  meet(a1, b, c); run(c, [a1, b]); sync([a1, a2])
   meet(a1, b, c); settle(c, [a1, b])
-  const oneSided = [contacts(a1), contacts(b)]
-  share(a1, a2)                                            // a2 learns what a1 sent, and that nothing came back for it
-  const again = sendAgain(a2, c); settle(c, [b])
+  c.drop = 1; send(a1, c); settle(c, [b])                  // a1's own proof for the pair is lost
+  share(a1, a2)                                            // a2 learns what a owes; a1 is gone
+  const again = send(a2, c); settle(c, [b]); send(a2, c)
   return {
-    'with a\'s proof lost, a holds of b': oneSided[0] as number,
-    'and b holds of a': oneSided[1] as number,
-    'documents the sibling sends again': again,
-    'then b holds of a': contacts(b),
+    'documents the sibling sends for it': again,
+    'pairs a still owes afterwards': [...a2.owed].filter((p) => !a2.done.has(p)).length,
+    'a holds of b': contacts(a2),
+    'b holds of a': contacts(b),
   }
 }
 
-/** A device fetches the other side's proof and is lost before it shares it. `proveWith`: what b proves with at the next encounter. */
-function fetchedAndLost (proveWith: 'all' | 'heads' | 'no encounter' = 'all'): Row {
+/** A device fetches the other side's documents, unites, and is lost before it shares it. */
+function fetchedAndLost (): Row {
   const c = new Carrier(), a1 = device('a1'), a2 = device('a2', a1), b = device('b')
-  meet(a1, b, c); settle(c, [a1, b]); sync(c, [a1, a2])
-  meet(a2, b, c); receive(b, c)
-  share(a2, a1); receive(a1, c)                            // a1 fetches b's proof for the fresh tuple; then a1 is gone
-  for (let i = 0; i < 3; i++) { catchUp(a2, c); sendAgain(a2, c); catchUp(b, c); sendAgain(b, c); settle(c, [a2, b]) }   // both sides send all they owe
+  meet(a1, b, c); run(c, [a1, b]); sync([a1, a2])
+  meet(a2, b, c); share(a2, a1)
+  run(c, [a1, b])                                          // a1 does all the receiving and sending for a; then a1 is gone
   const stuck = [contacts(a2), contacts(b)]
-  if (proveWith === 'no encounter') {                      // instead, a writes to b on the tuple that is no head at b any more
-    const tuples = relationships(b)[0] as string[], again = knock(b, c, tuples.find((t) => headOf(b, t) !== t) as string)
-    settle(c, [a2])
-    return { 'documents b sends again when a writes on the tuple that is no head at b': again, 'then a holds of b': contacts(a2) }
-  }
-  meet(a2, b, c, proveWith); settle(c, [a2, b])            // the next encounter
-  if (proveWith === 'heads') return { 'after the next encounter a holds of b': contacts(a2) }
+  run(c, [a2, b])
+  const still = contacts(a2)
+  meet(a2, b, c); run(c, [a2, b])
   return {
-    'after both sides sent all they owe, a\'s remaining device holds of b': stuck[0] as number,
+    'a\'s remaining device holds of b': stuck[0] as number,
     'and b holds of a': stuck[1] as number,
+    'after both sent all they owe, a holds of b': still,
     'after the next encounter a holds of b': contacts(a2),
+  }
+}
+
+/** A device of B fetches A's proof for a pair of which it holds one tuple only. */
+function unreadable (): Row {
+  const c = new Carrier(), a1 = device('a1'), a2 = device('a2', a1), b1 = device('b1'), b2 = device('b2', b1)
+  const t1 = meet(a1, b1, c); run(c, [a1, b1]); share(b1, b2)   // b2 knows the first tuple
+  const t2 = meet(a2, b1, c)                               // a2 has not heard of it; b1 opens the second knowing the first
+  settle(c, [a2]); sync([a1, a2])                          // b1's probe reached a2 before a2 held the first tuple
+  send(a1, c); settle(c, [t1 > t2 ? b2 : b1])              // a's own proof goes on the tuple of the larger name; b2 holds only the first
+  const before = contacts(a1)
+  sync([b1, b2]); run(c, [a1, a2, b1, b2]); sync([a1, a2]); sync([b1, b2])
+  return {
+    'before b\'s devices synced, a holds of b': before,
+    'afterwards a holds of b': [contacts(a1), contacts(a2)].join(' and '),
+    'and b of a': [contacts(b1), contacts(b2)].join(' and '),
   }
 }
 
@@ -167,121 +162,96 @@ function fetchedAndLost (proveWith: 'all' | 'heads' | 'no encounter' = 'all'): R
 function onAForeignTuple (): Row {
   const c = new Carrier(), [a, b, y] = [device('a'), device('b'), device('y')] as [Device, Device, Device]
   const x = meet(a, b, c), t = meet(a, y, c); settle(c, [a, b, y])
-  forge(c, endOf(b, x), { id: t, from: endOf(y, t).side }); receive(a, c)
-  return { 'a counts the other person as b': relationships(a).some((g) => g.includes(x) && g.includes(t)), 'contacts of a': contacts(a) }
+  forge(c, 'probe', endOf(b, x), { id: t, from: endOf(y, t).side }); forge(c, 'map', endOf(b, x), { id: t, from: endOf(y, t).side }); receive(a, c)
+  return { 'a counts the other person as b': together(a, x, t), 'contacts of a': contacts(a) }
 }
 
 /** A's phone and laptop know B and C; then the two devices scan each other. */
 function ownDevicesScan (): Row {
   const c = new Carrier(), phone = device('phone'), laptop = device('laptop', phone), b = device('b'), d = device('c')
-  meet(phone, b, c); meet(phone, d, c); settle(c, [phone, b, d]); sync(c, [phone, laptop])
-  const before = contacts(phone)
-  meet(phone, laptop, c); settle(c, [phone, laptop]); sync(c, [phone, laptop]); settle(c, [phone, laptop, b, d])
-  return { 'contacts before': before, 'contacts of other people afterwards': relationships(phone).filter((g) => g.length === 1).length - 1, 'b and c fell into one': contacts(phone) < 3 }
+  meet(phone, b, c); meet(phone, d, c); run(c, [phone, b, d]); sync([phone, laptop])
+  meet(phone, laptop, c); run(c, [phone, laptop]); sync([phone, laptop]); run(c, [phone, laptop, b, d])
+  return { 'contacts of other people afterwards': relationships(phone).filter((g) => g.length === 1).length - 1, 'b and c fell into one': contacts(phone) < 3 }
 }
 
 /** Someone copied one end of a tuple of B's relationship with A and meets A
  *  as a new contact. `which`: the head of the relationship, or a tuple
- *  behind it. `way`: the proof stands under the copied key and comes on the
- *  fresh tuple, or stands under the fresh tuple and comes on the old one. */
+ *  behind it. `way`: the value stands on the fresh tuple or on the old one. */
 function copied (which: 'the head' | 'an older tuple', way: 'on the fresh tuple' | 'on the old tuple'): Row {
   const c = new Carrier(), [a, b, thief] = [device('a'), device('b'), device('thief')] as [Device, Device, Device]
-  const t1 = meet(a, b, c); settle(c, [a, b]); const t2 = meet(a, b, c); settle(c, [a, b])
+  const t1 = meet(a, b, c); run(c, [a, b]); const t2 = meet(a, b, c); run(c, [a, b])
   const h = headOf(a, t1), old = h === t1 ? t2 : t1
   const stolen = { ...endOf(b, which === 'the head' ? h : old) }
   const t = meet(a, thief, c), mine = endOf(thief, t)
-  if (way === 'on the fresh tuple') forge(c, stolen, { id: t, from: mine.side, key: mine.key })
-  else forge(c, mine, { id: stolen.id, from: stolen.side, key: stolen.key })
-  settle(c, [a, thief])
-  return { 'a counts the newcomer as b': relationships(a).some((g) => g.includes(t1) && g.includes(t)), 'contacts of a': contacts(a) }
-}
-
-/** Three tuples of A and B. B's second device made the third knowing the first but not the second, so A holds proofs for two pairs under the same tuple. */
-function threeTuples (): Row {
-  const c = new Carrier(), a = device('a'), b1 = device('b1'), b2 = device('b2', b1)
-  meet(a, b1, c); settle(c, [a, b1]); share(b1, b2)
-  meet(a, b1, c); meet(a, b2, c); settle(c, [a])
-  const before = contacts(a)
-  settle(c, [b1, b2]); sync(c, [b1, b2]); settle(c, [a])
-  return {
-    'before b\'s devices synced, a holds of b': before,
-    'after b\'s devices synced and proved the last pair, a holds of b': contacts(a),
-    'and b holds of a': [contacts(b1), contacts(b2)].join(' and '),
+  for (const kind of ['probe', 'map'] as const) {
+    if (way === 'on the fresh tuple') forge(c, kind, stolen, { id: t, from: mine.side, key: mine.key })
+    else forge(c, kind, mine, { id: stolen.id, from: stolen.side, key: stolen.key })
   }
+  run(c, [a, thief])
+  return { 'a counts the newcomer as b': together(a, t1, t), 'contacts of a': contacts(a) }
 }
 
-/** Two siblings each make the second document of the same tuple, one of
- *  them knowing one tuple more. Which tuple a late pair travels on follows
- *  the names, so the case is drawn until the two documents differ. */
-function siblingsApart (): Row {
+/** The third review's case: a tuple is no head on A's phone any more; A's
+ *  laptop never heard of it and meets someone who holds a copy of B's end
+ *  of it. Then A's devices sync. */
+function copiedAndApart (): Row {
   for (let i = 0; i < 200; i++) {
-    const c = new Carrier(), a1 = device('a1'), a2 = device('a2', a1), a3 = device('a3', a1), x = device('x'), y = device('y'), z = device('z')
-    const t = meet(a1, x, c); settle(c, [a1, x]); share(a1, a3)
-    meet(a2, y, c); meet(a3, z, c); settle(c, [a2, a3, y, z])   // a2 has not heard of x's tuple when it meets y
-    share(a2, a1)                                          // a1 learns of y's tuple and owes the pair; a3 does not know of it
-    catchUp(a1, c); catchUp(a3, c); settle(c, [x])
-    const docs = [...x.got.values()].filter((d) => d.on === t)
-    if (docs.length !== 3) continue
-    const pairs = docs.flatMap((d, k) => docs.slice(k + 1).map((o) => o.tags.filter((v) => d.tags.includes(v)).length))
-    return {
-      'documents the stranger holds on the tuple': docs.length,
-      'values the two second documents share (of 256)': Math.max(...pairs),
-      'values either shares with the first document': Math.min(...pairs),
-      'values of all of it the stranger can read': readable(x),
-    }
+    const c = new Carrier(), phone = device('phone'), laptop = device('laptop', phone), b = device('b'), thief = device('thief')
+    const x = meet(phone, b, c); run(c, [phone, b]); const h = meet(phone, b, c); run(c, [phone, b])
+    if (headOf(phone, x) === x) continue
+    const stolen = { ...endOf(b, x) }
+    const y = meet(laptop, thief, c), mine = endOf(thief, y)
+    sync([phone, laptop])
+    for (const kind of ['probe', 'map'] as const) { forge(c, kind, stolen, { id: y, from: mine.side, key: mine.key }); forge(c, kind, mine, { id: x, from: stolen.side, key: stolen.key }) }
+    run(c, [phone, laptop, thief]); sync([phone, laptop])
+    return { 'a counts the newcomer as b': together(phone, x, y) || together(phone, h, y), 'contacts of a': contacts(phone) }
   }
   return { 'the case did not come up in 200 draws': true }
+}
+
+/** Three tuples of A and B. B's second device made the third knowing the first but not the second. */
+function threeTuples (): Row {
+  const c = new Carrier(), a = device('a'), b1 = device('b1'), b2 = device('b2', b1)
+  meet(a, b1, c); run(c, [a, b1]); share(b1, b2)
+  meet(a, b1, c); meet(a, b2, c); settle(c, [a])
+  const before = contacts(a)
+  run(c, [a, b1, b2]); sync([b1, b2]); run(c, [a, b1, b2]); sync([b1, b2])
+  return {
+    'after the probes, before b\'s devices synced, a holds of b': before,
+    'at the end a holds of b': contacts(a),
+    'and b of a': [contacts(b1), contacts(b2)].join(' and '),
+  }
 }
 
 /** B lost everything and meets A with a new device. */
 function dataLoss (): Row {
   const c = new Carrier(), [a, b, bNew] = [device('a'), device('b'), device('b-new')] as [Device, Device, Device]
-  meet(a, b, c); settle(c, [a, b])
-  meet(a, bNew, c); settle(c, [a, bNew])
+  meet(a, b, c); run(c, [a, b])
+  meet(a, bNew, c); run(c, [a, bNew])
   return { 'a holds of b': contacts(a), 'b holds of a': contacts(bNew) }
 }
 
 /** A, with one device, is restored from an image taken before its second
  *  tuple with B, and then meets B again. `head`: which of the two tuples B
- *  holds as the head of the relationship, the one A still has or the one A
- *  lost. Which it is follows the names, so the case is drawn. */
+ *  holds as the head, the one A still has or the one A lost. */
 function restored (head: 'kept' | 'lost'): Row {
   for (let i = 0; i < 200; i++) {
     const c = new Carrier(), a = device('a'), b = device('b')
-    const t1 = meet(a, b, c); settle(c, [a, b]); catchUp(a, c); catchUp(b, c); settle(c, [a, b])
+    const t1 = meet(a, b, c); run(c, [a, b])
     const old = image(a)
-    meet(a, b, c); settle(c, [a, b])
+    meet(a, b, c); run(c, [a, b])
     if ((headOf(b, t1) === t1) !== (head === 'kept')) continue
-    const t3 = meet(old, b, c); settle(c, [old, b])
-    for (let k = 0; k < 2; k++) { catchUp(old, c); sendAgain(old, c); catchUp(b, c); sendAgain(b, c); settle(c, [old, b]) }
-    const t4 = meet(old, b, c); settle(c, [old, b])
-    return {
-      'after the restore and one encounter, a holds of b': relationships(old).filter((g) => g.includes(t1) || g.includes(t3)).length,
-      'and b holds of a': contacts(b),
-      'after one more encounter b holds of a': relationships(b).filter((g) => g.includes(t1) || g.includes(t3) || g.includes(t4)).length,
-    }
+    meet(old, b, c); run(c, [old, b])
+    const first = [contacts(old), contacts(b)]
+    meet(old, b, c); run(c, [old, b])
+    return { 'after the restore and one encounter, a holds of b': first[0] as number, 'and b of a': first[1] as number, 'after one more encounter b holds of a': contacts(b) }
   }
   return { 'the case did not come up in 200 draws': true }
 }
 
-/** A sends the same proof twice. */
-function repeated (): Row {
-  const c = new Carrier(), [a, x] = [device('a'), device('x')] as [Device, Device]
-  knows(a, 5, c)
-  const before = c.log.length
-  const t = meet(a, x, c)
-  sendAgain(a, c)                                          // nothing acknowledged yet: it goes out again
-  receive(x, c)
-  return {
-    'documents a handed in on the fresh tuple': c.log.slice(before).filter((on) => on === t).length - 1,
-    'different documents the stranger holds afterwards': [...x.got.values()].filter((d) => d.on === t).length,
-    'different values it holds': new Set([...x.got.values()].filter((d) => d.on === t).flatMap((d) => d.tags)).size,
-  }
-}
-
-/** Three people with 3, 3 and 2 devices; encounters, deliveries and syncs of single pairs of devices in random order, nothing lost; then everything delivered and synced. */
+/** Three people with 3, 3 and 2 devices; encounters, deliveries, syncs of single pairs of devices and sendings in random order, nothing lost; then everything sent, delivered and synced. */
 function randomSchedules (runs: number): Row {
-  let wrong = 0, false_ = 0
+  let wrong = 0, false_ = 0, open = 0
   for (let r = 0; r < runs; r++) {
     const c = new Carrier()
     const a = [device('a1')]; a.push(device('a2', a[0]), device('a3', a[0]))
@@ -289,14 +259,13 @@ function randomSchedules (runs: number): Row {
     const x = [device('x1')]; x.push(device('x2', x[0]))
     const people = [a, b, x], all = [...a, ...b, ...x]
     const pick = <T>(xs: T[]): T => xs[randomInt(xs.length)] as T
-    for (let i = 0; i < 14; i++) {
+    for (let i = 0; i < 16; i++) {
       const k = randomInt(4)
       if (k === 0) { const p = pick(people), q = pick(people.filter((o) => o !== p)); meet(pick(p), pick(q), c) } else if (k === 1) receive(pick(all), c)
-      else if (k === 2) { const p = pick(people), d1 = pick(p), d2 = pick(p.filter((o) => o !== d1)); share(d1, d2) } else { const d = pick(all); catchUp(d, c); sendAgain(d, c) }
+      else if (k === 2) { const p = pick(people), d1 = pick(p), d2 = pick(p.filter((o) => o !== d1)); share(d1, d2) } else send(pick(all), c)
     }
-    for (let i = 0; i < 4; i++) { for (const p of people) { sync(c, p); for (const d of p) sendAgain(d, c) } settle(c, all) }
-    for (const p of people) sync(c, p)
-    // every device of a person must show one contact per other person it shares a tuple with, and no tuple with two people in one contact
+    for (let i = 0; i < 4; i++) { for (const p of people) sync(p); run(c, all, 1) }
+    for (const p of people) sync(p)
     const owner = new Map<string, Set<Device[]>>()
     for (const p of people) for (const d of p) for (const e of d.ends.values()) owner.set(e.id, (owner.get(e.id) ?? new Set()).add(p))
     for (const p of people) for (const d of p) {
@@ -307,9 +276,11 @@ function randomSchedules (runs: number): Row {
         for (const o of others) partners.add(o)
       }
       if (contacts(d) !== partners.size) wrong++
+      // a proof still owed between two tuples of the same two people
+      for (const pr of d.owed) if (!d.done.has(pr)) { const [s, t] = pr.split('|') as [string, string]; if ([...(owner.get(s) as Set<Device[]>)].every((o) => (owner.get(t) as Set<Device[]>).has(o))) open++ }
     }
   }
-  return { runs, 'devices that show more or fewer contacts than people they know': wrong, 'contacts that hold tuples of two people': false_ }
+  return { runs, 'devices that show more or fewer contacts than people they know': wrong, 'contacts that hold tuples of two people': false_, 'proofs still owed between two tuples of the same two people': open }
 }
 
 /** What one encounter costs someone with many contacts. */
@@ -317,8 +288,9 @@ function cost (n: number): Row {
   const c = new Carrier(), [a, x] = [device('a'), device('x')] as [Device, Device]
   knows(a, n, c)
   const before = c.log.length
-  const t = meet(a, x, c); settle(c, [a, x])
-  return { 'values a sends on the fresh tuple': valuesOn(x, t), 'documents on other tuples': c.log.slice(before).filter((on) => on !== t).length, 'step of the filling': STEP }
+  const t = meet(a, x, c); run(c, [a, x])
+  const docs = c.log.slice(before)
+  return { 'values a sends on the fresh tuple': docs.filter((d) => d.on === t && d.from === 'a').reduce((s, d) => s + d.tags.length, 0), 'documents on other tuples': docs.filter((d) => d.on !== t).length, 'step of the filling': STEP }
 }
 
 export const measure = (): Record<string, Row> => ({
@@ -328,22 +300,19 @@ export const measure = (): Record<string, Row> => ({
   'a\'s laptop, which has not heard of the relationship yet, meets b again': ownDevices(false),
   'both have two devices and meet crosswise, all four apart': crossed(),
   'a\'s two devices, apart, each meet someone else': twoStrangersApart(),
-  'the second document of every tuple': secondDocument(),
-  'one proof is lost on the way': lost(),
-  'a device fetches the other side\'s proof and is lost before it shares it': fetchedAndLost(),
-  'the same, but at the next encounter b proves with its heads only (Trust 6750)': fetchedAndLost('heads'),
-  'the same, with no further encounter: a writes to b on the older tuple': fetchedAndLost('no encounter'),
+  'a proof is lost on the way': lost(),
+  'a device fetches, unites and is lost before it shares it': fetchedAndLost(),
+  'a device fetches a proof it cannot read': unreadable(),
   'a contact hands in a value on a tuple that is not its own': onAForeignTuple(),
   'a\'s own devices scan each other': ownDevicesScan(),
   'a copied key of the head of a relationship': copied('the head', 'on the fresh tuple'),
-  'a copied key of an older tuple, the proof under it': copied('an older tuple', 'on the fresh tuple'),
-  'a copied key of an older tuple, the proof the other way round': copied('an older tuple', 'on the old tuple'),
-  'three tuples, proofs for two pairs under the same tuple': threeTuples(),
-  'two siblings make the second document of one tuple apart': siblingsApart(),
+  'a copied key of an older tuple, the value on the fresh tuple': copied('an older tuple', 'on the fresh tuple'),
+  'a copied key of an older tuple, the value on the old tuple': copied('an older tuple', 'on the old tuple'),
+  'a copied key of a tuple that is no head any more, met by a device that never heard of it': copiedAndApart(),
+  'three tuples, the third made by a device that knew only the first': threeTuples(),
   'b lost everything': dataLoss(),
   'a is restored from an image older than its second tuple with b; b\'s head is the tuple a kept': restored('kept'),
   'the same; b\'s head is the tuple a lost': restored('lost'),
-  'the same proof sent twice': repeated(),
   'random schedules': randomSchedules(60),
   'cost with 300 contacts': cost(300),
 })
