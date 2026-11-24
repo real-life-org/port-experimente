@@ -160,8 +160,11 @@ function newContactOnALinkedDevice (stock: number): Row {
  *  binds the relationship to a key it draws itself. `lostWhen` says when the
  *  laptop gets into foreign hands, unlocked. A lost laptop hands nothing
  *  over: lost before the handover, the main device never hears of the
- *  relationship. */
-function selfBound (lostWhen: 'never' | 'before the handover' | 'after the handover, before the counterpart knows' | 'after the counterpart knows'): Row {
+ *  relationship. An honest laptop forgets the key at the handover; lost
+ *  after it, it holds nothing to write with. The two `copied` cases are
+ *  another matter: the key was copied off the laptop before the handover
+ *  and is used after it. */
+function selfBound (lostWhen: 'never' | 'before the handover' | 'after the handover' | 'copied before, used before the counterpart knows' | 'copied before, used after the counterpart knows'): Row {
   const R = { ...MAIN, selfBind: true }
   const c = new Carrier(), [phone, laptop, b] = [device('phone'), device('laptop'), device('b')] as [Device, Device, Device]
   renew([phone]); renew([b])
@@ -174,10 +177,11 @@ function selfBound (lostWhen: 'never' | 'before the handover' | 'after the hando
   const tell = (): void => { send(phone, c, R, 'message', 'from the main device'); settle(c, R, [b, phone]) }
   if (lostWhen === 'before the handover') lose()
   else {
-    const copy = new Map(laptop.own.update)                                  // what a laptop in foreign hands would have kept
+    const copy = new Map(laptop.own.update)                                  // what someone who copied the key before the handover holds
     handed = handOver(laptop, phone, R)
-    if (lostWhen === 'after the handover, before the counterpart knows') { laptop.own.update = copy; lose(); tell() }
-    else if (lostWhen === 'after the counterpart knows') { tell(); laptop.own.update = copy; lose() }
+    if (lostWhen === 'after the handover') { lose(); tell() }                // the laptop as the handover left it
+    else if (lostWhen === 'copied before, used before the counterpart knows') { laptop.own.update = copy; lose(); tell() }
+    else if (lostWhen === 'copied before, used after the counterpart knows') { tell(); laptop.own.update = copy; lose() }
     else tell()
   }
   const knows = phone.own.log.length > 0
@@ -353,8 +357,9 @@ export function measure (): Record<string, Row> {
     'one main device: the laptop meets someone without a prepared binding': newContactOnALinkedDevice(0),
     'self-binding: the laptop meets someone, later hands the key over': selfBound('never'),
     'self-binding: the laptop is lost before the handover': selfBound('before the handover'),
-    'self-binding: the laptop is lost after the handover, before the counterpart knows of it': selfBound('after the handover, before the counterpart knows'),
-    'self-binding: the laptop is lost after the counterpart knows of the handover': selfBound('after the counterpart knows'),
+    'self-binding: the laptop is lost after the handover': selfBound('after the handover'),
+    'self-binding: the key was copied before the handover and is used before the counterpart knows of it': selfBound('copied before, used before the counterpart knows'),
+    'self-binding: the key was copied before the handover and is used after the counterpart knows of it': selfBound('copied before, used after the counterpart knows'),
     'the counterpart has two devices and each took another continuation': counterpartSplit(false),
     'the same; the counterpart\'s devices settle on one by a fixed rule': counterpartSplit(true),
     'contested: the owner reached the counterpart first': contested('the owner'),

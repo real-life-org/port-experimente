@@ -178,7 +178,17 @@
     "the relationship is contested at the counterpart": false,
     "the main device can change the keys afterwards": false
   },
-  "self-binding: the laptop is lost after the handover, before the counterpart knows of it": {
+  "self-binding: the laptop is lost after the handover": {
+    "the relationship is opened": "self-bound",
+    "the main device knows of the relationship": true,
+    "the handover binds it to the main device": true,
+    "the handover changes the everyday key": false,
+    "the lost laptop wrote a continuation": false,
+    "the counterpart follows": "the owner",
+    "the relationship is contested at the counterpart": false,
+    "the main device can change the keys afterwards": true
+  },
+  "self-binding: the key was copied before the handover and is used before the counterpart knows of it": {
     "the relationship is opened": "self-bound",
     "the main device knows of the relationship": true,
     "the handover binds it to the main device": true,
@@ -188,7 +198,7 @@
     "the relationship is contested at the counterpart": true,
     "the main device can change the keys afterwards": false
   },
-  "self-binding: the laptop is lost after the counterpart knows of the handover": {
+  "self-binding: the key was copied before the handover and is used after the counterpart knows of it": {
     "the relationship is opened": "self-bound",
     "the main device knows of the relationship": true,
     "the handover binds it to the main device": true,
