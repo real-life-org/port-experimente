@@ -59,6 +59,9 @@
     "after the next encounter a holds of b": 2
   },
   "a device fetches a proof it cannot read": {
+    "a's proof is on the first tuple, which b2 fetches": true,
+    "b2 holds the second tuple when it fetches": false,
+    "values of the proof b2 can read when it fetches": 0,
     "before b's devices synced, a holds of b": 2,
     "afterwards a holds of b": "1 and 1",
     "and b of a": "1 and 1"

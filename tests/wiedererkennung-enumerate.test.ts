@@ -10,8 +10,9 @@ test('recognition after Trust 6a on two devices: with the probe read again from 
   expect(r.atRest).toEqual({ 'both relations give 1, devices show 1111': 28992, 'both relations give 2, devices show 2222': 12096, 'at rest with more than one contact': 12096 })
 })
 
-test('without reading the probe again, some schedules end with two contacts although both relations hold the pair', () => {
+test('reading the probe once, when it is fetched, some schedules end with two contacts although both relations hold the pair', () => {
   const r = explore(2, false)
-  expect(r.atRest['both relations give 1, devices show 2222']).toBe(162)
+  expect(r.states).toBe(28404)
+  expect(r.atRest['both relations give 1, devices show 2222']).toBe(672)
   expect(r.problems).toEqual(['a device shows other contacts than the pairs both relations hold'])
 })

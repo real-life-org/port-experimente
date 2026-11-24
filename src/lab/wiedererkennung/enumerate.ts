@@ -56,11 +56,11 @@ export function explore (tuples: number, rereadProbes: boolean, syncBothWays = f
   const cand = (s: State, p: P, t: number): number => (s.heads[p] as number[])[t] as number
   const admitted = (s: State, p: P, x: number, y: number): boolean => Boolean(cand(s, p, x) & bit(y) || cand(s, p, y) & bit(x))
 
-  /** A device reads the probes it holds: a listed tuple it holds, in its relation with the probe's tuple, is a hit, and its person owes the mapping. */
-  const read = (s: State, d: number): void => {
+  /** A device reads probes it holds (all of them, or only the one on `only`): a listed tuple it holds, in its relation with the probe's tuple, is a hit, and its person owes the mapping. */
+  const read = (s: State, d: number, only = -1): void => {
     const me = personOf(d), other = (1 - me) as P, v = s.dev[d] as Dev
     for (let t = 0; t < tuples; t++) {
-      if (!(v.probe & bit(t))) continue
+      if (!(v.probe & bit(t)) || (only >= 0 && t !== only)) continue
       const listed = cand(s, other, t)
       for (let c = 0; c < tuples; c++) if (c !== t && listed & bit(c) && v.has & bit(c) && admitted(s, me, t, c)) v.owed |= pairBit(t, c)
     }
@@ -79,13 +79,14 @@ export function explore (tuples: number, rereadProbes: boolean, syncBothWays = f
         const n = clone(s), nv = n.dev[d] as Dev
         ;(n.heads[me] as number[])[t] = headsOf(v.has, v.edges)
         n.opened[me] = (n.opened[me] as number) | bit(t); nv.has |= bit(t); n.inbox[other] = (n.inbox[other] as number) | bit(t)
-        read(n, d); yield n
+        if (rereadProbes) read(n, d)                                        // read once: an opening reads nothing again
+        yield n
       }
       // fetch the other side's probe on a tuple this device holds
       for (let t = 0; t < tuples; t++) if ((s.inbox[me] as number) & bit(t) && v.has & bit(t)) {
         const n = clone(s), nv = n.dev[d] as Dev
         n.inbox[me] = (n.inbox[me] as number) & ~bit(t); nv.probe |= bit(t)
-        read(n, d); yield n
+        read(n, d, rereadProbes ? -1 : t); yield n                          // read once: only the probe just fetched
       }
       // fetch a mapping the other side owes and has not had acknowledged; it travels on the larger tuple of its pair
       const owedByOther = ((s.dev[other * 2] as Dev).owed | (s.dev[other * 2 + 1] as Dev).owed) & ~(s.acked[other] as number)
@@ -100,7 +101,7 @@ export function explore (tuples: number, rereadProbes: boolean, syncBothWays = f
       // sync to the sibling
       const sib = d ^ 1, w = s.dev[sib] as Dev
       if (syncBothWays && (d & 1)) continue
-      const differs = syncBothWays ? (w.has !== v.has || w.probe !== v.probe || w.edges !== v.edges || w.owed !== v.owed) : ((w.has | v.has) !== w.has || (rereadProbes && (w.probe | v.probe) !== w.probe) || (w.edges | v.edges) !== w.edges || (w.owed | v.owed) !== w.owed)
+      const differs = syncBothWays ? (w.has !== v.has || (rereadProbes && w.probe !== v.probe) || w.edges !== v.edges || w.owed !== v.owed) : ((w.has | v.has) !== w.has || (rereadProbes && (w.probe | v.probe) !== w.probe) || (w.edges | v.edges) !== w.edges || (w.owed | v.owed) !== w.owed)
       if (differs) {
         const n = clone(s), nw = n.dev[sib] as Dev
         nw.has |= v.has; nw.edges |= v.edges; nw.owed |= v.owed

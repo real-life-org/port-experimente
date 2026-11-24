@@ -144,17 +144,31 @@ function fetchedAndLost (): Row {
 
 /** A device of B fetches A's proof for a pair of which it holds one tuple only. */
 function unreadable (): Row {
-  const c = new Carrier(), a1 = device('a1'), a2 = device('a2', a1), b1 = device('b1'), b2 = device('b2', b1)
-  const t1 = meet(a1, b1, c); run(c, [a1, b1]); share(b1, b2)   // b2 knows the first tuple
-  const t2 = meet(a2, b1, c)                               // a2 has not heard of it; b1 opens the second knowing the first
-  settle(c, [a2]); sync([a1, a2])                          // b1's probe reached a2 before a2 held the first tuple
-  send(a1, c); settle(c, [t1 > t2 ? b2 : b1])              // a's own proof goes on the tuple of the larger name; b2 holds only the first
-  const before = contacts(a1)
-  sync([b1, b2]); run(c, [a1, a2, b1, b2]); sync([a1, a2]); sync([b1, b2])
-  return {
-    'before b\'s devices synced, a holds of b': before,
-    'afterwards a holds of b': [contacts(a1), contacts(a2)].join(' and '),
-    'and b of a': [contacts(b1), contacts(b2)].join(' and '),
+  // A's proof travels on the tuple of the larger name; only when that is the
+  // first tuple does it reach b2, which holds the first tuple only. Tuple
+  // names are random, so draw until that holds.
+  for (;;) {
+    const c = new Carrier(), a1 = device('a1'), a2 = device('a2', a1), b1 = device('b1'), b2 = device('b2', b1)
+    const t1 = meet(a1, b1, c); run(c, [a1, b1]); share(b1, b2)   // b2 knows the first tuple
+    const t2 = meet(a2, b1, c)                               // a2 has not heard of it; b1 opens the second knowing the first
+    if (t1 < t2) continue
+    settle(c, [a2]); sync([a1, a2])                          // b1's probe reached a2 before a2 held the first tuple
+    const from = c.log.length
+    send(a1, c)
+    const proof = c.log.slice(from).filter((d) => d.on === t1)
+    const holdsSecond = endOf(b2, t2) !== undefined, canRead = proof.reduce((n, d) => n + readable(b2, d), 0)
+    settle(c, [b2])
+    const fetched = proof.length > 0 && proof.every((d) => c.fetched.has(d.id))
+    const before = contacts(a1)
+    sync([b1, b2]); run(c, [a1, a2, b1, b2]); sync([a1, a2]); sync([b1, b2])
+    return {
+      'a\'s proof is on the first tuple, which b2 fetches': fetched,
+      'b2 holds the second tuple when it fetches': holdsSecond,
+      'values of the proof b2 can read when it fetches': canRead,
+      'before b\'s devices synced, a holds of b': before,
+      'afterwards a holds of b': [contacts(a1), contacts(a2)].join(' and '),
+      'and b of a': [contacts(b1), contacts(b2)].join(' and '),
+    }
   }
 }
 
