@@ -158,6 +158,46 @@
     "bindings left on the laptop": 0,
     "a device with neither secret nor stock opens": "unbound"
   },
+  "self-binding: the laptop meets someone, later hands the key over": {
+    "the relationship is opened": "self-bound",
+    "the main device knows of the relationship": true,
+    "the handover binds it to the main device": true,
+    "the handover changes the everyday key": false,
+    "the lost laptop wrote a continuation": false,
+    "the counterpart follows": "the owner",
+    "the relationship is contested at the counterpart": false,
+    "the main device can change the keys afterwards": true
+  },
+  "self-binding: the laptop is lost before the handover": {
+    "the relationship is opened": "self-bound",
+    "the main device knows of the relationship": false,
+    "the handover binds it to the main device": false,
+    "the handover changes the everyday key": false,
+    "the lost laptop wrote a continuation": true,
+    "the counterpart follows": "the lost laptop",
+    "the relationship is contested at the counterpart": false,
+    "the main device can change the keys afterwards": false
+  },
+  "self-binding: the laptop is lost after the handover, before the counterpart knows of it": {
+    "the relationship is opened": "self-bound",
+    "the main device knows of the relationship": true,
+    "the handover binds it to the main device": true,
+    "the handover changes the everyday key": false,
+    "the lost laptop wrote a continuation": true,
+    "the counterpart follows": "the lost laptop",
+    "the relationship is contested at the counterpart": true,
+    "the main device can change the keys afterwards": false
+  },
+  "self-binding: the laptop is lost after the counterpart knows of the handover": {
+    "the relationship is opened": "self-bound",
+    "the main device knows of the relationship": true,
+    "the handover binds it to the main device": true,
+    "the handover changes the everyday key": false,
+    "the lost laptop wrote a continuation": true,
+    "the counterpart follows": "the owner",
+    "the relationship is contested at the counterpart": true,
+    "the main device can change the keys afterwards": true
+  },
   "the counterpart has two devices and each took another continuation": {
     "b's phone and laptop follow different continuations before they sync": true,
     "after syncing they follow the same one": false,

@@ -1,7 +1,7 @@
 // Scenarios for the model of model.ts. Each returns plain facts; the rules
 // under discussion are switched per variant so that the table shows what
 // each rule buys. A measurement of the model, not of the library.
-import { Carrier, RULES, change, changeAfterSync, device, headId, met, open, paths, receive, removeDevice, renew, send, settleInPerson, share, stockUp, takeOver, type Device, type Rules } from './model'
+import { Carrier, RULES, change, changeAfterSync, device, handOver, headId, met, open, paths, receive, removeDevice, renew, send, settleInPerson, share, stockUp, takeOver, type Device, type Rules } from './model'
 
 export type Row = Record<string, string | number | boolean>
 const v = (r: Partial<Rules>): Rules => ({ ...RULES, ...r })
@@ -153,6 +153,43 @@ function newContactOnALinkedDevice (stock: number): Row {
     'the counterpart follows that change': changed && headId(b.peer.log) === headId(phone.own.log),
     'bindings left on the laptop': laptop.own.stock.length,
     'a device with neither secret nor stock opens': second,
+  }
+}
+
+/** Self-binding: the laptop meets someone while the main device is off and
+ *  binds the relationship to a key it draws itself. `lostWhen` says when the
+ *  laptop gets into foreign hands, unlocked. A lost laptop hands nothing
+ *  over: lost before the handover, the main device never hears of the
+ *  relationship. */
+function selfBound (lostWhen: 'never' | 'before the handover' | 'after the handover, before the counterpart knows' | 'after the counterpart knows'): Row {
+  const R = { ...MAIN, selfBind: true }
+  const c = new Carrier(), [phone, laptop, b] = [device('phone'), device('laptop'), device('b')] as [Device, Device, Device]
+  renew([phone]); renew([b])
+  const opened = open(laptop, [], R); open(b, [], R)
+  laptop.peer.log = [...b.own.log]; b.peer.log = [...laptop.own.log]; laptop.own.owed = []; b.own.owed = []
+  send(laptop, c, R, 'message', 'hello'); settle(c, R, [b, laptop])
+  const sigBefore = laptop.own.log[0]?.state.sig
+  let handed = false, wrote = false
+  const lose = (): void => { laptop.lost = true; wrote = change(laptop, R, []); if (wrote) { send(laptop, c, R, 'message', 'from the lost laptop'); settle(c, R, [b, phone]) } }
+  const tell = (): void => { send(phone, c, R, 'message', 'from the main device'); settle(c, R, [b, phone]) }
+  if (lostWhen === 'before the handover') lose()
+  else {
+    const copy = new Map(laptop.own.update)                                  // what a laptop in foreign hands would have kept
+    handed = handOver(laptop, phone, R)
+    if (lostWhen === 'after the handover, before the counterpart knows') { laptop.own.update = copy; lose(); tell() }
+    else if (lostWhen === 'after the counterpart knows') { tell(); laptop.own.update = copy; lose() }
+    else tell()
+  }
+  const knows = phone.own.log.length > 0
+  return {
+    'the relationship is opened': opened,
+    'the main device knows of the relationship': knows,
+    'the handover binds it to the main device': handed,
+    'the handover changes the everyday key': handed && phone.own.log[1]?.state.sig !== sigBefore,
+    'the lost laptop wrote a continuation': wrote,
+    'the counterpart follows': knows && headId(b.peer.log) === headId(phone.own.log) ? 'the owner' : reads(b, 'from the lost laptop') ? 'the lost laptop' : 'nobody new',
+    'the relationship is contested at the counterpart': b.peer.contested,
+    'the main device can change the keys afterwards': knows && headId(b.peer.log) === headId(phone.own.log) && change(phone, R, []),
   }
 }
 
@@ -314,6 +351,10 @@ export function measure (): Record<string, Row> {
     'one main device: a linked device is lost and the main device changes the keys': linkedDeviceLost(),
     'one main device: the laptop meets someone with a prepared binding': newContactOnALinkedDevice(2),
     'one main device: the laptop meets someone without a prepared binding': newContactOnALinkedDevice(0),
+    'self-binding: the laptop meets someone, later hands the key over': selfBound('never'),
+    'self-binding: the laptop is lost before the handover': selfBound('before the handover'),
+    'self-binding: the laptop is lost after the handover, before the counterpart knows of it': selfBound('after the handover, before the counterpart knows'),
+    'self-binding: the laptop is lost after the counterpart knows of the handover': selfBound('after the counterpart knows'),
     'the counterpart has two devices and each took another continuation': counterpartSplit(false),
     'the same; the counterpart\'s devices settle on one by a fixed rule': counterpartSplit(true),
     'contested: the owner reached the counterpart first': contested('the owner'),

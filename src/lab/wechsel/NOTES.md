@@ -119,6 +119,29 @@ are drawn and reach the linked devices by syncing.
    keeps following its own, unless a rule every device applies alike picks
    one (here: the lower id). Which one that is, the rule cannot know.
 
+## Bind yourself, hand over later
+
+Instead of a stock of prepared bindings: a linked device binds a new
+relationship to a key it draws itself. At the next sync it hands the key to
+the main device, which writes an entry that changes only the binding; from
+then on the next writer comes from the main device's secret.
+
+| The laptop gets into foreign hands | The main device knows of the relationship | The counterpart follows | Contested |
+|---|---|---|---|
+| never | yes | the owner | no |
+| before the handover | no | the lost laptop | no |
+| after the handover, before the counterpart knows of it | yes | the lost laptop | yes |
+| after the counterpart knows of the handover | yes | the owner | yes |
+
+1. **It works without anything prepared**, and the handover changes no
+   everyday key: the counterpart has nothing to tell its person.
+2. **The window ends when the counterpart knows of the handover**, not at
+   the handover: until then the key the laptop drew still stands at the
+   counterpart.
+3. **Before the first sync the relationship exists on the laptop alone.**
+   Lost then, the main device never hears of it. That is a matter of
+   syncing, with or without any binding.
+
 ## A contested relationship
 
 A second valid continuation marks the relationship as contested at the
@@ -195,8 +218,7 @@ path. That is the effect measured in finding 3, not a weaker check.
 
 ## What the model does not show
 
-- A join to a group on a device that holds no secret; how many prepared
-  bindings a device needs and how they are renewed.
+- A join to a group on a device that holds no secret.
 - Which of two continuations is the owner's: a counterpart's devices can
   agree on one, not on the right one.
 - Holders, wrapping, handing the role over, recovery, time.

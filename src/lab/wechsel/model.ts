@@ -74,8 +74,9 @@ export type Rules = {
   deterministic: boolean    // the next state is derived from a change secret the holders share, not drawn
   graceAfterAck: boolean    // the old receive key and address stay open for a while after the acknowledgement
   stateFromSecret: boolean  // with a change secret: the everyday keys are derived from it too (else only who may write next)
+  selfBind: boolean         // a device without a secret binds a new relationship to a key it draws itself, to hand over later
 }
-export const RULES: Rules = { heads: true, replyToSender: true, keepOldUntilAck: true, deterministic: false, graceAfterAck: false, stateFromSecret: true }
+export const RULES: Rules = { heads: true, replyToSender: true, keepOldUntilAck: true, deterministic: false, graceAfterAck: false, stateFromSecret: true, selfBind: false }
 
 /** One mailbox per address; what was fetched is gone. */
 export class Carrier {
@@ -107,12 +108,13 @@ const newState = (): { st: State, sigPair: Pair } => { const sigPair = pair(); r
 /** A relationship's first entry, written on `dev`. The key that may write
  *  the next entry is drawn and handed to `holders`, or, with a change
  *  secret, derived from the newest one `dev` holds. */
-export function open (dev: Device, holders: Device[], rules: Rules = RULES): 'bound' | 'from stock' | 'unbound' {
+export function open (dev: Device, holders: Device[], rules: Rules = RULES): 'bound' | 'from stock' | 'self-bound' | 'unbound' {
   const w = dev.own.secrets[dev.own.secrets.length - 1]
   const derived = rules.deterministic && w !== undefined
   // without a secret under the rule of a change secret: a binding the main device prepared, or none
   const item = rules.deterministic && !derived ? dev.own.stock.shift() : undefined
-  const unbound = rules.deterministic && !derived && !item
+  const self = rules.deterministic && !derived && !item && rules.selfBind
+  const unbound = rules.deterministic && !derived && !item && !self
   const rel = item?.rel ?? 'rel-' + randomBytes(6).toString('hex')
   const up = pair(), nextUp = derived ? pairFrom(kdf(w, rel, 1, 'update')) : pair(), { st, sigPair } = newState()
   const b = { n: 0, prev: null, update: up.pub, next: unbound ? 'none' : item?.next ?? h(nextUp.pub), state: st }
@@ -120,7 +122,8 @@ export function open (dev: Device, holders: Device[], rules: Rules = RULES): 'bo
   const e: Entry = { ...b, proof, id: h(body(b) + proof) }
   dev.own.log = [e]; dev.own.sig.set(st.sig, sigPair.priv); dev.own.enc.add(st.enc); dev.own.addr.add(st.addr); dev.own.owed = [e]; dev.own.acked = 0; dev.own.rel = rel
   if (!rules.deterministic) for (const x of holders) x.own.update.set(nextUp.pub, nextUp.priv)
-  return unbound ? 'unbound' : item ? 'from stock' : 'bound'
+  if (self) dev.own.update.set(nextUp.pub, nextUp.priv)                       // held by this device alone until it hands it over
+  return unbound ? 'unbound' : self ? 'self-bound' : item ? 'from stock' : 'bound'
 }
 /** The main device prepares bindings for a device that holds no secret:
  *  each names a relationship label and commits to the key the main device
@@ -183,15 +186,31 @@ export function takeOver (from: Device, to: Device, holder: boolean): void {
  *  committed under; the new state and the next commitment are derived from
  *  the newest secret the device holds. Two devices that hold the same
  *  secrets write the same entry, byte for byte. */
-export function change (dev: Device, rules: Rules, holders: Device[]): boolean {
+export function change (dev: Device, rules: Rules, holders: Device[], keepState = false): boolean {
   const hd = head(dev.own.log), n = hd.n + 1
-  let e: Entry, sigPair: Pair
+  let e: Entry, sigPair: Pair | undefined
   if (rules.deterministic) {
-    const rel = dev.own.rel, up = dev.own.secrets.map((w) => pairFrom(kdf(w, rel, n, 'update'))).find((p) => h(p.pub) === hd.next)
+    const rel = dev.own.rel
+    // the key the head committed to: derived from a secret, or one a linked device drew and handed over
+    const handed = [...dev.own.update].find(([pub]) => h(pub) === hd.next)
+    const up = dev.own.secrets.map((w) => pairFrom(kdf(w, rel, n, 'update'))).find((p) => h(p.pub) === hd.next) ?? (handed ? { pub: handed[0], priv: handed[1] } : undefined)
     const w = dev.own.secrets[dev.own.secrets.length - 1]
-    if (!up || !w) return false
+    if (!up) return false
+    if (!w) {
+      // no secret: a device can only write over a key it holds itself, and binds to another it draws
+      if (!handed) return false
+      const nextUp = pair(), made = newState()
+      const b = { n, prev: hd.id, update: up.pub, next: h(nextUp.pub), state: made.st }
+      const proof = sign(null, Buffer.from(body(b)), up.priv).toString('base64url')
+      e = { ...b, proof, id: h(body(b) + proof) }
+      dev.own.update.set(nextUp.pub, nextUp.priv)
+      dev.own.log.push(e); dev.own.owed.push(e)
+      dev.own.sig.set(e.state.sig, made.sigPair.priv); dev.own.enc.add(e.state.enc); dev.own.addr.add(e.state.addr)
+      return true
+    }
     let st: State
-    if (rules.stateFromSecret) {
+    if (keepState) st = hd.state                                             // only the binding changes
+    else if (rules.stateFromSecret) {
       sigPair = pairFrom(kdf(w, rel, n, 'sig'))
       st = { sig: sigPair.pub, enc: 'enc-' + h(kdf(w, rel, n, 'enc').toString('hex')), addr: 'addr-' + h(kdf(w, rel, n, 'addr').toString('hex')) }
     } else { const made = newState(); sigPair = made.sigPair; st = made.st }   // the secret says who may write next, nothing else
@@ -209,8 +228,18 @@ export function change (dev: Device, rules: Rules, holders: Device[]): boolean {
     for (const x of holders) if (!x.lost) x.own.update.set(nextUp.pub, nextUp.priv)
   }
   dev.own.log.push(e); dev.own.owed.push(e)
-  dev.own.sig.set(e.state.sig, sigPair.priv); dev.own.enc.add(e.state.enc); dev.own.addr.add(e.state.addr)
+  if (sigPair) { dev.own.sig.set(e.state.sig, sigPair.priv); dev.own.enc.add(e.state.enc); dev.own.addr.add(e.state.addr) }
   return true
+}
+/** A linked device hands the key it bound a relationship to over to the
+ *  main device, which writes an entry that changes only the binding: from
+ *  then on the next writer comes from the main device's secret. An honest
+ *  linked device forgets the key. */
+export function handOver (linked: Device, main: Device, rules: Rules): boolean {
+  share(linked, main, true)
+  const ok = change(main, rules, [], true)
+  if (ok && !linked.lost) linked.own.update.clear()
+  return ok
 }
 
 const signed = (d: Pick<Doc, 'kind' | 'text' | 'heads' | 'ref'>): Buffer => Buffer.from(JSON.stringify([d.kind, d.text ?? '', d.heads?.mine ?? '', d.heads?.yours ?? '', d.ref ?? '']))
