@@ -119,6 +119,34 @@ are drawn and reach the linked devices by syncing.
    keeps following its own, unless a rule every device applies alike picks
    one (here: the lower id). Which one that is, the rule cannot know.
 
+## A contested relationship
+
+A second valid continuation marks the relationship as contested at the
+counterpart, also when the counterpart has one device. The first one it
+accepted stays in use; what carries weight (a statement of trust, a vouch,
+an invitation, a credential) is held back; messages go on. The two settle
+it in a meeting: the person shows its log, the counterpart takes it,
+whichever continuation it followed before.
+
+| | The owner was first | The old main device was first |
+|---|---|---|
+| before the meeting the counterpart follows | the owner | the old main device |
+| marked contested | yes | yes |
+| a statement of trust is held back | yes | yes |
+| a message while contested reaches | the owner | the old main device |
+| after the meeting the counterpart follows | the owner | the owner |
+| the old main device is heard afterwards | no | no |
+| it can contest the relationship again | no | no |
+
+One warning per position of the log: a third continuation for a position
+already contested adds evidence and no new warning, and one for a position
+settled in a meeting is dropped.
+
+**First sync, then act.** A main device that was removed and reaches one of
+the person's devices before it changes keys learns of it, drops its secret
+and changes nothing. If it reaches none, it changes as before: the rule
+binds an honest app that is online, nothing else.
+
 ## The same question in a group (`group.ts`)
 
 Candidate: in each group a person has one key that all its devices hold;

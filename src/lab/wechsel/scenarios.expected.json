@@ -170,6 +170,36 @@
     "both show that there are two continuations": true,
     "both hold the other continuation as evidence": true
   },
+  "contested: the owner reached the counterpart first": {
+    "before the meeting the counterpart follows": "the owner",
+    "the relationship is marked contested": true,
+    "a statement of trust is held back": true,
+    "a message while contested reaches": "the owner",
+    "the meeting settles it": true,
+    "after the meeting the counterpart follows the owner": true,
+    "after the meeting trust reaches the owner": true,
+    "the old main device is heard after the meeting": false,
+    "the old main device can contest it again": false
+  },
+  "contested: the old main device reached the counterpart first": {
+    "before the meeting the counterpart follows": "the old main device",
+    "the relationship is marked contested": true,
+    "a statement of trust is held back": true,
+    "a message while contested reaches": "the old main device",
+    "the meeting settles it": true,
+    "after the meeting the counterpart follows the owner": true,
+    "after the meeting trust reaches the owner": true,
+    "the old main device is heard after the meeting": false,
+    "the old main device can contest it again": false
+  },
+  "first sync, then act: a removed main device reaches an own device": {
+    "the removed main device": "was removed",
+    "it still holds a change secret": false
+  },
+  "first sync, then act: a removed main device reaches none": {
+    "the removed main device": "changed",
+    "it still holds a change secret": true
+  },
   "an entry that is not a valid continuation arrives for a position already held": {
     "the counterpart keeps it as evidence": false,
     "the counterpart shows the warning of a second continuation": false,

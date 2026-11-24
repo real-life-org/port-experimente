@@ -56,11 +56,14 @@ export type Own = {
   rel: string                     // a name of the relationship that goes into every derivation
   secrets: Buffer[]               // the change secrets it holds, oldest first (rule `deterministic`)
   stock: Array<{ rel: string, next: string }>   // bindings the main device prepared for contexts this device opens without a secret
+  removed: Set<string>            // names of own devices that were removed (the personal group's knowledge)
   update: Map<string, KeyObject>  // update keys it holds, by public key
   owed: Entry[]                   // entries the counterpart has not acknowledged
 }
 /** What a device holds of the counterpart's side. */
-export type Peer = { log: Entry[], evidence: Entry[] }
+/** `contested`: a second valid continuation was seen and the person has not
+ *  settled it yet. `settled`: the positions the person settled in a meeting. */
+export type Peer = { log: Entry[], evidence: Entry[], contested: boolean, settled: Set<number> }
 export type Doc = { from: string, kind: string, text?: string, sigKey: string, sig: string, entries: Entry[], heads?: { mine: string, yours: string }, sealedTo: string, to: string, ref?: string }
 export type Device = { name: string, own: Own, peer: Peer, notices: string[], inbox: string[], lost?: boolean }
 
@@ -141,7 +144,7 @@ export function share (from: Device, to: Device, holder: boolean, settle = false
   const peerFork = pf.length > 0 && pt.length > 0 && !pf.some((e) => e.id === head(pt).id) && !pt.some((e) => e.id === head(pf).id)
   if (peerFork) {
     for (const [a, b] of [[from, to], [to, from]] as const) for (const e of a.peer.log) if (!b.peer.log.some((x) => x.id === e.id) && !b.peer.evidence.some((x) => x.id === e.id)) b.peer.evidence.push(e)
-    for (const d of [from, to]) if (!d.notices.includes('the own devices hold two continuations of the counterpart\'s log')) d.notices.push('the own devices hold two continuations of the counterpart\'s log')
+    for (const d of [from, to]) { d.peer.contested = true; if (!d.notices.includes('the own devices hold two continuations of the counterpart\'s log')) d.notices.push('the own devices hold two continuations of the counterpart\'s log') }
     if (settle) {
       // one rule every device applies alike: at the first position where they differ, the lower id
       const i = pf.findIndex((e, k) => e.id !== pt[k]?.id), a = pf[i], b = pt[i]
@@ -157,6 +160,10 @@ export function share (from: Device, to: Device, holder: boolean, settle = false
   for (const x of from.own.addr) to.own.addr.add(x)
   if (holder) for (const [k, v] of from.own.update) to.own.update.set(k, v)
   to.own.rel ||= from.own.rel
+  for (const x of from.own.removed) to.own.removed.add(x)
+  // what the person settled in a meeting holds for all its devices
+  for (const n of from.peer.settled) if (!to.peer.settled.has(n)) { to.peer.settled.add(n); to.peer.log = [...from.peer.log]; to.peer.contested = from.peer.contested }
+  if (from.peer.contested && !to.peer.settled.size) to.peer.contested = true
   if (extendsLog(from.peer.log, to.peer.log)) to.peer.log = [...from.peer.log]
   for (const e of from.peer.evidence) if (!to.peer.evidence.some((x) => x.id === e.id)) to.peer.evidence.push(e)
 }
@@ -211,7 +218,9 @@ const signed = (d: Pick<Doc, 'kind' | 'text' | 'heads' | 'ref'>): Buffer => Buff
  *  another state of the counterpart's log to send to (a reply to a device
  *  that is not at the head). Every document is signed under the head of
  *  the sender's own log, with or without log heads. */
+export const WEIGHTY = new Set(['trust', 'vouch', 'invite', 'credential'])
 export function send (dev: Device, c: Carrier, rules: Rules, kind: string, text?: string, extra: Partial<Doc> = {}, at?: State): void {
+  if (dev.peer.contested && WEIGHTY.has(kind)) { dev.notices.push(`held a ${kind}: the relationship is contested`); return }
   const mine = head(dev.own.log), yours = head(dev.peer.log), to = at ?? yours.state
   const key = dev.own.sig.get(mine.state.sig)
   if (!key) { dev.notices.push('cannot sign under the head of its own log'); return }
@@ -236,7 +245,10 @@ export function receive (dev: Device, c: Carrier, rules: Rules): void {
         // only a second VALID continuation of the same predecessor is evidence; anything else is ignored
         if (!follows(e.n > 0 ? (dev.peer.log[e.n - 1] ?? null) : null, e)) { dev.notices.push('ignored an entry that does not continue the counterpart\'s log'); continue }
         refused = e
-        if (!dev.peer.evidence.some((x) => x.id === e.id)) { dev.peer.evidence.push(e); dev.notices.push('a second continuation of the counterpart\'s log was refused') }
+        if (dev.peer.settled.has(e.n)) { refused = undefined; continue }          // settled in a meeting: nothing more to say about this position
+        const first = !dev.peer.evidence.some((x) => x.n === e.n)
+        if (!dev.peer.evidence.some((x) => x.id === e.id)) dev.peer.evidence.push(e)
+        if (first) { dev.peer.contested = true; dev.notices.push('a second continuation of the counterpart\'s log was refused') }   // one warning per position
         continue
       }
       if (follows(dev.peer.log.length ? head(dev.peer.log) : null, e)) dev.peer.log.push(e)
@@ -272,7 +284,29 @@ export function receive (dev: Device, c: Carrier, rules: Rules): void {
   }
 }
 
-export const device = (name: string): Device => ({ name, own: { log: [], sig: new Map(), enc: new Set(), addr: new Set(), update: new Map(), owed: [], acked: 0, rel: '', secrets: [], stock: [] }, peer: { log: [], evidence: [] }, notices: [], inbox: [] })
+/** A meeting: the counterpart shows its log in person and `dev` takes it,
+ *  whichever continuation it followed before. The other one stays as
+ *  evidence; the positions are settled for good. */
+export function settleInPerson (dev: Device, shown: Entry[]): boolean {
+  for (let i = 0; i < shown.length; i++) if (!follows(i ? (shown[i - 1] as Entry) : null, shown[i] as Entry)) return false
+  if (shown[0]?.id !== dev.peer.log[0]?.id) return false                       // another identifier
+  for (const e of dev.peer.log) if (!shown.some((x) => x.id === e.id) && !dev.peer.evidence.some((x) => x.id === e.id)) dev.peer.evidence.push(e)
+  dev.peer.log = [...shown]; dev.peer.contested = false
+  for (const e of dev.peer.evidence) dev.peer.settled.add(e.n)
+  return true
+}
+/** The main device removes an own device; the knowledge travels with every sync. */
+export function removeDevice (by: Device, name: string): void { by.own.removed.add(name) }
+/** First sync, then act: before it changes keys a device takes what the own
+ *  devices it can reach know. If it learns that it was removed, an honest
+ *  app drops its secrets and does nothing. */
+export function changeAfterSync (dev: Device, rules: Rules, reachable: Device[]): 'changed' | 'no key' | 'was removed' {
+  for (const r of reachable) for (const x of r.own.removed) dev.own.removed.add(x)
+  if (dev.own.removed.has(dev.name)) { dev.own.secrets = []; dev.own.update.clear(); return 'was removed' }
+  return change(dev, rules, []) ? 'changed' : 'no key'
+}
+
+export const device = (name: string): Device => ({ name, own: { log: [], sig: new Map(), enc: new Set(), addr: new Set(), update: new Map(), owed: [], acked: 0, rel: '', secrets: [], stock: [], removed: new Set() }, peer: { log: [], evidence: [], contested: false, settled: new Set() }, notices: [], inbox: [] })
 /** Two persons who met: A's devices and B's devices each know the other's first entry. */
 export function met (as: Device[], bs: Device[], holdersA: Device[], holdersB: Device[], rules: Rules = RULES): void {
   if (rules.deterministic) { renew(holdersA); renew(holdersB) }

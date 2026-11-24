@@ -1,7 +1,7 @@
 // Scenarios for the model of model.ts. Each returns plain facts; the rules
 // under discussion are switched per variant so that the table shows what
 // each rule buys. A measurement of the model, not of the library.
-import { Carrier, RULES, change, device, headId, met, open, paths, receive, renew, send, share, stockUp, takeOver, type Device, type Rules } from './model'
+import { Carrier, RULES, change, changeAfterSync, device, headId, met, open, paths, receive, removeDevice, renew, send, settleInPerson, share, stockUp, takeOver, type Device, type Rules } from './model'
 
 export type Row = Record<string, string | number | boolean>
 const v = (r: Partial<Rules>): Rules => ({ ...RULES, ...r })
@@ -178,6 +178,47 @@ function counterpartSplit (settleRule: boolean): Row {
   }
 }
 
+/** A contested relationship: an old main device in foreign hands and the
+ *  owner each write a continuation; `first` reaches the counterpart first.
+ *  Then the two meet. */
+function contested (first: 'the owner' | 'the old main device'): Row {
+  const c = new Carrier(), [phone, old, b] = [device('phone'), device('old main'), device('b')] as [Device, Device, Device]
+  old.lost = true
+  met([phone, old], [b], [phone, old], [b], MAIN)
+  renew([phone])
+  change(old, MAIN, []); change(phone, MAIN, [])
+  const order = first === 'the owner' ? [phone, old] : [old, phone]
+  for (const d of order) { send(d, c, MAIN, 'message', d === phone ? 'from the owner' : 'from the old main device'); settle(c, MAIN, [b, phone]) }
+  const follows0 = headId(b.peer.log) === headId(phone.own.log) ? 'the owner' : 'the old main device'
+  const marked = b.peer.contested
+  send(b, c, MAIN, 'trust'); send(b, c, MAIN, 'message', 'a message while contested'); settle(c, MAIN, [old, phone, b])
+  const trustHeld = has(b, 'held a trust'), msgTo = reads(phone, 'a message while contested') ? 'the owner' : reads(old, 'a message while contested') ? 'the old main device' : 'nobody'
+  const metOk = settleInPerson(b, phone.own.log)
+  send(b, c, MAIN, 'trust', 'trust after the meeting'); settle(c, MAIN, [old, phone, b])
+  const warnings = b.notices.filter((n) => n.includes('second continuation')).length
+  send(old, c, MAIN, 'message', 'again from the old main device'); settle(c, MAIN, [b, phone])
+  return {
+    'before the meeting the counterpart follows': follows0,
+    'the relationship is marked contested': marked,
+    'a statement of trust is held back': trustHeld,
+    'a message while contested reaches': msgTo,
+    'the meeting settles it': metOk && !b.peer.contested,
+    'after the meeting the counterpart follows the owner': headId(b.peer.log) === headId(phone.own.log),
+    'after the meeting trust reaches the owner': reads(phone, 'trust after the meeting'),
+    'the old main device is heard after the meeting': reads(b, 'again from the old main device'),
+    'the old main device can contest it again': b.peer.contested || b.notices.filter((n) => n.includes('second continuation')).length > warnings,
+  }
+}
+
+/** First sync, then act: an old main device that was removed tries to change keys with the unchanged app. */
+function removedMainDeviceActs (reachesAnOwnDevice: boolean): Row {
+  const [phone, old, laptop, b] = [device('phone'), device('old main'), device('laptop'), device('b')] as [Device, Device, Device, Device]
+  met([phone, old, laptop], [b], [phone, old], [b], MAIN)
+  removeDevice(phone, 'old main'); share(phone, laptop, false)
+  const result = changeAfterSync(old, MAIN, reachesAnOwnDevice ? [laptop] : [])
+  return { 'the removed main device': result, 'it still holds a change secret': old.own.secrets.length > 0 }
+}
+
 /** Someone without any key sends an entry for a position the counterpart already holds. */
 function forgedEntry (): Row {
   const c = new Carrier(), [a, b] = [device('a'), device('b')] as [Device, Device]
@@ -275,6 +316,10 @@ export function measure (): Record<string, Row> {
     'one main device: the laptop meets someone without a prepared binding': newContactOnALinkedDevice(0),
     'the counterpart has two devices and each took another continuation': counterpartSplit(false),
     'the same; the counterpart\'s devices settle on one by a fixed rule': counterpartSplit(true),
+    'contested: the owner reached the counterpart first': contested('the owner'),
+    'contested: the old main device reached the counterpart first': contested('the old main device'),
+    'first sync, then act: a removed main device reaches an own device': removedMainDeviceActs(true),
+    'first sync, then act: a removed main device reaches none': removedMainDeviceActs(false),
     'an entry that is not a valid continuation arrives for a position already held': forgedEntry(),
     'a sibling that was offline during the change comes back': siblingComesBack(RULES),
     'the same; the old receive path stays open for a while': siblingComesBack(v({ graceAfterAck: true })),
