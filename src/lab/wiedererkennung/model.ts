@@ -16,11 +16,16 @@
 //      its first, whether or not there is anything more to prove: so its
 //      coming says nothing.
 //   2. A side that holds the other side's proof for a pair unites the two
-//      tuples, if on its own side each of the two is the head of its
-//      relationship (or the two are united already): whichever of the two
-//      the proof stands under and whichever it came on. The sender proves
-//      with all it holds; the receiver decides by what it knows. The union
-//      is a fact: the person's devices share it, and nothing takes it back.
+//      tuples, if the pair is admitted on its own side: one of the two was
+//      the head of its relationship on the device that opened the other,
+//      when it opened it (the candidate relation of Trust 2300, 6802,
+//      6960), or neither opening knew of the other tuple (two own devices
+//      opened them apart). What a device knew when it opened a tuple is
+//      written down with the opening and shared, so whether a pair is
+//      admitted is a fact and does not depend on when a proof is read. The
+//      sender proves with all it holds; the receiver decides by its own
+//      record. The union is a fact: the person's devices share it, and
+//      nothing takes it back.
 //   3. A proof is owed until the carrier says the other side has it. Any
 //      device of the person can send it: it is the same document, byte for
 //      byte.
@@ -35,12 +40,15 @@ export type Side = 'a' | 'b'
 export type End = { id: string, key: string, side: Side }
 /** Values for pairs {x, on}, sent on `on` by the end `from`; filled up and sorted. Its name follows from its content. */
 export type Doc = { id: string, on: string, from: Side, tags: string[] }
+/** What the opening device held when it opened a tuple: the tuples it knew, and which of them were heads of their relationships then. */
+export type Opening = { known: string[], heads: string[] }
 /** What a person sent: on which end, for which ends, as which document of that tuple (0 the first, 1 the second, …). Enough for a sibling to make the same document again. */
 export type Sent = { on: string, xs: string[], n: number }
 export type Device = {
   name: string
   person: string                   // a secret of the person, the same on all its devices
   ends: Map<string, End>           // by `${id}/${side}`
+  opened: Map<string, Opening>     // by `${id}/${side}`: what the device that opened the tuple knew then
   got: Map<string, Doc>            // documents received, readable or not
   united: Set<string>              // pairs of tuples this person united
   sent: Map<string, Sent>          // documents this person sent, by name
@@ -48,7 +56,7 @@ export type Device = {
   read: Map<string, boolean>       // not a fact: which value of which document this device could make, so that it computes none twice
 }
 /** A device; `of` makes it a further device of the same person. */
-export const device = (name: string, of?: Device): Device => ({ name, person: of?.person ?? randomBytes(16).toString('hex'), ends: new Map(), got: new Map(), united: new Set(), sent: new Map(), acked: new Set(), read: new Map() })
+export const device = (name: string, of?: Device): Device => ({ name, person: of?.person ?? randomBytes(16).toString('hex'), ends: new Map(), opened: new Map(), got: new Map(), united: new Set(), sent: new Map(), acked: new Set(), read: new Map() })
 
 const other = (s: Side): Side => (s === 'a' ? 'b' : 'a')
 const endKey = (id: string, side: Side): string => `${id}/${side}`
@@ -119,16 +127,30 @@ function prove (dev: Device, c: Carrier, on: End, xs: End[]): void {
 const proved = (dev: Device): Set<string> => { const s = new Set<string>(); for (const v of dev.sent.values()) for (const x of v.xs) s.add(pairOf(x.split('/')[0] as string, v.on.split('/')[0] as string)); return s }
 
 /** An encounter (or any other way a fresh tuple comes about): both devices
- *  hold an end of a new tuple, and each proves, on it, every tuple it holds.
- *  With nothing to prove a full step of filling goes out all the same. */
-export function meet (d1: Device, d2: Device, c: Carrier): string {
+ *  hold an end of a new tuple, each writes down what it knew then, and each
+ *  proves, on the fresh tuple, every tuple it holds. With nothing to prove
+ *  a full step of filling goes out all the same. `proveWith: 'heads'` is
+ *  the sender of Trust 6750 for comparison: it proves with the heads of
+ *  its relationships only. */
+export function meet (d1: Device, d2: Device, c: Carrier, proveWith: 'all' | 'heads' = 'all'): string {
   const id = 't-' + randomBytes(5).toString('hex'), key = randomBytes(32).toString('base64url')
   for (const [d, side] of [[d1, 'a'], [d2, 'b']] as const) {
-    const xs = endsOf(d), e: End = { id, key, side }
+    const all = endsOf(d), e: End = { id, key, side }
+    const heads = relationships(d).map(head)
+    d.opened.set(endKey(id, side), { known: all.map((x) => x.id).sort(), heads: heads.filter((h) => all.some((x) => x.id === h)).sort() })
     d.ends.set(endKey(id, side), e)
-    prove(d, c, e, xs)
+    prove(d, c, e, proveWith === 'all' ? all : all.filter((x) => heads.includes(x.id)))
   }
   return id
+}
+
+/** Whether this person admits the pair {x, y} of its ends: one was a head
+ *  when the other was opened, or neither opening knew of the other. */
+export function admits (dev: Device, x: End, y: End): boolean {
+  const ox = dev.opened.get(endKey(x.id, x.side)), oy = dev.opened.get(endKey(y.id, y.side))
+  if (!ox || !oy) return false
+  if (ox.heads.includes(y.id) || oy.heads.includes(x.id)) return true
+  return !ox.known.includes(y.id) && !oy.known.includes(x.id)
 }
 
 /** Sentence 3: a device sends again what its person sent and the carrier
@@ -164,34 +186,21 @@ export function catchUp (dev: Device, c: Carrier): number {
 }
 
 /** Sentence 2. A device reads the documents it holds with the ends it
- *  holds: a value it can make itself unites the two tuples, if each of them
- *  is the head of its relationship here. Until nothing changes. Which
- *  pairs get united depends on the order the documents are read in; which
- *  tuples end up in one relationship does not, once a proof for every pair
- *  has come (two parts of one person always have two heads with a proof
- *  between them). */
+ *  holds: a value it can make itself unites the two tuples, if the pair is
+ *  admitted. What comes out is a function of the facts the device holds,
+ *  whatever order they came in. */
 export function evaluate (dev: Device): void {
-  const can = (d: Doc, tags: Set<string>, x: End, on: End): boolean => {
-    const k = `${d.id}|${x.id}/${x.side}`
-    let v = dev.read.get(k)
-    if (v === undefined) { v = tags.has(tag(x, other(x.side), on, d.from)); dev.read.set(k, v) }
-    return v
-  }
-  for (let changed = true; changed;) {
-    changed = false
-    const groupOf = new Map<string, string[]>()
-    for (const g of relationships(dev)) for (const id of g) groupOf.set(id, g)
-    for (const d of dev.got.values()) {
-      const on = dev.ends.get(endKey(d.on, other(d.from)))
-      if (!on || own(dev, on.id)) continue
-      const tags = new Set(d.tags)
-      for (const x of endsOf(dev)) {
-        if (x.id === on.id || dev.united.has(pairOf(x.id, on.id)) || !can(d, tags, x, on)) continue
-        const g = groupOf.get(x.id) as string[], go = groupOf.get(on.id) as string[]
-        if (g !== go && (head(g) !== x.id || head(go) !== on.id)) continue    // a new union takes two heads, whichever way round the proof came
-        dev.united.add(pairOf(x.id, on.id)); changed = true
-      }
-      if (changed) break
+  for (const d of dev.got.values()) {
+    const on = dev.ends.get(endKey(d.on, other(d.from)))
+    if (!on || own(dev, on.id)) continue
+    let tags: Set<string> | undefined
+    for (const x of endsOf(dev)) {
+      if (x.id === on.id || dev.united.has(pairOf(x.id, on.id))) continue
+      const k = `${d.id}|${x.id}/${x.side}`
+      let v = dev.read.get(k)
+      if (v === false || !admits(dev, x, on)) continue
+      if (v === undefined) { v = (tags ??= new Set(d.tags)).has(tag(x, other(x.side), on, d.from)); dev.read.set(k, v) }
+      if (v) dev.united.add(pairOf(x.id, on.id))
     }
   }
 }
@@ -208,6 +217,7 @@ export function receive (dev: Device, c: Carrier): void {
 /** The person's own devices sync: facts only, and facts only add up. */
 export function share (from: Device, to: Device): void {
   for (const [k, v] of from.ends) to.ends.set(k, v)
+  for (const [k, v] of from.opened) to.opened.set(k, v)
   for (const [k, v] of from.got) to.got.set(k, v)
   for (const k of from.united) to.united.add(k)
   for (const [k, v] of from.sent) to.sent.set(k, v)
@@ -230,3 +240,6 @@ export function forge (c: Carrier, x: End, on: { id: string, from: Side, key?: s
 }
 /** The head of the relationship the tuple `id` belongs to on this device. */
 export const headOf = (dev: Device, id: string): string => head(relationships(dev).find((g) => g.includes(id)) as string[])
+
+/** An image of a device as it is now, to restore it from later. */
+export const image = (dev: Device): Device => ({ ...dev, ends: new Map(dev.ends), opened: new Map(dev.opened), got: new Map(dev.got), united: new Set(dev.united), sent: new Map(dev.sent), acked: new Set(dev.acked), read: new Map(dev.read) })

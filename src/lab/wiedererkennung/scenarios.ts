@@ -3,7 +3,7 @@
 // of 24 November, each as plain facts. A measurement of the model, not of
 // the library.
 import { randomInt } from 'node:crypto'
-import { Carrier, STEP, catchUp, contacts, device, forge, headOf, meet, readable, receive, relationships, sendAgain, share, type Device, type End } from './model'
+import { Carrier, STEP, catchUp, contacts, device, forge, headOf, image, meet, readable, receive, relationships, sendAgain, share, type Device, type End } from './model'
 
 export type Row = Record<string, string | number | boolean>
 const settle = (c: Carrier, devs: Device[]): void => { for (const d of devs) receive(d, c) }
@@ -141,15 +141,16 @@ function lost (): Row {
   }
 }
 
-/** A device fetches the other side's proof and is lost before it shares it. */
-function fetchedAndLost (): Row {
+/** A device fetches the other side's proof and is lost before it shares it. `proveWith`: what b proves with at the next encounter. */
+function fetchedAndLost (proveWith: 'all' | 'heads' = 'all'): Row {
   const c = new Carrier(), a1 = device('a1'), a2 = device('a2', a1), b = device('b')
   meet(a1, b, c); settle(c, [a1, b]); sync(c, [a1, a2])
   meet(a2, b, c); receive(b, c)
   share(a2, a1); receive(a1, c)                            // a1 fetches b's proof for the fresh tuple; then a1 is gone
   for (let i = 0; i < 3; i++) { catchUp(a2, c); sendAgain(a2, c); catchUp(b, c); sendAgain(b, c); settle(c, [a2, b]) }   // both sides send all they owe
   const stuck = [contacts(a2), contacts(b)]
-  meet(a2, b, c); settle(c, [a2, b])                       // the next encounter
+  meet(a2, b, c, proveWith); settle(c, [a2, b])            // the next encounter
+  if (proveWith === 'heads') return { 'after the next encounter a holds of b': contacts(a2) }
   return {
     'after both sides sent all they owe, a\'s remaining device holds of b': stuck[0] as number,
     'and b holds of a': stuck[1] as number,
@@ -198,7 +199,7 @@ function threeTuples (): Row {
   const before = contacts(a)
   settle(c, [b1, b2]); sync(c, [b1, b2]); settle(c, [a])
   return {
-    'before b\'s devices synced, a holds of b at most': before <= 2 ? 2 : before,
+    'before b\'s devices synced, a holds of b': before,
     'after b\'s devices synced and proved the last pair, a holds of b': contacts(a),
     'and b holds of a': [contacts(b1), contacts(b2)].join(' and '),
   }
@@ -233,6 +234,29 @@ function dataLoss (): Row {
   meet(a, b, c); settle(c, [a, b])
   meet(a, bNew, c); settle(c, [a, bNew])
   return { 'a holds of b': contacts(a), 'b holds of a': contacts(bNew) }
+}
+
+/** A, with one device, is restored from an image taken before its second
+ *  tuple with B, and then meets B again. `head`: which of the two tuples B
+ *  holds as the head of the relationship, the one A still has or the one A
+ *  lost. Which it is follows the names, so the case is drawn. */
+function restored (head: 'kept' | 'lost'): Row {
+  for (let i = 0; i < 200; i++) {
+    const c = new Carrier(), a = device('a'), b = device('b')
+    const t1 = meet(a, b, c); settle(c, [a, b]); catchUp(a, c); catchUp(b, c); settle(c, [a, b])
+    const old = image(a)
+    meet(a, b, c); settle(c, [a, b])
+    if ((headOf(b, t1) === t1) !== (head === 'kept')) continue
+    const t3 = meet(old, b, c); settle(c, [old, b])
+    for (let k = 0; k < 2; k++) { catchUp(old, c); sendAgain(old, c); catchUp(b, c); sendAgain(b, c); settle(c, [old, b]) }
+    const t4 = meet(old, b, c); settle(c, [old, b])
+    return {
+      'after the restore and one encounter, a holds of b': relationships(old).filter((g) => g.includes(t1) || g.includes(t3)).length,
+      'and b holds of a': contacts(b),
+      'after one more encounter b holds of a': relationships(b).filter((g) => g.includes(t1) || g.includes(t3) || g.includes(t4)).length,
+    }
+  }
+  return { 'the case did not come up in 200 draws': true }
 }
 
 /** A sends the same proof twice. */
@@ -302,6 +326,7 @@ export const measure = (): Record<string, Row> => ({
   'the second document of every tuple': secondDocument(),
   'one proof is lost on the way': lost(),
   'a device fetches the other side\'s proof and is lost before it shares it': fetchedAndLost(),
+  'the same, but at the next encounter b proves with its heads only (Trust 6750)': fetchedAndLost('heads'),
   'a contact hands in a value on a tuple that is not its own': onAForeignTuple(),
   'a\'s own devices scan each other': ownDevicesScan(),
   'a copied key of the head of a relationship': copied('the head', 'on the fresh tuple'),
@@ -310,6 +335,8 @@ export const measure = (): Record<string, Row> => ({
   'three tuples, proofs for two pairs under the same tuple': threeTuples(),
   'two siblings make the second document of one tuple apart': siblingsApart(),
   'b lost everything': dataLoss(),
+  'a is restored from an image older than its second tuple with b; b\'s head is the tuple a kept': restored('kept'),
+  'the same; b\'s head is the tuple a lost': restored('lost'),
   'the same proof sent twice': repeated(),
   'random schedules': randomSchedules(60),
   'cost with 300 contacts': cost(300),
