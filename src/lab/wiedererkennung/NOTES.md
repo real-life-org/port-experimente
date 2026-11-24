@@ -20,6 +20,34 @@ in one call, so the scenarios cannot draw that order. Closing it takes a
 further rule, and the attempt was bounded to these two changes. What
 stands: the proof in the probe simplifies the proving for one device.
 
+## Every schedule, for the inventory as it is (`enumerate.ts`)
+
+What Trust 0.32 takes instead: the inventory's recognition unchanged, on
+several devices, with one addition decided on 18 October: the probe a
+device fetched is a fact its siblings get, and a device reads the probes it
+holds again when its facts grow. `enumerate.ts` does not sample. It walks
+every schedule of two people with two devices each and two tuples: the two
+openings of an encounter are separate steps on a device of each person's
+choice, any device that holds a tuple may fetch what waits on it, own
+devices sync one way at a time in any order. Every reachable state with
+all tuples opened is run to rest and checked
+(`tests/wiedererkennung-enumerate.test.ts`).
+
+| | States | At rest |
+|---|---|---|
+| The probe is read again from the log | 42 481 | every state ends as the candidate relations of the two sides say: one contact on all four devices where both relations hold the pair (28 992), two where they do not (12 096). Two devices of one person never differ, no mapping stays owed |
+| The probe is read once, by the device that fetched it | 26 356 | 162 states end with two contacts on all four devices although both relations hold the pair: the crossed case of the fourth review |
+
+Two tuples end as one contact exactly if **both** sides hold the pair in
+their relation: on each side, the device that opened the later tuple knew
+the earlier one, or the two sides opened them in opposite order. Where one
+side opened its two tuples on two devices that had not synced, it stays
+two contacts, whatever the other side knew.
+
+Not in this walk: lost devices, time, deleted keys, more than one probe
+per tuple, the outputs a union triggers, and the carrier's word for an
+acknowledgement reaching a sibling.
+
 ## What is modelled
 
 The 0.32 inventory of Trust 6a, written for one device per holder: the
