@@ -1,0 +1,123 @@
+{
+  "name": "crossed-opening",
+  "shows": "The two people open the two tuples in opposite order (each scans the other at once). Neither probe lists the other tuple where the receiver looks first; the pair is admitted the other way round. One contact.",
+  "setup": {
+    "tuples": [
+      "t1",
+      "t2"
+    ]
+  },
+  "steps": [
+    {
+      "open": "t1",
+      "on": "a1",
+      "effect": true
+    },
+    {
+      "open": "t2",
+      "on": "a1",
+      "effect": true
+    },
+    {
+      "open": "t2",
+      "on": "b1",
+      "effect": true
+    },
+    {
+      "open": "t1",
+      "on": "b1",
+      "effect": true
+    },
+    {
+      "fetchProbe": "t1",
+      "on": "a1",
+      "effect": true
+    },
+    {
+      "fetchProbe": "t2",
+      "on": "a1",
+      "effect": true
+    },
+    {
+      "sync": "a1",
+      "to": "a2",
+      "effect": true
+    },
+    {
+      "fetchProbe": "t1",
+      "on": "b1",
+      "effect": true
+    },
+    {
+      "fetchProbe": "t2",
+      "on": "b1",
+      "effect": true
+    },
+    {
+      "fetchMapping": "t1+t2",
+      "on": "a1",
+      "effect": true
+    },
+    {
+      "sync": "a1",
+      "to": "a2",
+      "effect": true
+    },
+    {
+      "fetchMapping": "t1+t2",
+      "on": "b1",
+      "effect": true
+    },
+    {
+      "sync": "b1",
+      "to": "b2",
+      "effect": true
+    }
+  ],
+  "expect": {
+    "contacts": {
+      "a1": [
+        [
+          "t1",
+          "t2"
+        ]
+      ],
+      "a2": [
+        [
+          "t1",
+          "t2"
+        ]
+      ],
+      "b1": [
+        [
+          "t1",
+          "t2"
+        ]
+      ],
+      "b2": [
+        [
+          "t1",
+          "t2"
+        ]
+      ]
+    },
+    "candidates": {
+      "a": {
+        "t1": [],
+        "t2": [
+          "t1"
+        ]
+      },
+      "b": {
+        "t1": [
+          "t2"
+        ],
+        "t2": []
+      }
+    },
+    "stillOwed": {
+      "a": [],
+      "b": []
+    }
+  }
+}
