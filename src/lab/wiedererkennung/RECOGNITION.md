@@ -237,10 +237,11 @@ The outcome is the same under both ceremonies:
 | `settled-by-a-path` (three tuples, one device each) | ends with one contact on both sides, but not by the rule's steps: it chains, so on t3 it issues a mapping over t1+t3 where the rule asks for t2+t3 (that one is never issued, and the run leaves the other held); from there on it differs at every step and four steps are not followed |
 | the eight traces with two devices of one person | not runnable |
 
-Measured on the way, for `shared-connect`: the responder's tuple opens when
-the inviter's issue reaches it; the inviter's tuple opens when the receipt
-of its own issue comes back. The two sides therefore open two tuples in
-opposite order as soon as two such receipts arrive in the other order than
+For `shared-connect`, each side opens its tuple when it has taken both the
+other side's issue and the other side's receipt of its own
+(`../tuple-opening/OPENING.md`); which side is first depends on the order
+of delivery. The two sides therefore open two tuples in opposite order as
+soon as the last receipts of two enactments arrive in the other order than
 the ceremonies ran; `crossed-opening` is that schedule and needs no
 scanning in both directions.
 
