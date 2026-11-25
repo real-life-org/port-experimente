@@ -70,6 +70,30 @@ describe('Anmeldung mit der Web-of-Trust-App', () => {
     expect(await app.receive(a.body, T0 + 1000)).toEqual({ ok: false, reason: 'Anfrage schon beantwortet' })
   })
 
+  test('zwei gleichzeitige Antworten: genau eine wird angenommen', async () => {
+    const app = shop()
+    const req = app.start('b', T0).request
+    const a = await confirm(req, ANTON, T0)
+    const same = await Promise.all([app.receive(a.body, T0), app.receive(a.body, T0)])
+    expect(same.filter((r) => r.ok)).toHaveLength(1)
+    const app2 = shop()
+    const req2 = app2.start('c', T0).request
+    const [telefon, tablet] = await Promise.all([confirm(req2, ANTON, T0), confirm(req2, ANTON, T0)])
+    const both = await Promise.all([app2.receive(telefon.body, T0), app2.receive(tablet.body, T0)])
+    expect(both.filter((r) => r.ok)).toHaveLength(1)
+  })
+
+  test('eine abgewiesene Antwort verbraucht die Anfrage nicht', async () => {
+    const app = shop()
+    const req = app.start('b', T0).request
+    const bad = await confirm({ ...req, nonce: 'eine-andere' }, ANTON, T0)
+    const good = await confirm(req, ANTON, T0)
+    const [r1, r2] = await Promise.all([app.receive(bad.body, T0), app.receive(good.body, T0)])
+    expect(r1).toEqual({ ok: false, reason: 'falsche Zufallszahl' })
+    expect(r2).toEqual({ ok: false, reason: 'Anfrage wird gerade geprüft' })
+    expect(await app.receive(good.body, T0)).toEqual({ ok: true, user: good.did })
+  })
+
   test('abgelaufene Anfrage und abgelaufenes Token werden abgewiesen', async () => {
     const app = shop()
     const late = await confirm(app.start('b', T0).request, ANTON, T0)

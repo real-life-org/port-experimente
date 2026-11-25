@@ -26,10 +26,14 @@ $('go').onclick=async()=>{
 }
 </script>`
 
-function sessionOf (req: IncomingMessage, res: ServerResponse): string {
+// Only session ids this server issued are taken from the cookie. An unknown
+// id (one a third party chose and planted) gets a fresh one, so a login is
+// never bound to an id someone else knows in advance.
+function sessionOf (issued: Set<string>, req: IncomingMessage, res: ServerResponse): string {
   const m = /(?:^|;\s*)sitzung=([A-Za-z0-9_-]+)/.exec(req.headers.cookie ?? '')
-  if (m?.[1]) return m[1]
+  if (m?.[1] && issued.has(m[1])) return m[1]
   const s = b64uOf(rand(16))
+  issued.add(s)
   res.setHeader('Set-Cookie', `sitzung=${s}; HttpOnly; SameSite=Lax; Path=/`)
   return s
 }
@@ -45,12 +49,13 @@ const json = (res: ServerResponse, code: number, o: unknown): void => { res.writ
 /** Start the example web app on 127.0.0.1. Port 0 picks a free one. */
 export async function serve (port = 0, now: () => number = Date.now): Promise<{ server: Server, origin: string, app: WebApp }> {
   let app!: WebApp
+  const issued = new Set<string>()
   const server = createServer((req, res) => {
     void (async () => {
       const path = (req.url ?? '/').split('?')[0]
       if (req.method === 'GET' && path === '/') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); res.end(PAGE); return }
-      if (req.method === 'GET' && path === '/start') { json(res, 200, { url: app.start(sessionOf(req, res), now()).url }); return }
-      if (req.method === 'GET' && path === '/status') { json(res, 200, app.poll(sessionOf(req, res)) ?? {}); return }
+      if (req.method === 'GET' && path === '/start') { json(res, 200, { url: app.start(sessionOf(issued, req, res), now()).url }); return }
+      if (req.method === 'GET' && path === '/status') { json(res, 200, app.poll(sessionOf(issued, req, res)) ?? {}); return }
       if (req.method === 'POST' && path === RESPONSE_PATH) {
         const form = new URLSearchParams(await bodyOf(req))
         const r = await app.receive({ id_token: form.get('id_token') ?? undefined, state: form.get('state') ?? undefined }, now())
@@ -67,8 +72,13 @@ export async function serve (port = 0, now: () => number = Date.now): Promise<{ 
   return { server, origin, app }
 }
 
-/** What the wallet does with its answer: post it to the response_uri. */
+/**
+ * What the wallet does with its answer: post it to the response_uri, and only
+ * there. A redirect is not followed (`redirect: 'manual'`): the wallet checked
+ * the origin of the response_uri, and a redirect could carry the signed token
+ * to another origin. A redirect answer counts as a failed post.
+ */
 export async function post (answer: { response_uri: string, body: { id_token: string, state: string } }): Promise<number> {
-  const r = await fetch(answer.response_uri, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(answer.body).toString() })
-  return r.status
+  const r = await fetch(answer.response_uri, { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(answer.body).toString() })
+  return r.status >= 300 && r.status < 400 ? 0 : r.status
 }

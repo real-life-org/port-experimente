@@ -26,7 +26,14 @@ Built 25 November 2026, step 1 of 4.
   `/status` (polled), and the `response_uri` taking
   `application/x-www-form-urlencoded`. The browser session is a cookie.
 
-Tests: `tests/anmeldung.test.ts` (14), `tests/anmeldung-http.test.ts` (2).
+Tests: `tests/anmeldung.test.ts` (16), `tests/anmeldung-http.test.ts` (4).
+
+Review of #128 (25 November) found three gaps, all fixed with a test that
+fails on the first version: concurrent answers could both pass, because the
+signature check lay between the lookup and the use of the request; the
+wallet's post followed redirects, so the signed token could leave the checked
+origin; the server took any session id from the cookie and bound the login
+to it. Still open from that angle: the session id is not renewed at login.
 
 ## Results
 
@@ -35,6 +42,10 @@ Tests: `tests/anmeldung.test.ts` (14), `tests/anmeldung-http.test.ts` (2).
 | Login works: QR, confirm, logged in | holds |
 | A token for web app A is refused at web app B | holds |
 | A second answer to the same request is refused | holds |
+| Two concurrent answers to one request: exactly one is taken | holds (claimed before the first await) |
+| A refused answer does not use up the request | holds |
+| The app's post follows no redirect, so the token reaches no other origin | holds (`redirect: 'manual'`) |
+| The server binds a login only to a session id it issued itself | holds (planted ids get a fresh one) |
 | Wrong nonce, expired request, expired token, changed content: refused | holds |
 | The app refuses an answer address on another origin | holds |
 | Two devices of the same person (same root, multi-device stage 1) reach the same account | holds |
