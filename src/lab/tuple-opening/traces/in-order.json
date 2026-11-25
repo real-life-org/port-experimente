@@ -11,12 +11,16 @@
         "inviter": {
           "open": false,
           "declined": false,
-          "held": []
+          "held": [],
+          "outbox": []
         },
         "responder": {
           "open": false,
           "declined": false,
-          "held": []
+          "held": [],
+          "outbox": [
+            "propose"
+          ]
         },
         "inFlight": [
           "propose"
@@ -30,12 +34,16 @@
         "inviter": {
           "open": false,
           "declined": false,
-          "held": []
+          "held": [],
+          "outbox": []
         },
         "responder": {
           "open": false,
           "declined": false,
-          "held": []
+          "held": [],
+          "outbox": [
+            "propose"
+          ]
         },
         "inFlight": []
       }
@@ -50,12 +58,19 @@
         "inviter": {
           "open": false,
           "declined": false,
-          "held": []
+          "held": [],
+          "outbox": [
+            "accept",
+            "issue-inviter"
+          ]
         },
         "responder": {
           "open": false,
           "declined": false,
-          "held": []
+          "held": [],
+          "outbox": [
+            "propose"
+          ]
         },
         "inFlight": [
           "accept",
@@ -72,12 +87,20 @@
         "inviter": {
           "open": false,
           "declined": false,
-          "held": []
+          "held": [],
+          "outbox": [
+            "accept",
+            "issue-inviter"
+          ]
         },
         "responder": {
           "open": false,
           "declined": false,
-          "held": []
+          "held": [],
+          "outbox": [
+            "propose",
+            "issue-responder"
+          ]
         },
         "inFlight": [
           "issue-inviter",
@@ -94,12 +117,21 @@
         "inviter": {
           "open": false,
           "declined": false,
-          "held": []
+          "held": [],
+          "outbox": [
+            "accept",
+            "issue-inviter"
+          ]
         },
         "responder": {
           "open": false,
           "declined": false,
-          "held": []
+          "held": [],
+          "outbox": [
+            "propose",
+            "issue-responder",
+            "receipt-of-issue-inviter"
+          ]
         },
         "inFlight": [
           "issue-responder",
@@ -116,12 +148,22 @@
         "inviter": {
           "open": false,
           "declined": false,
-          "held": []
+          "held": [],
+          "outbox": [
+            "accept",
+            "issue-inviter",
+            "receipt-of-issue-responder"
+          ]
         },
         "responder": {
           "open": false,
           "declined": false,
-          "held": []
+          "held": [],
+          "outbox": [
+            "propose",
+            "issue-responder",
+            "receipt-of-issue-inviter"
+          ]
         },
         "inFlight": [
           "receipt-of-issue-inviter",
@@ -136,12 +178,20 @@
         "inviter": {
           "open": true,
           "declined": false,
-          "held": []
+          "held": [],
+          "outbox": [
+            "receipt-of-issue-responder"
+          ]
         },
         "responder": {
           "open": false,
           "declined": false,
-          "held": []
+          "held": [],
+          "outbox": [
+            "propose",
+            "issue-responder",
+            "receipt-of-issue-inviter"
+          ]
         },
         "inFlight": [
           "receipt-of-issue-responder"
@@ -155,12 +205,18 @@
         "inviter": {
           "open": true,
           "declined": false,
-          "held": []
+          "held": [],
+          "outbox": [
+            "receipt-of-issue-responder"
+          ]
         },
         "responder": {
           "open": true,
           "declined": false,
-          "held": []
+          "held": [],
+          "outbox": [
+            "receipt-of-issue-inviter"
+          ]
         },
         "inFlight": []
       }

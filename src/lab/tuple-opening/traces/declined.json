@@ -11,12 +11,16 @@
         "inviter": {
           "open": false,
           "declined": false,
-          "held": []
+          "held": [],
+          "outbox": []
         },
         "responder": {
           "open": false,
           "declined": false,
-          "held": []
+          "held": [],
+          "outbox": [
+            "propose"
+          ]
         },
         "inFlight": [
           "propose"
@@ -30,12 +34,16 @@
         "inviter": {
           "open": false,
           "declined": false,
-          "held": []
+          "held": [],
+          "outbox": []
         },
         "responder": {
           "open": false,
           "declined": false,
-          "held": []
+          "held": [],
+          "outbox": [
+            "propose"
+          ]
         },
         "inFlight": []
       }
@@ -49,12 +57,18 @@
         "inviter": {
           "open": false,
           "declined": true,
-          "held": []
+          "held": [],
+          "outbox": [
+            "decline"
+          ]
         },
         "responder": {
           "open": false,
           "declined": false,
-          "held": []
+          "held": [],
+          "outbox": [
+            "propose"
+          ]
         },
         "inFlight": [
           "decline"
@@ -68,12 +82,18 @@
         "inviter": {
           "open": false,
           "declined": true,
-          "held": []
+          "held": [],
+          "outbox": [
+            "decline"
+          ]
         },
         "responder": {
           "open": false,
           "declined": true,
-          "held": []
+          "held": [],
+          "outbox": [
+            "propose"
+          ]
         },
         "inFlight": []
       }
@@ -87,12 +107,18 @@
         "inviter": {
           "open": false,
           "declined": true,
-          "held": []
+          "held": [],
+          "outbox": [
+            "decline"
+          ]
         },
         "responder": {
           "open": false,
           "declined": true,
-          "held": []
+          "held": [],
+          "outbox": [
+            "propose"
+          ]
         },
         "inFlight": [
           "decline"
@@ -106,12 +132,18 @@
         "inviter": {
           "open": false,
           "declined": true,
-          "held": []
+          "held": [],
+          "outbox": [
+            "decline"
+          ]
         },
         "responder": {
           "open": false,
           "declined": true,
-          "held": []
+          "held": [],
+          "outbox": [
+            "propose"
+          ]
         },
         "inFlight": []
       }

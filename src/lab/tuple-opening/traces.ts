@@ -1,14 +1,17 @@
 // Traces of the rule in rule.ts: schedules written by hand, with what every
 // step sent and what each side shows after it. A trace is data
 // (traces/*.json): another implementation replays the steps and compares.
-import { DOCS, apply, possible, start, type Doc, type Event, type State } from './rule'
+import { DOCS, apply, outbox, possible, start, type Doc, type Event, type State } from './rule'
 
-export type Shown = { inviter: { open: boolean, declined: boolean, held: Doc[] }, responder: { open: boolean, declined: boolean, held: Doc[] }, inFlight: Doc[] }
+/** `outbox`: what the side would send again after a restart */
+export type Shown = { inviter: { open: boolean, declined: boolean, held: Doc[], outbox: Doc[] }, responder: { open: boolean, declined: boolean, held: Doc[], outbox: Doc[] }, inFlight: Doc[] }
 export type Step = Event & { sent: Doc[], after: Shown }
 export type Trace = { name: string, shows: string, steps: Step[] }
 
 const shown = (s: State): Shown => ({
-  inviter: { open: s.inviter.open, declined: s.inviter.declined, held: s.inviter.held }, responder: { open: s.responder.open, declined: s.responder.declined, held: s.responder.held }, inFlight: [...s.inFlight].sort(),
+  inviter: { open: s.inviter.open, declined: s.inviter.declined, held: s.inviter.held, outbox: outbox(s, 'inviter') },
+  responder: { open: s.responder.open, declined: s.responder.declined, held: s.responder.held, outbox: outbox(s, 'responder') },
+  inFlight: [...s.inFlight].sort(),
 })
 
 export function replay (events: Event[]): Step[] {
