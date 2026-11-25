@@ -29,17 +29,28 @@ role.
 *Pinned by:* `traces/in-order.json` (the inviter first) and
 `traces/responder-first.json` (the responder first; the same documents,
 the two receipts delivered in the other order); of the nine orders in which
-the six documents can be delivered, the inviter opens first in five and
-the responder in four (`tests/tuple-opening.test.ts`).
+the six documents of an accepted enactment can be delivered, the inviter
+opens first in five and the responder in four
+(`tests/tuple-opening.test.ts`).
+
+O-P4. If the inviter's person declines, neither side opens.
+*Pinned by:* `traces/declined.json`.
+
+O-P5. A document handed over a second time changes nothing on the side
+that gets it.
+*Pinned by:* `traces/handed-over-again.json`; the walk with one redelivery
+at any point (`tests/tuple-opening.test.ts`).
 
 ## The documents
 
-Six documents per enactment, named here by step and sender:
+Seven documents, six of them in an accepted enactment, named here by step
+and sender:
 
 | Name | From → to | In the ceremony |
 |---|---|---|
 | `propose` | responder → inviter | step `propose` |
 | `accept` | inviter → responder | the `#response` of `propose` |
+| `decline` | inviter → responder | instead of `accept`: a trust-task-error on step `propose` with the decline code |
 | `issue-inviter` | inviter → responder | step `issue-inviter` |
 | `issue-responder` | responder → inviter | step `issue-responder` |
 | `receipt-of-issue-inviter` | responder → inviter | the `#response` of `issue-inviter` |
@@ -77,7 +88,8 @@ O6. **Opening.** A side opens its tuple at the step at which it has taken
 both: the other side's issue (O4) and the other side's receipt of its own
 issue. Neither alone opens. A receipt that arrives before the issue is
 taken at once, not held back; it opens nothing yet. This is the same for
-both roles. From that step on the side shows a contact; `open` in a trace
+both roles. An open tuple stays open; an issue handed over again after
+that is still answered with its receipt (O9). From that step on the side shows a contact; `open` in a trace
 means both.
 *Pinned by:* every trace (`after.*.open` at each step);
 `traces/issue-before-acceptance.json` for the receipt that arrives first
@@ -90,27 +102,69 @@ completes at the same step and that side keeps the credentials, without a
 tuple and without a contact. The other side opens if the issue it took
 carried a card.
 
+O8. **Decline.** When the inviter's person declines instead, the inviter
+sends `decline` and the enactment is over for it. The responder takes
+`decline`, drops what it holds back, and the enactment is over for it too.
+Neither side issues or opens. In a trace `declined` is true for the inviter
+from the step its person declined, for the responder from the step it took
+`decline`.
+*Pinned by:* `traces/declined.json` (the decline, and that neither side
+opens).
+
+O9. **Handed over again.** A document a side was handed before (taken, or
+still held back) changes nothing when it is handed over again; it is not
+held back a second time. The side sends again, unchanged, its answer to
+that document, as the table says. A document is told by its name: a copy
+sent again is the same document.
+
+| Handed over again | Sent again |
+|---|---|
+| `propose`, after the person accepted | `accept`, `issue-inviter` |
+| `propose`, after the person declined | `decline` |
+| `propose`, before the person decided | nothing |
+| `accept` | `issue-responder` (not the receipt of an issue it had held back, O5) |
+| `issue-inviter`, `issue-responder`, taken | its receipt |
+| an issue still held back | nothing |
+| a receipt, `decline` | nothing |
+
+A copy sent again travels like any document and is, where it arrives, a
+document handed over again.
+*Pinned by:* `traces/handed-over-again.json`; the walk with one redelivery.
+
 ## The steps of a trace
 
 - `{ "act": "propose" }`: O1, the responder's part.
-- `{ "act": "accept" }`: O2.
-- `{ "deliver": "<name>" }`: the carrier hands the document to the side it
-  is for. A document is delivered once.
+- `{ "act": "accept" }`: O2. `{ "act": "decline" }`: O8. Either is
+  possible once, after the inviter took `propose`.
+- `{ "deliver": "<name>" }`: the carrier hands one copy of the document in
+  flight to the side it is for.
+- `{ "redeliver": "<name>" }`: the carrier hands over once more a document
+  it delivered before; nothing leaves the flight.
 
 Every step records `sent`, the documents the step put in flight, in the
-order they were sent, and `after`: per side whether its tuple is open and
-which documents it holds back, and what is in flight (sorted by name).
+order they were sent, and `after`: per side whether its tuple is open,
+whether the enactment was declined for it, and which documents it holds
+back; and what is in flight, sorted by name, a document sent twice named
+twice.
 
 ## Read by a second implementation
 
-A session that was given this page and the steps of the three traces
-without results wrote the transition in Rust. Its output equals the rule at
-every step of the three traces and of all nine schedules, six of which it
-had not seen. The two words at the head of the rule, the early receipt in
-O6 and the meaning of `open` come from the list of what it had to decide.
+Twice a fresh session was given this page and the steps of the traces
+without results, and wrote the transition in Rust: once for O1 to O7 (three
+traces), once for the page with O8 and O9 (five traces). Each program
+equals the rule at every step of every schedule: the first on the nine
+orders of an accepted enactment (72 steps, six orders it had not seen), the
+second on all 6 906 schedules (95 551 steps). What they had to decide is on
+the page now: the words "take" and "hold back", the early receipt in O6,
+what `open` and `declined` mean in a trace, and the wording of O9, whose
+first sentence had contradicted its table.
 
 ## Stated, not pinned
 
+- O8, that the responder drops what it holds back: in every schedule the
+  responder holds nothing when `decline` arrives, because the inviter sends
+  its issue only when its person accepted. The model drops the list; no
+  trace or walk tells that from leaving it.
 - O7: both parties of every trace send a card.
 - The inviter holds back an `issue-responder` that arrives before its
   person accepted, as the responder does in O5, and takes it in the step of
@@ -121,18 +175,19 @@ O6 and the meaning of `open` come from the list of what it had to decide.
 
 ## Not in the model
 
-A document delivered twice (the ceremony answers it with what it sent the
-first time); a decline; an error of the other side; expiry of the link; a
+An error of the other side that is not a decline; expiry of the link; a
 second proposal on the same handle; what a side does after a restart; the
 offline back-code; several devices of one person.
 
 ## Against the library
 
 `lib-run.ts` runs the traces against the published library with two
-holders and carries the documents one by one. At every step of every trace,
-and of each of the nine possible schedules, the library sends the same
+holders and carries the documents one by one. At every step of every
+trace, of each of the ten schedules without a redelivery, and of the 6 896
+schedules with one redelivery at any point, the library sends the same
 documents, the same side holds a contact, and the same documents are held
-back.
+back. A document sent again has the content of the first. The test runs
+300 of the 6 896; all were run once by hand (eight minutes).
 
 ## What follows for recognition
 

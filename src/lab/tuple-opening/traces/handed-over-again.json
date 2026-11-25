@@ -1,0 +1,399 @@
+{
+  "name": "handed-over-again",
+  "shows": "Documents the carrier hands over a second time change nothing; each is answered with what its first delivery sent. The acceptance handed over again brings the responder's issue again, not the receipt it sent in the same step for an issue it had held back. The copies travel and are answered in turn until a receipt ends the chain.",
+  "steps": [
+    {
+      "act": "propose",
+      "sent": [
+        "propose"
+      ],
+      "after": {
+        "inviter": {
+          "open": false,
+          "declined": false,
+          "held": []
+        },
+        "responder": {
+          "open": false,
+          "declined": false,
+          "held": []
+        },
+        "inFlight": [
+          "propose"
+        ]
+      }
+    },
+    {
+      "deliver": "propose",
+      "sent": [],
+      "after": {
+        "inviter": {
+          "open": false,
+          "declined": false,
+          "held": []
+        },
+        "responder": {
+          "open": false,
+          "declined": false,
+          "held": []
+        },
+        "inFlight": []
+      }
+    },
+    {
+      "act": "accept",
+      "sent": [
+        "accept",
+        "issue-inviter"
+      ],
+      "after": {
+        "inviter": {
+          "open": false,
+          "declined": false,
+          "held": []
+        },
+        "responder": {
+          "open": false,
+          "declined": false,
+          "held": []
+        },
+        "inFlight": [
+          "accept",
+          "issue-inviter"
+        ]
+      }
+    },
+    {
+      "deliver": "issue-inviter",
+      "sent": [],
+      "after": {
+        "inviter": {
+          "open": false,
+          "declined": false,
+          "held": []
+        },
+        "responder": {
+          "open": false,
+          "declined": false,
+          "held": [
+            "issue-inviter"
+          ]
+        },
+        "inFlight": [
+          "accept"
+        ]
+      }
+    },
+    {
+      "redeliver": "issue-inviter",
+      "sent": [],
+      "after": {
+        "inviter": {
+          "open": false,
+          "declined": false,
+          "held": []
+        },
+        "responder": {
+          "open": false,
+          "declined": false,
+          "held": [
+            "issue-inviter"
+          ]
+        },
+        "inFlight": [
+          "accept"
+        ]
+      }
+    },
+    {
+      "deliver": "accept",
+      "sent": [
+        "issue-responder",
+        "receipt-of-issue-inviter"
+      ],
+      "after": {
+        "inviter": {
+          "open": false,
+          "declined": false,
+          "held": []
+        },
+        "responder": {
+          "open": false,
+          "declined": false,
+          "held": []
+        },
+        "inFlight": [
+          "issue-responder",
+          "receipt-of-issue-inviter"
+        ]
+      }
+    },
+    {
+      "redeliver": "accept",
+      "sent": [
+        "issue-responder"
+      ],
+      "after": {
+        "inviter": {
+          "open": false,
+          "declined": false,
+          "held": []
+        },
+        "responder": {
+          "open": false,
+          "declined": false,
+          "held": []
+        },
+        "inFlight": [
+          "issue-responder",
+          "issue-responder",
+          "receipt-of-issue-inviter"
+        ]
+      }
+    },
+    {
+      "deliver": "issue-responder",
+      "sent": [
+        "receipt-of-issue-responder"
+      ],
+      "after": {
+        "inviter": {
+          "open": false,
+          "declined": false,
+          "held": []
+        },
+        "responder": {
+          "open": false,
+          "declined": false,
+          "held": []
+        },
+        "inFlight": [
+          "issue-responder",
+          "receipt-of-issue-inviter",
+          "receipt-of-issue-responder"
+        ]
+      }
+    },
+    {
+      "deliver": "issue-responder",
+      "sent": [
+        "receipt-of-issue-responder"
+      ],
+      "after": {
+        "inviter": {
+          "open": false,
+          "declined": false,
+          "held": []
+        },
+        "responder": {
+          "open": false,
+          "declined": false,
+          "held": []
+        },
+        "inFlight": [
+          "receipt-of-issue-inviter",
+          "receipt-of-issue-responder",
+          "receipt-of-issue-responder"
+        ]
+      }
+    },
+    {
+      "deliver": "receipt-of-issue-inviter",
+      "sent": [],
+      "after": {
+        "inviter": {
+          "open": true,
+          "declined": false,
+          "held": []
+        },
+        "responder": {
+          "open": false,
+          "declined": false,
+          "held": []
+        },
+        "inFlight": [
+          "receipt-of-issue-responder",
+          "receipt-of-issue-responder"
+        ]
+      }
+    },
+    {
+      "deliver": "receipt-of-issue-responder",
+      "sent": [],
+      "after": {
+        "inviter": {
+          "open": true,
+          "declined": false,
+          "held": []
+        },
+        "responder": {
+          "open": true,
+          "declined": false,
+          "held": []
+        },
+        "inFlight": [
+          "receipt-of-issue-responder"
+        ]
+      }
+    },
+    {
+      "deliver": "receipt-of-issue-responder",
+      "sent": [],
+      "after": {
+        "inviter": {
+          "open": true,
+          "declined": false,
+          "held": []
+        },
+        "responder": {
+          "open": true,
+          "declined": false,
+          "held": []
+        },
+        "inFlight": []
+      }
+    },
+    {
+      "redeliver": "propose",
+      "sent": [
+        "accept",
+        "issue-inviter"
+      ],
+      "after": {
+        "inviter": {
+          "open": true,
+          "declined": false,
+          "held": []
+        },
+        "responder": {
+          "open": true,
+          "declined": false,
+          "held": []
+        },
+        "inFlight": [
+          "accept",
+          "issue-inviter"
+        ]
+      }
+    },
+    {
+      "deliver": "accept",
+      "sent": [
+        "issue-responder"
+      ],
+      "after": {
+        "inviter": {
+          "open": true,
+          "declined": false,
+          "held": []
+        },
+        "responder": {
+          "open": true,
+          "declined": false,
+          "held": []
+        },
+        "inFlight": [
+          "issue-inviter",
+          "issue-responder"
+        ]
+      }
+    },
+    {
+      "deliver": "issue-inviter",
+      "sent": [
+        "receipt-of-issue-inviter"
+      ],
+      "after": {
+        "inviter": {
+          "open": true,
+          "declined": false,
+          "held": []
+        },
+        "responder": {
+          "open": true,
+          "declined": false,
+          "held": []
+        },
+        "inFlight": [
+          "issue-responder",
+          "receipt-of-issue-inviter"
+        ]
+      }
+    },
+    {
+      "deliver": "issue-responder",
+      "sent": [
+        "receipt-of-issue-responder"
+      ],
+      "after": {
+        "inviter": {
+          "open": true,
+          "declined": false,
+          "held": []
+        },
+        "responder": {
+          "open": true,
+          "declined": false,
+          "held": []
+        },
+        "inFlight": [
+          "receipt-of-issue-inviter",
+          "receipt-of-issue-responder"
+        ]
+      }
+    },
+    {
+      "deliver": "receipt-of-issue-inviter",
+      "sent": [],
+      "after": {
+        "inviter": {
+          "open": true,
+          "declined": false,
+          "held": []
+        },
+        "responder": {
+          "open": true,
+          "declined": false,
+          "held": []
+        },
+        "inFlight": [
+          "receipt-of-issue-responder"
+        ]
+      }
+    },
+    {
+      "deliver": "receipt-of-issue-responder",
+      "sent": [],
+      "after": {
+        "inviter": {
+          "open": true,
+          "declined": false,
+          "held": []
+        },
+        "responder": {
+          "open": true,
+          "declined": false,
+          "held": []
+        },
+        "inFlight": []
+      }
+    },
+    {
+      "redeliver": "receipt-of-issue-inviter",
+      "sent": [],
+      "after": {
+        "inviter": {
+          "open": true,
+          "declined": false,
+          "held": []
+        },
+        "responder": {
+          "open": true,
+          "declined": false,
+          "held": []
+        },
+        "inFlight": []
+      }
+    }
+  ]
+}

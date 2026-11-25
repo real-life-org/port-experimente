@@ -28,15 +28,27 @@ test('the page names every trace, and only traces that exist', () => {
   expect([...new Set([...page.matchAll(/traces\/([a-z-]+\.json)/g)].map((m) => m[1] as string))].sort()).toEqual(files)
 })
 
-// Every order in which the carrier can deliver the six documents: nine schedules. In each, both sides end open,
-// one of them first; and the library does at every step what the rule gives.
-test('every schedule: both sides open at the end, either may be first, and the library follows each step', async () => {
-  const all = everySchedule(), first = { inviter: 0, responder: 0 }
-  for (const [i, events] of all.entries()) {
+// Every order in which the carrier can deliver, the person accepting or declining: ten schedules.
+test('every schedule: accepted, both sides open and either may be first; declined, neither; the library follows each step', async () => {
+  const all = everySchedule(), first = { inviter: 0, responder: 0, declined: 0 }
+  for (const events of all) {
     const steps = replay(events), a = steps.findIndex((s) => s.after.inviter.open), b = steps.findIndex((s) => s.after.responder.open)
-    expect(a >= 0 && b >= 0 && a !== b).toBe(true)
-    first[a < b ? 'inviter' : 'responder']++
-    expect(await runOnLibrary({ name: `schedule ${i}`, shows: '', steps }), JSON.stringify(events)).toEqual(steps.map((s) => ({ sent: s.sent, after: s.after })))
+    const end = (steps.at(-1) as Trace['steps'][number]).after
+    if (end.inviter.declined) { expect([a, b, end.responder.declined]).toEqual([-1, -1, true]); first.declined++ } else { expect(a >= 0 && b >= 0 && a !== b).toBe(true); first[a < b ? 'inviter' : 'responder']++ }
+    expect(end.inFlight).toEqual([])
+    expect(await runOnLibrary({ name: '', shows: '', steps }), JSON.stringify(events)).toEqual(steps.map((s) => ({ sent: s.sent, after: s.after })))
   }
-  expect([all.length, first]).toEqual([9, { inviter: 5, responder: 4 }])
+  expect([all.length, first]).toEqual([10, { inviter: 5, responder: 4, declined: 1 }])
 }, 120_000)
+
+// With one document handed over once more at any point: 6 896 schedules. A redelivery never changes what a side holds
+// or whether it is open. Against the library every 23rd is run here (300 schedules); all of them were run once by hand.
+test('one redelivery anywhere: nothing changes but what is sent again, and the library follows', async () => {
+  const all = everySchedule(1)
+  expect(all.length).toBe(6896)
+  for (const [i, events] of all.entries()) {
+    const steps = replay(events)
+    for (const [k, s] of steps.entries()) if ('redeliver' in s) { const before = (steps[k - 1] as Trace['steps'][number]).after; expect([s.after.inviter, s.after.responder]).toEqual([before.inviter, before.responder]) }
+    if (i % 23 === 0) expect(await runOnLibrary({ name: '', shows: '', steps }), JSON.stringify(events)).toEqual(steps.map((s) => ({ sent: s.sent, after: s.after })))
+  }
+}, 240_000)

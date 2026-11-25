@@ -1,7 +1,7 @@
 // @ts-nocheck
 // The traces of the rule (traces/*.json), run against the published library:
 // two holders, the documents of one shared-connect enactment carried one by
-// one in the order the trace gives. After every step it reads what the step
+// one in the order the trace gives (a redelivery hands the same bytes again). After every step it reads what the step
 // sent, whether each side holds a contact (its tuple is open) and what its
 // enactment holds back. Type checking is off: the library's results are
 // read loosely here.
@@ -13,12 +13,16 @@ import type { Shown, Trace } from './traces'
 const RELAYS = [{ kind: 'tsp-mediator', address: 'did:web:mediator.example' }]
 const other = (r: Role): Role => (r === 'inviter' ? 'responder' : 'inviter')
 
-/** which of the six documents this is, by its type and who sent it */
+/** a document as text, whatever the order of its members */
+const canon = (v: unknown): string => JSON.stringify(v, (_k, x) => (x !== null && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => a.localeCompare(b))) : x))
+
+/** which of the seven documents this is, by its type and who sent it */
 export function kindOf (from: Role, doc: any): Doc | null {
   const t = String(doc?.type ?? '').split('/spec/')[1] ?? ''
   if (t === 'vrc/relationships/propose/0.1') return 'propose'
   if (t === 'vrc/relationships/propose/0.1#response') return 'accept'
   if (t === 'vrc/relationships/issue/0.1') return from === 'inviter' ? 'issue-inviter' : 'issue-responder'
+  if (t.startsWith('trust-task-error/')) return 'decline'
   if (t === 'vrc/relationships/issue/0.1#response') return from === 'inviter' ? 'receipt-of-issue-responder' : 'receipt-of-issue-inviter'
   return null
 }
@@ -30,7 +34,8 @@ export async function runOnLibrary (t: Trace): Promise<LibStep[]> {
   const at = (extra = {}) => ({ when: now(), actId: 'run-' + (++acts), ...extra })
   const make = async (fill: number) => createHolder({ store: new InMemoryStore(), keys: seedKeys(new Uint8Array(64).fill(fill)) }, { modules: [], invariants: true })
   const P: Record<Role, any> = { inviter: await make(1), responder: await make(2) }
-  const flight = new Map<Doc, unknown>(), did: Partial<Record<Role, string>> = {}
+  /** in flight by name (a document sent again is there twice); `docs` keeps every document for a redelivery */
+  const flight: Doc[] = [], docs = new Map<Doc, unknown>(), did: Partial<Record<Role, string>> = {}
   let sent: Doc[] = []
   /** what a call of `from` sent in the ceremony goes into flight; the library's own outbox (probes, stars) is not carried */
   const collect = (from: Role, result: any): void => {
@@ -38,12 +43,13 @@ export async function runOnLibrary (t: Trace): Promise<LibStep[]> {
     for (const e of (result.events ?? []).filter((x) => x.type === 'sharedconnect.send')) for (const doc of e.docs) {
       const k = kindOf(from, doc)
       if (!k) throw new Error(`a document the rule does not know: ${doc?.type}`)
-      flight.set(k, doc); sent.push(k)
+      if (docs.has(k) && canon(docs.get(k)) !== canon(doc)) throw new Error(`sent again with another content: ${k}`)
+      docs.set(k, doc); flight.push(k); sent.push(k)
     }
   }
-  const held = async (r: Role): Promise<Doc[]> => {
+  const side = async (r: Role) => {
     const es = Object.values((await P[r].snapshot()).state.sharedConnect?.enactments ?? {}) as any[]
-    return es.flatMap((e) => (e.flow?.held ?? []).map((d) => kindOf(other(r), d)))
+    return { open: (await P[r].contacts()).length > 0, declined: es.some((e) => e.status === 'declined'), held: es.flatMap((e) => (e.flow?.held ?? []).map((d) => kindOf(other(r), d))) }
   }
   const out: LibStep[] = []
   for (const s of t.steps) {
@@ -56,18 +62,13 @@ export async function runOnLibrary (t: Trace): Promise<LibStep[]> {
       collect('responder', proposed)
     } else if ('act' in s) {
       const prompt = (await P.inviter.prompts()).find((x) => x.kind === 'shared-connect-confirm')
-      collect('inviter', await P.inviter.decide(prompt.id, 'accept', at()))
+      collect('inviter', await P.inviter.decide(prompt.id, s.act, at()))
     } else {
-      const to = recipientOf(s.deliver), doc = flight.get(s.deliver)
-      if (!doc) throw new Error(`not in flight: ${s.deliver}`)
-      flight.delete(s.deliver)
-      collect(to, await P[to].sharedConnectReceive(doc, did[other(to)], now()))
+      const d = 'redeliver' in s ? s.redeliver : s.deliver, to = recipientOf(d)
+      if ('deliver' in s) { if (!flight.includes(d)) throw new Error(`not in flight: ${d}`); flight.splice(flight.indexOf(d), 1) }
+      collect(to, await P[to].sharedConnectReceive(docs.get(d), did[other(to)], now()))
     }
-    out.push({ sent, after: {
-      inviter: { open: (await P.inviter.contacts()).length > 0, held: await held('inviter') },
-      responder: { open: (await P.responder.contacts()).length > 0, held: await held('responder') },
-      inFlight: [...flight.keys()].sort(),
-    } })
+    out.push({ sent, after: { inviter: await side('inviter'), responder: await side('responder'), inFlight: [...flight].sort() } })
   }
   return out
 }

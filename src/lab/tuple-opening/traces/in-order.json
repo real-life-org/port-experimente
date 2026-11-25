@@ -10,10 +10,12 @@
       "after": {
         "inviter": {
           "open": false,
+          "declined": false,
           "held": []
         },
         "responder": {
           "open": false,
+          "declined": false,
           "held": []
         },
         "inFlight": [
@@ -27,10 +29,12 @@
       "after": {
         "inviter": {
           "open": false,
+          "declined": false,
           "held": []
         },
         "responder": {
           "open": false,
+          "declined": false,
           "held": []
         },
         "inFlight": []
@@ -45,10 +49,12 @@
       "after": {
         "inviter": {
           "open": false,
+          "declined": false,
           "held": []
         },
         "responder": {
           "open": false,
+          "declined": false,
           "held": []
         },
         "inFlight": [
@@ -65,10 +71,12 @@
       "after": {
         "inviter": {
           "open": false,
+          "declined": false,
           "held": []
         },
         "responder": {
           "open": false,
+          "declined": false,
           "held": []
         },
         "inFlight": [
@@ -85,10 +93,12 @@
       "after": {
         "inviter": {
           "open": false,
+          "declined": false,
           "held": []
         },
         "responder": {
           "open": false,
+          "declined": false,
           "held": []
         },
         "inFlight": [
@@ -105,10 +115,12 @@
       "after": {
         "inviter": {
           "open": false,
+          "declined": false,
           "held": []
         },
         "responder": {
           "open": false,
+          "declined": false,
           "held": []
         },
         "inFlight": [
@@ -123,10 +135,12 @@
       "after": {
         "inviter": {
           "open": true,
+          "declined": false,
           "held": []
         },
         "responder": {
           "open": false,
+          "declined": false,
           "held": []
         },
         "inFlight": [
@@ -140,10 +154,12 @@
       "after": {
         "inviter": {
           "open": true,
+          "declined": false,
           "held": []
         },
         "responder": {
           "open": true,
+          "declined": false,
           "held": []
         },
         "inFlight": []
