@@ -94,7 +94,6 @@ that did not meet; several devices.
 
 The requirements for Encounter of 31 October 2026 (E1 to E4): classes from
 the two channels, trust and vouching only on `met` or `introduced`, a
-`link` contact keeps messages, profile and membership. M2 differs from E1
-in one point: E1 asks for `displayed` on one side and `scan` on the other;
-the library asks for the own channel in person and no objection, so that a
+`link` contact keeps messages, profile and membership. E1 reads as M2 since
+25 November 2026: the own channel in person and no objection, so that a
 counterpart of another app, which states no channel, can be met.
