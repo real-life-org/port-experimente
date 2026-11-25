@@ -12,10 +12,12 @@ whose note on freshness this page makes exact; what follows the proposal is
 F-P1. A code shown in person cannot be used later than ten minutes after it
 was shown, give or take a minute of clock difference.
 
-F-P2. Once the inviter took the proposal, nothing in the enactment expires:
-the person may accept a day or a month later, and documents may arrive
-late; both sides still open.
-*Pinned by:* the test "only the proposal has a window".
+F-P2. Once the inviter took the proposal, its person has thirty days after
+the link's expiry to decide. Once the person accepted, nothing in the
+enactment expires: the documents that follow may arrive months later, and
+both sides still open.
+*Pinned by:* the tests "the person decides until thirty days after the
+link expired" and "after the decision nothing has a window".
 
 F-P3. One link connects one person.
 *Pinned by:* the test "one link, one proposer".
@@ -26,7 +28,8 @@ All times in seconds; `exp` is the link's expiry, `now` the clock of the
 side that acts.
 
 F1. **Lifetime.** The link carries its expiry. The inviter sets it when it
-shows the link: ten minutes unless it states a lifetime; at most ten
+shows the link: ten minutes unless it states a lifetime; the stated
+lifetime rounded to the second and at least one minute; at most ten
 minutes for a code shown in person (`displayed`), at most seven days for a
 link sent in a message (`sent`). A sent link without a stated lifetime
 lives ten minutes.
@@ -47,14 +50,21 @@ The ten minutes of the second row hold for a sent link too: a proposal on
 a link that lives for days must still reach the inviter within eleven
 minutes of being issued.
 
-F4. **Nothing later has a window.** The acceptance, the issues and the
-receipts are taken whenever they arrive.
+F4. **The decision.** The inviter's person can accept or decline while
+`now < exp + 60 + 30 days`. After that the question is gone and neither
+side opens.
+
+F4a. **Nothing after the decision has a window.** The acceptance, the
+issues and the receipts are taken whenever they arrive.
 
 F5. **Single use.** The inviter takes one proposal per link. A proposal
 from another identity on the same link is refused.
 
 *Pinned by:* `tests/freshness.test.ts` runs the library at the seconds
-around every boundary of F1 to F3 and compares with `rule.ts`.
+around every boundary of F1 to F4 and compares with `rule.ts`.
+
+The age condition of F3 (second row) is what 0.20.0 does. It is removed in
+the library after 0.20.0: the link's expiry alone bounds the proposal then.
 
 ## Stated, not pinned
 
@@ -74,6 +84,6 @@ has no expiry of its own.
 
 The app shows codes in person only and states ten minutes. An app that
 sends links has to state the lifetime, or the link is dead after ten
-minutes (F1). Whatever it states, the person who opens the link has to be
+minutes (F1). With 0.20.0, whatever it states, the person who opens the link has to be
 reachable by the inviter's device within eleven minutes of proposing (F3):
 a proposal that waits longer in an inbox is refused.

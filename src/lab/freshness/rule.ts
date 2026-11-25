@@ -8,8 +8,15 @@ export const LINK_MAX = 7 * 86400
 /** how far two clocks may differ */
 export const TOLERANCE = 60
 
-/** How long a link lives from the moment it is shown. Without a stated lifetime: ten minutes, whatever the channel. */
-export const lifetime = (channel: 'displayed' | 'sent', minutes = 10): number => Math.min(minutes * 60, channel === 'displayed' ? CODE_MAX : LINK_MAX)
+/** the person's decision on a proposal the inviter took stays open this long after the link expired (thirty days) */
+export const DECISION = 30 * 86400
+
+/** How long a link lives from the moment it is shown, in whole seconds: the stated minutes, rounded to the second, at least
+ *  a minute, at most the cap of the channel. Without a stated lifetime: ten minutes, whatever the channel. */
+export const lifetime = (channel: 'displayed' | 'sent', minutes = 10): number => Math.min(Math.max(60, Math.round(minutes * 60)), channel === 'displayed' ? CODE_MAX : LINK_MAX)
+
+/** The inviter's person can accept or decline a proposal the inviter took until thirty days after the link expired. */
+export const mayDecide = (now: number, exp: number): boolean => now < exp + TOLERANCE + DECISION
 
 /** The responder reads the link and proposes only before the link's expiry, by its own clock, without tolerance. */
 export const mayPropose = (now: number, exp: number): boolean => now < exp
