@@ -28,10 +28,14 @@ and checked against it by the tests named there. Library: rltp-lib 0.20.0.
 
 ## Not written down yet
 
-- The offline back-code (the proposal shown back as a code when neither
-  side has a network). The library builds and reads it
-  (`vectors/shared-connect.json`); its holder does not offer it, so no app
-  can use it today.
+- Connecting without a network. The app does not use shared-connect then:
+  with no carrier it shows the card of `encounter-scan`, and the other side
+  shows its answer back as a second code (Encounter 0.32 describes that
+  ceremony). A contact from it met (MET, M3). The offline form of
+  shared-connect itself, the proposal shown back as a code, is built and
+  read by the library (`vectors/shared-connect.json`), but its holder does
+  not offer it and the app does not use it; with a party of another app
+  there is no offline way today.
 - A party without a card (another app): the enactment completes and the
   credentials are kept, without a tuple (OPENING, O7, stated and not
   pinned).
