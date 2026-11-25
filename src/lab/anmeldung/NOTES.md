@@ -69,7 +69,14 @@ login goes through.
 
 ## Tests
 
-`tests/anmeldung.test.ts` (20), `tests/anmeldung-http.test.ts` (9).
+`tests/anmeldung.test.ts` (20), `tests/anmeldung-http.test.ts` (9),
+`tests/anmeldung-wallet-store.test.ts` (4).
+
+Finding #135: with blocked browser storage the demo wallet fell back to a
+random key and so switched accounts unnoticed. `wallet-store.ts` now stores
+and reads back the test identity and reports a failure; the wallet shows it
+before anything is signed and offers to try again (checked in headless
+Chrome with a throwing `localStorage`: message shown, nothing posted).
 
 Review of #128 found three gaps, all fixed with a test that fails on the
 first version: concurrent answers could both pass, because the signature
