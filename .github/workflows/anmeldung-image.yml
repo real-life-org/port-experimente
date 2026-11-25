@@ -1,0 +1,33 @@
+# The example web app of the login prototype as a container image (deploy/anmeldung/). A pull request
+# builds it; a push to main builds and pushes ghcr.io/real-life-org/anmeldung-demo:latest, which
+# Watchtower on the server pulls.
+name: anmeldung-image
+
+on:
+  push:
+    branches: [main]
+    paths: ['src/lab/anmeldung/**', 'scripts/build-anmeldung-server.mjs', 'Dockerfile.anmeldung', '.dockerignore', 'package.json', 'pnpm-lock.yaml', '.github/workflows/anmeldung-image.yml']
+  pull_request:
+    paths: ['src/lab/anmeldung/**', 'scripts/build-anmeldung-server.mjs', 'Dockerfile.anmeldung', '.dockerignore', 'package.json', 'pnpm-lock.yaml', '.github/workflows/anmeldung-image.yml']
+  workflow_dispatch:
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.anmeldung
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ghcr.io/real-life-org/anmeldung-demo:latest

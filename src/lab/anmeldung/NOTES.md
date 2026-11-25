@@ -40,8 +40,13 @@ phone, and the same-device way) the same day.
 ## Running the demonstration
 
 ```sh
-pnpm anmeldung:demo          # https://<LAN address>:8790, PORT and DEMO_HOST override
+pnpm anmeldung:demo          # https://<LAN address>:8790, PORT and DEMO_HOST (IP or DNS name) override
+PUBLIC_ORIGIN=https://<tunnel> pnpm anmeldung:demo   # behind a public https tunnel: plain http on PORT
 ```
+
+Behind a tunnel or proxy that ends TLS, `PUBLIC_ORIGIN` is the address QR code, link and response_uri
+name; the demo then needs no certificate of its own (review #139: before, the QR code sent the app to
+the LAN address even when the page was opened through a tunnel).
 
 Laptop and phone in the same network. The certificate is self-signed for the
 LAN address (made with `openssl`, kept in the bench cache); both browsers
@@ -135,6 +140,42 @@ mints a new, authenticated id and drops the pre-login one.
   a log (multi-device model 4, E4/E5) the web app has to resolve the log.
 - **The QR code is dense**, because it carries the whole request (request
   by value). Request by reference (`request_uri`) would make it small.
+
+## The real app as wallet (25 November)
+
+`ANMELDUNG_WALLET=app pnpm anmeldung:demo` makes QR code and link point at the Web of Trust app
+(`https://web-of-trust.de/a#…`, its experimental login, web-of-trust#553) instead of the demo wallet.
+Two conditions for that, both found while switching:
+
+- **A certificate the phone trusts.** The app posts its answer to the response_uri; it cannot be told
+  to accept a self-signed certificate as a browser can. The example web app needs a public address
+  with a valid certificate (a tunnel or a server); the LAN address with the self-signed certificate
+  only works with the demo wallet.
+- **CORS at the response_uri.** The app answers from its web view (origin `https://localhost` on
+  Android, `capacitor://localhost` on iOS) with `fetch`, which Capacitor does not route natively
+  here. The response_uri therefore sends `Access-Control-Allow-Origin: *`; a web app without it
+  receives the login but the app cannot read the answer and reports it as unreachable. SIOPv2
+  assumes a native wallet without CORS; this is a difference for every web app the app logs into.
+
+## As a service
+
+The example web app also runs as a service on the team's server, so others can try the login
+without a laptop on the same network: `scripts/build-anmeldung-server.mjs` bundles `server.ts`
+(plain http behind Traefik, `PUBLIC_ORIGIN`, `ANMELDUNG_WALLET`, default `app`) and the wallet page
+into `dist-anmeldung/`; `Dockerfile.anmeldung` puts the two files into a Node image;
+`.github/workflows/anmeldung-image.yml` builds it on every pull request and pushes
+`ghcr.io/real-life-org/anmeldung-demo:latest` from `main`; `deploy/anmeldung/docker-compose.yml`
+runs it with the Traefik labels (domain from `ANMELDUNG_DOMAIN`). The page offers the demo wallet
+per login, for phones whose app does not have the login yet. Everything lives in memory, with one
+lifecycle per login decided in `webapp.ts` alone (review #139): started, the request has five minutes
+to be confirmed; confirmed, the result and its binding to the browser that started it hold together
+for the pickup window counted from the confirmation (five minutes for laptop plus phone, one for the
+same-device return code) and end together; collected once, the HTTP layer issues a signed-in session
+of one hour. A new start of the same browser replaces its login, also one whose answer is being
+checked: that check ends without storing anything. An answered request is dropped at once, everything else is swept when it ends; the HTTP
+layer keeps no login lifetimes of its own (before, its own five minutes from the start could cut off a
+login confirmed at 4:59). At most 10 000 open requests (then `/start` answers 503). A restart logs everyone
+out.
 
 ## Next steps
 

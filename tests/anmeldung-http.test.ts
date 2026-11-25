@@ -138,5 +138,81 @@ test('eine zweite Antwort auf dieselbe Anfrage bekommt 400 mit Grund', async () 
   expect(await post(answer)).toBe(200)
   const again = await fetch(answer.response_uri, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(answer.body).toString() })
   expect(again.status).toBe(400)
-  expect(await again.json()).toEqual({ error: 'invalid_request', error_description: 'Anfrage schon beantwortet' })
+  expect(await again.json()).toEqual({ error: 'invalid_request', error_description: 'unbekannte Anfrage' })
 })
+
+test('die Antwortadresse darf von jeder Origin gelesen werden (die App antwortet aus ihrem WebView)', async () => {
+  const req = parseRequestUrl(((await (await fetch(origin + '/start')).json()) as any).url)!
+  const answer = await confirm(req, new Uint8Array(32).fill(15), Date.now())
+  const r = await fetch(answer.response_uri, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: 'https://localhost' }, body: new URLSearchParams(answer.body).toString() })
+  expect(r.status).toBe(200)
+  expect(r.headers.get('access-control-allow-origin')).toBe('*')
+})
+
+test('mit wallet: app zeigen QR-Code und Link auf die App (https://web-of-trust.de/a)', async () => {
+  const { server: s2, origin: o2 } = await serve({ wallet: 'app' })
+  try {
+    const r = await (await fetch(o2 + '/start')).json() as { url: string, walletLink: string }
+    expect(r.walletLink).toBe(`https://web-of-trust.de/a#${encodeURIComponent(r.url)}`)
+    const demo = await (await fetch(o2 + '/start?wallet=demo')).json() as { url: string, walletLink: string }
+    expect(demo.walletLink).toBe(`${o2}/wallet#${encodeURIComponent(demo.url)}`)
+  } finally {
+    await new Promise<void>((ok) => s2.close(() => ok()))
+  }
+})
+
+test('Dauerbetrieb: Sitzungen laufen nach einer Stunde ab, offene Anfragen nach fünf Minuten, und es gibt eine Obergrenze (review #139)', async () => {
+  let t = Date.now()
+  const { server: s3, origin: o3, app } = await serve({ now: () => t, maxOpenRequests: 2 })
+  try {
+    const start = await fetch(o3 + '/start')
+    const pre = start.headers.get('set-cookie')!.split(';')[0]!
+    const answer = await confirm(parseRequestUrl(((await start.json()) as any).url)!, new Uint8Array(32).fill(16), t)
+    expect(await post(answer)).toBe(200)
+    const collect = await fetch(o3 + '/status', { headers: { cookie: pre } })
+    const signedIn = collect.headers.get('set-cookie')!.split(';')[0]!
+    expect(await collect.json()).toEqual({ user: answer.did })
+    expect(app.held().pending).toBe(0)
+    // two open requests reach the cap; a third start is refused
+    await fetch(o3 + '/start'); await fetch(o3 + '/start')
+    expect(app.held().pending).toBe(2)
+    expect((await fetch(o3 + '/start')).status).toBe(503)
+    // after five minutes the open requests are gone, a start works again
+    t += 5 * 60_000 + 1
+    expect((await fetch(o3 + '/start')).status).toBe(200)
+    expect(app.held().pending).toBe(1)
+    // the session is still there within the hour, gone after it
+    expect(await (await fetch(o3 + '/status', { headers: { cookie: signedIn } })).json()).toEqual({ user: answer.did })
+    t += 60 * 60_000
+    expect(await (await fetch(o3 + '/status', { headers: { cookie: signedIn } })).json()).toEqual({})
+  } finally {
+    await new Promise<void>((ok) => s3.close(() => ok()))
+  }
+})
+
+// Review #139, round 2: the binding to the browser holds from the confirmation until the pickup ends
+test('Grenzfall über HTTP: bestätigt nach 4:59, abgeholt nach 5:01, in beiden Modi', async () => {
+  let t = Date.now()
+  const t0 = t
+  const { server: s4, origin: o4 } = await serve({ now: () => t })
+  try {
+    const laptop = await fetch(o4 + '/start')
+    const laptopId = laptop.headers.get('set-cookie')!.split(';')[0]!
+    const lreq = parseRequestUrl(((await laptop.json()) as any).url)!
+    const handy = await fetch(o4 + '/start?geraet=gleich')
+    const handyId = handy.headers.get('set-cookie')!.split(';')[0]!
+    const hreq = parseRequestUrl(((await handy.json()) as any).url)!
+    t = t0 + 299_000
+    const la = await confirm(lreq, new Uint8Array(32).fill(17), t)
+    expect(await post(la)).toBe(200)
+    const ha = await postAndRead(await confirm(hreq, new Uint8Array(32).fill(18), t))
+    expect(ha.status).toBe(200)
+    t = t0 + 301_000
+    expect(await (await fetch(o4 + '/status', { headers: { cookie: laptopId } })).json()).toEqual({ user: la.did })
+    const back = await fetch(ha.redirect_uri!, { headers: { cookie: handyId }, redirect: 'manual' })
+    expect(back.status).toBe(303)
+  } finally {
+    await new Promise<void>((ok) => s4.close(() => ok()))
+  }
+})
+
