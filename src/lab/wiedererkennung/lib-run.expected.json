@@ -202,6 +202,22 @@
       },
       "asExpected": false
     },
+    "proven-by-the-acknowledgement": {
+      "runnable": false,
+      "why": "a person acts on two devices; the library has one device per holder",
+      "notFollowed": [],
+      "afterStep": [],
+      "differsAt": [],
+      "contacts": {
+        "a": 0,
+        "b": 0
+      },
+      "expected": {
+        "a": 1,
+        "b": 1
+      },
+      "asExpected": false
+    },
     "settled-by-a-path": {
       "runnable": true,
       "notFollowed": [
@@ -548,6 +564,22 @@
       "asExpected": true
     },
     "probe-read-again": {
+      "runnable": false,
+      "why": "a person acts on two devices; the library has one device per holder",
+      "notFollowed": [],
+      "afterStep": [],
+      "differsAt": [],
+      "contacts": {
+        "a": 0,
+        "b": 0
+      },
+      "expected": {
+        "a": 1,
+        "b": 1
+      },
+      "asExpected": false
+    },
+    "proven-by-the-acknowledgement": {
       "runnable": false,
       "why": "a person acts on two devices; the library has one device per holder",
       "notFollowed": [],

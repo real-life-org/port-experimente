@@ -36,12 +36,22 @@ test('the page names every trace, and only traces that exist', () => {
 })
 
 // The proven head changes one pinned case and no other: without it, only stale-device ends differently.
-test('without the proven head every trace but stale-device and the one built on it ends as it does with it', () => {
+test('without the proven head only the three traces of R10 end differently', () => {
   const differs: string[] = []
   for (const t of traces) {
     const c = { ...t.setup, noProvenHead: true }, end = rule(c).settle(replay(c, t.steps as Event[], true).state).state
     if (DEVICES.some((d) => JSON.stringify(relationships(end.devices[d].tuples, end.devices[d].united)) !== JSON.stringify(t.expect.relationships[d]))) differs.push(t.name)
     expect([rule(c).outstanding(end, 'a'), rule(c).outstanding(end, 'b')]).toEqual([[], []])
   }
-  expect(differs).toEqual(['head-changed-before-the-answer', 'stale-device'])
+  expect(differs).toEqual(['head-changed-before-the-answer', 'proven-by-the-acknowledgement', 'stale-device'])
+})
+
+// The two observations the trace is there for: the probe step gives no hit while the pair is not proven, and the
+// acknowledgement alone, with no sync or fetch in between, makes the kept probe hit.
+test('proven-by-the-acknowledgement: the mapping over t2+t3 is owed from the step that brings the acknowledgement, not before', () => {
+  const t = traces.find((x) => x.name === 'proven-by-the-acknowledgement') as Trace
+  const probe = t.steps.findIndex((s) => 'fetchProbe' in s && s.fetchProbe === 't3' && s.on === 'a2')
+  expect(t.steps[probe + 1]).toMatchObject({ fetchMapping: 't1+t2', on: 'b1' })
+  expect((t.steps[probe] as Trace['steps'][number]).after.stillOwed.a).toEqual(['t1+t2'])
+  expect((t.steps[probe + 1] as Trace['steps'][number]).after.stillOwed.a).toEqual(['t2+t3'])
 })

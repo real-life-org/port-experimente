@@ -1,0 +1,539 @@
+{
+  "name": "proven-by-the-acknowledgement",
+  "shows": "Person b opens its tuples in the other order and its second device holds t2 alone, so it lists t2 as the only candidate of t3 before its first device has verified the mapping over t1+t2. Device a2 holds t1 and t2 united and reads the probe on t3: t2 is its head, but the pair t1+t2 is not proven yet, no hit. When b verifies the mapping over t1+t2, the acknowledgement makes the pair proven and a2 reads the kept probe again: person a owes the mapping over t2+t3 from that step on, without a sync or a fetch in between.",
+  "setup": {
+    "tuples": [
+      "t1",
+      "t2",
+      "t3"
+    ]
+  },
+  "steps": [
+    {
+      "open": "t1",
+      "on": "a1",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
+    },
+    {
+      "sync": "a1",
+      "to": "a2",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
+    },
+    {
+      "open": "t2",
+      "on": "a1",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1"
+          ],
+          [
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
+    },
+    {
+      "open": "t2",
+      "on": "b1",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
+    },
+    {
+      "sync": "b1",
+      "to": "b2",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
+    },
+    {
+      "open": "t1",
+      "on": "b1",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1"
+          ],
+          [
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
+    },
+    {
+      "fetchProbe": "t1",
+      "on": "a1",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1"
+          ],
+          [
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t1+t2"
+          ],
+          "b": []
+        }
+      }
+    },
+    {
+      "fetchProbe": "t2",
+      "on": "b1",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1"
+          ],
+          [
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t1+t2"
+          ],
+          "b": [
+            "t1+t2"
+          ]
+        }
+      }
+    },
+    {
+      "fetchMapping": "t1+t2",
+      "on": "a1",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t1+t2"
+          ],
+          "b": []
+        }
+      }
+    },
+    {
+      "open": "t3",
+      "on": "a2",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1"
+          ],
+          [
+            "t3"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t1+t2"
+          ],
+          "b": []
+        }
+      }
+    },
+    {
+      "open": "t3",
+      "on": "b2",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t2"
+          ],
+          [
+            "t3"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t1+t2"
+          ],
+          "b": []
+        }
+      }
+    },
+    {
+      "sync": "a1",
+      "to": "a2",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2"
+          ],
+          [
+            "t3"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t1+t2"
+          ],
+          "b": []
+        }
+      }
+    },
+    {
+      "fetchProbe": "t3",
+      "on": "a2",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2"
+          ],
+          [
+            "t3"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t1+t2"
+          ],
+          "b": []
+        }
+      }
+    },
+    {
+      "fetchMapping": "t1+t2",
+      "on": "b1",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t2+t3"
+          ],
+          "b": []
+        }
+      }
+    },
+    {
+      "fetchProbe": "t2",
+      "on": "a1",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t2+t3"
+          ],
+          "b": []
+        }
+      }
+    },
+    {
+      "sync": "a1",
+      "to": "a2",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2"
+          ],
+          [
+            "t3"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t2+t3"
+          ],
+          "b": []
+        }
+      }
+    },
+    {
+      "sync": "a2",
+      "to": "a1",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2"
+          ],
+          [
+            "t3"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t2+t3"
+          ],
+          "b": []
+        }
+      }
+    },
+    {
+      "fetchProbe": "t1",
+      "on": "b1",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t2+t3"
+          ],
+          "b": []
+        }
+      }
+    },
+    {
+      "sync": "b1",
+      "to": "b2",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2"
+          ],
+          [
+            "t3"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t2+t3"
+          ],
+          "b": []
+        }
+      }
+    },
+    {
+      "fetchProbe": "t3",
+      "on": "b2",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2"
+          ],
+          [
+            "t3"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t2+t3"
+          ],
+          "b": []
+        }
+      }
+    },
+    {
+      "fetchMapping": "t2+t3",
+      "on": "b2",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2",
+            "t3"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": [
+            "t2+t3"
+          ]
+        }
+      }
+    },
+    {
+      "fetchMapping": "t2+t3",
+      "on": "a1",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2",
+            "t3"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
+    },
+    {
+      "sync": "a1",
+      "to": "a2",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2",
+            "t3"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
+    },
+    {
+      "sync": "b2",
+      "to": "b1",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2",
+            "t3"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
+    }
+  ],
+  "expect": {
+    "relationships": {
+      "a1": [
+        [
+          "t1",
+          "t2",
+          "t3"
+        ]
+      ],
+      "a2": [
+        [
+          "t1",
+          "t2",
+          "t3"
+        ]
+      ],
+      "b1": [
+        [
+          "t1",
+          "t2",
+          "t3"
+        ]
+      ],
+      "b2": [
+        [
+          "t1",
+          "t2",
+          "t3"
+        ]
+      ]
+    },
+    "candidates": {
+      "a": {
+        "t1": [],
+        "t2": [
+          "t1"
+        ],
+        "t3": [
+          "t1"
+        ]
+      },
+      "b": {
+        "t1": [
+          "t2"
+        ],
+        "t2": [],
+        "t3": [
+          "t2"
+        ]
+      }
+    },
+    "stillOwed": {
+      "a": [],
+      "b": []
+    }
+  }
+}

@@ -136,8 +136,12 @@ head has changed by then. The other person needs nothing but R3.
 *Pinned by:* `traces/stale-device.json` (the hit at the probe step after
 the sync; its `noProvenHead` outcome) and
 `traces/head-changed-before-the-answer.json` (the answer verified after a
-fourth tuple took the head); that no other trace ends differently without
-it, `tests/wiedererkennung-traces.test.ts`.
+fourth tuple took the head); that the pair must be proven, and that the
+acknowledgement is a cause to read again (R5),
+`traces/proven-by-the-acknowledgement.json` (no hit at the probe step
+while the acknowledgement is missing; the mapping owed at the step that
+brings it); that no other trace ends differently without R10,
+`tests/wiedererkennung-traces.test.ts`.
 
 It is the head alone, not any tuple of a candidate's relationship: taking
 any of them would let the copied key of a replaced tuple bring a new
@@ -145,11 +149,11 @@ contact into the relationship.
 
 ## Stated, not pinned
 
-- R6 and R7 say a device must **admit** the pair to verify a mapping. In
-  this model an honest mapping only ever comes over a pair both sides
-  admit, so no schedule reaches a refusal for that reason, and a rule
-  without the check passes every trace and walk. Pinning it needs a mapping
-  handed in from outside.
+- R6 and R7 say a device must **admit** the pair, or already owe its own
+  mapping over it, to verify a mapping. In this model an honest mapping
+  only ever comes over a pair for which that holds, so no schedule reaches
+  a refusal for that reason, and a rule without the check passes every
+  trace and walk. Pinning it needs a mapping handed in from outside.
 - That R10 holds against the copied key of a replaced tuple is argued, not
   modelled: the model has no forged mapping. The argument: such a tuple is
   no head, so a probe naming it has no hit, and no mapping over it is owed.
@@ -157,15 +161,9 @@ contact into the relationship.
   Whoever knows the anchor of a tuple that is a head today learns from the
   mapping that it belongs to the relationship of the tuple the probe came
   on. A tuple that is no head any more gives no such answer.
-- R10 asks that the person's own mapping over the joining pair was
-  acknowledged. A rule without that condition passes every trace and walk:
-  in this model the other person lists the head alone only after it united
-  the pair, and that is the acknowledgement. For the same reason the
-  acknowledgement as a cause to read again (R5) changes nothing here.
-  Pinning either needs a lost or forged document.
 - In the model an acknowledgement is a fact of the person at once; how it
   reaches a sibling device is not shown.
-- Three tuples with two devices each: three traces and a random draw
+- Three tuples with two devices each: four traces and a random draw
   (`enumerate.ts`, `draw`, 300 schedules in the test), no full walk. Four
   tuples: one trace.
 - What a probe and a mapping are on the wire, and that a mapping proves the
@@ -199,7 +197,7 @@ The outcome is the same under both ceremonies:
 | `met-again` | after every step each person holds as many contacts as the rule gives there (the receiver goes from two to one at the step it is handed the mapping); one contact on both sides at the end |
 | `crossed-opening` | issues no mapping: differs from the rule at the two mapping steps and ends with two contacts on both sides; the rule gives one relationship (R3: it does not admit the pair the other way round) |
 | `settled-by-a-path` (three tuples, one device each) | ends with one contact on both sides, but not by the rule's steps: it chains, so on t3 it issues a mapping over t1+t3 where the rule asks for t2+t3 (that one is never issued, and the run leaves the other held); from there on it differs at every step and four steps are not followed |
-| the seven traces with two devices of one person | not runnable |
+| the eight traces with two devices of one person | not runnable |
 
 Measured on the way, for `shared-connect`: the responder's tuple opens when
 the inviter's issue reaches it; the inviter's tuple opens when the receipt

@@ -104,6 +104,13 @@ export function build (): Trace[] {
       { fetchMapping: 't2+t4', on: 'a1' }, { fetchMapping: 't2+t4', on: 'b1' }, { sync: 'a1', to: 'a2' },
       { fetchMapping: 't2+t3', on: 'b1' }, { fetchMapping: 't2+t3', on: 'a2' },
     ]),
+    traceOf('proven-by-the-acknowledgement', 'Person b opens its tuples in the other order and its second device holds t2 alone, so it lists t2 as the only candidate of t3 before its first device has verified the mapping over t1+t2. Device a2 holds t1 and t2 united and reads the probe on t3: t2 is its head, but the pair t1+t2 is not proven yet, no hit. When b verifies the mapping over t1+t2, the acknowledgement makes the pair proven and a2 reads the kept probe again: person a owes the mapping over t2+t3 from that step on, without a sync or a fetch in between.', { tuples: ['t1', 't2', 't3'] }, [
+      { open: 't1', on: 'a1' }, { sync: 'a1', to: 'a2' }, { open: 't2', on: 'a1' },
+      { open: 't2', on: 'b1' }, { sync: 'b1', to: 'b2' }, { open: 't1', on: 'b1' },
+      { fetchProbe: 't1', on: 'a1' }, { fetchProbe: 't2', on: 'b1' }, { fetchMapping: 't1+t2', on: 'a1' },
+      { open: 't3', on: 'a2' }, { open: 't3', on: 'b2' }, { sync: 'a1', to: 'a2' },
+      { fetchProbe: 't3', on: 'a2' }, { fetchMapping: 't1+t2', on: 'b1' },
+    ]),
     traceOf('settled-by-a-path', 'Three tuples, one device each, all open before anything is read. Person a owes three mappings. Once the pairs t1+t2 and t2+t3 are verified and acknowledged both ways, the mapping over t1+t3 is no longer owed: the other side holds the two tuples in one relationship already.', { tuples: ['t1', 't2', 't3'], single: true }, [
       { open: 't1', on: 'a1' }, { open: 't1', on: 'b1' }, { open: 't2', on: 'a1' }, { open: 't2', on: 'b1' }, { open: 't3', on: 'a1' }, { open: 't3', on: 'b1' },
       { fetchProbe: 't2', on: 'a1' }, { fetchProbe: 't3', on: 'a1' },
