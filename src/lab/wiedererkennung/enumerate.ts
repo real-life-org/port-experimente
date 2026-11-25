@@ -3,8 +3,9 @@
 // device of its person's choice; any device that holds a tuple may fetch
 // what waits on it; own devices sync one way at a time, in any order.
 // Every reachable state with all tuples open is brought to rest
-// (everything synced, fetched and sent) and checked against what the two
-// people's relations give.
+// (everything synced, fetched and sent) and checked: the two people show the
+// same relationships, nothing stays owed, and every join the two people's
+// candidate relations give is there.
 import { DEVICES, relationships, rule, start, type Event, type Setup, type State } from './rule'
 
 /** candidates are keyed by tuple; the key of a state must not depend on the order they were written in */
@@ -23,7 +24,11 @@ function judge (setup: Setup, r: ReturnType<typeof rule>, s: State, atRest: Reco
   // with one device per person the second devices hold nothing and are not compared
   const acting = setup.single ? [0, 2] : [0, 1, 2, 3]
   if (!setup.single && (JSON.stringify(shown[0]) !== JSON.stringify(shown[1]) || JSON.stringify(shown[2]) !== JSON.stringify(shown[3]))) problems.add('two devices of one person show different relationships at rest')
-  if (acting.some((i) => JSON.stringify(shown[i]) !== want)) problems.add('a device shows other relationships than the pairs both relations hold')
+  // every join the two candidate relations give is shown; a join beyond them comes from a proven head and must be the same on both sides
+  const joins = (g: string[][], want: string[][]): boolean => want.every((w) => g.some((x) => w.every((t) => x.includes(t))))
+  if (acting.some((i) => !joins(shown[i] as string[][], r.expected(rest)))) problems.add('a device does not show a join both relations hold')
+  if (setup.noProvenHead && acting.some((i) => JSON.stringify(shown[i]) !== want)) problems.add('without the proven head, a device shows a join the relations do not hold')
+  if (JSON.stringify(shown[0]) !== JSON.stringify(shown[2])) problems.add('the two people show different relationships at rest')
   if (r.outstanding(rest, 'a').length || r.outstanding(rest, 'b').length) problems.add('a mapping stays owed at rest')
   // a statement that does not read the candidates: one device per person, every tuple open on both sides, one relationship
   if (setup.single && acting.some((i) => (shown[i] as unknown[]).length !== 1)) problems.add('one device per person, and more than one relationship at rest')

@@ -370,7 +370,8 @@
       "b": []
     }
   },
-  "readOnce": {
+  "control": {
+    "without": "readOnce",
     "relationships": {
       "a1": [
         [

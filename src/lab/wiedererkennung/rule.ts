@@ -17,14 +17,22 @@
 //               tuple can tell.
 //   admitted    a pair of tuples is admitted for a person if one was a
 //               candidate of the other, either way round.
+//   proven      a pair of tuples is proven on a device if the device united
+//               it (it verified the counterpart's mapping over it) and the
+//               person's own mapping over it was acknowledged.
 //   hit         a device reads a probe on a tuple it holds, the probe lists
-//               another tuple the device holds, and the pair is admitted.
+//               another tuple the device holds, and either the pair is
+//               admitted, or the listed tuple is the head of its relationship
+//               on this device now and a proven pair joins it directly to a
+//               candidate of the probe's tuple (the proven head). A tuple
+//               that is no head never hits this second way.
 //               A hit unites nothing; the person then owes its mapping.
 //   mapping     the proof over a pair of tuples, under the keys of both. A
-//               device that holds both tuples and admits the pair verifies
-//               it, unites the two, acknowledges, and its person owes its
-//               own mapping over the pair. Any other device cannot verify
-//               it: no acknowledgement, the sender keeps owing it.
+//               device that holds both tuples and either admits the pair or
+//               already owes its own mapping over it verifies it, unites the
+//               two, acknowledges, and its person owes its own mapping over
+//               the pair. Any other device cannot verify it: no
+//               acknowledgement, the sender keeps owing it.
 //   relationship  the tuples a device holds, grouped by the pairs it united.
 //               The head of a relationship is its tuple of the highest rank.
 //               (Not the contact entry an app shows: a relationship can
@@ -39,10 +47,11 @@
 //
 // The rule that is there for several devices: a probe a device fetched is
 // kept, and the device reads the probes it holds again whenever what it
-// holds grows. It also hands them to its sibling. Two control runs take
-// this apart: `readOnce` (a probe is read when it is fetched and never
-// again, and is not handed on) and `noForward` (kept and read again by the
-// device that fetched it, but not handed on).
+// holds grows or a pair becomes proven. It also hands them to its sibling.
+// Control runs take this apart: `readOnce` (a probe is read when it is
+// fetched and never again, and is not handed on), `noForward` (kept and
+// read again by the device that fetched it, but not handed on) and
+// `noProvenHead` (only admitted pairs hit).
 
 export type Device = 'a1' | 'a2' | 'b1' | 'b2'
 export type Person = 'a' | 'b'
@@ -98,11 +107,8 @@ export type Setup = {
   noForward?: boolean
   /** one device per person: only a1 and b1 act, nothing is synced */
   single?: boolean
-  /** A variant under trial, for a device with an older state. A device reading a kept probe also takes a named tuple that
-   *  is the head of its relationship now and is joined directly to a candidate of the probe's tuple by a pair this person
-   *  verified and had acknowledged; and it verifies a mapping over a pair it already owes. A tuple that is no head never
-   *  qualifies, so the key of a replaced tuple opens nothing. */
-  admitProvenHead?: boolean
+  /** control run: only admitted pairs hit and are verified; a listed tuple that is the head a proven pair joins to a candidate does not */
+  noProvenHead?: boolean
 }
 
 const add = <T>(xs: T[], x: T): T[] => (xs.includes(x) ? xs : [...xs, x].sort())
@@ -137,9 +143,10 @@ export function rule (setup: Setup) {
 
   const admitted = (s: State, p: Person, x: Tuple, y: Tuple): boolean =>
     (s.people[p].candidates[x] ?? []).includes(y) || (s.people[p].candidates[y] ?? []).includes(x)
-  /** the variant: `named`, read in a probe on `t`, is this device's head now and a proven pair joins it to a candidate of `t` */
+  /** `named`, read in a probe on `t`, is this device's head now and a proven pair joins it directly to a candidate of `t`.
+   *  The key of a tuple that is no head any more opens nothing this way. */
   const provenHead = (s: State, d: Device, t: Tuple, named: Tuple): boolean => {
-    if (!setup.admitProvenHead) return false
+    if (setup.noProvenHead) return false
     const dev = s.devices[d], ack = s.people[personOf(d)].acknowledged
     return heads(dev).includes(named) && (s.people[personOf(d)].candidates[t] ?? []).some((c) => dev.united.includes(pairOf(c, named)) && ack.includes(pairOf(c, named)))
   }
@@ -213,14 +220,15 @@ export function rule (setup: Setup) {
     if ('fetchMapping' in e) {
       const me = personOf(e.on), dev = n.devices[e.on], [x, y] = tuplesOf(e.fetchMapping)
       // cannot verify: it does not hold both tuples, or its person does not admit the pair. No acknowledgement, nothing changes.
-      const owedHere = setup.admitProvenHead === true && dev.owed.includes(e.fetchMapping)   // the variant: the pair it already owes
+      // a pair it already owes: the hit decided, and stands also if the head changed since
+      const owedHere = !setup.noProvenHead && dev.owed.includes(e.fetchMapping)
       if (!dev.tuples.includes(x) || !dev.tuples.includes(y) || !(admitted(s, me, x, y) || owedHere)) return { state: s, effect: false }
       dev.united = add(dev.united, e.fetchMapping)
       owe(dev, e.fetchMapping, travelsOn(s, otherPerson(me), e.fetchMapping))   // the answer travels on the tuple the mapping came on
       n.people[otherPerson(me)].acknowledged = add(n.people[otherPerson(me)].acknowledged, e.fetchMapping)
       // a pair became proven or a head changed: a kept probe may hit now. On this device, which verified, and on the
       // counterpart's, whose acknowledgement just arrived (the model keeps it per person, so both its devices read again).
-      if (setup.admitProvenHead && !setup.readOnce) for (const d of [e.on, ...both(otherPerson(me))]) read(n, d)
+      if (!setup.noProvenHead && !setup.readOnce) for (const d of [e.on, ...both(otherPerson(me))]) read(n, d)
       return { state: n, effect: true }
     }
     const from = n.devices[e.sync], to = n.devices[e.to]
@@ -257,8 +265,9 @@ export function rule (setup: Setup) {
     }
   }
 
-  /** What the two relations give: the tuples grouped by the pairs both people admit. (The variant is not in this
-   *  expectation: what it adds depends on the order things happened in, so it is checked on traces.) */
+  /** What the two candidate relations give: the tuples grouped by the pairs both people admit. At rest every device shows
+   *  at least these joins. A proven head adds joins that depend on the order things happened in; they are no function of
+   *  the candidates, so the walk checks them as agreement of the two people and the traces pin the cases. */
   const expected = (s: State): Tuple[][] => {
     const joint: Pair[] = []
     for (const x of setup.tuples) for (const y of setup.tuples) if (x < y && admitted(s, 'a', x, y) && admitted(s, 'b', x, y)) joint.push(pairOf(x, y))

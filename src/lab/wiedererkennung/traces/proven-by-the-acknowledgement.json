@@ -1,15 +1,10 @@
 {
-  "name": "stale-device-joined",
-  "shows": "The same schedule as stale-device-apart with the first tuple ranking above the second: the head of the other person's relationship is then the first tuple, both list it, and all three tuples end in one relationship. The rank decides.",
+  "name": "proven-by-the-acknowledgement",
+  "shows": "Person b opens its tuples in the other order and its second device holds t2 alone, so it lists t2 as the only candidate of t3 before its first device has verified the mapping over t1+t2. Device a2 holds t1 and t2 united and reads the probe on t3: t2 is its head, but the pair t1+t2 is not proven yet, no hit. When b verifies the mapping over t1+t2, the acknowledgement makes the pair proven and a2 reads the kept probe again: person a owes the mapping over t2+t3 from that step on, without a sync or a fetch in between.",
   "setup": {
     "tuples": [
       "t1",
       "t2",
-      "t3"
-    ],
-    "rank": [
-      "t2",
-      "t1",
       "t3"
     ]
   },
@@ -31,22 +26,6 @@
       }
     },
     {
-      "open": "t1",
-      "on": "b1",
-      "effect": true,
-      "after": {
-        "relationships": [
-          [
-            "t1"
-          ]
-        ],
-        "stillOwed": {
-          "a": [],
-          "b": []
-        }
-      }
-    },
-    {
       "sync": "a1",
       "to": "a2",
       "effect": true,
@@ -63,38 +42,6 @@
       }
     },
     {
-      "fetchProbe": "t1",
-      "on": "a1",
-      "effect": true,
-      "after": {
-        "relationships": [
-          [
-            "t1"
-          ]
-        ],
-        "stillOwed": {
-          "a": [],
-          "b": []
-        }
-      }
-    },
-    {
-      "fetchProbe": "t1",
-      "on": "b1",
-      "effect": true,
-      "after": {
-        "relationships": [
-          [
-            "t1"
-          ]
-        ],
-        "stillOwed": {
-          "a": [],
-          "b": []
-        }
-      }
-    },
-    {
       "open": "t2",
       "on": "a1",
       "effect": true,
@@ -120,6 +67,38 @@
       "after": {
         "relationships": [
           [
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
+    },
+    {
+      "sync": "b1",
+      "to": "b2",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
+    },
+    {
+      "open": "t1",
+      "on": "b1",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
             "t1"
           ],
           [
@@ -133,7 +112,7 @@
       }
     },
     {
-      "fetchProbe": "t2",
+      "fetchProbe": "t1",
       "on": "a1",
       "effect": true,
       "after": {
@@ -196,23 +175,6 @@
       }
     },
     {
-      "fetchMapping": "t1+t2",
-      "on": "b1",
-      "effect": true,
-      "after": {
-        "relationships": [
-          [
-            "t1",
-            "t2"
-          ]
-        ],
-        "stillOwed": {
-          "a": [],
-          "b": []
-        }
-      }
-    },
-    {
       "open": "t3",
       "on": "a2",
       "effect": true,
@@ -226,19 +188,20 @@
           ]
         ],
         "stillOwed": {
-          "a": [],
+          "a": [
+            "t1+t2"
+          ],
           "b": []
         }
       }
     },
     {
       "open": "t3",
-      "on": "b1",
+      "on": "b2",
       "effect": true,
       "after": {
         "relationships": [
           [
-            "t1",
             "t2"
           ],
           [
@@ -246,7 +209,9 @@
           ]
         ],
         "stillOwed": {
-          "a": [],
+          "a": [
+            "t1+t2"
+          ],
           "b": []
         }
       }
@@ -266,7 +231,9 @@
           ]
         ],
         "stillOwed": {
-          "a": [],
+          "a": [
+            "t1+t2"
+          ],
           "b": []
         }
       }
@@ -287,7 +254,67 @@
         ],
         "stillOwed": {
           "a": [
-            "t1+t3"
+            "t1+t2"
+          ],
+          "b": []
+        }
+      }
+    },
+    {
+      "fetchMapping": "t1+t2",
+      "on": "b1",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t2+t3"
+          ],
+          "b": []
+        }
+      }
+    },
+    {
+      "fetchProbe": "t2",
+      "on": "a1",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t2+t3"
+          ],
+          "b": []
+        }
+      }
+    },
+    {
+      "sync": "a1",
+      "to": "a2",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2"
+          ],
+          [
+            "t3"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t2+t3"
           ],
           "b": []
         }
@@ -309,15 +336,34 @@
         ],
         "stillOwed": {
           "a": [
-            "t1+t3"
+            "t2+t3"
           ],
           "b": []
         }
       }
     },
     {
-      "fetchProbe": "t3",
+      "fetchProbe": "t1",
       "on": "b1",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t2+t3"
+          ],
+          "b": []
+        }
+      }
+    },
+    {
+      "sync": "b1",
+      "to": "b2",
       "effect": true,
       "after": {
         "relationships": [
@@ -331,16 +377,56 @@
         ],
         "stillOwed": {
           "a": [
-            "t1+t3"
+            "t2+t3"
           ],
+          "b": []
+        }
+      }
+    },
+    {
+      "fetchProbe": "t3",
+      "on": "b2",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2"
+          ],
+          [
+            "t3"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t2+t3"
+          ],
+          "b": []
+        }
+      }
+    },
+    {
+      "fetchMapping": "t2+t3",
+      "on": "b2",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2",
+            "t3"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
           "b": [
-            "t1+t3"
+            "t2+t3"
           ]
         }
       }
     },
     {
-      "fetchMapping": "t1+t3",
+      "fetchMapping": "t2+t3",
       "on": "a1",
       "effect": true,
       "after": {
@@ -352,9 +438,7 @@
           ]
         ],
         "stillOwed": {
-          "a": [
-            "t1+t3"
-          ],
+          "a": [],
           "b": []
         }
       }
@@ -372,34 +456,14 @@
           ]
         ],
         "stillOwed": {
-          "a": [
-            "t1+t3"
-          ],
-          "b": []
-        }
-      }
-    },
-    {
-      "fetchMapping": "t1+t3",
-      "on": "b1",
-      "effect": true,
-      "after": {
-        "relationships": [
-          [
-            "t1",
-            "t2",
-            "t3"
-          ]
-        ],
-        "stillOwed": {
           "a": [],
           "b": []
         }
       }
     },
     {
-      "sync": "b1",
-      "to": "b2",
+      "sync": "b2",
+      "to": "b1",
       "effect": true,
       "after": {
         "relationships": [
@@ -458,12 +522,12 @@
         ]
       },
       "b": {
-        "t1": [],
-        "t2": [
-          "t1"
+        "t1": [
+          "t2"
         ],
+        "t2": [],
         "t3": [
-          "t1"
+          "t2"
         ]
       }
     },
