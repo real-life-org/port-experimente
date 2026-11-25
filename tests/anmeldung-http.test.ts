@@ -3,7 +3,7 @@ import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { parseRequestUrl } from '../src/lab/anmeldung/siop'
 import { confirm } from '../src/lab/anmeldung/wallet'
-import { post, serve } from '../src/lab/anmeldung/http'
+import { post, postAndRead, serve } from '../src/lab/anmeldung/http'
 
 // The same login over real HTTP: the browser session is a cookie, the wallet
 // posts to the response_uri, the page polls /status.
@@ -91,6 +91,45 @@ test('eine früher ausgegebene ID gilt nach einem neuen Start nicht mehr', async
   expect(await post(answer)).toBe(200)
   expect(await (await fetch(origin + '/status', { headers: { cookie: first } })).json()).toEqual({})
   expect(await (await fetch(origin + '/status', { headers: { cookie: now } })).json()).toEqual({ user: answer.did })
+})
+
+test('Startseite zeigt einen QR-Code, der auf die Wallet mit der Anfrage zeigt', async () => {
+  const r = await (await fetch(origin + '/start')).json() as { url: string, walletLink: string, qrSvg: string }
+  expect(r.qrSvg.startsWith('<svg')).toBe(true)
+  expect(r.walletLink).toBe(`${origin}/wallet#${encodeURIComponent(r.url)}`)
+  expect(parseRequestUrl(decodeURIComponent(new URL(r.walletLink).hash.slice(1)))).not.toBeNull()
+})
+
+test('gleiches Gerät über HTTP: bestätigen, Rücksprung, angemeldet in genau diesem Browser', async () => {
+  const start = await fetch(origin + '/start?geraet=gleich')
+  const cookie = start.headers.get('set-cookie')!.split(';')[0]!
+  const { url, qrSvg } = await start.json() as { url: string, qrSvg?: string }
+  expect(qrSvg).toBeUndefined()
+  const answer = await confirm(parseRequestUrl(url)!, new Uint8Array(32).fill(13), Date.now())
+  const sent = await postAndRead(answer)
+  expect(sent.status).toBe(200)
+  expect(sent.redirect_uri!.startsWith(origin + '/fertig?response_code=')).toBe(true)
+  expect(await (await fetch(origin + '/status', { headers: { cookie } })).json()).toEqual({})   // no polling login
+
+  const back = await fetch(sent.redirect_uri!, { headers: { cookie }, redirect: 'manual' })
+  expect(back.status).toBe(303)
+  const signedIn = back.headers.get('set-cookie')!.split(';')[0]!
+  expect(signedIn).not.toBe(cookie)
+  expect(await (await fetch(origin + '/status', { headers: { cookie: signedIn } })).json()).toEqual({ user: answer.did })
+  expect(await (await fetch(origin + '/status', { headers: { cookie } })).json()).toEqual({})
+})
+
+test('gleiches Gerät über HTTP: der Rücksprung in einem fremden Browser meldet niemanden an', async () => {
+  const fremd = await fetch(origin + '/start?geraet=gleich')
+  const fremdCookie = fremd.headers.get('set-cookie')!.split(';')[0]!
+  const answer = await confirm(parseRequestUrl(((await fremd.json()) as any).url)!, new Uint8Array(32).fill(14), Date.now())
+  const sent = await postAndRead(answer)
+  const inAntonsBrowser = await fetch(sent.redirect_uri!, { redirect: 'manual' })            // Anton's browser: no session of this request
+  expect(inAntonsBrowser.status).toBe(400)
+  expect(inAntonsBrowser.headers.get('set-cookie')).toBeNull()
+  const strangerLater = await fetch(sent.redirect_uri!, { headers: { cookie: fremdCookie }, redirect: 'manual' })
+  expect(strangerLater.status).toBe(400)                                                    // the code is used up
+  expect(await (await fetch(origin + '/status', { headers: { cookie: fremdCookie } })).json()).toEqual({})
 })
 
 test('eine zweite Antwort auf dieselbe Anfrage bekommt 400 mit Grund', async () => {

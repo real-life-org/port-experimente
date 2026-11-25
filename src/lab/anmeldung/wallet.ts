@@ -42,6 +42,16 @@ export function review (r: LoginRequest): Review {
   return { ok: true, origin, host, text: `${host} möchte dich anmelden. Es sieht nur einen Namen für dich, der nur dort gilt.` }
 }
 
+/**
+ * Same-device: after the answer the web app names a redirect_uri, which the
+ * wallet opens in the browser. Only an address on the web app's own origin is
+ * opened; anything else could hand the response_code to someone else.
+ */
+export function mayOpen (r: LoginRequest, redirectUri: string): boolean {
+  const origin = originOf(r.client_id)
+  return origin !== null && originOf(redirectUri) === origin
+}
+
 export interface Answer {
   response_uri: string
   body: { id_token: string, state: string }

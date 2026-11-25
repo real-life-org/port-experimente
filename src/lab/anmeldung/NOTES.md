@@ -3,7 +3,8 @@
 A prototype, not the library and not the app. It asks whether a person can
 log into an ordinary web app with the Web of Trust app, in the shape of
 Self-Issued OpenID Provider v2 (SIOPv2), with one identifier per web app.
-Built 25 November 2026, step 1 of 4.
+Step 1 built 25 November 2026 (#128), step 2 (real QR code on laptop and
+phone, and the same-device way) the same day.
 
 ## What it shows
 
@@ -18,44 +19,96 @@ Built 25 November 2026, step 1 of 4.
   answer would go to another origin than the web app (client_id scheme
   `redirect_uri`). Text shown: "beispiel.org möchte dich anmelden. Es sieht
   nur einen Namen für dich, der nur dort gilt." The person can add a name.
-- `webapp.ts`: what the web app does. Start a login for a browser session,
-  take the posted answer, check signature, audience, nonce (once), request
-  age (5 min) and token time (60 s skew, at most 10 min), then let the
-  waiting session in.
-- `http.ts`: the same behind HTTP on 127.0.0.1: one page, `/start`,
-  `/status` (polled), and the `response_uri` taking
-  `application/x-www-form-urlencoded`. The browser session is a cookie.
+  After a same-device answer it opens the return address only on the web
+  app's own origin (`mayOpen`).
+- `webapp.ts`: what the web app does, in two ways as in OpenID4VP.
+  *Cross-device*: the browser shows a QR code, the phone answers, the
+  waiting browser session is logged in when it polls. *Same-device*: the
+  browser opens the app by a link on the same device; the answer logs no one
+  in but returns a `redirect_uri` with a one-time `response_code` (valid
+  60 s, used up by any attempt), which only the browser session that
+  started the request can redeem. Both ways check signature, audience,
+  nonce (once), request age (5 min) and token time (60 s skew, at most
+  10 min).
+- `http.ts`: the web app behind HTTP. One page with two buttons ("Mit dem
+  Telefon anmelden" shows a QR code, "Auf diesem Gerät anmelden" opens the
+  wallet by link), `/start`, `/status` (polled), the `response_uri`
+  (form-encoded), the return `/fertig`, and the demo wallet page.
+- `wallet-page.ts`: the demo wallet in the browser, bundled by Vite.
+- `demo.ts`, `scripts/anmeldung-demo.mjs`: the demonstration on the LAN.
 
-Tests: `tests/anmeldung.test.ts` (16), `tests/anmeldung-http.test.ts` (6).
+## Running the demonstration
 
-Review of #128 (25 November) found three gaps, all fixed with a test that
-fails on the first version: concurrent answers could both pass, because the
-signature check lay between the lookup and the use of the request; the
-wallet's post followed redirects, so the signed token could leave the checked
-origin; the server took any session id from the cookie and bound the login
-to it. A second round found that a pre-login id the server had issued still
-worked after the login. Now `/start` mints a fresh pre-login id and binds the
-request to it, and collecting the completed login on `/status` mints a new,
-authenticated id and drops the pre-login one: alone it can neither read the
-account nor collect the login again.
+```sh
+pnpm anmeldung:demo          # https://<LAN address>:8790, PORT and DEMO_HOST override
+```
+
+Laptop and phone in the same network. The certificate is self-signed for the
+LAN address (made with `openssl`, kept in the bench cache); both browsers
+warn once. https is needed because phone browsers give WebCrypto (and so
+Ed25519) only to secure origins.
+
+- *Laptop plus phone*: open the address on the laptop, "Mit dem Telefon
+  anmelden", scan the code with the phone's camera app, confirm. The code
+  disappears on the laptop and it shows the login.
+- *Same device*: open the address on the phone, "Auf diesem Gerät
+  anmelden", confirm; the phone's browser returns to the web app, logged in.
+
+**Demo crutch.** Until step 3 the wallet is a web page served by the web
+app's own server (`/wallet`), holding a test identity in that browser's
+storage. The QR code carries an https link to it instead of the `openid://`
+request, because no app claims that scheme yet. In the real app the wallet
+is the Web of Trust app on its own; nothing of the web app's origin touches
+its keys.
+
+Visual check (headless Chrome 145, desktop and phone viewports, 25
+November): both ways run through, the laptop page shows the login after the
+phone confirmed, the phone returns logged in. Tried by Anton on a real
+laptop and phone the same day: the phone's camera reads the QR code and the
+login goes through.
+
+## Tests
+
+`tests/anmeldung.test.ts` (20), `tests/anmeldung-http.test.ts` (9),
+`tests/anmeldung-wallet-store.test.ts` (4).
+
+Finding #135: with blocked browser storage the demo wallet fell back to a
+random key and so switched accounts unnoticed. `wallet-store.ts` now stores
+and reads back the test identity and reports a failure; the wallet shows it
+before anything is signed and offers to try again (checked in headless
+Chrome with a throwing `localStorage`: message shown, nothing posted).
+
+Review of #128 found three gaps, all fixed with a test that fails on the
+first version: concurrent answers could both pass, because the signature
+check lay between the lookup and the use of the request; the wallet's post
+followed redirects, so the signed token could leave the checked origin; the
+server took any session id from the cookie and bound the login to it. A
+second round found that a pre-login id the server had issued still worked
+after the login. Now `/start` mints a fresh pre-login id and binds the
+request to it, and collecting the completed login (`/status` or `/fertig`)
+mints a new, authenticated id and drops the pre-login one.
 
 ## Results
 
 | Promise | Result |
 |---|---|
 | Login works: QR, confirm, logged in | holds |
+| Same device: confirm, return, logged in in exactly this browser | holds |
+| Same device: whoever opens a stranger's link logs in neither themself nor the stranger | holds |
+| Same device: the response_code works once, briefly, only for its browser | holds |
+| The app opens a return address only on the web app's origin | holds |
 | A token for web app A is refused at web app B | holds |
 | A second answer to the same request is refused | holds |
 | Two concurrent answers to one request: exactly one is taken | holds (claimed before the first await) |
 | A refused answer does not use up the request | holds |
 | The app's post follows no redirect, so the token reaches no other origin | holds (`redirect: 'manual'`) |
 | The server binds a login only to a session id it issued itself | holds (planted ids get a fresh one) |
-| The login ends in a new session; the earlier id alone gets nothing afterwards | holds (fresh id at `/start`, new id when the login is collected) |
+| The login ends in a new session; the earlier id alone gets nothing afterwards | holds |
 | Wrong nonce, expired request, expired token, changed content: refused | holds |
 | The app refuses an answer address on another origin | holds |
 | Two devices of the same person (same root, multi-device stage 1) reach the same account | holds |
 | Two web apps see two identifiers; two people get two accounts | holds |
-| Whoever started the request is the one logged in | **does not hold** (limit below) |
+| Laptop plus phone: whoever started the request is the one logged in | **does not hold** (limit below) |
 
 ## Limits
 
@@ -63,11 +116,11 @@ account nor collect the login again.
   who starts a real login at beispiel.org and shows the person its QR code
   is logged in as that person once the person confirms. The app shows the
   right address, so the person sees nothing wrong. Measured in the test
-  "Grenze". This is the known weakness of cross-device flows (OpenID4VP
-  security considerations describe the same). Ways out, not built: the
-  same-device way (link instead of QR, answer back in the same browser), a
-  short code shown on both screens that the person compares, or binding the
-  answer to the browser that started it.
+  "Grenze". The same-device way does not have this limit. Decided (Anton,
+  25 November): no number to compare and no animated QR code, because a
+  forged page can copy both live; real protection needs the same device or
+  proof of proximity (Bluetooth, as passkeys do, only through the operating
+  system). For laptop plus phone the limit stays and is named.
 - **The web app is not authenticated toward the app.** With the client_id
   scheme `redirect_uri` the app can only show the address it was given. A
   signed request (other client_id schemes) is not built.
@@ -80,11 +133,12 @@ account nor collect the login again.
 - **`did:key` does not survive a key change.** A web app that stores the
   identifier loses the person when the key changes. With an identifier with
   a log (multi-device model 4, E4/E5) the web app has to resolve the log.
-- **Local only, http.** A real web app runs on https.
+- **The QR code is dense**, because it carries the whole request (request
+  by value). Request by reference (`request_uri`) would make it small.
 
 ## Next steps
 
-2. A demonstration with a real QR code: laptop browser and phone.
-3. The confirmation screen in the v3 app.
+3. The confirmation screen in the v3 app, claiming the `openid://` scheme
+   (or a universal link) instead of the demo wallet page.
 4. Authentik locally in Docker with a small bridge that speaks OpenID
    Connect toward Authentik and SIOPv2 toward the app.
