@@ -70,8 +70,8 @@ importers:
         specifier: 1.5.4
         version: 1.5.4
       rltp-lib:
-        specifier: npm:@real-life/trust-protocol@0.20.0
-        version: '@real-life/trust-protocol@0.20.0'
+        specifier: npm:@real-life/trust-protocol@0.22.0
+        version: '@real-life/trust-protocol@0.22.0'
       typescript:
         specifier: ~5.7.2
         version: 5.7.3
@@ -561,8 +561,8 @@ packages:
   '@pinojs/redact@0.4.0':
     resolution: {integrity: sha512-k2ENnmBugE/rzQfEcdWHcCY+/FM3VLzH9cYEsbdsoqrvzAKRhUZeRNhAZvB8OitQJ1TBed3yqWtdjzS6wJKBwg==}
 
-  '@real-life/trust-protocol@0.20.0':
-    resolution: {integrity: sha512-gRydoDjYKDQYpFXpy/aJu1YBNcz4J//NDNKAs7VB0ZlHN/I74g9A491a+TwQM5w5O6Ft5EXKeeog9N/4rNv/rQ==}
+  '@real-life/trust-protocol@0.22.0':
+    resolution: {integrity: sha512-Eq6MonVwvpt3JimwZkNAp1FBU5R+PuH6FgWA6kT/KZ1Xg3cB3klWpoPVnNQXm5pXlnObaiZR7oJsf270DpFCkg==}
     engines: {node: '>=20'}
 
   '@real-life/trust-protocol@0.3.2':
@@ -2262,7 +2262,7 @@ snapshots:
 
   '@pinojs/redact@0.4.0': {}
 
-  '@real-life/trust-protocol@0.20.0': {}
+  '@real-life/trust-protocol@0.22.0': {}
 
   '@real-life/trust-protocol@0.3.2': {}
 

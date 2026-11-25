@@ -1,7 +1,7 @@
 # How long a shared-connect link and its proposal are good
 
 Status: a contract for the time rules of the first step, written from what
-the library does (rltp-lib 0.20.0) and checked against it to the second
+the library does (rltp-lib 0.22.0) and checked against it to the second
 (`tests/freshness.test.ts`). The rule is `rule.ts`. The ceremony is
 [`shared-connect` 0.1](https://github.com/real-life-org/trust-protocol/blob/main/interop/ceremonies/shared-connect.ceremony.json),
 whose note on freshness this page makes exact; what follows the proposal is
@@ -40,18 +40,17 @@ lives ten minutes.
 F2. **The responder** reads the link and proposes only while `now < exp`.
 No tolerance: at the second of the expiry the link is refused.
 
-F3. **The inviter** takes a proposal issued at `issuedAt` when all three
-hold, and refuses it otherwise:
+F3. **The inviter** takes a proposal issued at `issuedAt` when both hold,
+and refuses it otherwise:
 
 | Condition | Refusal |
 |---|---|
-| `now - issuedAt > -60` (not issued more than a minute ahead of the inviter's clock) | `not-fresh` |
-| `now - issuedAt < 660` (younger than ten minutes plus the minute of tolerance) | `not-fresh` |
+| `now - issuedAt >= -60` (not issued more than a minute ahead of the inviter's clock) | `not-fresh` |
 | `now < exp + 60` | `expired-link` |
 
-The ten minutes of the second row hold for a sent link too: a proposal on
-a link that lives for days must still reach the inviter within eleven
-minutes of being issued.
+The proposal has no age limit of its own: on a link that lives for days it
+is taken whenever it reaches the inviter before the link's expiry, also
+when the inviter's device was offline in between.
 
 F4. **Kept for thirty days.** Each side keeps an enactment that is not
 complete while `now < exp + 60 + 30 days`, by its own clock. While it is
@@ -67,9 +66,6 @@ from another identity on the same link is refused.
 *Pinned by:* `tests/freshness.test.ts` runs the library at the seconds
 around every boundary of F1 to F4 and compares with `rule.ts`.
 
-The age condition of F3 (second row) is what 0.20.0 does. It is removed in
-the library after 0.20.0: the link's expiry alone bounds the proposal then.
-
 ## Stated, not pinned
 
 - A responder and an inviter whose clocks differ: the tests give both the
@@ -81,13 +77,12 @@ the library after 0.20.0: the link's expiry alone bounds the proposal then.
 ## Not here
 
 What the app shows when a link expired; when an enactment that was never
-answered leaves the holder's state; the offline back-code, whose proposal
-has no expiry of its own.
+answered leaves the holder's state; the offline back-code (`../offline/OFFLINE.md`): its
+proposal is taken under F3 like one a carrier delivered.
 
 ## For an app
 
 The app shows codes in person only and states ten minutes. An app that
 sends links has to state the lifetime, or the link is dead after ten
-minutes (F1). With 0.20.0, whatever it states, the person who opens the link has to be
-reachable by the inviter's device within eleven minutes of proposing (F3):
-a proposal that waits longer in an inbox is refused.
+minutes (F1); within the lifetime it states, the person who opens the link
+is connected whenever the inviter's device next fetches its documents.

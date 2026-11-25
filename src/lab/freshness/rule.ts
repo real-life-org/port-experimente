@@ -25,9 +25,7 @@ export const mayPropose = (now: number, exp: number): boolean => now < exp
 
 /** What the inviter does with a proposal that reaches it at `now`, issued at `issuedAt`, on a link that expires at `exp`. */
 export function proposal (issuedAt: number, now: number, exp: number): 'taken' | 'not-fresh' | 'expired-link' {
-  const age = now - issuedAt
-  if (age <= -TOLERANCE) return 'not-fresh'                 // issued in the future, by more than the clocks may differ
-  if (age >= CODE_MAX + TOLERANCE) return 'not-fresh'       // older than ten minutes
-  if (now >= exp + TOLERANCE) return 'expired-link'
+  if (now - issuedAt < -TOLERANCE) return 'not-fresh'       // issued in the future, by more than the clocks may differ
+  if (now >= exp + TOLERANCE) return 'expired-link'         // the proposal has no age limit of its own: the link's expiry bounds it
   return 'taken'
 }

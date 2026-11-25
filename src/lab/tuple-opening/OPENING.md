@@ -1,7 +1,7 @@
 # When each side opens its tuple under shared-connect
 
 Status: a contract for one transition, written from what the library does
-(rltp-lib 0.20.0) and checked against it step by step
+(rltp-lib 0.22.0) and checked against it step by step
 (`tests/tuple-opening.test.ts`). The ceremony itself is
 [`shared-connect` 0.1](https://github.com/real-life-org/trust-protocol/blob/main/interop/ceremonies/shared-connect.ceremony.json);
 its documents, proofs and checks are defined there and are not repeated
@@ -187,7 +187,8 @@ first sentence had contradicted its table.
 ## Not in the model
 
 An error of the other side that is not a decline; a second proposal on the
-same handle; the offline back-code; several devices of one person. The
+same handle; several devices of one person. The two codes without a
+carrier are `../offline/OFFLINE.md`, which extends this rule. The
 time rules are `../freshness/FRESH.md`.
 
 ## Against the library

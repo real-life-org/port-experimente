@@ -42,7 +42,7 @@
     "@types/node": "22",
     "@types/qrcode": "1.5.5",
     "qrcode": "1.5.4",
-    "rltp-lib": "npm:@real-life/trust-protocol@0.20.0",
+    "rltp-lib": "npm:@real-life/trust-protocol@0.22.0",
     "typescript": "~5.7.2",
     "vite": "^6.0.7",
     "vitest": "^4.1.0",
