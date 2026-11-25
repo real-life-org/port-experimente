@@ -145,6 +145,7 @@ pnpm test:rust                  # native tests of the Rust wrappers
 pnpm report                     # measure all candidates into results/<id>.json
 pnpm matrix                     # matrix.md and public/matrix.html from the result files
 pnpm dev                        # browser run, local
+pnpm anmeldung:demo             # login demonstration on the LAN, laptop and phone (src/lab/anmeldung/NOTES.md)
 ```
 
 `pnpm wasm` and `pnpm server:fetch` keep what they built or fetched in a

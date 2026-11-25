@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import { fromB64u, b64uOf } from 'rltp-lib'
 import { parseRequestUrl, requestUrl } from '../src/lab/anmeldung/siop'
-import { confirm, review } from '../src/lab/anmeldung/wallet'
+import { confirm, mayOpen, review } from '../src/lab/anmeldung/wallet'
 import { WebApp } from '../src/lab/anmeldung/webapp'
 
 // Logging into an ordinary web app with the Web of Trust app, SIOPv2-shaped.
@@ -146,6 +146,46 @@ describe('Anmeldung mit der Web-of-Trust-App', () => {
     const a = await confirm(parseRequestUrl(fremd.url)!, ANTON, T0)
     await app.receive(a.body, T0)
     expect(app.poll('browser-des-fremden')).toEqual({ user: a.did })
+  })
+
+  test('gleiches Gerät: die Antwort meldet niemanden an, sie gibt einen Rücksprung mit Code', async () => {
+    const app = shop()
+    const req = app.start('handy-browser', T0, 'same-device').request
+    const a = await confirm(req, ANTON, T0)
+    const r = await app.receive(a.body, T0)
+    expect(r.ok && 'redirect_uri' in r).toBe(true)
+    const back = new URL((r as { redirect_uri: string }).redirect_uri)
+    expect(back.origin + back.pathname).toBe('https://beispiel.org/fertig')
+    expect(mayOpen(req, back.href)).toBe(true)
+    expect(app.poll('handy-browser')).toBeNull()
+    const code = back.searchParams.get('response_code')!
+    expect(app.redeem('handy-browser', code, T0 + 1000)).toEqual({ ok: true, user: a.did })
+    expect(app.redeem('handy-browser', code, T0 + 2000)).toEqual({ ok: false, reason: 'unbekannter oder verbrauchter Code' })
+  })
+
+  test('gleiches Gerät: wer den Link eines Fremden öffnet, meldet weder sich noch den Fremden an', async () => {
+    const app = shop()
+    const fremd = app.start('browser-des-fremden', T0, 'same-device')        // the stranger starts and sends the link
+    const r = await app.receive((await confirm(parseRequestUrl(fremd.url)!, ANTON, T0)).body, T0)
+    const code = new URL((r as { redirect_uri: string }).redirect_uri).searchParams.get('response_code')!
+    expect(app.poll('browser-des-fremden')).toBeNull()                         // the stranger is not logged in
+    expect(app.redeem('antons-browser', code, T0)).toEqual({ ok: false, reason: 'Code gehört zu einem anderen Browser' })
+    expect(app.redeem('browser-des-fremden', code, T0)).toEqual({ ok: false, reason: 'unbekannter oder verbrauchter Code' })
+  })
+
+  test('gleiches Gerät: ein Code gilt nur kurz', async () => {
+    const app = shop()
+    const req = app.start('b', T0, 'same-device').request
+    const r = await app.receive((await confirm(req, ANTON, T0)).body, T0)
+    const code = new URL((r as { redirect_uri: string }).redirect_uri).searchParams.get('response_code')!
+    expect(app.redeem('b', code, T0 + 61_000)).toEqual({ ok: false, reason: 'Code abgelaufen' })
+  })
+
+  test('die App öffnet einen Rücksprung nur auf der Adresse der Web-App', () => {
+    const req = shop().start('b', T0, 'same-device').request
+    expect(mayOpen(req, 'https://beispiel.org/fertig?response_code=x')).toBe(true)
+    expect(mayOpen(req, 'https://angreifer.example/fertig?response_code=x')).toBe(false)
+    expect(mayOpen(req, 'javascript:alert(1)')).toBe(false)
   })
 
   test('die Anfrage-URL enthält nichts außer den SIOPv2-Feldern', () => {
