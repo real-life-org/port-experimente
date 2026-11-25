@@ -12,12 +12,13 @@ whose note on freshness this page makes exact; what follows the proposal is
 F-P1. A code shown in person cannot be used later than ten minutes after it
 was shown, give or take a minute of clock difference.
 
-F-P2. Once the inviter took the proposal, its person has thirty days after
-the link's expiry to decide. Once the person accepted, nothing in the
-enactment expires: the documents that follow may arrive months later, and
-both sides still open.
+F-P2. Once the inviter took the proposal, the enactment has until thirty
+days after the link's expiry to complete: for the person to decide and for
+the documents that follow to arrive. Within that time a late decision and
+late documents still open both sides. After it a side no longer keeps the
+enactment, and neither opens.
 *Pinned by:* the tests "the person decides until thirty days after the
-link expired" and "after the decision nothing has a window".
+link expired" and "accepted at once, the rest carried late".
 
 F-P3. One link connects one person.
 *Pinned by:* the test "one link, one proposer".
@@ -50,12 +51,13 @@ The ten minutes of the second row hold for a sent link too: a proposal on
 a link that lives for days must still reach the inviter within eleven
 minutes of being issued.
 
-F4. **The decision.** The inviter's person can accept or decline while
-`now < exp + 60 + 30 days`. After that the question is gone and neither
-side opens.
-
-F4a. **Nothing after the decision has a window.** The acceptance, the
-issues and the receipts are taken whenever they arrive.
+F4. **Kept for thirty days.** Each side keeps an enactment that is not
+complete while `now < exp + 60 + 30 days`, by its own clock. While it is
+kept, the inviter's person can accept or decline, and the acceptance, the
+issues and the receipts are taken whenever they arrive: they have no age
+limit of their own. When a side's upkeep runs after that moment, the
+enactment is gone with its open question; a document that arrives then
+finds nothing, and that side does not open. A complete enactment is kept.
 
 F5. **Single use.** The inviter takes one proposal per link. A proposal
 from another identity on the same link is refused.

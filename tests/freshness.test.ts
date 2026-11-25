@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 import { run } from '../src/lab/freshness/lib-run'
-import { lifetime, mayDecide, mayPropose, proposal } from '../src/lab/freshness/rule'
+import { kept, lifetime, mayPropose, proposal } from '../src/lab/freshness/rule'
 
 const DAY = 86400
 
@@ -35,13 +35,21 @@ test.each([
 test('the person decides until thirty days after the link expired, to the second', async () => {
   for (const at of [DAY, 30 * DAY, 30 * DAY + 659, 30 * DAY + 660, 30 * DAY + 661]) {
     const o = await run({ channel: 'displayed', proposedAt: 30, deliveredAt: 40, restAt: at })
-    expect(o.contacts, `decided at ${at}`).toEqual(mayDecide(at, o.expS) ? [1, 1] : [0, 0])
+    expect(o.contacts, `decided at ${at}`).toEqual(kept(at, o.expS) ? [1, 1] : [0, 0])
   }
 })
 
-test('after the decision nothing has a window: accepted at once, every later document carried sixty days or a year later, both sides open', async () => {
-  expect((await run({ channel: 'displayed', proposedAt: 30, deliveredAt: 40, decideAt: 50, restAt: 60 * DAY })).contacts).toEqual([1, 1])
-  expect((await run({ channel: 'displayed', proposedAt: 30, deliveredAt: 40, decideAt: 50, restAt: 365 * DAY })).contacts).toEqual([1, 1])
+// Accepted at once; each side's upkeep runs, then every later document is carried. The documents have no age limit of
+// their own, but the enactment must still be kept: the same boundary as for the decision.
+test('accepted at once, the rest carried late: both sides open while the enactment is kept, neither after', async () => {
+  for (const at of [DAY, 30 * DAY + 659, 30 * DAY + 660, 60 * DAY]) {
+    const o = await run({ channel: 'displayed', proposedAt: 30, deliveredAt: 40, decideAt: 50, restAt: at })
+    expect(o.contacts, `carried at ${at}`).toEqual(kept(at, o.expS) ? [1, 1] : [0, 0])
+  }
+  // a sent link of seven days: kept until thirty days after its expiry
+  const week = await run({ channel: 'sent', minutes: 7 * 1440, proposedAt: 30, deliveredAt: 40, decideAt: 50, restAt: 36 * DAY })
+  expect([week.expS, week.contacts]).toEqual([7 * DAY, [1, 1]])
+  expect((await run({ channel: 'sent', minutes: 7 * 1440, proposedAt: 30, deliveredAt: 40, decideAt: 50, restAt: 37 * DAY + 60 })).contacts).toEqual([0, 0])
 })
 
 test('one link, one proposer: a second identity on the same link is refused', async () => {

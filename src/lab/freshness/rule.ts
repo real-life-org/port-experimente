@@ -8,15 +8,17 @@ export const LINK_MAX = 7 * 86400
 /** how far two clocks may differ */
 export const TOLERANCE = 60
 
-/** the person's decision on a proposal the inviter took stays open this long after the link expired (thirty days) */
-export const DECISION = 30 * 86400
+/** an enactment that is not complete is kept this long after its link expired (thirty days) */
+export const KEPT = 30 * 86400
 
 /** How long a link lives from the moment it is shown, in whole seconds: the stated minutes, rounded to the second, at least
  *  a minute, at most the cap of the channel. Without a stated lifetime: ten minutes, whatever the channel. */
 export const lifetime = (channel: 'displayed' | 'sent', minutes = 10): number => Math.min(Math.max(60, Math.round(minutes * 60)), channel === 'displayed' ? CODE_MAX : LINK_MAX)
 
-/** The inviter's person can accept or decline a proposal the inviter took until thirty days after the link expired. */
-export const mayDecide = (now: number, exp: number): boolean => now < exp + TOLERANCE + DECISION
+/** A side keeps an enactment that is not complete until thirty days after the link expired. While it is kept the inviter's
+ *  person can decide, and the documents of the enactment are taken; once the side's upkeep has run after that moment the
+ *  enactment is gone, with the open question, and a document that arrives then finds nothing. */
+export const kept = (now: number, exp: number): boolean => now < exp + TOLERANCE + KEPT
 
 /** The responder reads the link and proposes only before the link's expiry, by its own clock, without tolerance. */
 export const mayPropose = (now: number, exp: number): boolean => now < exp

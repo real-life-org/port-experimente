@@ -42,6 +42,8 @@ export async function run (c: Case): Promise<Outcome> {
     const post = (from: 'inviter' | 'responder', r: any): void => { for (const e of (r.events ?? []).filter((x) => x.type === 'sharedconnect.send')) for (const doc of e.docs) queue.push({ to: from === 'inviter' ? 'responder' : 'inviter', doc }) }
     // a prompt that expired is gone or refuses the act: nothing is sent then
     if (prompt) post('inviter', await inviter.decide(prompt.id, 'accept', { when: decideAt, actId: 'run-accept' }))
+    // each side's upkeep runs before the late documents arrive: what it no longer keeps is gone
+    for (const h of [inviter, responder]) await h.tick(when)
     while (queue.length) { const q = queue; queue = []; for (const d of q) post(d.to, await (d.to === 'inviter' ? inviter : responder).sharedConnectReceive(d.doc, dids[d.to === 'inviter' ? 'responder' : 'inviter'], when)) }
     contacts = [(await inviter.contacts()).length, (await responder.contacts()).length]
   }
