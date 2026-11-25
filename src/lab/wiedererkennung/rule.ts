@@ -10,8 +10,8 @@
 //   tuple       one pair of keys between two people, opened by one ceremony.
 //               A person may hold several tuples with the same counterpart.
 //   candidates  fixed when a device opens a tuple: the heads that device
-//               held then. They are a fact of the person (its devices get
-//               them by sync) and never change.
+//               held then. They are a fact of the person (both its devices
+//               know them from the opening on) and never change.
 //   probe       sent on a tuple at its opening: it lists the opener's
 //               candidates of that tuple, blinded. Whoever holds a listed
 //               tuple can tell.

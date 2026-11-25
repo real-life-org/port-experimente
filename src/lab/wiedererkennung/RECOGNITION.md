@@ -86,7 +86,8 @@ included.
 
 R1. **Candidates.** When a device opens a tuple, the **heads** that device
 holds then are the tuple's candidates. They are fixed and are a fact of the
-person; sibling devices get them by sync and never change them.
+person. In the model both devices of the person know them from the opening
+on, without a sync; how they reach a sibling device is not shown.
 *Pinned by:* `expect.candidates` of every trace; that it is the heads and
 not all tuples, by `traces/stale-device.json` (the other person lists t2
 alone).
@@ -185,11 +186,12 @@ that list.
 
 ## Stated, not pinned
 
-- R6 and R7 say a device must **admit** the pair, or already owe its own
-  mapping over it, to verify a mapping. In this model an honest mapping
-  only ever comes over a pair for which that holds, so no schedule reaches
-  a refusal for that reason, and a rule without the check passes every
-  trace and walk. Pinning it needs a mapping handed in from outside.
+- R6 says a device must **admit** the pair, or know that its person took
+  on its own mapping over it at some time, to verify a mapping. In this
+  model an honest mapping only ever comes over a pair for which that holds,
+  so no schedule reaches a refusal for that reason, and a rule without the
+  check passes every trace and walk. Pinning it needs a mapping handed in
+  from outside.
 - That R10 holds against the copied key of a replaced tuple is argued, not
   modelled: the model has no forged mapping. The argument: such a tuple is
   no head, so a probe naming it has no hit, and no mapping over it is owed.
@@ -197,8 +199,8 @@ that list.
   Whoever knows the anchor of a tuple that is a head today learns from the
   mapping that it belongs to the relationship of the tuple the probe came
   on. A tuple that is no head any more gives no such answer.
-- In the model an acknowledgement is a fact of the person at once; how it
-  reaches a sibling device is not shown.
+- In the model candidates and acknowledgements are facts of the person at
+  once; how they reach a sibling device is not shown.
 - Three tuples with two devices each: four traces and a random draw
   (`enumerate.ts`, `draw`, 300 schedules in the test), no full walk. Four
   tuples: one trace.
