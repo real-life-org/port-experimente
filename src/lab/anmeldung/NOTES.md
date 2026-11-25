@@ -63,8 +63,9 @@ its keys.
 
 Visual check (headless Chrome 145, desktop and phone viewports, 25
 November): both ways run through, the laptop page shows the login after the
-phone confirmed, the phone returns logged in. Not checked: reading the QR
-code with a real camera.
+phone confirmed, the phone returns logged in. Tried by Anton on a real
+laptop and phone the same day: the phone's camera reads the QR code and the
+login goes through.
 
 ## Tests
 
