@@ -67,11 +67,13 @@ export function handed (s: State, d: Doc): boolean {
  *  enactment runs, everything it sent so far; once its tuple is open, only its receipt. */
 export function outbox (s: State, r: Role): Doc[] {
   const me = s[r]
+  // complete: both the other side's issue and its receipt are taken (O6; the moment the tuple opens here)
+  const complete = me.issueTheirs && me.receiptTheirs
   if (r === 'inviter') {
-    if (me.open) return ['receipt-of-issue-responder']
+    if (complete) return ['receipt-of-issue-responder']
     return [...(me.accept ? ['accept' as const] : []), ...(me.declined ? ['decline' as const] : []), ...(me.accept ? ['issue-inviter' as const] : []), ...(me.issueTheirs ? ['receipt-of-issue-responder' as const] : [])]
   }
-  if (me.open) return ['receipt-of-issue-inviter']
+  if (complete) return ['receipt-of-issue-inviter']
   return [...(me.propose ? ['propose' as const] : []), ...(me.accept ? ['issue-responder' as const] : []), ...(me.issueTheirs ? ['receipt-of-issue-inviter' as const] : [])]
 }
 

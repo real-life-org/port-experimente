@@ -28,7 +28,7 @@ export function kindOf (from: Role, doc: any): Doc | null {
 }
 
 export type LibStep = { sent: Doc[], after: Shown }
-export async function runOnLibrary (t: Trace): Promise<LibStep[]> {
+export async function runOnLibrary (t: { name?: string, shows?: string, steps: unknown[] }): Promise<LibStep[]> {
   let clock = Date.parse('2026-10-15T09:00:00Z'), acts = 0
   const now = (): number => (clock += 10_000)
   const at = (extra = {}) => ({ when: now(), actId: 'run-' + (++acts), ...extra })
@@ -37,6 +37,8 @@ export async function runOnLibrary (t: Trace): Promise<LibStep[]> {
   /** in flight by name (a document sent again is there twice); `docs` keeps every document for a redelivery */
   const flight: Doc[] = [], docs = new Map<Doc, unknown>(), did: Partial<Record<Role, string>> = {}
   let sent: Doc[] = []
+  /** the enactment's id (the link's handle) and the responder's back-code, for the offline acts of ../offline */
+  let id = '', code = ''
   /** what a call of `from` sent in the ceremony goes into flight; the library's own outbox (probes, stars) is not carried */
   const collect = (from: Role, result: any): void => {
     if (result.ok === false) throw new Error(`refused: ${result.code}`)
@@ -50,7 +52,11 @@ export async function runOnLibrary (t: Trace): Promise<LibStep[]> {
   const side = async (r: Role) => {
     const es = Object.values((await P[r].snapshot()).state.sharedConnect?.enactments ?? {}) as any[]
     const view = (await P[r].sharedConnect())[0]
-    return { open: (await P[r].contacts()).length > 0, declined: es.some((e) => e.status === 'declined'), held: es.flatMap((e) => (e.flow?.held ?? []).map((d) => kindOf(other(r), d))), outbox: (view?.outbox ?? []).map((d) => kindOf(r, d)) }
+    const contacts = await P[r].contacts()
+    // one enactment opens at most one contact, whatever is delivered or handed over again afterwards
+    if (contacts.length > 1) throw new Error(`${r} holds ${contacts.length} contacts for one enactment`)
+    if (es.length > 1) throw new Error(`${r} holds ${es.length} enactments`)
+    return { open: contacts.length > 0, declined: es.some((e) => e.status === 'declined'), held: es.flatMap((e) => (e.flow?.held ?? []).map((d) => kindOf(other(r), d))), outbox: (view?.outbox ?? []).map((d) => kindOf(r, d)) }
   }
   const out: LibStep[] = []
   for (const s of t.steps) {
@@ -60,7 +66,14 @@ export async function runOnLibrary (t: Trace): Promise<LibStep[]> {
       const link = shown.events.find((e) => e.type === 'sharedconnect.shown')
       const proposed = await P.responder.sharedConnectPropose({ link: link.link, relays: RELAYS, channel: 'scan', name: 'responder' }, at())
       did.inviter = link.did; did.responder = proposed.events.find((e) => e.type === 'sharedconnect.proposed').did
+      id = link.id
       collect('responder', proposed)
+    } else if ('act' in s && s.act === 'back') {
+      const back = await P.responder.sharedConnectBack({ id }, at())
+      if (back.ok === false) throw new Error(`refused: ${back.code}`)
+      code = back.events.find((e) => e.type === 'sharedconnect.shown').link
+    } else if ('act' in s && s.act === 'read-back') {
+      collect('inviter', await P.inviter.sharedConnectReadBack(id, code, now()))
     } else if ('act' in s) {
       const prompt = (await P.inviter.prompts()).find((x) => x.kind === 'shared-connect-confirm')
       collect('inviter', await P.inviter.decide(prompt.id, s.act, at()))

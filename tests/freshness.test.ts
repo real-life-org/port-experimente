@@ -32,10 +32,10 @@ test('the responder proposes only before the link expires, to the second', async
 
 // Each row: the link's lifetime, when the proposal was issued, and the times of delivery around a boundary.
 test.each([
-  ['age: under eleven minutes', { channel: 'sent', minutes: 7 * 1440 }, 30, [629, 630, 631, 689, 690, 691]],
+  ['no age limit of its own: a proposal on a sent link, taken days after it was issued', { channel: 'sent', minutes: 7 * 1440 }, 30, [629, 689, 690, 691, 3 * 86400, 7 * 86400 + 59, 7 * 86400 + 60]],
   ['the link: under a minute after its expiry', { channel: 'displayed' }, 590, [599, 600, 601, 659, 660, 661]],
-  ['issued in the future: under a minute ahead', { channel: 'displayed' }, 100, [39, 40, 41, 99, 100]],
-  ['a sent link on its third day', { channel: 'sent', minutes: 7 * 1440 }, 3 * DAY, [3 * DAY + 300, 3 * DAY + 659, 3 * DAY + 660]],
+  ['issued in the future: at most a minute ahead', { channel: 'displayed' }, 100, [39, 40, 41, 99, 100]],
+  ['a sent link on its third day', { channel: 'sent', minutes: 7 * 1440 }, 3 * DAY, [3 * DAY + 300, 3 * DAY + 659, 3 * DAY + 660, 7 * DAY + 59, 7 * DAY + 60]],
 ] as const)('the inviter and a proposal, %s', async (_n, link, issuedAt, deliveries) => {
   for (const now of deliveries) {
     const o = await run({ ...link, proposedAt: issuedAt, deliveredAt: now } as never), want = proposal(issuedAt, now, o.expS)

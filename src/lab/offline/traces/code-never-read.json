@@ -1,0 +1,248 @@
+{
+  "name": "code-never-read",
+  "shows": "The responder showed its code and opened; the inviter never read it. A carrier brings the proposal, the person accepts, and the enactment completes as it does with a carrier: the inviter opens at its last step.",
+  "steps": [
+    {
+      "act": "propose",
+      "sent": [
+        "propose"
+      ],
+      "after": {
+        "inviter": {
+          "open": false,
+          "declined": false,
+          "held": [],
+          "outbox": []
+        },
+        "responder": {
+          "open": false,
+          "declined": false,
+          "held": [],
+          "outbox": [
+            "propose"
+          ]
+        },
+        "inFlight": [
+          "propose"
+        ]
+      }
+    },
+    {
+      "act": "back",
+      "sent": [],
+      "after": {
+        "inviter": {
+          "open": false,
+          "declined": false,
+          "held": [],
+          "outbox": []
+        },
+        "responder": {
+          "open": true,
+          "declined": false,
+          "held": [],
+          "outbox": [
+            "propose"
+          ]
+        },
+        "inFlight": [
+          "propose"
+        ]
+      }
+    },
+    {
+      "deliver": "propose",
+      "sent": [],
+      "after": {
+        "inviter": {
+          "open": false,
+          "declined": false,
+          "held": [],
+          "outbox": []
+        },
+        "responder": {
+          "open": true,
+          "declined": false,
+          "held": [],
+          "outbox": [
+            "propose"
+          ]
+        },
+        "inFlight": []
+      }
+    },
+    {
+      "act": "accept",
+      "sent": [
+        "accept",
+        "issue-inviter"
+      ],
+      "after": {
+        "inviter": {
+          "open": false,
+          "declined": false,
+          "held": [],
+          "outbox": [
+            "accept",
+            "issue-inviter"
+          ]
+        },
+        "responder": {
+          "open": true,
+          "declined": false,
+          "held": [],
+          "outbox": [
+            "propose"
+          ]
+        },
+        "inFlight": [
+          "accept",
+          "issue-inviter"
+        ]
+      }
+    },
+    {
+      "deliver": "accept",
+      "sent": [
+        "issue-responder"
+      ],
+      "after": {
+        "inviter": {
+          "open": false,
+          "declined": false,
+          "held": [],
+          "outbox": [
+            "accept",
+            "issue-inviter"
+          ]
+        },
+        "responder": {
+          "open": true,
+          "declined": false,
+          "held": [],
+          "outbox": [
+            "propose",
+            "issue-responder"
+          ]
+        },
+        "inFlight": [
+          "issue-inviter",
+          "issue-responder"
+        ]
+      }
+    },
+    {
+      "deliver": "issue-inviter",
+      "sent": [
+        "receipt-of-issue-inviter"
+      ],
+      "after": {
+        "inviter": {
+          "open": false,
+          "declined": false,
+          "held": [],
+          "outbox": [
+            "accept",
+            "issue-inviter"
+          ]
+        },
+        "responder": {
+          "open": true,
+          "declined": false,
+          "held": [],
+          "outbox": [
+            "propose",
+            "issue-responder",
+            "receipt-of-issue-inviter"
+          ]
+        },
+        "inFlight": [
+          "issue-responder",
+          "receipt-of-issue-inviter"
+        ]
+      }
+    },
+    {
+      "deliver": "issue-responder",
+      "sent": [
+        "receipt-of-issue-responder"
+      ],
+      "after": {
+        "inviter": {
+          "open": false,
+          "declined": false,
+          "held": [],
+          "outbox": [
+            "accept",
+            "issue-inviter",
+            "receipt-of-issue-responder"
+          ]
+        },
+        "responder": {
+          "open": true,
+          "declined": false,
+          "held": [],
+          "outbox": [
+            "propose",
+            "issue-responder",
+            "receipt-of-issue-inviter"
+          ]
+        },
+        "inFlight": [
+          "receipt-of-issue-inviter",
+          "receipt-of-issue-responder"
+        ]
+      }
+    },
+    {
+      "deliver": "receipt-of-issue-inviter",
+      "sent": [],
+      "after": {
+        "inviter": {
+          "open": true,
+          "declined": false,
+          "held": [],
+          "outbox": [
+            "receipt-of-issue-responder"
+          ]
+        },
+        "responder": {
+          "open": true,
+          "declined": false,
+          "held": [],
+          "outbox": [
+            "propose",
+            "issue-responder",
+            "receipt-of-issue-inviter"
+          ]
+        },
+        "inFlight": [
+          "receipt-of-issue-responder"
+        ]
+      }
+    },
+    {
+      "deliver": "receipt-of-issue-responder",
+      "sent": [],
+      "after": {
+        "inviter": {
+          "open": true,
+          "declined": false,
+          "held": [],
+          "outbox": [
+            "receipt-of-issue-responder"
+          ]
+        },
+        "responder": {
+          "open": true,
+          "declined": false,
+          "held": [],
+          "outbox": [
+            "receipt-of-issue-inviter"
+          ]
+        },
+        "inFlight": []
+      }
+    }
+  ]
+}

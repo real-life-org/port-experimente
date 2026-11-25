@@ -17,7 +17,8 @@ export const lifetime = (channel: 'displayed' | 'sent', minutes = 10): number =>
 
 /** A side keeps an enactment that is not complete until thirty days after the link expired. While it is kept the inviter's
  *  person can decide, and the documents of the enactment are taken; once the side's upkeep has run after that moment the
- *  enactment is gone, with the open question, and a document that arrives then finds nothing. */
+ *  enactment is gone, with the open question, and a document that arrives then finds nothing. Not so an enactment
+ *  that opened a contact from a code (`../offline/OFFLINE.md`, X5): it is kept, with its contact, whatever time passes. */
 export const kept = (now: number, exp: number): boolean => now < exp + TOLERANCE + KEPT
 
 /** The responder reads the link and proposes only before the link's expiry, by its own clock, without tolerance. */
@@ -25,9 +26,7 @@ export const mayPropose = (now: number, exp: number): boolean => now < exp
 
 /** What the inviter does with a proposal that reaches it at `now`, issued at `issuedAt`, on a link that expires at `exp`. */
 export function proposal (issuedAt: number, now: number, exp: number): 'taken' | 'not-fresh' | 'expired-link' {
-  const age = now - issuedAt
-  if (age <= -TOLERANCE) return 'not-fresh'                 // issued in the future, by more than the clocks may differ
-  if (age >= CODE_MAX + TOLERANCE) return 'not-fresh'       // older than ten minutes
-  if (now >= exp + TOLERANCE) return 'expired-link'
+  if (now - issuedAt < -TOLERANCE) return 'not-fresh'       // issued in the future, by more than the clocks may differ
+  if (now >= exp + TOLERANCE) return 'expired-link'         // the proposal has no age limit of its own: the link's expiry bounds it
   return 'taken'
 }

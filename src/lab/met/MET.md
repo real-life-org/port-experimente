@@ -1,7 +1,7 @@
 # "Met": the channel of a shared-connect contact and what it allows
 
 Status: a contract for one derivation, written from what the library does
-(rltp-lib 0.20.0) and checked against it (`tests/met.test.ts`). The rule is
+(rltp-lib 0.22.0) and checked against it (`tests/met.test.ts`). The rule is
 `rule.ts`. The ceremony is
 [`shared-connect` 0.1](https://github.com/real-life-org/trust-protocol/blob/main/interop/ceremonies/shared-connect.ceremony.json);
 when a side opens its tuple is `../tuple-opening/OPENING.md`.

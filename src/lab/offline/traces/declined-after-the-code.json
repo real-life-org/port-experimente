@@ -1,0 +1,180 @@
+{
+  "name": "declined-after-the-code",
+  "shows": "The responder showed its code and opened. The inviter's person reads the code and declines. The inviter holds no contact; the responder keeps the one it opened, and its enactment is declined once the decline arrives.",
+  "steps": [
+    {
+      "act": "propose",
+      "sent": [
+        "propose"
+      ],
+      "after": {
+        "inviter": {
+          "open": false,
+          "declined": false,
+          "held": [],
+          "outbox": []
+        },
+        "responder": {
+          "open": false,
+          "declined": false,
+          "held": [],
+          "outbox": [
+            "propose"
+          ]
+        },
+        "inFlight": [
+          "propose"
+        ]
+      }
+    },
+    {
+      "act": "back",
+      "sent": [],
+      "after": {
+        "inviter": {
+          "open": false,
+          "declined": false,
+          "held": [],
+          "outbox": []
+        },
+        "responder": {
+          "open": true,
+          "declined": false,
+          "held": [],
+          "outbox": [
+            "propose"
+          ]
+        },
+        "inFlight": [
+          "propose"
+        ]
+      }
+    },
+    {
+      "act": "read-back",
+      "sent": [],
+      "after": {
+        "inviter": {
+          "open": false,
+          "declined": false,
+          "held": [],
+          "outbox": []
+        },
+        "responder": {
+          "open": true,
+          "declined": false,
+          "held": [],
+          "outbox": [
+            "propose"
+          ]
+        },
+        "inFlight": [
+          "propose"
+        ]
+      }
+    },
+    {
+      "act": "decline",
+      "sent": [
+        "decline"
+      ],
+      "after": {
+        "inviter": {
+          "open": false,
+          "declined": true,
+          "held": [],
+          "outbox": [
+            "decline"
+          ]
+        },
+        "responder": {
+          "open": true,
+          "declined": false,
+          "held": [],
+          "outbox": [
+            "propose"
+          ]
+        },
+        "inFlight": [
+          "decline",
+          "propose"
+        ]
+      }
+    },
+    {
+      "deliver": "decline",
+      "sent": [],
+      "after": {
+        "inviter": {
+          "open": false,
+          "declined": true,
+          "held": [],
+          "outbox": [
+            "decline"
+          ]
+        },
+        "responder": {
+          "open": true,
+          "declined": true,
+          "held": [],
+          "outbox": [
+            "propose"
+          ]
+        },
+        "inFlight": [
+          "propose"
+        ]
+      }
+    },
+    {
+      "deliver": "propose",
+      "sent": [
+        "decline"
+      ],
+      "after": {
+        "inviter": {
+          "open": false,
+          "declined": true,
+          "held": [],
+          "outbox": [
+            "decline"
+          ]
+        },
+        "responder": {
+          "open": true,
+          "declined": true,
+          "held": [],
+          "outbox": [
+            "propose"
+          ]
+        },
+        "inFlight": [
+          "decline"
+        ]
+      }
+    },
+    {
+      "deliver": "decline",
+      "sent": [],
+      "after": {
+        "inviter": {
+          "open": false,
+          "declined": true,
+          "held": [],
+          "outbox": [
+            "decline"
+          ]
+        },
+        "responder": {
+          "open": true,
+          "declined": true,
+          "held": [],
+          "outbox": [
+            "propose"
+          ]
+        },
+        "inFlight": []
+      }
+    }
+  ]
+}
