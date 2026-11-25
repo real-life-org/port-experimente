@@ -62,11 +62,32 @@ two people never end with different relationships, and no mapping stays
 owed.
 *Pinned by:* the full walk (its checks at rest).
 
+## The four events
+
+The model and the traces know two people with two devices each and four
+events. A trace records for every event whether it had an effect: whether
+anything changed in what any device or person holds, a newly kept probe
+included.
+
+- **open** a tuple on a device: that person's side of the ceremony. Each
+  person opens a tuple once, on one device. A tuple comes about only after
+  someone opened the one before it.
+- **fetch a probe** on a tuple: possible once the counterpart opened the
+  tuple, for a device that holds it. The probe is fetched once.
+- **fetch a mapping** over a pair: possible while the counterpart owes its
+  mapping over the pair (R8), for a device that holds the tuple the mapping
+  travels on (R4, R6). Whether the device can verify it is R6 and R7.
+- **sync** from a device to its sibling: the tuples it holds, the pairs it
+  united, the probes it keeps and what it knows its person took on. What
+  is a fact of the person (candidates, acknowledgements) is known to both
+  devices at once.
+
 ## The rule
 
 R1. **Candidates.** When a device opens a tuple, the **heads** that device
 holds then are the tuple's candidates. They are fixed and are a fact of the
-person; sibling devices get them by sync and never change them.
+person. In the model both devices of the person know them from the opening
+on, without a sync; how they reach a sibling device is not shown.
 *Pinned by:* `expect.candidates` of every trace; that it is the heads and
 not all tuples, by `traces/stale-device.json` (the other person lists t2
 alone).
@@ -75,15 +96,18 @@ R2. **Probe.** The opener sends a probe on the tuple that lists its
 candidates. One device of the counterpart that holds the tuple fetches it;
 its siblings get it by sync.
 
-R3. **Admitted pair.** A person admits a pair of tuples if one was a
-candidate of the other, either way round.
+R3. **Admitted pair.** A person admits a pair of tuples if, among its own
+candidates, one was a candidate of the other, either way round. What the
+counterpart's probe lists says which tuples to look at (R4), not whether
+the pair is admitted.
 *Pinned by:* `traces/crossed-opening.json` (admitted only the other way
 round).
 
 R4. **Hit.** A device that reads a probe on a tuple it holds, finds listed
 another tuple it holds, and admits the pair, has a hit. A hit unites
-nothing. The person then owes its mapping over the pair; the mapping
-travels on the tuple the probe came on.
+nothing. The person then takes on its mapping over the pair, once: a later
+hit on the same pair adds nothing. The mapping travels on the tuple the
+probe came on.
 *Pinned by:* `traces/met-again.json` (`after` of the probe steps: still
 two relationships, the mapping owed).
 
@@ -96,8 +120,9 @@ control walk `noForward` (kept and read again by the fetching device, not
 handed on) ends without a deviation.
 
 R6. **Mapping.** A device that holds both tuples of a pair and either
-admits the pair or already owes its own mapping over it (R10) verifies the
-counterpart's mapping over it: it unites the two tuples,
+admits the pair or knows that its person took on its own mapping over it
+(R10; whether that mapping was acknowledged since does not matter)
+verifies the counterpart's mapping over it: it unites the two tuples,
 acknowledges, and its person owes its own mapping over the pair, on the
 tuple the mapping came on.
 *Pinned by:* `traces/met-again.json` (`after` of the mapping steps).
@@ -109,10 +134,11 @@ keeps owing it.
 `"effect": false`: the device holds the tuple the mapping travels on, not
 the other).
 
-R8. **Owed until acknowledged or settled.** A mapping is owed by the
-person, not by a device. It stops being owed when the counterpart
-acknowledged it, or when its two tuples are already joined by pairs each of
-which the person verified and had its own mapping acknowledged for.
+R8. **Owed until acknowledged or settled.** A mapping is taken on by the
+person, not by a device. It is owed from then until the counterpart
+acknowledged it, or until its two tuples are joined by other pairs each of
+which the person verified and had its own mapping acknowledged for,
+whenever that path completes.
 *Pinned by:* `traces/settled-by-a-path.json` (the mapping over t1+t3
 leaves `stillOwed` at the step that completes the path).
 
@@ -129,10 +155,11 @@ R10. **Proven head.** A pair is proven on a device if the device united it
 and the person's own mapping over it was acknowledged. A device that reads
 a kept probe also has a hit where the listed tuple is not admitted with the
 probe's tuple, but is the head of its relationship on this device now and
-a proven pair joins it directly to a candidate of the probe's tuple. A
-listed tuple that is no head never hits this way. The hit decides: the
-answer over the pair is verified because the pair is owed (R6), also if the
-head has changed by then. The other person needs nothing but R3.
+a proven pair joins it directly (one pair, not a path) to one of the
+person's own candidates of the probe's tuple. A listed tuple that is no
+head never hits this way. The hit decides: the answer over the pair is
+verified because the person took on the pair (R6), also if the head has
+changed by then. The other person needs nothing but R3.
 *Pinned by:* `traces/stale-device.json` (the hit at the probe step after
 the sync; its `noProvenHead` outcome) and
 `traces/head-changed-before-the-answer.json` (the answer verified after a
@@ -147,13 +174,24 @@ It is the head alone, not any tuple of a candidate's relationship: taking
 any of them would let the copied key of a replaced tuple bring a new
 contact into the relationship.
 
+## Read by a second implementation
+
+A session that was given this page, the format of the traces and their
+steps without results wrote the rule in Rust, without the model and the
+library. Its output equals the traces at every step (eleven traces, 198
+steps; one of the traces was written after its program). It listed where
+the page left it to decide; the section on the four events and the words
+"own candidates", "took on" and "one pair, not a path" above come from
+that list.
+
 ## Stated, not pinned
 
-- R6 and R7 say a device must **admit** the pair, or already owe its own
-  mapping over it, to verify a mapping. In this model an honest mapping
-  only ever comes over a pair for which that holds, so no schedule reaches
-  a refusal for that reason, and a rule without the check passes every
-  trace and walk. Pinning it needs a mapping handed in from outside.
+- R6 says a device must **admit** the pair, or know that its person took
+  on its own mapping over it at some time, to verify a mapping. In this
+  model an honest mapping only ever comes over a pair for which that holds,
+  so no schedule reaches a refusal for that reason, and a rule without the
+  check passes every trace and walk. Pinning it needs a mapping handed in
+  from outside.
 - That R10 holds against the copied key of a replaced tuple is argued, not
   modelled: the model has no forged mapping. The argument: such a tuple is
   no head, so a probe naming it has no hit, and no mapping over it is owed.
@@ -161,8 +199,8 @@ contact into the relationship.
   Whoever knows the anchor of a tuple that is a head today learns from the
   mapping that it belongs to the relationship of the tuple the probe came
   on. A tuple that is no head any more gives no such answer.
-- In the model an acknowledgement is a fact of the person at once; how it
-  reaches a sibling device is not shown.
+- In the model candidates and acknowledgements are facts of the person at
+  once; how they reach a sibling device is not shown.
 - Three tuples with two devices each: four traces and a random draw
   (`enumerate.ts`, `draw`, 300 schedules in the test), no full walk. Four
   tuples: one trace.
