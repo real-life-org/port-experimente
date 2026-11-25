@@ -171,7 +171,8 @@ lifecycle per login decided in `webapp.ts` alone (review #139): started, the req
 to be confirmed; confirmed, the result and its binding to the browser that started it hold together
 for the pickup window counted from the confirmation (five minutes for laptop plus phone, one for the
 same-device return code) and end together; collected once, the HTTP layer issues a signed-in session
-of one hour. An answered request is dropped at once, everything else is swept when it ends; the HTTP
+of one hour. A new start of the same browser replaces its login, also one whose answer is being
+checked: that check ends without storing anything. An answered request is dropped at once, everything else is swept when it ends; the HTTP
 layer keeps no login lifetimes of its own (before, its own five minutes from the start could cut off a
 login confirmed at 4:59). At most 10 000 open requests (then `/start` answers 503). A restart logs everyone
 out.

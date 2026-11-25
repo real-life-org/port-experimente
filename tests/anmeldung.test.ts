@@ -237,5 +237,26 @@ describe('Anmeldung mit der Web-of-Trust-App', () => {
     await app.receive((await confirm(req, ANTON, T0 + 60_000)).body, T0 + 60_000)
     expect(app.take('laptop', T0 + 60_000 + 5 * 60_000 + 1)).toBeNull()
   })
+
+  // Review #139, round 3: a new start of the same browser during the check of the old answer
+  test('Neustart während der Prüfung: die alte Anmeldung legt nichts ab', async () => {
+    const app = shop()
+    const req = app.start('browser', T0).request
+    const answer = await confirm(req, ANTON, T0)
+    const checking = app.receive(answer.body, T0)        // the check is running (claimed before its first await)
+    app.forget('browser')                                  // the browser starts a new login meanwhile
+    expect(await checking).toEqual({ ok: false, reason: 'Anmeldung ersetzt' })
+    expect(app.take('browser', T0)).toBeNull()
+    expect(app.held()).toEqual({ pending: 0, loggedIn: 0, codes: 0 })
+  })
+
+  test('Neustart während der Prüfung, gleiches Gerät: kein Rücksprungcode bleibt', async () => {
+    const app = shop()
+    const req = app.start('handy', T0, 'same-device').request
+    const checking = app.receive((await confirm(req, ANTON, T0)).body, T0)
+    app.forget('handy')
+    expect(await checking).toEqual({ ok: false, reason: 'Anmeldung ersetzt' })
+    expect(app.held().codes).toBe(0)
+  })
 })
 

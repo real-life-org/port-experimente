@@ -40,7 +40,9 @@ export type Login = { user: string, name?: string }
 // `checking` is set before the first await of `receive` and cleared only if
 // the answer fails, so two concurrent answers cannot both pass: JavaScript
 // runs the check-and-set before the await without interruption.
-interface Pending { session: string, nonce: string, created: number, mode: Mode, done: boolean, checking: boolean }
+// `replaced`: the browser session started a new login while this answer was being checked; the
+// check ends without storing anything (review #139, round 3)
+interface Pending { session: string, nonce: string, created: number, mode: Mode, done: boolean, checking: boolean, replaced: boolean }
 interface Code { session: string, login: Login, created: number }
 
 export type Receipt =
@@ -65,7 +67,7 @@ export class WebApp {
   /** A browser session asks to log in: make a request for the QR code or the link. */
   start (session: string, nowMs: number, mode: Mode = 'cross-device'): { request: LoginRequest, url: string } {
     const state = b64uOf(rand(16)), nonce = b64uOf(rand(16))
-    this.pending.set(state, { session, nonce, created: nowMs, mode, done: false, checking: false })
+    this.pending.set(state, { session, nonce, created: nowMs, mode, done: false, checking: false, replaced: false })
     const request: LoginRequest = {
       response_type: 'id_token', response_mode: 'direct_post', scope: 'openid', id_token_type: 'subject_signed',
       client_id: this.clientId, response_uri: this.responseUri, nonce, state,
@@ -82,6 +84,11 @@ export class WebApp {
     if (p.checking) return { ok: false, reason: 'Anfrage wird gerade geprüft' }
     p.checking = true                                   // claimed before the first await
     const r = await this.check(body.id_token, p, nowMs)
+    if (p.replaced) {
+      // a new login of the same browser replaced this one during the check: nothing is stored
+      this.pending.delete(String(body.state))
+      return { ok: false, reason: 'Anmeldung ersetzt' }
+    }
     if (!r.ok) { p.checking = false; return r }
     p.done = true
     // answered: the request is gone at once; a second answer finds nothing (review #139)
@@ -126,7 +133,12 @@ export class WebApp {
 
   /** The browser session starts a new login (or is replaced): what it held is dropped. */
   forget (session: string): void {
-    for (const [k, p] of this.pending) if (p.session === session && !p.checking) this.pending.delete(k)
+    // a request being checked is marked, not dropped: its check ends and stores nothing
+    for (const [k, p] of this.pending) {
+      if (p.session !== session) continue
+      if (p.checking) p.replaced = true
+      else this.pending.delete(k)
+    }
     this.loggedIn.delete(session)
     for (const [k, c] of this.codes) if (c.session === session) this.codes.delete(k)
   }
