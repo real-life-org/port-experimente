@@ -1,6 +1,6 @@
 {
   "name": "probe-read-again",
-  "shows": "A device fetches a probe before it holds the other tuple; the tuple arrives later by sync. Reading the kept probe again gives the hit. Read once, the two people end with two contacts although both relations hold the pair.",
+  "shows": "A device fetches a probe before it holds the other tuple; the tuple arrives later by sync. Reading the kept probe again gives the hit. Read once, the two people end with two relationships although both relations hold the pair.",
   "setup": {
     "tuples": [
       "t1",
@@ -11,91 +11,321 @@
     {
       "open": "t1",
       "on": "a1",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
     },
     {
       "sync": "a1",
       "to": "a2",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
     },
     {
       "open": "t2",
       "on": "a2",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1"
+          ],
+          [
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
     },
     {
       "open": "t2",
       "on": "b1",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
     },
     {
       "sync": "b1",
       "to": "b2",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
     },
     {
       "open": "t1",
       "on": "b2",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1"
+          ],
+          [
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
     },
     {
       "fetchProbe": "t1",
       "on": "a1",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
     },
     {
       "sync": "a1",
       "to": "a2",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1"
+          ],
+          [
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t1+t2"
+          ],
+          "b": []
+        }
+      }
     },
     {
       "fetchProbe": "t2",
       "on": "a2",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1"
+          ],
+          [
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t1+t2"
+          ],
+          "b": []
+        }
+      }
     },
     {
       "sync": "a2",
       "to": "a1",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1"
+          ],
+          [
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t1+t2"
+          ],
+          "b": []
+        }
+      }
     },
     {
       "fetchProbe": "t2",
       "on": "b1",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t1+t2"
+          ],
+          "b": []
+        }
+      }
     },
     {
       "sync": "b1",
       "to": "b2",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1"
+          ],
+          [
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t1+t2"
+          ],
+          "b": [
+            "t1+t2"
+          ]
+        }
+      }
     },
     {
       "fetchMapping": "t1+t2",
       "on": "a1",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t1+t2"
+          ],
+          "b": []
+        }
+      }
     },
     {
       "sync": "a1",
       "to": "a2",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t1+t2"
+          ],
+          "b": []
+        }
+      }
     },
     {
       "fetchProbe": "t1",
       "on": "b2",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1"
+          ],
+          [
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t1+t2"
+          ],
+          "b": []
+        }
+      }
     },
     {
       "fetchMapping": "t1+t2",
       "on": "b2",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
     },
     {
       "sync": "b2",
       "to": "b1",
-      "effect": true
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
     }
   ],
   "expect": {
-    "contacts": {
+    "relationships": {
       "a1": [
         [
           "t1",
@@ -141,7 +371,7 @@
     }
   },
   "readOnce": {
-    "contacts": {
+    "relationships": {
       "a1": [
         [
           "t1"

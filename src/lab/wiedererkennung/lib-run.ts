@@ -21,16 +21,20 @@
 //   fetchMapping on X X is handed a continuity mapping of the counterpart.
 //   sync              skipped (to a device that never acts).
 //
-// Probes and mappings are held back until a step asks for them; every
+// Probes and mappings are held back until a step asks for them (a mapping by
+// the pair it is over, read from its sender's state; one over another pair
+// stays held); every
 // other document (acknowledgements, credentials, stars, profiles) is
-// delivered at once, because the rule says nothing about them. After every
+// delivered at once, because the rule says nothing about them. A step that
+// hands over a probe or a mapping counts as followed only if the library
+// takes the document where the trace says it has an effect. After every
 // step the contacts each person holds are compared with what the rule gives
 // at that step, so a mapping that takes effect later than its step shows.
 // Type
 // checking is off: the library's results are read loosely here.
 import { seedKeys, createHolder } from 'rltp-lib'
 import { InMemoryStore } from 'rltp-lib/testing'
-import { contacts as groups, rule, start, type Device, type Event } from './rule'
+import { otherPerson, pairOf, relationships as groups, rule, start, type Device, type Event, type Person } from './rule'
 import type { Trace } from './traces'
 
 const PROBE = 'https://real-life.org/trust-tasks/spec/continuity-probe/0.1'
@@ -49,7 +53,7 @@ export async function runOnLibrary (t: Trace, ceremony: Ceremony = 'shared-conne
   const acting = { a: new Set<string>(), b: new Set<string>() }
   for (const s of t.steps) if (!('sync' in s)) acting[s.on[0]].add(s.on)
   const device = { a: ([...acting.a][0] ?? 'a1') as Device, b: ([...acting.b][0] ?? 'b1') as Device }
-  const expected = { a: t.expect.contacts[device.a].length, b: t.expect.contacts[device.b].length }
+  const expected = { a: t.expect.relationships[device.a].length, b: t.expect.relationships[device.b].length }
   if (acting.a.size > 1 || acting.b.size > 1) return { runnable: false, why: 'a person acts on two devices; the library has one device per holder', notFollowed: [], afterStep: [], differsAt: [], contacts: { a: 0, b: 0 }, expected, asExpected: false }
   // the rule beside the library, step by step
   const model = rule(t.setup)
@@ -64,16 +68,26 @@ export async function runOnLibrary (t: Trace, ceremony: Ceremony = 'shared-conne
   const P = { a: await make(1), b: await make(2) }
   const other = (p) => (p === 'a' ? 'b' : 'a')
   /** held back: probes and mappings, with the person they are for and the tuple they travel on; bundles by tuple */
-  const held: Array<{ to: string, type: string, tuple: string | null, envelope: unknown }> = []
-  /** the pair anchor a document is addressed to → the trace's tuple */
+  const held: Array<{ to: string, type: string, tuple: string | null, pair: string | null, envelope: unknown }> = []
+  /** the address a document goes to (one per tuple and side) → the trace's tuple */
   const tupleOf = new Map<string, string>()
+  const addressOf = (o: any): string => String(o.envelope?.rkid)
   let opening: string | null = null
+  const tuplesOf = async (p: string): Promise<any[]> => Object.values((await P[p].h.snapshot()).state.relationships).flatMap((r: any) => r.tuples)
+  /** The pair a mapping is over, read from the sender's state when it is sent: the tuple that issued it, and the
+   *  tuple its body names as prior (the sender's anchor there, which the receiver holds as the counterpart's). */
+  async function pairIn (from: string, o: any): Promise<string | null> {
+    const issued = (await tuplesOf(from)).find((x) => x.continuityOut.sent.includes(o.digest))
+    const prior = issued && (await tuplesOf(other(from))).find((x) => x.counterpartAnchor === issued.continuityOut.body?.prior)
+    const next = issued && tupleOf.get(String(issued.rkid)), before = prior && tupleOf.get(String(prior.rkid))
+    return next && before ? pairOf(before, next) : null
+  }
 
   /** Take what a person sends: hold back probes, mappings and bundles, deliver the rest at once. */
   async function take (from: string, outbound: any[]): Promise<void> {
     for (const o of outbound ?? []) {
-      if (!tupleOf.has(o.recipient) && opening) tupleOf.set(o.recipient, opening)
-      if (o.type === PROBE || o.type === MAPPING || o.type === BUNDLE) { held.push({ to: other(from), type: o.type, tuple: tupleOf.get(o.recipient) ?? null, envelope: o.envelope }); continue }
+      if (!tupleOf.has(addressOf(o)) && opening) tupleOf.set(addressOf(o), opening)
+      if (o.type === PROBE || o.type === MAPPING || o.type === BUNDLE) { held.push({ to: other(from), type: o.type, tuple: tupleOf.get(addressOf(o)) ?? null, pair: o.type === MAPPING ? await pairIn(from, o) : null, envelope: o.envelope }); continue }
       await hand(other(from), o.envelope)
     }
   }
@@ -100,13 +114,16 @@ export async function runOnLibrary (t: Trace, ceremony: Ceremony = 'shared-conne
       if (prompt) await carry(other(from), await P[other(from)].h.decide(prompt.id, 'accept', at()), tuple)
     }
   }
-  const pull = (to: string, type: string, tuple?: string) => { const i = held.findIndex((d) => d.to === to && d.type === type && (tuple === undefined || d.tuple === tuple)); return i < 0 ? null : held.splice(i, 1)[0] }
+  /** a mapping is picked by the person it is for, the tuple it travels on and the pair it is over; another one stays held */
+  const pull = (to: string, type: string, tuple?: string, pair?: string) => { const i = held.findIndex((d) => d.to === to && d.type === type && (tuple === undefined || d.tuple === tuple) && (pair === undefined || d.pair === pair)); return i < 0 ? null : held.splice(i, 1)[0] }
 
   const notFollowed: string[] = []
   const opened = new Set<string>()
   for (const [i, s] of t.steps.entries()) {
-    const event = Object.fromEntries(Object.entries(s).filter(([k]) => k !== 'effect')) as Event
+    const event = Object.fromEntries(Object.entries(s).filter(([k]) => k !== 'effect' && k !== 'after')) as Event
     const label = `step ${i + 1} ${JSON.stringify(event)}`
+    // a mapping is picked by the tuple it travels on, which the rule knows before the step
+    const mappingOn = 'fetchMapping' in s ? model.travelsOn(byRule, otherPerson(s.on[0] as Person), s.fetchMapping) : undefined
     byRule = model.apply(byRule, event).state
     if ('sync' in s) continue
     const me = s.on[0]
@@ -148,9 +165,16 @@ export async function runOnLibrary (t: Trace, ceremony: Ceremony = 'shared-conne
       await turn(); opening = null
       return
     }
-    const doc = 'fetchProbe' in s ? pull(me, PROBE, s.fetchProbe) : pull(me, MAPPING)
-    if (!doc) { notFollowed.push(`${label}: the library has no such document waiting`); return }
-    await hand(me, doc.envelope)
+    const doc = 'fetchProbe' in s ? pull(me, PROBE, s.fetchProbe) : pull(me, MAPPING, mappingOn, s.fetchMapping)
+    if (!doc) {
+      const waiting = [...new Set(held.filter((d) => d.to === me && d.type === MAPPING).map((d) => `${d.pair ?? 'an unread pair'} on ${d.tuple}`))]
+      notFollowed.push(`${label}: the library has no such document waiting${'fetchMapping' in s && waiting.length ? ` (mappings waiting for ${me}: ${waiting.join(', ')})` : ''}`)
+      return
+    }
+    const got = await hand(me, doc.envelope)
+    // a step of the trace that has an effect must be taken by the library; one without effect must not
+    const taken = got.disposition === 'unique'
+    if (taken !== s.effect) notFollowed.push(`${label}: the library answered ${got.disposition}${got.reason ? ' (' + got.reason + ')' : ''}`)
     await turn()
     }
   }
@@ -161,5 +185,5 @@ export async function runOnLibrary (t: Trace, ceremony: Ceremony = 'shared-conne
     for (const d of held.splice(0)) await hand(d.to, d.envelope)
   }
   const contacts = { a: (await P.a.h.contacts()).length, b: (await P.b.h.contacts()).length }
-  return { runnable: true, notFollowed, afterStep, differsAt, contacts, expected, asExpected: differsAt.length === 0 && contacts.a === expected.a && contacts.b === expected.b }
+  return { runnable: true, notFollowed, afterStep, differsAt, contacts, expected, asExpected: notFollowed.length === 0 && differsAt.length === 0 && contacts.a === expected.a && contacts.b === expected.b }
 }

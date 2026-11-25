@@ -38,8 +38,20 @@ test('a trace in which a person acts on its second device only runs like the sam
   const swap = (d: string): string => (d === 'a1' ? 'a2' : d === 'a2' ? 'a1' : d)
   const swapped = JSON.parse(JSON.stringify(t)) as Trace
   for (const s of swapped.steps as unknown as Array<Record<string, string>>) for (const k of ['on', 'sync', 'to']) if (k in s) s[k] = swap(s[k] as string)
-  const c = swapped.expect.contacts; [c.a1, c.a2] = [c.a2, c.a1]
+  const c = swapped.expect.relationships; [c.a1, c.a2] = [c.a2, c.a1]
   const r = await runOnLibrary(swapped)
   expect(r.runnable).toBe(true)
   expect({ ...r }).toEqual({ ...(await runOnLibrary(t)) })
+}, 120_000)
+
+// A mapping is handed over only if it is over the pair the step names. Both
+// ride on the same tuple here: the library issues t1+t3 on t3 where the rule
+// asks for t2+t3, and that one must stay held instead of standing in for it.
+test('settled-by-a-path: a mapping over another pair on the same tuple is not handed over in its place', async () => {
+  const t = read('settled-by-a-path'), r = await runOnLibrary(t)
+  expect((t.steps[9] as { fetchMapping?: string }).fetchMapping).toBe('t2+t3')
+  expect(r.notFollowed.find((x) => x.startsWith('step 10 '))).toBe('step 10 {"fetchMapping":"t2+t3","on":"b1"}: the library has no such document waiting (mappings waiting for b: t1+t3 on t3, t1+t2 on t2)')
+  // nothing was handed over at that step: the contacts stand as after step 9
+  const at = (n: number): string => (r.afterStep.find((x) => x.step === n) as { library: string }).library
+  expect(at(10)).toBe(at(9))
 }, 120_000)

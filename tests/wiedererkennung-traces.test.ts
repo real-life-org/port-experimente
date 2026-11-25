@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { expect, test } from 'vitest'
-import { DEVICES, contacts, rule, type Event } from '../src/lab/wiedererkennung/rule'
+import { DEVICES, relationships, rule, type Event } from '../src/lab/wiedererkennung/rule'
 import { build, replay, type Trace } from '../src/lab/wiedererkennung/traces'
 
 const dir = new URL('../src/lab/wiedererkennung/traces/', import.meta.url)
@@ -13,13 +13,13 @@ test.each(traces.map((t) => [t.name, t] as const))('trace %s replays to what it 
   const r = rule(t.setup), run = replay(t.setup, t.steps as Event[])
   expect(run.steps).toEqual(t.steps)
   expect([...r.events(run.state, false)].filter((e) => r.apply(run.state, e).effect)).toEqual([])   // at rest
-  for (const d of DEVICES) expect(contacts(run.state.devices[d].tuples, run.state.devices[d].united)).toEqual(t.expect.contacts[d])
+  for (const d of DEVICES) expect(relationships(run.state.devices[d].tuples, run.state.devices[d].united)).toEqual(t.expect.relationships[d])
   expect(run.state.people.a.candidates).toEqual(t.expect.candidates.a)
   expect(run.state.people.b.candidates).toEqual(t.expect.candidates.b)
   expect({ a: r.outstanding(run.state, 'a'), b: r.outstanding(run.state, 'b') }).toEqual(t.expect.stillOwed)
   if (t.readOnce) {
     const c = { ...t.setup, readOnce: true }, end = rule(c).settle(replay(c, t.steps as Event[], true).state).state
-    for (const d of DEVICES) expect(contacts(end.devices[d].tuples, end.devices[d].united)).toEqual(t.readOnce.contacts[d])
+    for (const d of DEVICES) expect(relationships(end.devices[d].tuples, end.devices[d].united)).toEqual(t.readOnce.relationships[d])
   }
 })
 
@@ -32,4 +32,16 @@ test('the page names every trace, and only traces that exist', () => {
   const page = readFileSync(new URL('../src/lab/wiedererkennung/RECOGNITION.md', import.meta.url), 'utf8')
   const named = [...new Set([...page.matchAll(/traces\/([a-z-]+\.json)/g)].map((m) => m[1] as string))].sort()
   expect(named).toEqual(files)
+})
+
+// A variant under trial (rule.ts, `admitProvenHead`): a kept probe may hit the head a proven pair joins to a
+// candidate. Not the rule; pinned so that what it changes is on record.
+test('variant: the device with an older state ends in one relationship, whatever the rank; the other traces end as before', () => {
+  for (const t of traces) {
+    const c = { ...t.setup, admitProvenHead: true }, end = rule(c).settle(replay(c, t.steps as Event[], true).state).state
+    const shown = DEVICES.map((d) => relationships(end.devices[d].tuples, end.devices[d].united))
+    if (t.name === 'stale-device-apart') for (const g of shown) expect(g).toEqual([['t1', 't2', 't3']])
+    else for (const [i, d] of DEVICES.entries()) expect(shown[i]).toEqual(t.expect.relationships[d])
+    expect([rule(c).outstanding(end, 'a'), rule(c).outstanding(end, 'b')]).toEqual([[], []])
+  }
 })
