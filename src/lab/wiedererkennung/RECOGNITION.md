@@ -220,7 +220,7 @@ Trust 0.31; the ceremony that opens a tuple.
 
 ## Against the library
 
-`lib-run.ts` runs the same traces against the published library (0.19.0,
+`lib-run.ts` runs the same traces against the published library (0.20.0,
 which implements Trust 0.31: chaining, one device per holder), under both
 ceremonies that open a tuple: `shared-connect` 0.1, which the app uses, and
 `encounter-scan`. `lib-run.expected.json` pins what it does. A measurement

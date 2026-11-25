@@ -1,7 +1,7 @@
 # When each side opens its tuple under shared-connect
 
 Status: a contract for one transition, written from what the library does
-(rltp-lib 0.19.0) and checked against it step by step
+(rltp-lib 0.20.0) and checked against it step by step
 (`tests/tuple-opening.test.ts`). The ceremony itself is
 [`shared-connect` 0.1](https://github.com/real-life-org/trust-protocol/blob/main/interop/ceremonies/shared-connect.ceremony.json);
 its documents, proofs and checks are defined there and are not repeated
