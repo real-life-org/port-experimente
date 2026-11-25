@@ -1,0 +1,18 @@
+# The example web app of the login prototype (src/lab/anmeldung/NOTES.md) as a service behind
+# Traefik. Build stage: the repository's dependencies and scripts/build-anmeldung-server.mjs; the image
+# itself holds Node and the two bundled files only.
+FROM node:24-alpine AS build
+WORKDIR /app
+RUN corepack enable
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile --ignore-scripts
+COPY . .
+RUN node scripts/build-anmeldung-server.mjs
+
+FROM node:24-alpine
+WORKDIR /app
+COPY --from=build /app/dist-anmeldung/server.mjs /app/dist-anmeldung/wallet.js ./
+ENV NODE_ENV=production PORT=8080
+EXPOSE 8080
+USER node
+CMD ["node", "server.mjs"]

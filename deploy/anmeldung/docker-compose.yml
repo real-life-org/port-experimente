@@ -1,0 +1,18 @@
+# The example web app of the login prototype on the server (Traefik terminates TLS, Watchtower pulls
+# new images). ANMELDUNG_DOMAIN comes from a .env file next to this one, e.g.
+#   ANMELDUNG_DOMAIN=anmeldung-demo.web-of-trust.de
+# Start once: docker compose up -d
+services:
+  app:
+    image: ghcr.io/real-life-org/anmeldung-demo:latest
+    network_mode: bridge
+    restart: unless-stopped
+    environment:
+      PUBLIC_ORIGIN: https://${ANMELDUNG_DOMAIN}
+      ANMELDUNG_WALLET: app
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.anmeldung-demo.rule=Host(`${ANMELDUNG_DOMAIN}`)"
+      - "traefik.http.routers.anmeldung-demo.entrypoints=websecure"
+      - "traefik.http.routers.anmeldung-demo.tls.certresolver=letsencrypt"
+      - "traefik.http.services.anmeldung-demo.loadbalancer.server.port=8080"

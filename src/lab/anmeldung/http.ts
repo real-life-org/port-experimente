@@ -20,6 +20,12 @@ import { WebApp, type Login } from './webapp'
 export const RESPONSE_PATH = '/anmeldung/antwort'
 export const RETURN_PATH = '/fertig'
 export const WALLET_PATH = '/wallet'
+/** a signed-in session lives one hour; a login before it lives as webapp.ts decides */
+export const SESSION_LIFETIME_MS = 60 * 60_000
+export const SWEEP_EVERY_MS = 60_000
+export const MAX_OPEN_REQUESTS = 10_000
+/** the Web of Trust app's link for a login request */
+export const APP_LINK = 'https://web-of-trust.de/a'
 
 const STYLE = `body{font:17px/1.5 system-ui,sans-serif;max-width:34rem;margin:2.5rem auto;padding:0 1rem;color:#1b2420;background:#f6f8f7}
 h1{font-size:1.6rem;margin:0 0 1rem}button,.button{font:inherit;padding:.7rem 1rem;border-radius:6px;border:1px solid #2c6a55;background:#2c6a55;color:#fff;cursor:pointer;text-decoration:none;display:inline-block}
@@ -35,19 +41,21 @@ const PAGE = `<!doctype html><meta charset="utf-8"><meta name="viewport" content
   <button id="phone">Mit dem Telefon anmelden</button>
   <button id="here" class="secondary">Auf diesem Gerät anmelden</button>
 </div>
+<label class="muted" id="demobox"><input type="checkbox" id="demo" style="width:auto;margin-right:.4rem">Demo-Wallet im Browser benutzen (statt der Web-of-Trust-App)</label>
 <div id="qrbox" hidden><p>Scanne den Code mit der Kamera deines Telefons.</p><div id="qr"></div>
 <p class="muted">Der Code gilt fünf Minuten. Er verschwindet, sobald du in der App bestätigt hast.</p></div>
 <script>
 const $=id=>document.getElementById(id)
-const show=s=>{$('state').innerHTML='';const d=document.createElement('div');d.className='ok';d.textContent='Angemeldet als '+(s.name?s.name+' · ':'')+s.user;$('state').append(d);$('choices').hidden=true;$('qrbox').hidden=true}
+const show=s=>{$('state').innerHTML='';const d=document.createElement('div');d.className='ok';d.textContent='Angemeldet als '+(s.name?s.name+' · ':'')+s.user;$('state').append(d);$('choices').hidden=true;$('qrbox').hidden=true;$('demobox').hidden=true}
+const w=()=>$('demo').checked?'&wallet=demo':''
 fetch('/status').then(r=>r.json()).then(s=>{if(s.user)show(s)})
 let timer
 $('phone').onclick=async()=>{
-  const r=await (await fetch('/start')).json()
+  const r=await (await fetch('/start?geraet=anderes'+w())).json()
   $('qr').innerHTML=r.qrSvg; $('qrbox').hidden=false
   clearInterval(timer); timer=setInterval(async()=>{const s=await (await fetch('/status')).json(); if(s.user){clearInterval(timer);show(s)}},1000)
 }
-$('here').onclick=async()=>{ const r=await (await fetch('/start?geraet=gleich')).json(); location.href=r.walletLink }
+$('here').onclick=async()=>{ const r=await (await fetch('/start?geraet=gleich'+w())).json(); location.href=r.walletLink }
 </script>`
 
 const WALLET_PAGE = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Web of Trust · Anmeldung</title><link rel="icon" href="data:,">
@@ -85,51 +93,71 @@ export interface ServeOptions {
   https?: { key: string, cert: string }
   publicOrigin?: string                           // what the web app calls itself; default from the bound address
   walletScript?: () => Promise<string>            // the bundled demo wallet (demo.ts)
+  /** where QR code and link send the person: the demo wallet page (default), or the Web of Trust app
+   *  through its app link https://web-of-trust.de/a#… (the app's experimental login, web-of-trust#553) */
+  wallet?: 'demo' | 'app'
   now?: () => number
+  /** the cap on open login requests (default MAX_OPEN_REQUESTS) */
+  maxOpenRequests?: number
 }
 
 /** Start the example web app. Port 0 picks a free one. */
 export async function serve (opts: ServeOptions = {}): Promise<{ server: Server, origin: string, app: WebApp }> {
   const now = opts.now ?? Date.now
   let app!: WebApp, origin!: string
-  const preLogin = new Set<string>()
-  const authenticated = new Map<string, Login>()
+  // signed-in sessions with their start; a login before it is the web app's (one lifecycle, webapp.ts)
+  const authenticated = new Map<string, { login: Login, at: number }>()
+  const sweep = (): void => {
+    const t = now()
+    app?.sweep(t)
+    for (const [id, s] of authenticated) if (t - s.at > SESSION_LIFETIME_MS) authenticated.delete(id)
+  }
+  // behind a TLS-terminating proxy (Traefik) the server speaks http, but the browser sees https
+  const secure = Boolean(opts.https) || (opts.publicOrigin ?? '').startsWith('https:')
   const signIn = (res: ServerResponse, login: Login): void => {
-    const fresh = freshId(); authenticated.set(fresh, login)
-    res.setHeader('Set-Cookie', `sitzung=${fresh}; HttpOnly; SameSite=Lax; Path=/${opts.https ? '; Secure' : ''}`)
+    const fresh = freshId(); authenticated.set(fresh, { login, at: now() })
+    res.setHeader('Set-Cookie', `sitzung=${fresh}; HttpOnly; SameSite=Lax; Path=/${secure ? '; Secure' : ''}`)
   }
   const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const url = new URL(req.url ?? '/', origin), path = url.pathname
+    sweep()
     if (req.method === 'GET' && path === '/') { html(res, 200, PAGE); return }
     if (req.method === 'GET' && path === '/start') {
-      const old = cookieId(req); if (old) preLogin.delete(old)
-      const id = freshId(); preLogin.add(id)
-      res.setHeader('Set-Cookie', `sitzung=${id}; HttpOnly; SameSite=Lax; Path=/${opts.https ? '; Secure' : ''}`)
+      // a cap on open requests: nobody fills the memory by starting logins
+      const cap = opts.maxOpenRequests ?? MAX_OPEN_REQUESTS
+      if (app.held().pending >= cap) { json(res, 503, { error: 'busy' }); return }
+      const old = cookieId(req); if (old && !authenticated.has(old)) app.forget(old)
+      const id = freshId()
+      res.setHeader('Set-Cookie', `sitzung=${id}; HttpOnly; SameSite=Lax; Path=/${secure ? '; Secure' : ''}`)
       const same = url.searchParams.get('geraet') === 'gleich'
       const started = app.start(id, now(), same ? 'same-device' : 'cross-device')
-      const walletLink = `${origin}${WALLET_PATH}#${encodeURIComponent(started.url)}`
+      // the page may ask for the demo wallet (or the app) per login; otherwise the server's choice
+      const asked = url.searchParams.get('wallet')
+      const wallet = asked === 'demo' || asked === 'app' ? asked : (opts.wallet ?? 'demo')
+      const walletLink = wallet === 'app' ? `${APP_LINK}#${encodeURIComponent(started.url)}` : `${origin}${WALLET_PATH}#${encodeURIComponent(started.url)}`
       json(res, 200, same ? { url: started.url, walletLink } : { url: started.url, walletLink, qrSvg: await QRCode.toString(walletLink, { type: 'svg', margin: 2, errorCorrectionLevel: 'L' }) })
       return
     }
     if (req.method === 'GET' && path === '/status') {
       const id = cookieId(req)
       const signedIn = id ? authenticated.get(id) : undefined
-      if (signedIn) { json(res, 200, signedIn); return }
-      if (id && preLogin.has(id)) {
-        const done = app.take(id)
-        if (done) { preLogin.delete(id); signIn(res, done); json(res, 200, done); return }
-      }
+      if (signedIn) { json(res, 200, signedIn.login); return }
+      const done = id ? app.take(id, now()) : null
+      if (done) { signIn(res, done); json(res, 200, done); return }
       json(res, 200, {})
       return
     }
     if (req.method === 'GET' && path === RETURN_PATH) {
       const id = cookieId(req), code = url.searchParams.get('response_code') ?? ''
-      const r = app.redeem(id && preLogin.has(id) ? id : '', code, now())   // a code is used up by any attempt
-      if (r.ok && id) { preLogin.delete(id); signIn(res, { user: r.user, ...(r.name ? { name: r.name } : {}) }); res.writeHead(303, { Location: '/' }); res.end(); return }
+      const r = app.redeem(id ?? '', code, now())   // a code is used up by any attempt
+      if (r.ok && id) { signIn(res, { user: r.user, ...(r.name ? { name: r.name } : {}) }); res.writeHead(303, { Location: '/' }); res.end(); return }
       html(res, 400, `<!doctype html><meta charset="utf-8"><style>${STYLE}</style><h1>Anmeldung nicht möglich</h1><p>${escapeHtml(r.ok ? 'keine Sitzung' : r.reason)}</p><p><a href="/">Zur Startseite</a></p>`)
       return
     }
     if (req.method === 'POST' && path === RESPONSE_PATH) {
+      // the Web of Trust app answers from its web view (origin https://localhost or capacitor://localhost),
+      // so the response_uri lets any origin read its answer; the request is a simple form post (no preflight)
+      res.setHeader('Access-Control-Allow-Origin', '*')
       const form = new URLSearchParams(await bodyOf(req))
       const r = await app.receive({ id_token: form.get('id_token') ?? undefined, state: form.get('state') ?? undefined }, now())
       if (!r.ok) { json(res, 400, { error: 'invalid_request', error_description: r.reason }); return }
@@ -145,6 +173,10 @@ export async function serve (opts: ServeOptions = {}): Promise<{ server: Server,
   const listener = (req: IncomingMessage, res: ServerResponse): void => { handle(req, res).catch(() => { if (!res.headersSent) res.writeHead(500); res.end() }) }
   const server: Server = opts.https ? createHttps(opts.https, listener) as unknown as Server : createHttp(listener)
   await new Promise<void>((ok) => server.listen(opts.port ?? 0, opts.host ?? '127.0.0.1', ok))
+  // also swept while nobody asks; the timer does not keep the process alive and ends with the server
+  const timer = setInterval(sweep, SWEEP_EVERY_MS)
+  timer.unref?.()
+  server.on('close', () => clearInterval(timer))
   const addr = server.address()
   const port = typeof addr === 'object' && addr ? addr.port : opts.port
   origin = opts.publicOrigin ?? `${opts.https ? 'https' : 'http'}://127.0.0.1:${port}`

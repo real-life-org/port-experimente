@@ -67,7 +67,7 @@ describe('Anmeldung mit der Web-of-Trust-App', () => {
     const app = shop()
     const a = await confirm(app.start('b', T0).request, ANTON, T0)
     expect((await app.receive(a.body, T0)).ok).toBe(true)
-    expect(await app.receive(a.body, T0 + 1000)).toEqual({ ok: false, reason: 'Anfrage schon beantwortet' })
+    expect(await app.receive(a.body, T0 + 1000)).toEqual({ ok: false, reason: 'unbekannte Anfrage' })   // answered: gone at once
   })
 
   test('zwei gleichzeitige Antworten: genau eine wird angenommen', async () => {
@@ -194,4 +194,69 @@ describe('Anmeldung mit der Web-of-Trust-App', () => {
     expect(keys).toEqual(['client_id', 'client_name', 'id_token_type', 'nonce', 'response_mode', 'response_type', 'response_uri', 'scope', 'state'])
     expect(requestUrl(parseRequestUrl(url)!)).toBe(url)
   })
+
+  test('Speicher: eine beantwortete Anfrage ist sofort weg, Abgelaufenes räumt sweep weg (review #139)', async () => {
+    const app = shop()
+    const answered = app.start('a', T0).request
+    app.start('b', T0)                                                  // never answered
+    const same = app.start('c', T0, 'same-device').request              // answered, code never redeemed
+    await app.receive((await confirm(answered, ANTON, T0)).body, T0)   // cross-device, never collected
+    await app.receive((await confirm(same, ANTON, T0)).body, T0)
+    expect(app.held()).toEqual({ pending: 1, loggedIn: 1, codes: 1 })
+    app.sweep(T0 + 59_000)
+    expect(app.held()).toEqual({ pending: 1, loggedIn: 1, codes: 1 })
+    app.sweep(T0 + 61_000)
+    expect(app.held()).toEqual({ pending: 1, loggedIn: 1, codes: 0 })
+    app.sweep(T0 + 5 * 60_000 + 1)
+    expect(app.held()).toEqual({ pending: 0, loggedIn: 0, codes: 0 })
+  })
+
+  // Review #139, round 2: confirmed in time, collected after the request's own five minutes
+  test('Grenzfall: bestätigt nach 4:59, abgeholt nach 5:01, Laptop und Telefon', async () => {
+    const app = shop()
+    const req = app.start('laptop', T0).request
+    const a = await confirm(req, ANTON, T0 + 299_000)
+    expect(await app.receive(a.body, T0 + 299_000)).toEqual({ ok: true, user: a.did })
+    app.sweep(T0 + 301_000)
+    expect(app.take('laptop', T0 + 301_000)).toEqual({ user: a.did })
+    expect(app.take('laptop', T0 + 302_000)).toBeNull()                          // exactly once
+  })
+
+  test('Grenzfall: bestätigt nach 4:59, Rücksprung nach 5:01, gleiches Gerät', async () => {
+    const app = shop()
+    const req = app.start('handy', T0, 'same-device').request
+    const r = await app.receive((await confirm(req, ANTON, T0 + 299_000)).body, T0 + 299_000)
+    const code = new URL((r as { redirect_uri: string }).redirect_uri).searchParams.get('response_code')!
+    app.sweep(T0 + 301_000)
+    expect(app.redeem('handy', code, T0 + 301_000)).toMatchObject({ ok: true })
+  })
+
+  test('die Abholfrist zählt ab der Bestätigung und endet mit ihr', async () => {
+    const app = shop()
+    const req = app.start('laptop', T0).request
+    await app.receive((await confirm(req, ANTON, T0 + 60_000)).body, T0 + 60_000)
+    expect(app.take('laptop', T0 + 60_000 + 5 * 60_000 + 1)).toBeNull()
+  })
+
+  // Review #139, round 3: a new start of the same browser during the check of the old answer
+  test('Neustart während der Prüfung: die alte Anmeldung legt nichts ab', async () => {
+    const app = shop()
+    const req = app.start('browser', T0).request
+    const answer = await confirm(req, ANTON, T0)
+    const checking = app.receive(answer.body, T0)        // the check is running (claimed before its first await)
+    app.forget('browser')                                  // the browser starts a new login meanwhile
+    expect(await checking).toEqual({ ok: false, reason: 'Anmeldung ersetzt' })
+    expect(app.take('browser', T0)).toBeNull()
+    expect(app.held()).toEqual({ pending: 0, loggedIn: 0, codes: 0 })
+  })
+
+  test('Neustart während der Prüfung, gleiches Gerät: kein Rücksprungcode bleibt', async () => {
+    const app = shop()
+    const req = app.start('handy', T0, 'same-device').request
+    const checking = app.receive((await confirm(req, ANTON, T0)).body, T0)
+    app.forget('handy')
+    expect(await checking).toEqual({ ok: false, reason: 'Anmeldung ersetzt' })
+    expect(app.held().codes).toBe(0)
+  })
 })
+
