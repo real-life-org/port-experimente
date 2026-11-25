@@ -67,7 +67,7 @@ describe('Anmeldung mit der Web-of-Trust-App', () => {
     const app = shop()
     const a = await confirm(app.start('b', T0).request, ANTON, T0)
     expect((await app.receive(a.body, T0)).ok).toBe(true)
-    expect(await app.receive(a.body, T0 + 1000)).toEqual({ ok: false, reason: 'Anfrage schon beantwortet' })
+    expect(await app.receive(a.body, T0 + 1000)).toEqual({ ok: false, reason: 'unbekannte Anfrage' })   // answered: gone at once
   })
 
   test('zwei gleichzeitige Antworten: genau eine wird angenommen', async () => {
@@ -193,5 +193,21 @@ describe('Anmeldung mit der Web-of-Trust-App', () => {
     const keys = [...new URLSearchParams(url.slice(url.indexOf('?') + 1)).keys()].sort()
     expect(keys).toEqual(['client_id', 'client_name', 'id_token_type', 'nonce', 'response_mode', 'response_type', 'response_uri', 'scope', 'state'])
     expect(requestUrl(parseRequestUrl(url)!)).toBe(url)
+  })
+
+  test('Speicher: eine beantwortete Anfrage ist sofort weg, Abgelaufenes räumt sweep weg (review #139)', async () => {
+    const app = shop()
+    const answered = app.start('a', T0).request
+    app.start('b', T0)                                                  // never answered
+    const same = app.start('c', T0, 'same-device').request              // answered, code never redeemed
+    await app.receive((await confirm(answered, ANTON, T0)).body, T0)   // cross-device, never collected
+    await app.receive((await confirm(same, ANTON, T0)).body, T0)
+    expect(app.held()).toEqual({ pending: 1, loggedIn: 1, codes: 1 })
+    app.sweep(T0 + 59_000)
+    expect(app.held()).toEqual({ pending: 1, loggedIn: 1, codes: 1 })
+    app.sweep(T0 + 61_000)
+    expect(app.held()).toEqual({ pending: 1, loggedIn: 1, codes: 0 })
+    app.sweep(T0 + 5 * 60_000 + 1)
+    expect(app.held()).toEqual({ pending: 0, loggedIn: 0, codes: 0 })
   })
 })

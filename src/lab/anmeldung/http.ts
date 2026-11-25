@@ -20,6 +20,11 @@ import { WebApp, type Login } from './webapp'
 export const RESPONSE_PATH = '/anmeldung/antwort'
 export const RETURN_PATH = '/fertig'
 export const WALLET_PATH = '/wallet'
+/** a pre-login id lives as long as the request bound to it; an authenticated session one hour */
+export const PRE_LOGIN_LIFETIME_MS = 5 * 60_000
+export const SESSION_LIFETIME_MS = 60 * 60_000
+export const SWEEP_EVERY_MS = 60_000
+export const MAX_OPEN_REQUESTS = 10_000
 /** the Web of Trust app's link for a login request */
 export const APP_LINK = 'https://web-of-trust.de/a'
 
@@ -93,26 +98,39 @@ export interface ServeOptions {
    *  through its app link https://web-of-trust.de/a#… (the app's experimental login, web-of-trust#553) */
   wallet?: 'demo' | 'app'
   now?: () => number
+  /** the cap on open login requests (default MAX_OPEN_REQUESTS) */
+  maxOpenRequests?: number
 }
 
 /** Start the example web app. Port 0 picks a free one. */
 export async function serve (opts: ServeOptions = {}): Promise<{ server: Server, origin: string, app: WebApp }> {
   const now = opts.now ?? Date.now
   let app!: WebApp, origin!: string
-  const preLogin = new Set<string>()
-  const authenticated = new Map<string, Login>()
+  // every id with the time it was issued; both are swept (review #139: the service runs for long)
+  const preLogin = new Map<string, number>()
+  const authenticated = new Map<string, { login: Login, at: number }>()
+  const sweep = (): void => {
+    const t = now()
+    app?.sweep(t)
+    for (const [id, at] of preLogin) if (t - at > PRE_LOGIN_LIFETIME_MS) preLogin.delete(id)
+    for (const [id, s] of authenticated) if (t - s.at > SESSION_LIFETIME_MS) authenticated.delete(id)
+  }
   // behind a TLS-terminating proxy (Traefik) the server speaks http, but the browser sees https
   const secure = Boolean(opts.https) || (opts.publicOrigin ?? '').startsWith('https:')
   const signIn = (res: ServerResponse, login: Login): void => {
-    const fresh = freshId(); authenticated.set(fresh, login)
+    const fresh = freshId(); authenticated.set(fresh, { login, at: now() })
     res.setHeader('Set-Cookie', `sitzung=${fresh}; HttpOnly; SameSite=Lax; Path=/${secure ? '; Secure' : ''}`)
   }
   const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const url = new URL(req.url ?? '/', origin), path = url.pathname
+    sweep()
     if (req.method === 'GET' && path === '/') { html(res, 200, PAGE); return }
     if (req.method === 'GET' && path === '/start') {
+      // a cap on open requests: nobody fills the memory by starting logins
+      const cap = opts.maxOpenRequests ?? MAX_OPEN_REQUESTS
+      if (app.held().pending >= cap || preLogin.size >= cap) { json(res, 503, { error: 'busy' }); return }
       const old = cookieId(req); if (old) preLogin.delete(old)
-      const id = freshId(); preLogin.add(id)
+      const id = freshId(); preLogin.set(id, now())
       res.setHeader('Set-Cookie', `sitzung=${id}; HttpOnly; SameSite=Lax; Path=/${secure ? '; Secure' : ''}`)
       const same = url.searchParams.get('geraet') === 'gleich'
       const started = app.start(id, now(), same ? 'same-device' : 'cross-device')
@@ -126,7 +144,7 @@ export async function serve (opts: ServeOptions = {}): Promise<{ server: Server,
     if (req.method === 'GET' && path === '/status') {
       const id = cookieId(req)
       const signedIn = id ? authenticated.get(id) : undefined
-      if (signedIn) { json(res, 200, signedIn); return }
+      if (signedIn) { json(res, 200, signedIn.login); return }
       if (id && preLogin.has(id)) {
         const done = app.take(id)
         if (done) { preLogin.delete(id); signIn(res, done); json(res, 200, done); return }
@@ -160,6 +178,10 @@ export async function serve (opts: ServeOptions = {}): Promise<{ server: Server,
   const listener = (req: IncomingMessage, res: ServerResponse): void => { handle(req, res).catch(() => { if (!res.headersSent) res.writeHead(500); res.end() }) }
   const server: Server = opts.https ? createHttps(opts.https, listener) as unknown as Server : createHttp(listener)
   await new Promise<void>((ok) => server.listen(opts.port ?? 0, opts.host ?? '127.0.0.1', ok))
+  // also swept while nobody asks; the timer does not keep the process alive and ends with the server
+  const timer = setInterval(sweep, SWEEP_EVERY_MS)
+  timer.unref?.()
+  server.on('close', () => clearInterval(timer))
   const addr = server.address()
   const port = typeof addr === 'object' && addr ? addr.port : opts.port
   origin = opts.publicOrigin ?? `${opts.https ? 'https' : 'http'}://127.0.0.1:${port}`

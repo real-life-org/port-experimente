@@ -40,7 +40,7 @@ export type Redemption = ({ ok: true } & Login) | { ok: false, reason: string }
 
 export class WebApp {
   private pending = new Map<string, Pending>()
-  private loggedIn = new Map<string, Login>()           // browser session -> user (cross-device)
+  private loggedIn = new Map<string, { login: Login, at: number }>()   // browser session -> user (cross-device), until collected
   private codes = new Map<string, Code>()               // response_code -> login (same-device)
 
   constructor (
@@ -66,20 +66,21 @@ export class WebApp {
   async receive (body: { id_token?: unknown, state?: unknown }, nowMs: number): Promise<Receipt> {
     const p = typeof body.state === 'string' ? this.pending.get(body.state) : undefined
     if (!p) return { ok: false, reason: 'unbekannte Anfrage' }
-    if (p.done) return { ok: false, reason: 'Anfrage schon beantwortet' }
     if (nowMs - p.created > REQUEST_LIFETIME_MS) return { ok: false, reason: 'Anfrage abgelaufen' }
     if (p.checking) return { ok: false, reason: 'Anfrage wird gerade geprüft' }
     p.checking = true                                   // claimed before the first await
     const r = await this.check(body.id_token, p, nowMs)
     if (!r.ok) { p.checking = false; return r }
     p.done = true
+    // answered: the request is gone at once; a second answer finds nothing (review #139)
+    this.pending.delete(String(body.state))
     if (p.mode === 'same-device') {
       const code = b64uOf(rand(16))
       this.codes.set(code, { session: p.session, login: r.login, created: nowMs })
       const u = new URL(this.returnUri); u.searchParams.set('response_code', code)
       return { ok: true, redirect_uri: u.href }
     }
-    this.loggedIn.set(p.session, r.login)
+    this.loggedIn.set(p.session, { login: r.login, at: nowMs })
     return { ok: true, ...r.login }
   }
 
@@ -97,7 +98,7 @@ export class WebApp {
 
   /** What the waiting page asks (cross-device): is this browser session logged in? */
   poll (session: string): Login | null {
-    return this.loggedIn.get(session) ?? null
+    return this.loggedIn.get(session)?.login ?? null
   }
 
   /**
@@ -105,9 +106,25 @@ export class WebApp {
    * this session id. The HTTP layer moves it to a fresh, authenticated session.
    */
   take (session: string): Login | null {
-    const entry = this.loggedIn.get(session) ?? null
+    const entry = this.loggedIn.get(session)?.login ?? null
     this.loggedIn.delete(session)
     return entry
+  }
+
+  /**
+   * Forget what has run out (review #139: the web app runs for long): requests older than their
+   * lifetime, logins nobody collected within it, return codes older than theirs. Answered requests,
+   * collected logins and redeemed codes are gone already.
+   */
+  sweep (nowMs: number): void {
+    for (const [k, p] of this.pending) if (nowMs - p.created > REQUEST_LIFETIME_MS) this.pending.delete(k)
+    for (const [k, l] of this.loggedIn) if (nowMs - l.at > REQUEST_LIFETIME_MS) this.loggedIn.delete(k)
+    for (const [k, c] of this.codes) if (nowMs - c.created > CODE_LIFETIME_MS) this.codes.delete(k)
+  }
+
+  /** what is held in memory (tests, and the cap on open requests) */
+  held (): { pending: number, loggedIn: number, codes: number } {
+    return { pending: this.pending.size, loggedIn: this.loggedIn.size, codes: this.codes.size }
   }
 
   /**

@@ -138,7 +138,7 @@ test('eine zweite Antwort auf dieselbe Anfrage bekommt 400 mit Grund', async () 
   expect(await post(answer)).toBe(200)
   const again = await fetch(answer.response_uri, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(answer.body).toString() })
   expect(again.status).toBe(400)
-  expect(await again.json()).toEqual({ error: 'invalid_request', error_description: 'Anfrage schon beantwortet' })
+  expect(await again.json()).toEqual({ error: 'invalid_request', error_description: 'unbekannte Anfrage' })
 })
 
 test('die Antwortadresse darf von jeder Origin gelesen werden (die App antwortet aus ihrem WebView)', async () => {
@@ -158,6 +158,35 @@ test('mit wallet: app zeigen QR-Code und Link auf die App (https://web-of-trust.
     expect(demo.walletLink).toBe(`${o2}/wallet#${encodeURIComponent(demo.url)}`)
   } finally {
     await new Promise<void>((ok) => s2.close(() => ok()))
+  }
+})
+
+test('Dauerbetrieb: Sitzungen laufen nach einer Stunde ab, offene Anfragen nach fünf Minuten, und es gibt eine Obergrenze (review #139)', async () => {
+  let t = Date.now()
+  const { server: s3, origin: o3, app } = await serve({ now: () => t, maxOpenRequests: 2 })
+  try {
+    const start = await fetch(o3 + '/start')
+    const pre = start.headers.get('set-cookie')!.split(';')[0]!
+    const answer = await confirm(parseRequestUrl(((await start.json()) as any).url)!, new Uint8Array(32).fill(16), t)
+    expect(await post(answer)).toBe(200)
+    const collect = await fetch(o3 + '/status', { headers: { cookie: pre } })
+    const signedIn = collect.headers.get('set-cookie')!.split(';')[0]!
+    expect(await collect.json()).toEqual({ user: answer.did })
+    expect(app.held().pending).toBe(0)
+    // two open requests reach the cap; a third start is refused
+    await fetch(o3 + '/start'); await fetch(o3 + '/start')
+    expect(app.held().pending).toBe(2)
+    expect((await fetch(o3 + '/start')).status).toBe(503)
+    // after five minutes the open requests are gone, a start works again
+    t += 5 * 60_000 + 1
+    expect((await fetch(o3 + '/start')).status).toBe(200)
+    expect(app.held().pending).toBe(1)
+    // the session is still there within the hour, gone after it
+    expect(await (await fetch(o3 + '/status', { headers: { cookie: signedIn } })).json()).toEqual({ user: answer.did })
+    t += 60 * 60_000
+    expect(await (await fetch(o3 + '/status', { headers: { cookie: signedIn } })).json()).toEqual({})
+  } finally {
+    await new Promise<void>((ok) => s3.close(() => ok()))
   }
 })
 
