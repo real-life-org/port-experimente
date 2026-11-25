@@ -40,8 +40,13 @@ phone, and the same-device way) the same day.
 ## Running the demonstration
 
 ```sh
-pnpm anmeldung:demo          # https://<LAN address>:8790, PORT and DEMO_HOST override
+pnpm anmeldung:demo          # https://<LAN address>:8790, PORT and DEMO_HOST (IP or DNS name) override
+PUBLIC_ORIGIN=https://<tunnel> pnpm anmeldung:demo   # behind a public https tunnel: plain http on PORT
 ```
+
+Behind a tunnel or proxy that ends TLS, `PUBLIC_ORIGIN` is the address QR code, link and response_uri
+name; the demo then needs no certificate of its own (review #139: before, the QR code sent the app to
+the LAN address even when the page was opened through a tunnel).
 
 Laptop and phone in the same network. The certificate is self-signed for the
 LAN address (made with `openssl`, kept in the bench cache); both browsers

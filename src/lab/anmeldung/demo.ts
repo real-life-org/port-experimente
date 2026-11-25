@@ -8,6 +8,7 @@
 
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { isIP } from 'node:net'
 import { homedir, networkInterfaces } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -26,13 +27,16 @@ function lanAddress (): string {
   return '127.0.0.1'
 }
 
+/** the certificate's name for the host: an IP address or a DNS name (DEMO_HOST may be either) */
+export const sanOf = (host: string): string => (isIP(host) ? `IP:${host}` : `DNS:${host}`)
+
 function certificate (ip: string): { key: string, cert: string } {
   const dir = join(process.env.PORT_EXPERIMENTE_CACHE ?? join(process.env.XDG_CACHE_HOME ?? join(homedir(), '.cache'), 'port-experimente'), 'anmeldung')
   mkdirSync(dir, { recursive: true })
   const key = join(dir, `${ip}.key.pem`), cert = join(dir, `${ip}.cert.pem`)
   if (!existsSync(key) || !existsSync(cert)) {
     execFileSync('openssl', ['req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1', '-nodes', '-days', '30',
-      '-subj', '/CN=anmeldung-demo', '-addext', `subjectAltName=IP:${ip},IP:127.0.0.1,DNS:localhost`, '-keyout', key, '-out', cert], { stdio: 'ignore' })
+      '-subj', '/CN=anmeldung-demo', '-addext', `subjectAltName=${sanOf(ip)},IP:127.0.0.1,DNS:localhost`, '-keyout', key, '-out', cert], { stdio: 'ignore' })
   }
   return { key: readFileSync(key, 'utf8'), cert: readFileSync(cert, 'utf8') }
 }
@@ -50,11 +54,21 @@ async function walletBundle (): Promise<string> {
 }
 
 export async function main (port = Number(process.env.PORT ?? 8790)): Promise<void> {
-  const ip = lanAddress()
-  const origin = `https://${ip}:${port}`
   const script = await walletBundle()
   const wallet = process.env.ANMELDUNG_WALLET === 'app' ? 'app' : 'demo'
-  await serve({ port, host: '0.0.0.0', https: certificate(ip), publicOrigin: origin, walletScript: async () => script, wallet })
+  // behind a public https tunnel or proxy: the web app calls itself by that address, the tunnel ends
+  // TLS, so the server speaks plain http on its port and needs no certificate of its own
+  const tunnel = process.env.PUBLIC_ORIGIN
+  if (tunnel !== undefined) {
+    if (!/^https:\/\/[^/]+$/.test(tunnel)) throw new Error('PUBLIC_ORIGIN must be an https origin, e.g. https://xyz.trycloudflare.com')
+    await serve({ port, host: '0.0.0.0', publicOrigin: tunnel, walletScript: async () => script, wallet })
+    console.log(`\nBeispiel-Web-App läuft: ${tunnel} → http://0.0.0.0:${port} (Wallet: ${wallet === 'app' ? 'Web-of-Trust-App über https://web-of-trust.de/a' : 'Demo-Seite'})\n`)
+    console.log('Den Tunnel auf diesen Port richten; QR-Code und Antwortadresse nennen die öffentliche Adresse. Beenden mit Strg+C.\n')
+    return
+  }
+  const host = lanAddress()
+  const origin = `https://${host}:${port}`
+  await serve({ port, host: '0.0.0.0', https: certificate(host), publicOrigin: origin, walletScript: async () => script, wallet })
   console.log(`\nBeispiel-Web-App läuft: ${origin} (Wallet: ${wallet === 'app' ? 'Web-of-Trust-App über https://web-of-trust.de/a' : 'Demo-Seite'})\n`)
   console.log('Laptop: diese Adresse im Browser öffnen, Warnung zum Zertifikat einmal bestätigen,')
   console.log('        „Mit dem Telefon anmelden“, QR-Code mit der Kamera des Telefons scannen.')
