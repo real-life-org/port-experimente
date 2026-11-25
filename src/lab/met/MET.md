@@ -14,8 +14,12 @@ trust is given only to someone met. This page says how each side tells.
 
 ## What is promised
 
-M-P1. A contact that came about only by a link that was sent, or by a code
-that was passed on, cannot be trusted: the trust act is refused.
+M-P1. Where a side states `sent` or `link` for an enactment, that
+enactment gives neither side a reason to trust: toward a contact that came
+about only by such enactments the trust act is refused. The promise is
+about the channels the devices recorded. A picture of a code that was
+passed on and then read by a camera is recorded as `displayed` and `scan`
+and is not told apart from a meeting.
 
 M-P2. Meeting later upgrades the contact: after a second enactment in
 person and the union of the two tuples (`../wiedererkennung/RECOGNITION.md`)
@@ -67,7 +71,7 @@ contact and the answer to the trust act.
 | Enactment | Both sides |
 |---|---|
 | `displayed` read by `scan` | met, trust taken |
-| `displayed` read by `link` (the code was passed on) | not met, `not-met` |
+| `displayed` read by `link` (the link behind the code was opened elsewhere) | not met, `not-met` |
 | `sent` read by `scan` | not met, `not-met` |
 | `sent` read by `link` | not met, `not-met` |
 | `sent`/`link`, later `displayed`/`scan`, before recognition is delivered | two contacts: the first not met, the second met |
@@ -82,7 +86,8 @@ contact and the answer to the trust act.
   opposite order on the two sides, the library does not unite them today
   (the trace `crossed-opening` on the recognition page): the contact from
   the link then stays not met beside the one that met.
-- A side can state a channel it did not observe. Nothing here detects that.
+- A side can state a channel it did not observe, and a camera can read a
+  code that was passed on as a picture. Nothing here detects either.
 
 ## Not here
 
