@@ -108,7 +108,8 @@ sends `decline` and the enactment is over for it. The responder takes
 Neither side issues or opens. In a trace `declined` is true for the inviter
 from the step its person declined, for the responder from the step it took
 `decline`.
-*Pinned by:* `traces/declined.json`.
+*Pinned by:* `traces/declined.json` (the decline, and that neither side
+opens).
 
 O9. **Handed over again.** A document a side was handed before (taken, or
 still held back) changes nothing when it is handed over again; it is not
@@ -160,6 +161,10 @@ first sentence had contradicted its table.
 
 ## Stated, not pinned
 
+- O8, that the responder drops what it holds back: in every schedule the
+  responder holds nothing when `decline` arrives, because the inviter sends
+  its issue only when its person accepted. The model drops the list; no
+  trace or walk tells that from leaving it.
 - O7: both parties of every trace send a card.
 - The inviter holds back an `issue-responder` that arrives before its
   person accepted, as the responder does in O5, and takes it in the step of
