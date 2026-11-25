@@ -14,7 +14,7 @@ const RELAYS = [{ kind: 'tsp-mediator', address: 'did:web:mediator.example' }]
 const other = (r: Role): Role => (r === 'inviter' ? 'responder' : 'inviter')
 
 /** which of the six documents this is, by its type and who sent it */
-function kindOf (from: Role, doc: any): Doc | null {
+export function kindOf (from: Role, doc: any): Doc | null {
   const t = String(doc?.type ?? '').split('/spec/')[1] ?? ''
   if (t === 'vrc/relationships/propose/0.1') return 'propose'
   if (t === 'vrc/relationships/propose/0.1#response') return 'accept'
