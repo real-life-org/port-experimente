@@ -63,6 +63,18 @@ export function handed (s: State, d: Doc): boolean {
   return d === 'issue-inviter' || d === 'issue-responder' ? me.issueTheirs : me.receiptTheirs
 }
 
+/** What a side sends again after a restart: its own documents the other side may still be waiting for. While the
+ *  enactment runs, everything it sent so far; once its tuple is open, only its receipt. */
+export function outbox (s: State, r: Role): Doc[] {
+  const me = s[r]
+  if (r === 'inviter') {
+    if (me.open) return ['receipt-of-issue-responder']
+    return [...(me.accept ? ['accept' as const] : []), ...(me.declined ? ['decline' as const] : []), ...(me.accept ? ['issue-inviter' as const] : []), ...(me.issueTheirs ? ['receipt-of-issue-responder' as const] : [])]
+  }
+  if (me.open) return ['receipt-of-issue-inviter']
+  return [...(me.propose ? ['propose' as const] : []), ...(me.accept ? ['issue-responder' as const] : []), ...(me.issueTheirs ? ['receipt-of-issue-inviter' as const] : [])]
+}
+
 export function possible (s: State, e: Event): boolean {
   if ('act' in e) return e.act === 'propose' ? !s.responder.propose : s.inviter.propose && !s.inviter.accept && !s.inviter.declined
   if ('redeliver' in e) return handed(s, e.redeliver)

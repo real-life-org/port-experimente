@@ -131,6 +131,16 @@ A copy sent again travels like any document and is, where it arrives, a
 document handed over again.
 *Pinned by:* `traces/handed-over-again.json`; the walk with one redelivery.
 
+O10. **After a restart** a side sends again its own documents the other
+side may still be waiting for. While its enactment runs, that is everything
+it sent so far: for the responder `propose`, then `issue-responder`, then
+its receipt; for the inviter `accept` (or `decline`), `issue-inviter`, then
+its receipt. Once its tuple is open, only its receipt: the other side may
+have received everything else, but this receipt may not have left. What is
+sent again arrives as a document handed over again (O9).
+*Pinned by:* `after.*.outbox` at every step of every trace and schedule,
+against the library's own list.
+
 ## The steps of a trace
 
 - `{ "act": "propose" }`: O1, the responder's part.
@@ -143,8 +153,9 @@ document handed over again.
 
 Every step records `sent`, the documents the step put in flight, in the
 order they were sent, and `after`: per side whether its tuple is open,
-whether the enactment was declined for it, and which documents it holds
-back; and what is in flight, sorted by name, a document sent twice named
+whether the enactment was declined for it, which documents it holds back,
+and its `outbox`, what it would send again after a restart (O10); and what
+is in flight, sorted by name, a document sent twice named
 twice.
 
 ## Read by a second implementation
@@ -175,9 +186,9 @@ first sentence had contradicted its table.
 
 ## Not in the model
 
-An error of the other side that is not a decline; expiry of the link; a
-second proposal on the same handle; what a side does after a restart; the
-offline back-code; several devices of one person.
+An error of the other side that is not a decline; a second proposal on the
+same handle; the offline back-code; several devices of one person. The
+time rules are `../freshness/FRESH.md`.
 
 ## Against the library
 
@@ -185,8 +196,8 @@ offline back-code; several devices of one person.
 holders and carries the documents one by one. At every step of every
 trace, of each of the ten schedules without a redelivery, and of the 6 896
 schedules with one redelivery at any point, the library sends the same
-documents, the same side holds a contact, and the same documents are held
-back. A document sent again has the content of the first. The test runs
+documents, the same side holds a contact, the same documents are held
+back, and the outbox is the same. A document sent again has the content of the first. The test runs
 300 of the 6 896; all were run once by hand (eight minutes).
 
 ## What follows for recognition
