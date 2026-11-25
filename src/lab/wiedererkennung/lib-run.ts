@@ -13,10 +13,11 @@
 //                     is the bundle handed over and the encounter accepted.
 //                     With `shared-connect` (the ceremony the app uses):
 //                     the other person shows a link, X proposes, the other
-//                     accepts, both issue; X's tuple opens when the other's
-//                     issue reaches it. The second opening is X's receipt
-//                     of that issue handed to the other, whose tuple opens
-//                     then.
+//                     accepts, both issue; every document is carried at once
+//                     but X's receipt of the other's issue, so X's tuple
+//                     opens and the other's does not. The second opening is
+//                     that receipt handed to the other, whose tuple opens
+//                     then (../tuple-opening/OPENING.md, O6).
 //   fetchProbe t on X X is handed the counterpart's continuity probe on t.
 //   fetchMapping on X X is handed a continuity mapping of the counterpart.
 //   sync              skipped (to a device that never acts).

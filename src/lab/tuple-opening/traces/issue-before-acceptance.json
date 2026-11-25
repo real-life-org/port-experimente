@@ -1,0 +1,152 @@
+{
+  "name": "issue-before-acceptance",
+  "shows": "The inviter's issue overtakes its acceptance. The responder holds it and answers nothing; when the acceptance arrives it issues and takes the held issue in the same step. The receipt of the inviter's issue then reaches the inviter before the responder's issue does: a receipt alone opens nothing.",
+  "steps": [
+    {
+      "act": "propose",
+      "sent": [
+        "propose"
+      ],
+      "after": {
+        "inviter": {
+          "open": false,
+          "held": []
+        },
+        "responder": {
+          "open": false,
+          "held": []
+        },
+        "inFlight": [
+          "propose"
+        ]
+      }
+    },
+    {
+      "deliver": "propose",
+      "sent": [],
+      "after": {
+        "inviter": {
+          "open": false,
+          "held": []
+        },
+        "responder": {
+          "open": false,
+          "held": []
+        },
+        "inFlight": []
+      }
+    },
+    {
+      "act": "accept",
+      "sent": [
+        "accept",
+        "issue-inviter"
+      ],
+      "after": {
+        "inviter": {
+          "open": false,
+          "held": []
+        },
+        "responder": {
+          "open": false,
+          "held": []
+        },
+        "inFlight": [
+          "accept",
+          "issue-inviter"
+        ]
+      }
+    },
+    {
+      "deliver": "issue-inviter",
+      "sent": [],
+      "after": {
+        "inviter": {
+          "open": false,
+          "held": []
+        },
+        "responder": {
+          "open": false,
+          "held": [
+            "issue-inviter"
+          ]
+        },
+        "inFlight": [
+          "accept"
+        ]
+      }
+    },
+    {
+      "deliver": "accept",
+      "sent": [
+        "issue-responder",
+        "receipt-of-issue-inviter"
+      ],
+      "after": {
+        "inviter": {
+          "open": false,
+          "held": []
+        },
+        "responder": {
+          "open": false,
+          "held": []
+        },
+        "inFlight": [
+          "issue-responder",
+          "receipt-of-issue-inviter"
+        ]
+      }
+    },
+    {
+      "deliver": "receipt-of-issue-inviter",
+      "sent": [],
+      "after": {
+        "inviter": {
+          "open": false,
+          "held": []
+        },
+        "responder": {
+          "open": false,
+          "held": []
+        },
+        "inFlight": [
+          "issue-responder"
+        ]
+      }
+    },
+    {
+      "deliver": "issue-responder",
+      "sent": [
+        "receipt-of-issue-responder"
+      ],
+      "after": {
+        "inviter": {
+          "open": true,
+          "held": []
+        },
+        "responder": {
+          "open": false,
+          "held": []
+        },
+        "inFlight": [
+          "receipt-of-issue-responder"
+        ]
+      }
+    },
+    {
+      "deliver": "receipt-of-issue-responder",
+      "sent": [],
+      "after": {
+        "inviter": {
+          "open": true,
+          "held": []
+        },
+        "responder": {
+          "open": true,
+          "held": []
+        },
+        "inFlight": []
+      }
+    }
+  ]
+}

@@ -1,0 +1,153 @@
+{
+  "name": "responder-first",
+  "shows": "The same documents, the two receipts delivered in the other order: the responder opens its tuple first. Which side opens first is decided by the carrier, not by the role.",
+  "steps": [
+    {
+      "act": "propose",
+      "sent": [
+        "propose"
+      ],
+      "after": {
+        "inviter": {
+          "open": false,
+          "held": []
+        },
+        "responder": {
+          "open": false,
+          "held": []
+        },
+        "inFlight": [
+          "propose"
+        ]
+      }
+    },
+    {
+      "deliver": "propose",
+      "sent": [],
+      "after": {
+        "inviter": {
+          "open": false,
+          "held": []
+        },
+        "responder": {
+          "open": false,
+          "held": []
+        },
+        "inFlight": []
+      }
+    },
+    {
+      "act": "accept",
+      "sent": [
+        "accept",
+        "issue-inviter"
+      ],
+      "after": {
+        "inviter": {
+          "open": false,
+          "held": []
+        },
+        "responder": {
+          "open": false,
+          "held": []
+        },
+        "inFlight": [
+          "accept",
+          "issue-inviter"
+        ]
+      }
+    },
+    {
+      "deliver": "accept",
+      "sent": [
+        "issue-responder"
+      ],
+      "after": {
+        "inviter": {
+          "open": false,
+          "held": []
+        },
+        "responder": {
+          "open": false,
+          "held": []
+        },
+        "inFlight": [
+          "issue-inviter",
+          "issue-responder"
+        ]
+      }
+    },
+    {
+      "deliver": "issue-inviter",
+      "sent": [
+        "receipt-of-issue-inviter"
+      ],
+      "after": {
+        "inviter": {
+          "open": false,
+          "held": []
+        },
+        "responder": {
+          "open": false,
+          "held": []
+        },
+        "inFlight": [
+          "issue-responder",
+          "receipt-of-issue-inviter"
+        ]
+      }
+    },
+    {
+      "deliver": "issue-responder",
+      "sent": [
+        "receipt-of-issue-responder"
+      ],
+      "after": {
+        "inviter": {
+          "open": false,
+          "held": []
+        },
+        "responder": {
+          "open": false,
+          "held": []
+        },
+        "inFlight": [
+          "receipt-of-issue-inviter",
+          "receipt-of-issue-responder"
+        ]
+      }
+    },
+    {
+      "deliver": "receipt-of-issue-responder",
+      "sent": [],
+      "after": {
+        "inviter": {
+          "open": false,
+          "held": []
+        },
+        "responder": {
+          "open": true,
+          "held": []
+        },
+        "inFlight": [
+          "receipt-of-issue-inviter"
+        ]
+      }
+    },
+    {
+      "deliver": "receipt-of-issue-inviter",
+      "sent": [],
+      "after": {
+        "inviter": {
+          "open": true,
+          "held": []
+        },
+        "responder": {
+          "open": true,
+          "held": []
+        },
+        "inFlight": []
+      }
+    }
+  ]
+}
