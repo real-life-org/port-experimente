@@ -1,0 +1,106 @@
+// The example web app behind HTTP: one page, a start route, a status route the
+// page polls, and the response_uri the wallet posts to (direct_post,
+// application/x-www-form-urlencoded). Node only; the browser session is a
+// cookie. Local use: http on 127.0.0.1; a real web app runs on https.
+
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { rand, b64uOf } from 'rltp-lib'
+import { WebApp } from './webapp'
+
+export const RESPONSE_PATH = '/anmeldung/antwort'
+
+const PAGE = `<!doctype html><meta charset="utf-8"><title>Beispiel-Web-App</title>
+<style>body{font:16px system-ui;max-width:38rem;margin:3rem auto;padding:0 1rem}code{word-break:break-all;display:block;background:#eee;padding:.6rem}</style>
+<h1>Beispiel-Web-App</h1>
+<p id="state">Nicht angemeldet.</p>
+<button id="go">Mit Web of Trust anmelden</button>
+<p id="hint" hidden>Diese Anfrage mit der App scannen (QR folgt in Schritt 2):</p>
+<code id="url" hidden></code>
+<script>
+const $=id=>document.getElementById(id)
+$('go').onclick=async()=>{
+  const r=await (await fetch('/start')).json()
+  $('url').textContent=r.url; $('url').hidden=false; $('hint').hidden=false
+  const t=setInterval(async()=>{const s=await (await fetch('/status')).json()
+    if(s.user){clearInterval(t);$('state').textContent='Angemeldet als '+(s.name?s.name+' ('+s.user+')':s.user);$('url').hidden=true;$('hint').hidden=true}},1000)
+}
+</script>`
+
+// Sessions. Two kinds of id, both issued by this server (visitors without a
+// login get no id at all):
+// - pre-login: minted fresh by /start and the only id the login request is
+//   bound to. Whoever knew the browser's earlier id (an earlier pre-login id,
+//   or one planted from outside) does not know this one.
+// - authenticated: minted when the completed login is collected. The
+//   pre-login id is dropped at that moment and can neither read the account
+//   nor collect the login a second time.
+// An id the server did not issue, or no longer accepts, is treated as absent.
+const cookieId = (req: IncomingMessage): string | null => /(?:^|;\s*)sitzung=([A-Za-z0-9_-]+)/.exec(req.headers.cookie ?? '')?.[1] ?? null
+const setCookie = (res: ServerResponse, id: string): void => { res.setHeader('Set-Cookie', `sitzung=${id}; HttpOnly; SameSite=Lax; Path=/`) }
+const freshId = (): string => b64uOf(rand(16))
+
+async function bodyOf (req: IncomingMessage): Promise<string> {
+  let raw = ''
+  for await (const chunk of req) { raw += chunk; if (raw.length > 64_000) throw new Error('zu groß') }
+  return raw
+}
+
+const json = (res: ServerResponse, code: number, o: unknown): void => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(o)) }
+
+/** Start the example web app on 127.0.0.1. Port 0 picks a free one. */
+export async function serve (port = 0, now: () => number = Date.now): Promise<{ server: Server, origin: string, app: WebApp }> {
+  let app!: WebApp
+  const preLogin = new Set<string>()
+  const authenticated = new Map<string, { user: string, name?: string }>()
+  const server = createServer((req, res) => {
+    void (async () => {
+      const path = (req.url ?? '/').split('?')[0]
+      if (req.method === 'GET' && path === '/') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); res.end(PAGE); return }
+      if (req.method === 'GET' && path === '/start') {
+        const old = cookieId(req); if (old) preLogin.delete(old)
+        const id = freshId(); preLogin.add(id); setCookie(res, id)
+        json(res, 200, { url: app.start(id, now()).url })
+        return
+      }
+      if (req.method === 'GET' && path === '/status') {
+        const id = cookieId(req)
+        const signedIn = id ? authenticated.get(id) : undefined
+        if (signedIn) { json(res, 200, signedIn); return }
+        if (id && preLogin.has(id)) {
+          const done = app.take(id)
+          if (done) {
+            preLogin.delete(id)
+            const fresh = freshId(); authenticated.set(fresh, done); setCookie(res, fresh)
+            json(res, 200, done)
+            return
+          }
+        }
+        json(res, 200, {})
+        return
+      }
+      if (req.method === 'POST' && path === RESPONSE_PATH) {
+        const form = new URLSearchParams(await bodyOf(req))
+        const r = await app.receive({ id_token: form.get('id_token') ?? undefined, state: form.get('state') ?? undefined }, now())
+        json(res, r.ok ? 200 : 400, r.ok ? {} : { error: 'invalid_request', error_description: r.reason })
+        return
+      }
+      res.writeHead(404); res.end()
+    })().catch(() => { res.writeHead(500); res.end() })
+  })
+  await new Promise<void>((ok) => server.listen(port, '127.0.0.1', ok))
+  const addr = server.address()
+  const origin = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : port}`
+  app = new WebApp(origin, origin + RESPONSE_PATH, 'Beispiel-Web-App')
+  return { server, origin, app }
+}
+
+/**
+ * What the wallet does with its answer: post it to the response_uri, and only
+ * there. A redirect is not followed (`redirect: 'manual'`): the wallet checked
+ * the origin of the response_uri, and a redirect could carry the signed token
+ * to another origin. A redirect answer counts as a failed post.
+ */
+export async function post (answer: { response_uri: string, body: { id_token: string, state: string } }): Promise<number> {
+  const r = await fetch(answer.response_uri, { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(answer.body).toString() })
+  return r.status >= 300 && r.status < 400 ? 0 : r.status
+}

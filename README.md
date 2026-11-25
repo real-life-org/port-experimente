@@ -124,6 +124,8 @@ S9 is almost all waiting.
 - `src/candidates/zustellung/`: the wires of the delivery bench.
 - `src/lab/mehrgeraet/`: the multi-device bench (E15): target model,
   holder device, world, scenarios.
+- `src/lab/anmeldung/`: logging into a web app with the Web of Trust app,
+  SIOPv2-shaped, one identifier per web app (prototype, `NOTES.md`).
 - `rust/`: WebAssembly wrappers (`p2panda-wasm`, `beekem-wasm`, `mls-wasm`),
   built by `scripts/build-wasm.sh`; the bindings land under
   `src/candidates/*/pkg/`. `rust/mls-wasm/examples/vectors.rs` exchanges
