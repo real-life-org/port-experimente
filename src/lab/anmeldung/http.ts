@@ -20,8 +20,7 @@ import { WebApp, type Login } from './webapp'
 export const RESPONSE_PATH = '/anmeldung/antwort'
 export const RETURN_PATH = '/fertig'
 export const WALLET_PATH = '/wallet'
-/** a pre-login id lives as long as the request bound to it; an authenticated session one hour */
-export const PRE_LOGIN_LIFETIME_MS = 5 * 60_000
+/** a signed-in session lives one hour; a login before it lives as webapp.ts decides */
 export const SESSION_LIFETIME_MS = 60 * 60_000
 export const SWEEP_EVERY_MS = 60_000
 export const MAX_OPEN_REQUESTS = 10_000
@@ -106,13 +105,11 @@ export interface ServeOptions {
 export async function serve (opts: ServeOptions = {}): Promise<{ server: Server, origin: string, app: WebApp }> {
   const now = opts.now ?? Date.now
   let app!: WebApp, origin!: string
-  // every id with the time it was issued; both are swept (review #139: the service runs for long)
-  const preLogin = new Map<string, number>()
+  // signed-in sessions with their start; a login before it is the web app's (one lifecycle, webapp.ts)
   const authenticated = new Map<string, { login: Login, at: number }>()
   const sweep = (): void => {
     const t = now()
     app?.sweep(t)
-    for (const [id, at] of preLogin) if (t - at > PRE_LOGIN_LIFETIME_MS) preLogin.delete(id)
     for (const [id, s] of authenticated) if (t - s.at > SESSION_LIFETIME_MS) authenticated.delete(id)
   }
   // behind a TLS-terminating proxy (Traefik) the server speaks http, but the browser sees https
@@ -128,9 +125,9 @@ export async function serve (opts: ServeOptions = {}): Promise<{ server: Server,
     if (req.method === 'GET' && path === '/start') {
       // a cap on open requests: nobody fills the memory by starting logins
       const cap = opts.maxOpenRequests ?? MAX_OPEN_REQUESTS
-      if (app.held().pending >= cap || preLogin.size >= cap) { json(res, 503, { error: 'busy' }); return }
-      const old = cookieId(req); if (old) preLogin.delete(old)
-      const id = freshId(); preLogin.set(id, now())
+      if (app.held().pending >= cap) { json(res, 503, { error: 'busy' }); return }
+      const old = cookieId(req); if (old && !authenticated.has(old)) app.forget(old)
+      const id = freshId()
       res.setHeader('Set-Cookie', `sitzung=${id}; HttpOnly; SameSite=Lax; Path=/${secure ? '; Secure' : ''}`)
       const same = url.searchParams.get('geraet') === 'gleich'
       const started = app.start(id, now(), same ? 'same-device' : 'cross-device')
@@ -145,17 +142,15 @@ export async function serve (opts: ServeOptions = {}): Promise<{ server: Server,
       const id = cookieId(req)
       const signedIn = id ? authenticated.get(id) : undefined
       if (signedIn) { json(res, 200, signedIn.login); return }
-      if (id && preLogin.has(id)) {
-        const done = app.take(id)
-        if (done) { preLogin.delete(id); signIn(res, done); json(res, 200, done); return }
-      }
+      const done = id ? app.take(id, now()) : null
+      if (done) { signIn(res, done); json(res, 200, done); return }
       json(res, 200, {})
       return
     }
     if (req.method === 'GET' && path === RETURN_PATH) {
       const id = cookieId(req), code = url.searchParams.get('response_code') ?? ''
-      const r = app.redeem(id && preLogin.has(id) ? id : '', code, now())   // a code is used up by any attempt
-      if (r.ok && id) { preLogin.delete(id); signIn(res, { user: r.user, ...(r.name ? { name: r.name } : {}) }); res.writeHead(303, { Location: '/' }); res.end(); return }
+      const r = app.redeem(id ?? '', code, now())   // a code is used up by any attempt
+      if (r.ok && id) { signIn(res, { user: r.user, ...(r.name ? { name: r.name } : {}) }); res.writeHead(303, { Location: '/' }); res.end(); return }
       html(res, 400, `<!doctype html><meta charset="utf-8"><style>${STYLE}</style><h1>Anmeldung nicht möglich</h1><p>${escapeHtml(r.ok ? 'keine Sitzung' : r.reason)}</p><p><a href="/">Zur Startseite</a></p>`)
       return
     }

@@ -190,3 +190,29 @@ test('Dauerbetrieb: Sitzungen laufen nach einer Stunde ab, offene Anfragen nach 
   }
 })
 
+// Review #139, round 2: the binding to the browser holds from the confirmation until the pickup ends
+test('Grenzfall über HTTP: bestätigt nach 4:59, abgeholt nach 5:01, in beiden Modi', async () => {
+  let t = Date.now()
+  const t0 = t
+  const { server: s4, origin: o4 } = await serve({ now: () => t })
+  try {
+    const laptop = await fetch(o4 + '/start')
+    const laptopId = laptop.headers.get('set-cookie')!.split(';')[0]!
+    const lreq = parseRequestUrl(((await laptop.json()) as any).url)!
+    const handy = await fetch(o4 + '/start?geraet=gleich')
+    const handyId = handy.headers.get('set-cookie')!.split(';')[0]!
+    const hreq = parseRequestUrl(((await handy.json()) as any).url)!
+    t = t0 + 299_000
+    const la = await confirm(lreq, new Uint8Array(32).fill(17), t)
+    expect(await post(la)).toBe(200)
+    const ha = await postAndRead(await confirm(hreq, new Uint8Array(32).fill(18), t))
+    expect(ha.status).toBe(200)
+    t = t0 + 301_000
+    expect(await (await fetch(o4 + '/status', { headers: { cookie: laptopId } })).json()).toEqual({ user: la.did })
+    const back = await fetch(ha.redirect_uri!, { headers: { cookie: handyId }, redirect: 'manual' })
+    expect(back.status).toBe(303)
+  } finally {
+    await new Promise<void>((ok) => s4.close(() => ok()))
+  }
+})
+

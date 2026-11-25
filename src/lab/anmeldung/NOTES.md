@@ -166,10 +166,14 @@ into `dist-anmeldung/`; `Dockerfile.anmeldung` puts the two files into a Node im
 `.github/workflows/anmeldung-image.yml` builds it on every pull request and pushes
 `ghcr.io/real-life-org/anmeldung-demo:latest` from `main`; `deploy/anmeldung/docker-compose.yml`
 runs it with the Traefik labels (domain from `ANMELDUNG_DOMAIN`). The page offers the demo wallet
-per login, for phones whose app does not have the login yet. Everything lives in memory and is swept
-(review #139): an answered request is dropped at once; open requests, logins nobody collected and
-pre-login ids after five minutes, return codes after one; a signed-in session after one hour, with its
-identifier and name. At most 10 000 open requests (then `/start` answers 503). A restart logs everyone
+per login, for phones whose app does not have the login yet. Everything lives in memory, with one
+lifecycle per login decided in `webapp.ts` alone (review #139): started, the request has five minutes
+to be confirmed; confirmed, the result and its binding to the browser that started it hold together
+for the pickup window counted from the confirmation (five minutes for laptop plus phone, one for the
+same-device return code) and end together; collected once, the HTTP layer issues a signed-in session
+of one hour. An answered request is dropped at once, everything else is swept when it ends; the HTTP
+layer keeps no login lifetimes of its own (before, its own five minutes from the start could cut off a
+login confirmed at 4:59). At most 10 000 open requests (then `/start` answers 503). A restart logs everyone
 out.
 
 ## Next steps

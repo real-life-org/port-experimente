@@ -210,4 +210,32 @@ describe('Anmeldung mit der Web-of-Trust-App', () => {
     app.sweep(T0 + 5 * 60_000 + 1)
     expect(app.held()).toEqual({ pending: 0, loggedIn: 0, codes: 0 })
   })
+
+  // Review #139, round 2: confirmed in time, collected after the request's own five minutes
+  test('Grenzfall: bestätigt nach 4:59, abgeholt nach 5:01, Laptop und Telefon', async () => {
+    const app = shop()
+    const req = app.start('laptop', T0).request
+    const a = await confirm(req, ANTON, T0 + 299_000)
+    expect(await app.receive(a.body, T0 + 299_000)).toEqual({ ok: true, user: a.did })
+    app.sweep(T0 + 301_000)
+    expect(app.take('laptop', T0 + 301_000)).toEqual({ user: a.did })
+    expect(app.take('laptop', T0 + 302_000)).toBeNull()                          // exactly once
+  })
+
+  test('Grenzfall: bestätigt nach 4:59, Rücksprung nach 5:01, gleiches Gerät', async () => {
+    const app = shop()
+    const req = app.start('handy', T0, 'same-device').request
+    const r = await app.receive((await confirm(req, ANTON, T0 + 299_000)).body, T0 + 299_000)
+    const code = new URL((r as { redirect_uri: string }).redirect_uri).searchParams.get('response_code')!
+    app.sweep(T0 + 301_000)
+    expect(app.redeem('handy', code, T0 + 301_000)).toMatchObject({ ok: true })
+  })
+
+  test('die Abholfrist zählt ab der Bestätigung und endet mit ihr', async () => {
+    const app = shop()
+    const req = app.start('laptop', T0).request
+    await app.receive((await confirm(req, ANTON, T0 + 60_000)).body, T0 + 60_000)
+    expect(app.take('laptop', T0 + 60_000 + 5 * 60_000 + 1)).toBeNull()
+  })
 })
+
