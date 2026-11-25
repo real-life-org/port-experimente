@@ -1,0 +1,120 @@
+{
+  "name": "declined",
+  "shows": "The inviter's person declines. The responder takes the decline; neither side opens, and nothing more is sent. The proposal handed over once more is answered with the decline again.",
+  "steps": [
+    {
+      "act": "propose",
+      "sent": [
+        "propose"
+      ],
+      "after": {
+        "inviter": {
+          "open": false,
+          "declined": false,
+          "held": []
+        },
+        "responder": {
+          "open": false,
+          "declined": false,
+          "held": []
+        },
+        "inFlight": [
+          "propose"
+        ]
+      }
+    },
+    {
+      "deliver": "propose",
+      "sent": [],
+      "after": {
+        "inviter": {
+          "open": false,
+          "declined": false,
+          "held": []
+        },
+        "responder": {
+          "open": false,
+          "declined": false,
+          "held": []
+        },
+        "inFlight": []
+      }
+    },
+    {
+      "act": "decline",
+      "sent": [
+        "decline"
+      ],
+      "after": {
+        "inviter": {
+          "open": false,
+          "declined": true,
+          "held": []
+        },
+        "responder": {
+          "open": false,
+          "declined": false,
+          "held": []
+        },
+        "inFlight": [
+          "decline"
+        ]
+      }
+    },
+    {
+      "deliver": "decline",
+      "sent": [],
+      "after": {
+        "inviter": {
+          "open": false,
+          "declined": true,
+          "held": []
+        },
+        "responder": {
+          "open": false,
+          "declined": true,
+          "held": []
+        },
+        "inFlight": []
+      }
+    },
+    {
+      "redeliver": "propose",
+      "sent": [
+        "decline"
+      ],
+      "after": {
+        "inviter": {
+          "open": false,
+          "declined": true,
+          "held": []
+        },
+        "responder": {
+          "open": false,
+          "declined": true,
+          "held": []
+        },
+        "inFlight": [
+          "decline"
+        ]
+      }
+    },
+    {
+      "deliver": "decline",
+      "sent": [],
+      "after": {
+        "inviter": {
+          "open": false,
+          "declined": true,
+          "held": []
+        },
+        "responder": {
+          "open": false,
+          "declined": true,
+          "held": []
+        },
+        "inFlight": []
+      }
+    }
+  ]
+}
