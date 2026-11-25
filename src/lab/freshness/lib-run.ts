@@ -6,11 +6,14 @@
 // results. Type checking is off: the results are read loosely.
 import { seedKeys, createHolder } from 'rltp-lib'
 import { InMemoryStore } from 'rltp-lib/testing'
+import { kindOf } from '../tuple-opening/lib-run'
+import type { Doc } from '../tuple-opening/rule'
 
 const RELAYS = [{ kind: 'tsp-mediator', address: 'did:web:mediator.example' }]
 const T0 = Date.parse('2026-10-15T09:00:00Z')
 export type Case = { channel: 'displayed' | 'sent', minutes?: number, proposedAt: number, deliveredAt: number, /** a second responder proposes on the same link, delivered a second later */ second?: boolean,
-  /** after the proposal is taken: the person accepts at `decideAt` (default: `restAt`) and every later document is carried at `restAt` */ restAt?: number, decideAt?: number }
+  /** after the proposal is taken: the person accepts at `decideAt` (default: `restAt`) and every later document is carried at `restAt` */ restAt?: number, decideAt?: number,
+  /** only this document is carried at `restAt`; every other one at once after the decision */ late?: Doc }
 export type Outcome = { expS: number, propose: string, inviter: string, second?: string, /** contacts each side holds at the end, with `restAt` */ contacts?: [number, number] }
 
 export async function run (c: Case): Promise<Outcome> {
@@ -39,12 +42,18 @@ export async function run (c: Case): Promise<Outcome> {
     const decideAt = T0 + (c.decideAt ?? c.restAt) * 1000
     const prompt = (await inviter.prompts()).find((x) => x.kind === 'shared-connect-confirm')
     let queue: Array<{ to: 'inviter' | 'responder', doc: unknown }> = []
-    const post = (from: 'inviter' | 'responder', r: any): void => { for (const e of (r.events ?? []).filter((x) => x.type === 'sharedconnect.send')) for (const doc of e.docs) queue.push({ to: from === 'inviter' ? 'responder' : 'inviter', doc }) }
+    const last: typeof queue = []
+    const post = (from: 'inviter' | 'responder', r: any): void => {
+      for (const e of (r.events ?? []).filter((x) => x.type === 'sharedconnect.send')) for (const doc of e.docs) (c.late !== undefined && kindOf(from, doc) === c.late ? last : queue).push({ to: from === 'inviter' ? 'responder' : 'inviter', doc })
+    }
+    const carry = async (at: number): Promise<void> => { while (queue.length) { const q = queue; queue = []; for (const d of q) post(d.to, await (d.to === 'inviter' ? inviter : responder).sharedConnectReceive(d.doc, dids[d.to === 'inviter' ? 'responder' : 'inviter'], at)) } }
     // a prompt that expired is gone or refuses the act: nothing is sent then
     if (prompt) post('inviter', await inviter.decide(prompt.id, 'accept', { when: decideAt, actId: 'run-accept' }))
+    if (c.late !== undefined) await carry(decideAt + 1000)        // everything but the late document, right after the decision
     // each side's upkeep runs before the late documents arrive: what it no longer keeps is gone
     for (const h of [inviter, responder]) await h.tick(when)
-    while (queue.length) { const q = queue; queue = []; for (const d of q) post(d.to, await (d.to === 'inviter' ? inviter : responder).sharedConnectReceive(d.doc, dids[d.to === 'inviter' ? 'responder' : 'inviter'], when)) }
+    queue.push(...last.splice(0))
+    await carry(when)
     contacts = [(await inviter.contacts()).length, (await responder.contacts()).length]
   }
   return { expS, ...first, ...(contacts ? { contacts } : {}), ...(c.second ? { second: (await take(await make(3), c.proposedAt, c.deliveredAt + 1)).inviter } : {}) }

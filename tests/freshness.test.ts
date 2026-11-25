@@ -11,6 +11,17 @@ test('how long a link lives: ten minutes unless stated, a shown code at most ten
   expect([lifetime('sent'), lifetime('displayed', 30), lifetime('sent', 30), lifetime('sent', 8 * 1440), lifetime('sent', 0.5), lifetime('sent', 1.012)]).toEqual([600, 600, 1800, 7 * DAY, 60, 61])
 })
 
+// The time is each side's own. A side that completed keeps its contact; a side whose enactment is still open when
+// its upkeep runs past the boundary loses it, and the last receipt, arriving after that, completes nothing there.
+test.each([
+  ['the inviter lacks the last receipt', 'receipt-of-issue-inviter', [0, 1]],
+  ['the responder lacks the last receipt', 'receipt-of-issue-responder', [1, 0]],
+] as const)('one receipt carried late, %s: in time both open; past the boundary the side that was complete stays open, the other does not', async (_n, late, past) => {
+  const c = { channel: 'displayed', proposedAt: 30, deliveredAt: 40, decideAt: 50, late } as const
+  expect((await run({ ...c, restAt: 30 * DAY + 659 })).contacts).toEqual([1, 1])
+  expect((await run({ ...c, restAt: 30 * DAY + 660 })).contacts).toEqual(past)
+})
+
 test('the responder proposes only before the link expires, to the second', async () => {
   for (const at of [598, 599, 600, 601]) {
     const o = await run({ channel: 'displayed', proposedAt: at, deliveredAt: at + 1 })

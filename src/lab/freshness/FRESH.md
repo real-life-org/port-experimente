@@ -12,13 +12,15 @@ whose note on freshness this page makes exact; what follows the proposal is
 F-P1. A code shown in person cannot be used later than ten minutes after it
 was shown, give or take a minute of clock difference.
 
-F-P2. Once the inviter took the proposal, the enactment has until thirty
-days after the link's expiry to complete: for the person to decide and for
-the documents that follow to arrive. Within that time a late decision and
-late documents still open both sides. After it a side no longer keeps the
-enactment, and neither opens.
+F-P2. Once the inviter took the proposal, each side has until thirty days
+after the link's expiry to complete its part: the inviter's person to
+decide, and each side to take the documents meant for it. A side that
+completed stays open. A side whose enactment is still open when its upkeep
+runs after that time no longer keeps it; documents that arrive later
+complete nothing there. So one side can hold a contact and the other none.
 *Pinned by:* the tests "the person decides until thirty days after the
-link expired" and "accepted at once, the rest carried late".
+link expired", "accepted at once, the rest carried late" and "one receipt
+carried late" (for either role).
 
 F-P3. One link connects one person.
 *Pinned by:* the test "one link, one proposer".
