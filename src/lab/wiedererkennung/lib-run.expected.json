@@ -72,6 +72,22 @@
       },
       "asExpected": false
     },
+    "head-changed-before-the-answer": {
+      "runnable": false,
+      "why": "a person acts on two devices; the library has one device per holder",
+      "notFollowed": [],
+      "afterStep": [],
+      "differsAt": [],
+      "contacts": {
+        "a": 0,
+        "b": 0
+      },
+      "expected": {
+        "a": 1,
+        "b": 1
+      },
+      "asExpected": false
+    },
     "joined-by-a-third": {
       "runnable": false,
       "why": "a person acts on two devices; the library has one device per holder",
@@ -295,7 +311,7 @@
       },
       "asExpected": false
     },
-    "stale-device-apart": {
+    "stale-device-other-rank": {
       "runnable": false,
       "why": "a person acts on two devices; the library has one device per holder",
       "notFollowed": [],
@@ -306,12 +322,12 @@
         "b": 0
       },
       "expected": {
-        "a": 2,
-        "b": 2
+        "a": 1,
+        "b": 1
       },
       "asExpected": false
     },
-    "stale-device-joined": {
+    "stale-device": {
       "runnable": false,
       "why": "a person acts on two devices; the library has one device per holder",
       "notFollowed": [],
@@ -417,6 +433,22 @@
       },
       "asExpected": false
     },
+    "head-changed-before-the-answer": {
+      "runnable": false,
+      "why": "a person acts on two devices; the library has one device per holder",
+      "notFollowed": [],
+      "afterStep": [],
+      "differsAt": [],
+      "contacts": {
+        "a": 0,
+        "b": 0
+      },
+      "expected": {
+        "a": 1,
+        "b": 1
+      },
+      "asExpected": false
+    },
     "joined-by-a-third": {
       "runnable": false,
       "why": "a person acts on two devices; the library has one device per holder",
@@ -640,7 +672,7 @@
       },
       "asExpected": false
     },
-    "stale-device-apart": {
+    "stale-device-other-rank": {
       "runnable": false,
       "why": "a person acts on two devices; the library has one device per holder",
       "notFollowed": [],
@@ -651,12 +683,12 @@
         "b": 0
       },
       "expected": {
-        "a": 2,
-        "b": 2
+        "a": 1,
+        "b": 1
       },
       "asExpected": false
     },
-    "stale-device-joined": {
+    "stale-device": {
       "runnable": false,
       "why": "a person acts on two devices; the library has one device per holder",
       "notFollowed": [],

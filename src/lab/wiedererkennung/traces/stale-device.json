@@ -1,13 +1,8 @@
 {
-  "name": "stale-device-apart",
-  "shows": "A device that knows the first tuple but not that its sibling united it with a second meets the same person again. It lists the first tuple; the other person lists the head of its relationship, the second. No pair is admitted by both: the third tuple stays a relationship of its own on every device, although each opening device knew the other person.",
+  "name": "stale-device",
+  "shows": "A device that knows the first tuple but not that its sibling united it with a second meets the same person again. It lists the first tuple; the other person lists the head of its relationship, the second. No pair is admitted by both. After its sibling's sync the device reads the kept probe again: the second tuple is its head now and the proven pair of the first two joins it to its candidate, so it hits. One relationship of all three. Without the proven head the third tuple stays a relationship of its own on every device, although each opening device knew the other person.",
   "setup": {
     "tuples": [
-      "t1",
-      "t2",
-      "t3"
-    ],
-    "rank": [
       "t1",
       "t2",
       "t3"
@@ -286,7 +281,9 @@
           ]
         ],
         "stillOwed": {
-          "a": [],
+          "a": [
+            "t2+t3"
+          ],
           "b": []
         }
       }
@@ -306,7 +303,9 @@
           ]
         ],
         "stillOwed": {
-          "a": [],
+          "a": [
+            "t2+t3"
+          ],
           "b": []
         }
       }
@@ -326,6 +325,64 @@
           ]
         ],
         "stillOwed": {
+          "a": [
+            "t2+t3"
+          ],
+          "b": []
+        }
+      }
+    },
+    {
+      "fetchMapping": "t2+t3",
+      "on": "b1",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2",
+            "t3"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": [
+            "t2+t3"
+          ]
+        }
+      }
+    },
+    {
+      "fetchMapping": "t2+t3",
+      "on": "a1",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2",
+            "t3"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
+    },
+    {
+      "sync": "a1",
+      "to": "a2",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2",
+            "t3"
+          ]
+        ],
+        "stillOwed": {
           "a": [],
           "b": []
         }
@@ -339,9 +396,7 @@
         "relationships": [
           [
             "t1",
-            "t2"
-          ],
-          [
+            "t2",
             "t3"
           ]
         ],
@@ -353,6 +408,63 @@
     }
   ],
   "expect": {
+    "relationships": {
+      "a1": [
+        [
+          "t1",
+          "t2",
+          "t3"
+        ]
+      ],
+      "a2": [
+        [
+          "t1",
+          "t2",
+          "t3"
+        ]
+      ],
+      "b1": [
+        [
+          "t1",
+          "t2",
+          "t3"
+        ]
+      ],
+      "b2": [
+        [
+          "t1",
+          "t2",
+          "t3"
+        ]
+      ]
+    },
+    "candidates": {
+      "a": {
+        "t1": [],
+        "t2": [
+          "t1"
+        ],
+        "t3": [
+          "t1"
+        ]
+      },
+      "b": {
+        "t1": [],
+        "t2": [
+          "t1"
+        ],
+        "t3": [
+          "t2"
+        ]
+      }
+    },
+    "stillOwed": {
+      "a": [],
+      "b": []
+    }
+  },
+  "control": {
+    "without": "noProvenHead",
     "relationships": {
       "a1": [
         [
@@ -390,30 +502,6 @@
           "t3"
         ]
       ]
-    },
-    "candidates": {
-      "a": {
-        "t1": [],
-        "t2": [
-          "t1"
-        ],
-        "t3": [
-          "t1"
-        ]
-      },
-      "b": {
-        "t1": [],
-        "t2": [
-          "t1"
-        ],
-        "t3": [
-          "t2"
-        ]
-      }
-    },
-    "stillOwed": {
-      "a": [],
-      "b": []
     }
   }
 }

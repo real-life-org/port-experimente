@@ -1,16 +1,12 @@
 {
-  "name": "stale-device-joined",
-  "shows": "The same schedule as stale-device-apart with the first tuple ranking above the second: the head of the other person's relationship is then the first tuple, both list it, and all three tuples end in one relationship. The rank decides.",
+  "name": "head-changed-before-the-answer",
+  "shows": "As stale-device, with a fourth tuple. The device with the older state hits on the proven head t2 and its person owes the mapping over t2+t3. Before the answer comes back, the sibling unites t2 with a fourth tuple of higher rank and syncs: t2 is no head any more. The answer over t2+t3 is still verified, because the pair is already owed; the hit decided. One relationship of all four on both sides.",
   "setup": {
     "tuples": [
       "t1",
       "t2",
-      "t3"
-    ],
-    "rank": [
-      "t2",
-      "t1",
-      "t3"
+      "t3",
+      "t4"
     ]
   },
   "steps": [
@@ -287,15 +283,15 @@
         ],
         "stillOwed": {
           "a": [
-            "t1+t3"
+            "t2+t3"
           ],
           "b": []
         }
       }
     },
     {
-      "sync": "a2",
-      "to": "a1",
+      "open": "t4",
+      "on": "a1",
       "effect": true,
       "after": {
         "relationships": [
@@ -304,19 +300,19 @@
             "t2"
           ],
           [
-            "t3"
+            "t4"
           ]
         ],
         "stillOwed": {
           "a": [
-            "t1+t3"
+            "t2+t3"
           ],
           "b": []
         }
       }
     },
     {
-      "fetchProbe": "t3",
+      "open": "t4",
       "on": "b1",
       "effect": true,
       "after": {
@@ -327,20 +323,72 @@
           ],
           [
             "t3"
+          ],
+          [
+            "t4"
           ]
         ],
         "stillOwed": {
           "a": [
-            "t1+t3"
+            "t2+t3"
+          ],
+          "b": []
+        }
+      }
+    },
+    {
+      "fetchProbe": "t4",
+      "on": "a1",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2"
+          ],
+          [
+            "t4"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t2+t3",
+            "t2+t4"
+          ],
+          "b": []
+        }
+      }
+    },
+    {
+      "fetchProbe": "t4",
+      "on": "b1",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2"
+          ],
+          [
+            "t3"
+          ],
+          [
+            "t4"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t2+t3",
+            "t2+t4"
           ],
           "b": [
-            "t1+t3"
+            "t2+t4"
           ]
         }
       }
     },
     {
-      "fetchMapping": "t1+t3",
+      "fetchMapping": "t2+t4",
       "on": "a1",
       "effect": true,
       "after": {
@@ -348,12 +396,36 @@
           [
             "t1",
             "t2",
+            "t4"
+          ]
+        ],
+        "stillOwed": {
+          "a": [
+            "t2+t3",
+            "t2+t4"
+          ],
+          "b": []
+        }
+      }
+    },
+    {
+      "fetchMapping": "t2+t4",
+      "on": "b1",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2",
+            "t4"
+          ],
+          [
             "t3"
           ]
         ],
         "stillOwed": {
           "a": [
-            "t1+t3"
+            "t2+t3"
           ],
           "b": []
         }
@@ -368,19 +440,22 @@
           [
             "t1",
             "t2",
+            "t4"
+          ],
+          [
             "t3"
           ]
         ],
         "stillOwed": {
           "a": [
-            "t1+t3"
+            "t2+t3"
           ],
           "b": []
         }
       }
     },
     {
-      "fetchMapping": "t1+t3",
+      "fetchMapping": "t2+t3",
       "on": "b1",
       "effect": true,
       "after": {
@@ -388,7 +463,67 @@
           [
             "t1",
             "t2",
-            "t3"
+            "t3",
+            "t4"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": [
+            "t2+t3"
+          ]
+        }
+      }
+    },
+    {
+      "fetchMapping": "t2+t3",
+      "on": "a2",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2",
+            "t3",
+            "t4"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
+    },
+    {
+      "sync": "a2",
+      "to": "a1",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2",
+            "t3",
+            "t4"
+          ]
+        ],
+        "stillOwed": {
+          "a": [],
+          "b": []
+        }
+      }
+    },
+    {
+      "fetchProbe": "t3",
+      "on": "b1",
+      "effect": true,
+      "after": {
+        "relationships": [
+          [
+            "t1",
+            "t2",
+            "t3",
+            "t4"
           ]
         ],
         "stillOwed": {
@@ -406,7 +541,8 @@
           [
             "t1",
             "t2",
-            "t3"
+            "t3",
+            "t4"
           ]
         ],
         "stillOwed": {
@@ -422,28 +558,32 @@
         [
           "t1",
           "t2",
-          "t3"
+          "t3",
+          "t4"
         ]
       ],
       "a2": [
         [
           "t1",
           "t2",
-          "t3"
+          "t3",
+          "t4"
         ]
       ],
       "b1": [
         [
           "t1",
           "t2",
-          "t3"
+          "t3",
+          "t4"
         ]
       ],
       "b2": [
         [
           "t1",
           "t2",
-          "t3"
+          "t3",
+          "t4"
         ]
       ]
     },
@@ -455,6 +595,9 @@
         ],
         "t3": [
           "t1"
+        ],
+        "t4": [
+          "t2"
         ]
       },
       "b": {
@@ -463,7 +606,11 @@
           "t1"
         ],
         "t3": [
-          "t1"
+          "t2"
+        ],
+        "t4": [
+          "t2",
+          "t3"
         ]
       }
     },

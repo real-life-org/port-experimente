@@ -17,15 +17,16 @@ test.each(traces.map((t) => [t.name, t] as const))('trace %s replays to what it 
   expect(run.state.people.a.candidates).toEqual(t.expect.candidates.a)
   expect(run.state.people.b.candidates).toEqual(t.expect.candidates.b)
   expect({ a: r.outstanding(run.state, 'a'), b: r.outstanding(run.state, 'b') }).toEqual(t.expect.stillOwed)
-  if (t.readOnce) {
-    const c = { ...t.setup, readOnce: true }, end = rule(c).settle(replay(c, t.steps as Event[], true).state).state
-    for (const d of DEVICES) expect(relationships(end.devices[d].tuples, end.devices[d].united)).toEqual(t.readOnce.relationships[d])
+  if (t.control) {
+    const c = { ...t.setup, [t.control.without]: true }, end = rule(c).settle(replay(c, t.steps as Event[], true).state).state
+    for (const d of DEVICES) expect(relationships(end.devices[d].tuples, end.devices[d].united)).toEqual(t.control.relationships[d])
+    expect(t.control.relationships).not.toEqual(t.expect.relationships)
   }
 })
 
 test('the trace files are what the walk gives today', () => {
   const fresh = (JSON.parse(JSON.stringify(build())) as Trace[]).sort((x, y) => x.name.localeCompare(y.name))
-  expect(traces).toEqual(fresh)
+  expect([...traces].sort((x, y) => x.name.localeCompare(y.name))).toEqual(fresh)
 }, 240_000)
 
 test('the page names every trace, and only traces that exist', () => {
@@ -34,14 +35,13 @@ test('the page names every trace, and only traces that exist', () => {
   expect(named).toEqual(files)
 })
 
-// A variant under trial (rule.ts, `admitProvenHead`): a kept probe may hit the head a proven pair joins to a
-// candidate. Not the rule; pinned so that what it changes is on record.
-test('variant: the device with an older state ends in one relationship, whatever the rank; the other traces end as before', () => {
+// The proven head changes one pinned case and no other: without it, only stale-device ends differently.
+test('without the proven head every trace but stale-device and the one built on it ends as it does with it', () => {
+  const differs: string[] = []
   for (const t of traces) {
-    const c = { ...t.setup, admitProvenHead: true }, end = rule(c).settle(replay(c, t.steps as Event[], true).state).state
-    const shown = DEVICES.map((d) => relationships(end.devices[d].tuples, end.devices[d].united))
-    if (t.name === 'stale-device-apart') for (const g of shown) expect(g).toEqual([['t1', 't2', 't3']])
-    else for (const [i, d] of DEVICES.entries()) expect(shown[i]).toEqual(t.expect.relationships[d])
+    const c = { ...t.setup, noProvenHead: true }, end = rule(c).settle(replay(c, t.steps as Event[], true).state).state
+    if (DEVICES.some((d) => JSON.stringify(relationships(end.devices[d].tuples, end.devices[d].united)) !== JSON.stringify(t.expect.relationships[d]))) differs.push(t.name)
     expect([rule(c).outstanding(end, 'a'), rule(c).outstanding(end, 'b')]).toEqual([[], []])
   }
+  expect(differs).toEqual(['head-changed-before-the-answer', 'stale-device'])
 })
