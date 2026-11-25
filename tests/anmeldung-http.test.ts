@@ -140,3 +140,22 @@ test('eine zweite Antwort auf dieselbe Anfrage bekommt 400 mit Grund', async () 
   expect(again.status).toBe(400)
   expect(await again.json()).toEqual({ error: 'invalid_request', error_description: 'Anfrage schon beantwortet' })
 })
+
+test('die Antwortadresse darf von jeder Origin gelesen werden (die App antwortet aus ihrem WebView)', async () => {
+  const req = parseRequestUrl(((await (await fetch(origin + '/start')).json()) as any).url)!
+  const answer = await confirm(req, new Uint8Array(32).fill(15), Date.now())
+  const r = await fetch(answer.response_uri, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: 'https://localhost' }, body: new URLSearchParams(answer.body).toString() })
+  expect(r.status).toBe(200)
+  expect(r.headers.get('access-control-allow-origin')).toBe('*')
+})
+
+test('mit wallet: app zeigen QR-Code und Link auf die App (https://web-of-trust.de/a)', async () => {
+  const { server: s2, origin: o2 } = await serve({ wallet: 'app' })
+  try {
+    const r = await (await fetch(o2 + '/start')).json() as { url: string, walletLink: string }
+    expect(r.walletLink).toBe(`https://web-of-trust.de/a#${encodeURIComponent(r.url)}`)
+  } finally {
+    await new Promise<void>((ok) => s2.close(() => ok()))
+  }
+})
+

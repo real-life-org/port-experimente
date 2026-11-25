@@ -136,6 +136,22 @@ mints a new, authenticated id and drops the pre-login one.
 - **The QR code is dense**, because it carries the whole request (request
   by value). Request by reference (`request_uri`) would make it small.
 
+## The real app as wallet (25 November)
+
+`ANMELDUNG_WALLET=app pnpm anmeldung:demo` makes QR code and link point at the Web of Trust app
+(`https://web-of-trust.de/a#…`, its experimental login, web-of-trust#553) instead of the demo wallet.
+Two conditions for that, both found while switching:
+
+- **A certificate the phone trusts.** The app posts its answer to the response_uri; it cannot be told
+  to accept a self-signed certificate as a browser can. The example web app needs a public address
+  with a valid certificate (a tunnel or a server); the LAN address with the self-signed certificate
+  only works with the demo wallet.
+- **CORS at the response_uri.** The app answers from its web view (origin `https://localhost` on
+  Android, `capacitor://localhost` on iOS) with `fetch`, which Capacitor does not route natively
+  here. The response_uri therefore sends `Access-Control-Allow-Origin: *`; a web app without it
+  receives the login but the app cannot read the answer and reports it as unreachable. SIOPv2
+  assumes a native wallet without CORS; this is a difference for every web app the app logs into.
+
 ## Next steps
 
 3. The confirmation screen in the v3 app, claiming the `openid://` scheme

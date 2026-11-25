@@ -20,6 +20,8 @@ import { WebApp, type Login } from './webapp'
 export const RESPONSE_PATH = '/anmeldung/antwort'
 export const RETURN_PATH = '/fertig'
 export const WALLET_PATH = '/wallet'
+/** the Web of Trust app's link for a login request */
+export const APP_LINK = 'https://web-of-trust.de/a'
 
 const STYLE = `body{font:17px/1.5 system-ui,sans-serif;max-width:34rem;margin:2.5rem auto;padding:0 1rem;color:#1b2420;background:#f6f8f7}
 h1{font-size:1.6rem;margin:0 0 1rem}button,.button{font:inherit;padding:.7rem 1rem;border-radius:6px;border:1px solid #2c6a55;background:#2c6a55;color:#fff;cursor:pointer;text-decoration:none;display:inline-block}
@@ -85,6 +87,9 @@ export interface ServeOptions {
   https?: { key: string, cert: string }
   publicOrigin?: string                           // what the web app calls itself; default from the bound address
   walletScript?: () => Promise<string>            // the bundled demo wallet (demo.ts)
+  /** where QR code and link send the person: the demo wallet page (default), or the Web of Trust app
+   *  through its app link https://web-of-trust.de/a#… (the app's experimental login, web-of-trust#553) */
+  wallet?: 'demo' | 'app'
   now?: () => number
 }
 
@@ -107,7 +112,7 @@ export async function serve (opts: ServeOptions = {}): Promise<{ server: Server,
       res.setHeader('Set-Cookie', `sitzung=${id}; HttpOnly; SameSite=Lax; Path=/${opts.https ? '; Secure' : ''}`)
       const same = url.searchParams.get('geraet') === 'gleich'
       const started = app.start(id, now(), same ? 'same-device' : 'cross-device')
-      const walletLink = `${origin}${WALLET_PATH}#${encodeURIComponent(started.url)}`
+      const walletLink = opts.wallet === 'app' ? `${APP_LINK}#${encodeURIComponent(started.url)}` : `${origin}${WALLET_PATH}#${encodeURIComponent(started.url)}`
       json(res, 200, same ? { url: started.url, walletLink } : { url: started.url, walletLink, qrSvg: await QRCode.toString(walletLink, { type: 'svg', margin: 2, errorCorrectionLevel: 'L' }) })
       return
     }
@@ -130,6 +135,9 @@ export async function serve (opts: ServeOptions = {}): Promise<{ server: Server,
       return
     }
     if (req.method === 'POST' && path === RESPONSE_PATH) {
+      // the Web of Trust app answers from its web view (origin https://localhost or capacitor://localhost),
+      // so the response_uri lets any origin read its answer; the request is a simple form post (no preflight)
+      res.setHeader('Access-Control-Allow-Origin', '*')
       const form = new URLSearchParams(await bodyOf(req))
       const r = await app.receive({ id_token: form.get('id_token') ?? undefined, state: form.get('state') ?? undefined }, now())
       if (!r.ok) { json(res, 400, { error: 'invalid_request', error_description: r.reason }); return }

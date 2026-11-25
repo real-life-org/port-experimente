@@ -53,8 +53,9 @@ export async function main (port = Number(process.env.PORT ?? 8790)): Promise<vo
   const ip = lanAddress()
   const origin = `https://${ip}:${port}`
   const script = await walletBundle()
-  await serve({ port, host: '0.0.0.0', https: certificate(ip), publicOrigin: origin, walletScript: async () => script })
-  console.log(`\nBeispiel-Web-App läuft: ${origin}\n`)
+  const wallet = process.env.ANMELDUNG_WALLET === 'app' ? 'app' : 'demo'
+  await serve({ port, host: '0.0.0.0', https: certificate(ip), publicOrigin: origin, walletScript: async () => script, wallet })
+  console.log(`\nBeispiel-Web-App läuft: ${origin} (Wallet: ${wallet === 'app' ? 'Web-of-Trust-App über https://web-of-trust.de/a' : 'Demo-Seite'})\n`)
   console.log('Laptop: diese Adresse im Browser öffnen, Warnung zum Zertifikat einmal bestätigen,')
   console.log('        „Mit dem Telefon anmelden“, QR-Code mit der Kamera des Telefons scannen.')
   console.log('Telefon: dieselbe Adresse im Browser öffnen, „Auf diesem Gerät anmelden“.')
