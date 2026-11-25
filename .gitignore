@@ -1,5 +1,6 @@
 node_modules
 dist
+dist-anmeldung
 *.log
 rust/*/target
 src/candidates/p2panda/pkg

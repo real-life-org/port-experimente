@@ -154,6 +154,8 @@ test('mit wallet: app zeigen QR-Code und Link auf die App (https://web-of-trust.
   try {
     const r = await (await fetch(o2 + '/start')).json() as { url: string, walletLink: string }
     expect(r.walletLink).toBe(`https://web-of-trust.de/a#${encodeURIComponent(r.url)}`)
+    const demo = await (await fetch(o2 + '/start?wallet=demo')).json() as { url: string, walletLink: string }
+    expect(demo.walletLink).toBe(`${o2}/wallet#${encodeURIComponent(demo.url)}`)
   } finally {
     await new Promise<void>((ok) => s2.close(() => ok()))
   }

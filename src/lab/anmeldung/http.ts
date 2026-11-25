@@ -37,19 +37,21 @@ const PAGE = `<!doctype html><meta charset="utf-8"><meta name="viewport" content
   <button id="phone">Mit dem Telefon anmelden</button>
   <button id="here" class="secondary">Auf diesem Gerät anmelden</button>
 </div>
+<label class="muted" id="demobox"><input type="checkbox" id="demo" style="width:auto;margin-right:.4rem">Demo-Wallet im Browser benutzen (statt der Web-of-Trust-App)</label>
 <div id="qrbox" hidden><p>Scanne den Code mit der Kamera deines Telefons.</p><div id="qr"></div>
 <p class="muted">Der Code gilt fünf Minuten. Er verschwindet, sobald du in der App bestätigt hast.</p></div>
 <script>
 const $=id=>document.getElementById(id)
-const show=s=>{$('state').innerHTML='';const d=document.createElement('div');d.className='ok';d.textContent='Angemeldet als '+(s.name?s.name+' · ':'')+s.user;$('state').append(d);$('choices').hidden=true;$('qrbox').hidden=true}
+const show=s=>{$('state').innerHTML='';const d=document.createElement('div');d.className='ok';d.textContent='Angemeldet als '+(s.name?s.name+' · ':'')+s.user;$('state').append(d);$('choices').hidden=true;$('qrbox').hidden=true;$('demobox').hidden=true}
+const w=()=>$('demo').checked?'&wallet=demo':''
 fetch('/status').then(r=>r.json()).then(s=>{if(s.user)show(s)})
 let timer
 $('phone').onclick=async()=>{
-  const r=await (await fetch('/start')).json()
+  const r=await (await fetch('/start?geraet=anderes'+w())).json()
   $('qr').innerHTML=r.qrSvg; $('qrbox').hidden=false
   clearInterval(timer); timer=setInterval(async()=>{const s=await (await fetch('/status')).json(); if(s.user){clearInterval(timer);show(s)}},1000)
 }
-$('here').onclick=async()=>{ const r=await (await fetch('/start?geraet=gleich')).json(); location.href=r.walletLink }
+$('here').onclick=async()=>{ const r=await (await fetch('/start?geraet=gleich'+w())).json(); location.href=r.walletLink }
 </script>`
 
 const WALLET_PAGE = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Web of Trust · Anmeldung</title><link rel="icon" href="data:,">
@@ -99,9 +101,11 @@ export async function serve (opts: ServeOptions = {}): Promise<{ server: Server,
   let app!: WebApp, origin!: string
   const preLogin = new Set<string>()
   const authenticated = new Map<string, Login>()
+  // behind a TLS-terminating proxy (Traefik) the server speaks http, but the browser sees https
+  const secure = Boolean(opts.https) || (opts.publicOrigin ?? '').startsWith('https:')
   const signIn = (res: ServerResponse, login: Login): void => {
     const fresh = freshId(); authenticated.set(fresh, login)
-    res.setHeader('Set-Cookie', `sitzung=${fresh}; HttpOnly; SameSite=Lax; Path=/${opts.https ? '; Secure' : ''}`)
+    res.setHeader('Set-Cookie', `sitzung=${fresh}; HttpOnly; SameSite=Lax; Path=/${secure ? '; Secure' : ''}`)
   }
   const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const url = new URL(req.url ?? '/', origin), path = url.pathname
@@ -109,10 +113,13 @@ export async function serve (opts: ServeOptions = {}): Promise<{ server: Server,
     if (req.method === 'GET' && path === '/start') {
       const old = cookieId(req); if (old) preLogin.delete(old)
       const id = freshId(); preLogin.add(id)
-      res.setHeader('Set-Cookie', `sitzung=${id}; HttpOnly; SameSite=Lax; Path=/${opts.https ? '; Secure' : ''}`)
+      res.setHeader('Set-Cookie', `sitzung=${id}; HttpOnly; SameSite=Lax; Path=/${secure ? '; Secure' : ''}`)
       const same = url.searchParams.get('geraet') === 'gleich'
       const started = app.start(id, now(), same ? 'same-device' : 'cross-device')
-      const walletLink = opts.wallet === 'app' ? `${APP_LINK}#${encodeURIComponent(started.url)}` : `${origin}${WALLET_PATH}#${encodeURIComponent(started.url)}`
+      // the page may ask for the demo wallet (or the app) per login; otherwise the server's choice
+      const asked = url.searchParams.get('wallet')
+      const wallet = asked === 'demo' || asked === 'app' ? asked : (opts.wallet ?? 'demo')
+      const walletLink = wallet === 'app' ? `${APP_LINK}#${encodeURIComponent(started.url)}` : `${origin}${WALLET_PATH}#${encodeURIComponent(started.url)}`
       json(res, 200, same ? { url: started.url, walletLink } : { url: started.url, walletLink, qrSvg: await QRCode.toString(walletLink, { type: 'svg', margin: 2, errorCorrectionLevel: 'L' }) })
       return
     }

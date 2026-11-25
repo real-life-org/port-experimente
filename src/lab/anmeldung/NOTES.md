@@ -152,6 +152,18 @@ Two conditions for that, both found while switching:
   receives the login but the app cannot read the answer and reports it as unreachable. SIOPv2
   assumes a native wallet without CORS; this is a difference for every web app the app logs into.
 
+## As a service
+
+The example web app also runs as a service on the team's server, so others can try the login
+without a laptop on the same network: `scripts/build-anmeldung-server.mjs` bundles `server.ts`
+(plain http behind Traefik, `PUBLIC_ORIGIN`, `ANMELDUNG_WALLET`, default `app`) and the wallet page
+into `dist-anmeldung/`; `Dockerfile.anmeldung` puts the two files into a Node image;
+`.github/workflows/anmeldung-image.yml` builds it on every pull request and pushes
+`ghcr.io/real-life-org/anmeldung-demo:latest` from `main`; `deploy/anmeldung/docker-compose.yml`
+runs it with the Traefik labels (domain from `ANMELDUNG_DOMAIN`). The page offers the demo wallet
+per login, for phones whose app does not have the login yet. Sessions live in memory: a restart logs
+everyone out.
+
 ## Next steps
 
 3. The confirmation screen in the v3 app, claiming the `openid://` scheme
