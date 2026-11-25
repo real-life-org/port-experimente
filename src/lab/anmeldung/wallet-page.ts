@@ -3,21 +3,10 @@
 // show, signs with a test identity kept only in this browser, posts the answer
 // and, for a same-device request, opens the web app's return address.
 
-import { b64uOf, fromB64u, anchorOfEd } from 'rltp-lib'
+import { anchorOfEd } from 'rltp-lib'
 import { parseRequestUrl } from './siop'
 import { confirm, loginKey, mayOpen, review } from './wallet'
-
-const STORE = 'anmeldung-test-wurzel'
-
-function testRoot (): Uint8Array {
-  try {
-    const kept = localStorage.getItem(STORE)
-    if (kept) return fromB64u(kept)
-    const fresh = crypto.getRandomValues(new Uint8Array(32))
-    localStorage.setItem(STORE, b64uOf(fresh))
-    return fresh
-  } catch { return crypto.getRandomValues(new Uint8Array(32)) }
-}
+import { persistentRoot } from './wallet-store'
 
 const app = document.getElementById('app')!
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, cls?: string): HTMLElementTagNameMap[K] => {
@@ -30,7 +19,14 @@ async function main (): Promise<void> {
   if (!req) { say(el('p', 'Keine Anmeldeanfrage. Diese Seite öffnet sich über den Code oder Link einer Web-App.')); return }
   const shown = review(req)
   if (!shown.ok) { say(el('p', `Anmeldung abgelehnt: ${shown.reason}.`)); return }
-  const root = testRoot()
+  const stored = persistentRoot(() => localStorage, (n) => crypto.getRandomValues(new Uint8Array(n)))
+  if (!stored.ok) {
+    const again = el('button', 'Erneut versuchen'); again.onclick = () => location.reload()
+    const row = el('div', undefined, 'row'); row.append(again)
+    say(el('p', `Anmeldung nicht möglich. ${stored.reason}`), el('p', 'Erlaube Speicher für diese Seite oder öffne sie in einem normalen Fenster, dann versuche es erneut. Es wurde nichts gesendet.', 'muted'), row)
+    return
+  }
+  const root = stored.root
   const did = anchorOfEd((await loginKey(root, req.client_id)).pubRaw)
 
   const host = el('strong', shown.host)
