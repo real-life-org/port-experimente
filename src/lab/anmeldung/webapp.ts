@@ -69,4 +69,15 @@ export class WebApp {
   poll (session: string): { user: string, name?: string } | null {
     return this.loggedIn.get(session) ?? null
   }
+
+  /**
+   * Hand a completed login over exactly once and forget it under this
+   * session id. The HTTP layer uses this to move the login to a fresh,
+   * authenticated session; the pre-login id means nothing afterwards.
+   */
+  take (session: string): { user: string, name?: string } | null {
+    const entry = this.loggedIn.get(session) ?? null
+    this.loggedIn.delete(session)
+    return entry
+  }
 }

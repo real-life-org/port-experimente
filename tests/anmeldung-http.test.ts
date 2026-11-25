@@ -64,6 +64,35 @@ test('eine vorgegebene Sitzungs-ID wird nicht übernommen', async () => {
   expect(await asIssued.json()).toEqual({ user: answer.did })
 })
 
+test('beim Login gibt es eine neue Sitzung; die alte ID allein bekommt danach nichts', async () => {
+  const start = await fetch(origin + '/start')
+  const before = start.headers.get('set-cookie')!.split(';')[0]!
+  const answer = await confirm(parseRequestUrl(((await start.json()) as any).url)!, new Uint8Array(32).fill(11), Date.now())
+  expect(await post(answer)).toBe(200)
+
+  const collect = await fetch(origin + '/status', { headers: { cookie: before } })
+  expect(await collect.json()).toEqual({ user: answer.did })
+  const after = collect.headers.get('set-cookie')!.split(';')[0]!
+  expect(after).not.toBe(before)
+
+  const withOld = await fetch(origin + '/status', { headers: { cookie: before } })
+  expect(await withOld.json()).toEqual({})                    // cannot read the account
+  expect(withOld.headers.get('set-cookie')).toBeNull()        // cannot collect the new session
+  const withNew = await fetch(origin + '/status', { headers: { cookie: after } })
+  expect(await withNew.json()).toEqual({ user: answer.did })
+})
+
+test('eine früher ausgegebene ID gilt nach einem neuen Start nicht mehr', async () => {
+  const first = (await fetch(origin + '/start')).headers.get('set-cookie')!.split(';')[0]!
+  const second = await fetch(origin + '/start', { headers: { cookie: first } })
+  const now = second.headers.get('set-cookie')!.split(';')[0]!
+  expect(now).not.toBe(first)
+  const answer = await confirm(parseRequestUrl(((await second.json()) as any).url)!, new Uint8Array(32).fill(12), Date.now())
+  expect(await post(answer)).toBe(200)
+  expect(await (await fetch(origin + '/status', { headers: { cookie: first } })).json()).toEqual({})
+  expect(await (await fetch(origin + '/status', { headers: { cookie: now } })).json()).toEqual({ user: answer.did })
+})
+
 test('eine zweite Antwort auf dieselbe Anfrage bekommt 400 mit Grund', async () => {
   const page = browser()
   const answer = await confirm(parseRequestUrl((await page('/start')).url)!, new Uint8Array(32).fill(8), Date.now())

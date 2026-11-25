@@ -26,17 +26,18 @@ $('go').onclick=async()=>{
 }
 </script>`
 
-// Only session ids this server issued are taken from the cookie. An unknown
-// id (one a third party chose and planted) gets a fresh one, so a login is
-// never bound to an id someone else knows in advance.
-function sessionOf (issued: Set<string>, req: IncomingMessage, res: ServerResponse): string {
-  const m = /(?:^|;\s*)sitzung=([A-Za-z0-9_-]+)/.exec(req.headers.cookie ?? '')
-  if (m?.[1] && issued.has(m[1])) return m[1]
-  const s = b64uOf(rand(16))
-  issued.add(s)
-  res.setHeader('Set-Cookie', `sitzung=${s}; HttpOnly; SameSite=Lax; Path=/`)
-  return s
-}
+// Sessions. Two kinds of id, both issued by this server (visitors without a
+// login get no id at all):
+// - pre-login: minted fresh by /start and the only id the login request is
+//   bound to. Whoever knew the browser's earlier id (an earlier pre-login id,
+//   or one planted from outside) does not know this one.
+// - authenticated: minted when the completed login is collected. The
+//   pre-login id is dropped at that moment and can neither read the account
+//   nor collect the login a second time.
+// An id the server did not issue, or no longer accepts, is treated as absent.
+const cookieId = (req: IncomingMessage): string | null => /(?:^|;\s*)sitzung=([A-Za-z0-9_-]+)/.exec(req.headers.cookie ?? '')?.[1] ?? null
+const setCookie = (res: ServerResponse, id: string): void => { res.setHeader('Set-Cookie', `sitzung=${id}; HttpOnly; SameSite=Lax; Path=/`) }
+const freshId = (): string => b64uOf(rand(16))
 
 async function bodyOf (req: IncomingMessage): Promise<string> {
   let raw = ''
@@ -49,13 +50,34 @@ const json = (res: ServerResponse, code: number, o: unknown): void => { res.writ
 /** Start the example web app on 127.0.0.1. Port 0 picks a free one. */
 export async function serve (port = 0, now: () => number = Date.now): Promise<{ server: Server, origin: string, app: WebApp }> {
   let app!: WebApp
-  const issued = new Set<string>()
+  const preLogin = new Set<string>()
+  const authenticated = new Map<string, { user: string, name?: string }>()
   const server = createServer((req, res) => {
     void (async () => {
       const path = (req.url ?? '/').split('?')[0]
       if (req.method === 'GET' && path === '/') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); res.end(PAGE); return }
-      if (req.method === 'GET' && path === '/start') { json(res, 200, { url: app.start(sessionOf(issued, req, res), now()).url }); return }
-      if (req.method === 'GET' && path === '/status') { json(res, 200, app.poll(sessionOf(issued, req, res)) ?? {}); return }
+      if (req.method === 'GET' && path === '/start') {
+        const old = cookieId(req); if (old) preLogin.delete(old)
+        const id = freshId(); preLogin.add(id); setCookie(res, id)
+        json(res, 200, { url: app.start(id, now()).url })
+        return
+      }
+      if (req.method === 'GET' && path === '/status') {
+        const id = cookieId(req)
+        const signedIn = id ? authenticated.get(id) : undefined
+        if (signedIn) { json(res, 200, signedIn); return }
+        if (id && preLogin.has(id)) {
+          const done = app.take(id)
+          if (done) {
+            preLogin.delete(id)
+            const fresh = freshId(); authenticated.set(fresh, done); setCookie(res, fresh)
+            json(res, 200, done)
+            return
+          }
+        }
+        json(res, 200, {})
+        return
+      }
       if (req.method === 'POST' && path === RESPONSE_PATH) {
         const form = new URLSearchParams(await bodyOf(req))
         const r = await app.receive({ id_token: form.get('id_token') ?? undefined, state: form.get('state') ?? undefined }, now())
