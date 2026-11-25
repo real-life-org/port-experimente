@@ -18,9 +18,16 @@ decide, and each side to take the documents meant for it. A side that
 completed stays open. A side whose enactment is still open when its upkeep
 runs after that time no longer keeps it; documents that arrive later
 complete nothing there. So one side can hold a contact and the other none.
+The thirty days are for an enactment that opened no contact. A side that
+opened its tuple from a code, without a carrier
+(`../offline/OFFLINE.md`, X1, X2), keeps the contact and the enactment
+whatever time passes: the responder that showed its code back still holds
+both after thirty-one days without any delivery, and a document that
+arrives then is still taken.
 *Pinned by:* the tests "the person decides until thirty days after the
 link expired", "accepted at once, the rest carried late" and "one receipt
-carried late" (for either role).
+carried late" (for either role); for the exception
+`tests/offline.test.ts`, "thirty-one days after the code".
 
 F-P3. One link connects one person.
 *Pinned by:* the test "one link, one proposer".
@@ -58,7 +65,9 @@ kept, the inviter's person can accept or decline, and the acceptance, the
 issues and the receipts are taken whenever they arrive: they have no age
 limit of their own. When a side's upkeep runs after that moment, the
 enactment is gone with its open question; a document that arrives then
-finds nothing, and that side does not open. A complete enactment is kept.
+finds nothing, and that side does not open. A complete enactment is kept. So is one that opened a contact before it
+was complete (the two codes without a carrier): it has no end of this kind,
+and neither has its contact.
 
 F5. **Single use.** The inviter takes one proposal per link. A proposal
 from another identity on the same link is refused.

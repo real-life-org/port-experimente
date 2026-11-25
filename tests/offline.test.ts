@@ -1,5 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { expect, test } from 'vitest'
+import { seedKeys, createHolder } from 'rltp-lib'
+import { InMemoryStore } from 'rltp-lib/testing'
 import { runOnLibrary } from '../src/lab/tuple-opening/lib-run'
 import { build, everySchedule, replay, type Trace } from '../src/lab/offline/traces'
 import type { Event } from '../src/lab/offline/rule'
@@ -63,3 +65,84 @@ test('every schedule with the two codes: who is open when, how it ends, and the 
   }
   expect(ends).toEqual({ both: 33790, responder: 8, neither: 1 })
 }, 600_000)
+
+// ── two properties the traces do not show: identity of the contact, and time ──
+
+const RELAYS = [{ kind: 'tsp-mediator', address: 'did:web:mediator.example' }]
+const DAY = 86_400_000
+/** two holders after the two codes: the responder showed its code, the inviter read it and its person accepted */
+async function twoCodes (accept: boolean) {
+  let t = Date.parse('2026-10-15T09:00:00Z'), n = 0
+  const at = () => ({ when: (t += 10_000), actId: 'offline-' + (++n) })
+  const make = async (fill: number) => createHolder({ store: new InMemoryStore(), keys: seedKeys(new Uint8Array(64).fill(fill)) }, { modules: [], invariants: true })
+  const I: any = await make(11), R: any = await make(12)
+  const ev = (r: any, type: string) => (r.events ?? []).filter((e: any) => e.type === type)
+  const shown = ev(await I.sharedConnectShow({ relays: RELAYS, name: 'inviter' }, at()), 'sharedconnect.shown')[0]
+  const proposed = await R.sharedConnectPropose({ link: shown.link, relays: RELAYS, channel: 'scan', name: 'responder' }, at())
+  const rDid = ev(proposed, 'sharedconnect.proposed')[0].did
+  const code = ev(await R.sharedConnectBack({ id: shown.id }, at()), 'sharedconnect.shown')[0].link
+  let fromI: any[] = []
+  if (accept) {
+    await I.sharedConnectReadBack(shown.id, code, (t += 10_000))
+    const prompt = (await I.prompts()).find((x: any) => x.kind === 'shared-connect-confirm')
+    fromI = ev(await I.decide(prompt.id, 'accept', at()), 'sharedconnect.send').flatMap((e: any) => e.docs)
+  }
+  return { I, R, id: shown.id as string, iDid: shown.did as string, rDid: rDid as string, fromI, ev, now: () => t, later: (ms: number) => (t += ms) }
+}
+const only = async (h: any) => { const cs = await h.contacts(); expect(cs.length).toBe(1); return cs[0].id as string }
+const enactment = async (h: any) => { const vs = await h.sharedConnect(); expect(vs.length).toBe(1); return vs[0] }
+
+test('one contact, the same before and after the documents: the enactment that opened it is the one that completes', async () => {
+  const s = await twoCodes(true)
+  const before = { i: await only(s.I), r: await only(s.R) }
+  for (const side of [s.I, s.R]) { const v = await enactment(side); expect([v.id, v.status]).toEqual([s.id, 'open']) }
+  expect([(await enactment(s.I)).contactId, (await enactment(s.R)).contactId]).toEqual([before.i, before.r])
+  // a carrier is there: every document, and everything it causes, until nothing moves
+  let wave: Array<{ to: any, from: string, docs: any[] }> = [{ to: s.R, from: s.iDid, docs: s.fromI }]
+  for (let round = 0; round < 12 && wave.length; round++) {
+    const next: typeof wave = []
+    for (const w of wave) for (const doc of w.docs) {
+      const r = await w.to.sharedConnectReceive(doc, w.from, s.later(10_000))
+      expect(r.ok, JSON.stringify(r)).toBe(true)
+      const docs = s.ev(r, 'sharedconnect.send').flatMap((e: any) => e.docs)
+      if (docs.length) next.push(w.to === s.R ? { to: s.I, from: s.rDid, docs } : { to: s.R, from: s.iDid, docs })
+    }
+    wave = next
+  }
+  // exactly one contact on each side, with the id it had; the same enactment, complete, naming that contact
+  expect({ i: await only(s.I), r: await only(s.R) }).toEqual(before)
+  for (const [side, cid] of [[s.I, before.i], [s.R, before.r]] as const) {
+    const v = await enactment(side)
+    expect([v.id, v.status, v.contactId]).toEqual([s.id, 'complete', cid])
+    expect(Object.keys((await side.snapshot()).state.relationships).length).toBe(1)
+  }
+}, 60_000)
+
+test('thirty-one days after the code, nothing delivered: the responder keeps its contact and its open enactment; the acceptance, arriving then, is still taken', async () => {
+  // the inviter read the code and accepted, but no carrier came for thirty-one days
+  const s = await twoCodes(true)
+  const contact = await only(s.R)
+  const day31 = s.later(31 * DAY)
+  expect((await s.R.tick(day31)).ok).toBe(true)
+  expect(await only(s.R)).toBe(contact)
+  const v = await enactment(s.R)
+  expect([v.id, v.status, v.contactId]).toEqual([s.id, 'open', contact])
+  // the inviter too opened from a code: it keeps both as well
+  expect((await s.I.tick(day31)).ok).toBe(true)
+  expect([(await enactment(s.I)).status, (await s.I.contacts()).length]).toEqual(['open', 1])
+  // the acceptance and the inviter's issue arrive on day thirty-one: taken, the responder issues
+  const [accept] = s.fromI
+  const r = await s.R.sharedConnectReceive(accept, s.iDid, s.later(10_000))
+  expect(r.ok).toBe(true)
+  expect(s.ev(r, 'sharedconnect.accepted').length).toBe(1)
+  expect(await only(s.R)).toBe(contact)
+  // the counter-case of FRESH, F4: a responder that showed no code holds no contact, and its enactment is gone
+  const plain = await twoCodes(false)
+  const P: any = await createHolder({ store: new InMemoryStore(), keys: seedKeys(new Uint8Array(64).fill(13)) }, { modules: [], invariants: true })
+  const link = (await plain.I.sharedConnect())[0]
+  expect(link.status).toBe('open')
+  const shown2 = plain.ev(await plain.I.sharedConnectShow({ relays: RELAYS }, { when: plain.later(10_000), actId: 'offline-second' }), 'sharedconnect.shown')[0]
+  expect((await P.sharedConnectPropose({ link: shown2.link, relays: RELAYS, channel: 'scan' }, { when: plain.later(10_000), actId: 'offline-p' })).ok).toBe(true)
+  expect((await P.tick(plain.later(31 * DAY))).ok).toBe(true)
+  expect([(await P.contacts()).length, (await P.sharedConnect()).length]).toEqual([0, 0])
+}, 60_000)

@@ -52,7 +52,11 @@ export async function runOnLibrary (t: { name?: string, shows?: string, steps: u
   const side = async (r: Role) => {
     const es = Object.values((await P[r].snapshot()).state.sharedConnect?.enactments ?? {}) as any[]
     const view = (await P[r].sharedConnect())[0]
-    return { open: (await P[r].contacts()).length > 0, declined: es.some((e) => e.status === 'declined'), held: es.flatMap((e) => (e.flow?.held ?? []).map((d) => kindOf(other(r), d))), outbox: (view?.outbox ?? []).map((d) => kindOf(r, d)) }
+    const contacts = await P[r].contacts()
+    // one enactment opens at most one contact, whatever is delivered or handed over again afterwards
+    if (contacts.length > 1) throw new Error(`${r} holds ${contacts.length} contacts for one enactment`)
+    if (es.length > 1) throw new Error(`${r} holds ${es.length} enactments`)
+    return { open: contacts.length > 0, declined: es.some((e) => e.status === 'declined'), held: es.flatMap((e) => (e.flow?.held ?? []).map((d) => kindOf(other(r), d))), outbox: (view?.outbox ?? []).map((d) => kindOf(r, d)) }
   }
   const out: LibStep[] = []
   for (const s of t.steps) {

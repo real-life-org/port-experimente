@@ -27,7 +27,10 @@ have opened. No document was carried.
 X-P2. A side opens once. The documents that follow by a carrier complete
 the same enactment and open nothing more.
 *Pinned by:* every trace to its last step; the walk over every schedule
-(a side that opened stays open, and the library holds one contact).
+(a side that opened stays open; the run against the library fails if a
+side ever holds two contacts or two enactments); the test "one contact,
+the same before and after the documents" (the contact's id and the
+enactment's id are unchanged when the enactment completes).
 
 X-P3. A side opens only with the other side's card in hand: the pair keys
 of the other side, under a proof of its pair key made for this one code.
@@ -80,6 +83,12 @@ that is open stays open.
 X4. **Shown once, read once, while the enactment runs.** A side whose
 enactment is declined or complete shows no code and takes none.
 
+X5. **No end by time.** A side that opened from a code keeps its contact
+and its enactment whatever time passes; the thirty days of
+`../freshness/FRESH.md`, F4, are for an enactment that opened no contact.
+Documents that arrive later are taken and complete it.
+*Pinned by:* the test "thirty-one days after the code".
+
 ## The steps of a trace
 
 The steps of OPENING, and two more:
@@ -126,8 +135,6 @@ person, and the other side has stated nothing yet).
   (`../freshness/FRESH.md`, F3: the inviter would refuse its proposal),
   and not when it would pass 1200 characters (a long name in the
   proposal). The model has no time and no length.
-- An enactment that opened a contact is kept whatever its end; the thirty
-  days of FRESH, F4, are for an enactment that opened none.
 
 ## Not in the model
 
