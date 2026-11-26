@@ -31,8 +31,9 @@ function browser (at = () => origin) {
 test('Anmeldung über HTTP: Seite startet, App antwortet, Seite holt ab und ist angemeldet', async () => {
   const b = browser()
   const start = await b.call('/start')
-  expect(start.setCookie).toEqual([])                       // the QR way sets no cookie
   const { vorgang, url } = start.body
+  // the QR way sets only the attempt's own binding cookie, never the signed-in one
+  expect(start.setCookie.map((c) => c.split('=')[0])).toEqual(['v_' + vorgang])
   expect((await b.call('/status?vorgang=' + vorgang)).body).toEqual({})
   const answer = await confirm(parseRequestUrl(url)!, new Uint8Array(32).fill(7), Date.now(), { name: 'Anton' })
   expect(await post(answer)).toBe(200)
@@ -76,6 +77,20 @@ test('ein Vorgang wird genau einmal abgeholt; ohne das Cookie bekommt danach nie
   const again = await other.call('/status?vorgang=' + vorgang)
   expect(again.body).toEqual({})
   expect(again.setCookie).toEqual([])
+})
+
+test('die Vorgangs-ID allein holt nichts ab: ein fremder Browser zuerst geht leer aus, der startende danach nicht (Review #141, Runde 4)', async () => {
+  const b = browser()
+  const { vorgang, url } = (await b.call('/start')).body
+  const answer = await confirm(parseRequestUrl(url)!, new Uint8Array(32).fill(19), Date.now())
+  expect(await post(answer)).toBe(200)
+  const fremd = browser()                                   // knows the id (it travels in URLs), not the binding
+  const first = await fremd.call('/status?vorgang=' + vorgang)
+  expect(first.body).toEqual({})
+  expect(first.setCookie).toEqual([])
+  expect((await fremd.call('/erneuern?vorgang=' + vorgang)).status).toBe(410)
+  expect((await b.call('/status?vorgang=' + vorgang)).body).toEqual({ user: answer.did })
+  expect(b.jar.has('v_' + vorgang)).toBe(false)             // the binding is used up with the collect
 })
 
 test('Erneuern ersetzt die Anfrage desselben Vorgangs; die alte gilt nicht mehr, ein Cookie gibt es nicht', async () => {

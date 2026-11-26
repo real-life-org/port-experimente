@@ -150,16 +150,20 @@ const WALLET_PAGE = `<!doctype html><meta charset="utf-8"><meta name="viewport" 
 <script type="module" src="${WALLET_PATH}.js"></script>`
 
 // Sessions (review #141: starting, renewing and collecting are separate):
-// - a login attempt (vorgang) is a fresh random id from /start. For the QR code (cross-device) it lives
-//   only in the page's script: renewing and collecting name it, and no cookie is set for it. A
-//   background tab's QR timer can therefore never touch the browser's signed-in cookie, and nobody can
-//   plant an attempt id in a browser.
+// - a login attempt (vorgang) is a fresh random id from /start. For the QR code (cross-device) the
+//   page's script names it when renewing and collecting, and the browser that started it holds a
+//   cookie of its own for exactly this attempt (v_<vorgang>, a second random value). Collecting needs
+//   both: the id alone (it travels in URLs) gets nothing (review #141, round 4). Each attempt has its
+//   own cookie, so tabs do not overwrite each other, and renewing never sets a cookie; a background
+//   tab's QR timer can therefore never touch the browser's signed-in cookie.
 // - same-device: the return from the app (/fertig) comes in a browser navigation, so the attempt is
 //   bound by a short-lived cookie of its own (anmeldung), separate from the signed-in one.
 // - signed in: the cookie sitzung, minted fresh when a confirmed attempt is collected, exactly once.
 // An id the server did not issue, or no longer accepts, is treated as absent.
-const cookieOf = (req: IncomingMessage, name: string): string | null => new RegExp(`(?:^|;\\s*)${name}=([A-Za-z0-9_-]+)`).exec(req.headers.cookie ?? '')?.[1] ?? null
-const SIGNED_IN = 'sitzung', SAME_DEVICE = 'anmeldung'
+const cookieOf = (req: IncomingMessage, name: string): string | null => new RegExp(`(?:^|;\\s*)${name.replace(/-/g, '\\-')}=([A-Za-z0-9_-]+)`).exec(req.headers.cookie ?? '')?.[1] ?? null
+const SIGNED_IN = 'sitzung', SAME_DEVICE = 'anmeldung', BINDING = 'v_'
+/** a QR attempt's browser binding outlives its request and pickup windows (5 + 5 minutes) */
+const BINDING_MAX_AGE_S = 600
 /** the same-device attempt's cookie lives as long as the request plus the return */
 const SAME_DEVICE_MAX_AGE_S = 600
 const freshId = (): string => b64uOf(rand(16))
@@ -195,10 +199,17 @@ export async function serve (opts: ServeOptions = {}): Promise<{ server: Server,
   let app!: WebApp, origin!: string
   // signed-in sessions with their start; a login before it is the web app's (one lifecycle, webapp.ts)
   const authenticated = new Map<string, { login: Login, at: number }>()
+  // the QR way: attempt -> the browser binding (the value of its cookie v_<attempt>) and its start
+  const bindings = new Map<string, { value: string, at: number }>()
+  const bound = (req: IncomingMessage, vorgang: string): boolean => {
+    const b = bindings.get(vorgang)
+    return Boolean(b) && cookieOf(req, BINDING + vorgang) === b!.value
+  }
   const sweep = (): void => {
     const t = now()
     app?.sweep(t)
     for (const [id, s] of authenticated) if (t - s.at > SESSION_LIFETIME_MS) authenticated.delete(id)
+    for (const [id, b] of bindings) if (t - b.at > BINDING_MAX_AGE_S * 1000) bindings.delete(id)
   }
   // behind a TLS-terminating proxy (Traefik) the server speaks http, but the browser sees https
   const secure = Boolean(opts.https) || (opts.publicOrigin ?? '').startsWith('https:')
@@ -229,12 +240,16 @@ export async function serve (opts: ServeOptions = {}): Promise<{ server: Server,
         res.setHeader('Set-Cookie', cookie(SAME_DEVICE, vorgang, SAME_DEVICE_MAX_AGE_S))
         json(res, 200, { url: started.url, walletLink }); return
       }
-      json(res, 200, { vorgang, url: started.url, walletLink, qrSvg })   // no cookie for the QR way
+      const binding = freshId()
+      bindings.set(vorgang, { value: binding, at: now() })
+      res.setHeader('Set-Cookie', cookie(BINDING + vorgang, binding, BINDING_MAX_AGE_S))
+      json(res, 200, { vorgang, url: started.url, walletLink, qrSvg })
       return
     }
     if (req.method === 'GET' && path === '/erneuern') {
       // a fresh QR code for the same attempt, only while it is still open; never a cookie
       const vorgang = url.searchParams.get('vorgang') ?? ''
+      if (!bound(req, vorgang)) { json(res, 410, { error: 'gone' }); return }   // only the browser that started it
       if (app.inFlight(vorgang, now())) { json(res, 409, { error: 'confirmed' }); return }   // collect it instead
       if (!app.isOpen(vorgang, now())) { json(res, 410, { error: 'gone' }); return }                // start anew
       app.forget(vorgang)
@@ -247,8 +262,9 @@ export async function serve (opts: ServeOptions = {}): Promise<{ server: Server,
       const signedIn = id ? authenticated.get(id) : undefined
       if (signedIn) { json(res, 200, signedIn.login); return }
       const vorgang = url.searchParams.get('vorgang')
-      const done = vorgang ? app.take(vorgang, now()) : null   // exactly once
-      if (done) { signIn(res, done); json(res, 200, done); return }
+      // exactly once, and only by the browser that started the attempt (its binding cookie)
+      const done = vorgang && bound(req, vorgang) ? app.take(vorgang, now()) : null
+      if (done && vorgang) { bindings.delete(vorgang); signIn(res, done, BINDING + vorgang); json(res, 200, done); return }
       json(res, 200, {})
       return
     }

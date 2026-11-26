@@ -97,10 +97,11 @@ request to it, and collecting the completed login (`/status` or `/fertig`)
 mints a new, authenticated id and drops the pre-login one.
 Review of #141 found that the QR timer, calling `/start` like a deliberate
 start, could replace a signed-in cookie from a background tab. Starting,
-renewing and collecting are separate now: the QR way's login attempt id
-lives only in the tab's script (no cookie), `/erneuern` renews only an open
-attempt and never sets a cookie, and collecting sets the signed-in cookie
-exactly once. The same-device way binds its attempt with a short-lived
+renewing and collecting are separate now: the QR way's login attempt has an
+id the tab's script names and a cookie of its own (`v_<id>`) held by the
+browser that started it; collecting needs both, so the id alone, which
+travels in URLs, gets nothing. `/erneuern` renews only an open attempt and
+never sets a cookie, and collecting sets the signed-in cookie exactly once. The same-device way binds its attempt with a short-lived
 cookie of its own.
 
 ## Results
