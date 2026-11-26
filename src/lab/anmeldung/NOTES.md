@@ -101,7 +101,9 @@ renewing and collecting are separate now: the QR way's login attempt has an
 id the tab's script names and a cookie of its own (`v_<id>`) held by the
 browser that started it; collecting needs both, so the id alone, which
 travels in URLs, gets nothing. `/erneuern` renews only an open attempt and
-never sets a cookie, and collecting sets the signed-in cookie exactly once. The same-device way binds its attempt with a short-lived
+only refreshes that attempt's own binding (so every code shown works until
+the end of its windows), and collecting sets the signed-in cookie exactly
+once. The same-device way binds its attempt with a short-lived
 cookie of its own.
 
 ## Results

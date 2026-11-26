@@ -93,12 +93,13 @@ test('die Vorgangs-ID allein holt nichts ab: ein fremder Browser zuerst geht lee
   expect(b.jar.has('v_' + vorgang)).toBe(false)             // the binding is used up with the collect
 })
 
-test('Erneuern ersetzt die Anfrage desselben Vorgangs; die alte gilt nicht mehr, ein Cookie gibt es nicht', async () => {
+test('Erneuern ersetzt die Anfrage desselben Vorgangs; die alte gilt nicht mehr; nur die eigene Bindung wird aufgefrischt', async () => {
   const b = browser()
   const first = (await b.call('/start')).body
   const renewed = await b.call('/erneuern?vorgang=' + first.vorgang)
   expect(renewed.status).toBe(200)
-  expect(renewed.setCookie).toEqual([])
+  // only this attempt's own binding is refreshed; never the signed-in cookie
+  expect(renewed.setCookie.map((c) => c.split('=')[0])).toEqual(['v_' + first.vorgang])
   expect(renewed.body.vorgang).toBe(first.vorgang)
   expect(renewed.body.url).not.toBe(first.url)
   const old = await confirm(parseRequestUrl(first.url)!, new Uint8Array(32).fill(12), Date.now())
@@ -283,7 +284,7 @@ test('Erneuerung kurz nach der Bestätigung, vor der Abholung: 409, die Anmeldun
   } finally { s.server.close() }
 })
 
-test('Erneuerung nach der Abholung, aus demselben oder einem zweiten Tab, auch Minuten später: kein Cookie, angemeldet', async () => {
+test('Erneuerung nach der Abholung, aus demselben oder einem zweiten Tab, auch Minuten später: das Anmelde-Cookie bleibt', async () => {
   let t = Date.UTC(2026, 10, 26, 12, 0, 0)
   const s = await serve({ now: () => t })
   try {
@@ -301,12 +302,28 @@ test('Erneuerung nach der Abholung, aus demselben oder einem zweiten Tab, auch M
     // tab B's timer fires before its next poll
     const renewB = await b.call('/erneuern?vorgang=' + tabB.vorgang)
     expect(renewB.status).toBe(200)
-    expect(renewB.setCookie).toEqual([])
+    expect(renewB.setCookie.map((c) => c.split('=')[0])).toEqual(['v_' + tabB.vorgang])
     expect(b.jar.get('sitzung')).toBe(signed)
     expect((await b.call('/status?vorgang=' + tabB.vorgang)).body.user).toBe(answer.did)
     // minutes later, an old renewal again
     t += 3 * 60_000
     expect((await b.call('/erneuern?vorgang=' + tabA.vorgang)).setCookie).toEqual([])
     expect((await b.call('/status')).body.user).toBe(answer.did)
+  } finally { s.server.close() }
+})
+
+test('jeder angezeigte Code trägt bis zum Ende seines Abholfensters: erneuert nach 9 Minuten, bestätigt nach 10:01, abgeholt (Review #141, Runde 5)', async () => {
+  let t = Date.UTC(2026, 10, 26, 12, 0, 0)
+  const s = await serve({ now: () => t })
+  try {
+    const b = browser(() => s.origin)
+    const { vorgang } = (await b.call('/start')).body
+    t += 4 * 60_000; await b.call('/erneuern?vorgang=' + vorgang)
+    t += 5 * 60_000
+    const renewed = (await b.call('/erneuern?vorgang=' + vorgang)).body   // 9:00
+    t += 61_000                                                             // 10:01
+    const answer = await confirm(parseRequestUrl(renewed.url)!, new Uint8Array(32).fill(33), t)
+    expect(await post(answer)).toBe(200)
+    expect((await b.call('/status?vorgang=' + vorgang)).body).toEqual({ user: answer.did })
   } finally { s.server.close() }
 })

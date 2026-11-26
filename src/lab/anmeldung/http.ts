@@ -154,8 +154,8 @@ const WALLET_PAGE = `<!doctype html><meta charset="utf-8"><meta name="viewport" 
 //   page's script names it when renewing and collecting, and the browser that started it holds a
 //   cookie of its own for exactly this attempt (v_<vorgang>, a second random value). Collecting needs
 //   both: the id alone (it travels in URLs) gets nothing (review #141, round 4). Each attempt has its
-//   own cookie, so tabs do not overwrite each other, and renewing never sets a cookie; a background
-//   tab's QR timer can therefore never touch the browser's signed-in cookie.
+//   own cookie, so tabs do not overwrite each other; renewing only refreshes that attempt's own cookie
+//   (its binding lasts as long as the new code's windows) and never touches the signed-in one.
 // - same-device: the return from the app (/fertig) comes in a browser navigation, so the attempt is
 //   bound by a short-lived cookie of its own (anmeldung), separate from the signed-in one.
 // - signed in: the cookie sitzung, minted fresh when a confirmed attempt is collected, exactly once.
@@ -254,6 +254,12 @@ export async function serve (opts: ServeOptions = {}): Promise<{ server: Server,
       if (!app.isOpen(vorgang, now())) { json(res, 410, { error: 'gone' }); return }                // start anew
       app.forget(vorgang)
       const started = app.start(vorgang, now(), 'cross-device')
+      // every code shown works until the end of its own confirmation and pickup windows: the binding of
+      // this attempt starts anew with it (review #141, round 5). Only this attempt's own cookie is
+      // refreshed; the signed-in cookie stays untouched.
+      const b = bindings.get(vorgang)!
+      bindings.set(vorgang, { value: b.value, at: now() })
+      res.setHeader('Set-Cookie', cookie(BINDING + vorgang, b.value, BINDING_MAX_AGE_S))
       json(res, 200, { vorgang, url: started.url, ...(await qrOf(started.url, url.searchParams.get('wallet'))) })
       return
     }
