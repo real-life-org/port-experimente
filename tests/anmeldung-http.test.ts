@@ -216,3 +216,51 @@ test('Grenzfall über HTTP: bestätigt nach 4:59, abgeholt nach 5:01, in beiden 
   }
 })
 
+
+// Profile on the page (name and picture, both only as the person shared them in the app)
+const PICTURE = 'data:image/webp;base64,' + 'A'.repeat(20_000) + '=='
+
+test('ein geteiltes Bild kommt mit dem Namen auf der Seite an', async () => {
+  const page = browser()
+  const { url } = await page('/start')
+  const answer = await confirm(parseRequestUrl(url)!, new Uint8Array(32).fill(11), Date.now(), { name: 'Anton', picture: PICTURE })
+  expect(await post(answer)).toBe(200)
+  expect(await page('/status')).toEqual({ user: answer.did, name: 'Anton', picture: PICTURE })
+})
+
+test('ein Bild, das kein eingebettetes Bild ist, zeigt die Seite nicht (keine fremde Adresse, nicht zu groß)', async () => {
+  for (const picture of ['https://tracker.example/pixel.png', 'data:text/html;base64,PHNjcmlwdD4=', 'data:image/webp;base64,' + 'A'.repeat(120_000)]) {
+    const page = browser()
+    const { url } = await page('/start')
+    const answer = await confirm(parseRequestUrl(url)!, new Uint8Array(32).fill(12), Date.now(), { name: 'Anton', picture })
+    expect(await post(answer)).toBe(200)                    // the login itself counts; only the picture is dropped
+    expect(await page('/status')).toEqual({ user: answer.did, name: 'Anton' })
+  }
+})
+
+test('Abmelden beendet die Sitzung', async () => {
+  let cookie = ''
+  const call = async (path: string, method = 'GET') => {
+    const r = await fetch(origin + path, { method, headers: cookie ? { cookie } : {} })
+    const set = r.headers.get('set-cookie'); if (set) cookie = set.split(';')[0]!
+    return r.json() as Promise<any>
+  }
+  const { url } = await call('/start')
+  const answer = await confirm(parseRequestUrl(url)!, new Uint8Array(32).fill(13), Date.now())
+  expect(await post(answer)).toBe(200)
+  const before = cookie
+  expect((await call('/status')).user).toBe(answer.did)
+  const signedIn = cookie
+  expect(signedIn).not.toBe(before)
+  await call('/abmelden', 'POST')
+  expect(await (await fetch(origin + '/status', { headers: { cookie: signedIn } })).json()).toEqual({})
+})
+
+test('die Seite: auf dem Rechner der QR-Code, auf dem Telefon ein Knopf, die Demo-Wallet nur mit ?demo', async () => {
+  const html = await (await fetch(origin + '/')).text()
+  expect(html).toContain('id="qrbox"')
+  expect(html).toContain('id="hierbox"')
+  expect(html).toContain("matchMedia('(pointer: coarse)')")
+  expect(html).not.toContain('id="demo"')                   // no checkbox for the demo wallet any more
+  expect(html).toContain("has('demo')")
+})

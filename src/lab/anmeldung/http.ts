@@ -1,7 +1,8 @@
 // The example web app behind HTTP. Node only; the browser session is a cookie.
 //
 // Routes:
-//   GET  /                 the page: log in with the phone (QR) or on this device (link)
+//   GET  /                 the page: on a computer the QR code, on a phone one button to the app
+//   POST /abmelden         end the signed-in session
 //   GET  /start            a cross-device request: QR code and wallet link
 //   GET  /start?geraet=gleich   a same-device request: wallet link only
 //   GET  /status           what the page polls (cross-device)
@@ -27,38 +28,109 @@ export const MAX_OPEN_REQUESTS = 10_000
 /** the Web of Trust app's link for a login request */
 export const APP_LINK = 'https://web-of-trust.de/a'
 
-const STYLE = `body{font:17px/1.5 system-ui,sans-serif;max-width:34rem;margin:2.5rem auto;padding:0 1rem;color:#1b2420;background:#f6f8f7}
-h1{font-size:1.6rem;margin:0 0 1rem}button,.button{font:inherit;padding:.7rem 1rem;border-radius:6px;border:1px solid #2c6a55;background:#2c6a55;color:#fff;cursor:pointer;text-decoration:none;display:inline-block}
-.secondary{background:#fff;color:#2c6a55}.row{display:flex;flex-wrap:wrap;gap:.6rem;margin:1rem 0}#qr svg{width:min(22rem,100%);height:auto;background:#fff}
-.muted{color:#5a6862;font-size:.92rem}.ok{background:#dcece5;padding:.8rem 1rem;border-radius:6px;overflow-wrap:anywhere}
-[hidden]{display:none!important}label{display:block;margin:1rem 0 .3rem}input{font:inherit;width:100%;box-sizing:border-box;padding:.6rem;border:1px solid #9fb3aa;border-radius:6px}`
+// The look of web-of-trust.de and the app: the Web of Trust tokens (apps/wot-v3/src/styles/tokens.css),
+// light and dark, system fonts (no external font requests).
+const STYLE = `:root{color-scheme:light dark;--bg:oklch(98% 0.003 265);--fg:oklch(22% 0.004 265);--card:oklch(100% 0 0);
+--primary:oklch(55% 0.21 264);--primary-fg:oklch(100% 0 0);--muted:oklch(95% 0.005 265);--muted-fg:oklch(44% 0.008 265);
+--accent:oklch(95% 0.03 264);--border:oklch(90% 0.008 265);--success:oklch(55% 0.17 142);--destructive:oklch(54% 0.19 27);
+--radius:0.5rem;--shadow:0 10px 15px -3px oklch(0% 0 0 / .10),0 4px 6px -4px oklch(0% 0 0 / .10)}
+@media (prefers-color-scheme:dark){:root{--bg:oklch(15% 0.02 265);--fg:oklch(95% 0.01 247);--card:oklch(20% 0.02 265);
+--primary:oklch(65% 0.19 264);--primary-fg:oklch(15% 0.02 265);--muted:oklch(25% 0.02 265);--muted-fg:oklch(70% 0.01 247);
+--accent:oklch(30% 0.08 264);--border:oklch(30% 0.02 265);--success:oklch(65% 0.17 142);--destructive:oklch(60% 0.19 27);
+--shadow:0 10px 15px -3px oklch(0% 0 0 / .15),0 4px 6px -4px oklch(0% 0 0 / .15)}}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;font:16px/1.5 Inter,system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--fg);background:var(--bg)}
+header{display:flex;align-items:center;gap:.6rem;padding:1rem 1.25rem;max-width:40rem;margin:0 auto}
+header svg{width:2rem;height:2rem}header b{font-weight:600}header span{margin-left:auto;font-size:.8rem;color:var(--muted-fg);background:var(--muted);padding:.15rem .55rem;border-radius:999px}
+main{max-width:40rem;margin:0 auto;padding:0 1.25rem 2.5rem}
+.card{background:var(--card);border:1px solid var(--border);border-radius:calc(var(--radius) + 4px);box-shadow:var(--shadow);padding:1.75rem 1.5rem;text-align:center}
+h1{font-size:1.45rem;line-height:1.25;margin:0 0 .4rem;font-weight:650}
+p{margin:.4rem 0}.muted{color:var(--muted-fg);font-size:.92rem}
+.button{font:inherit;font-weight:600;display:block;width:100%;padding:.85rem 1rem;border:0;border-radius:var(--radius);background:var(--primary);color:var(--primary-fg);cursor:pointer;text-decoration:none;margin:1.25rem 0 .5rem}
+.quiet{font:inherit;background:none;border:0;color:var(--primary);cursor:pointer;text-decoration:underline;text-underline-offset:3px;padding:.25rem;margin-top:.75rem}
+#qr{display:inline-block;margin:1.25rem auto .5rem;padding:.6rem;background:#fff;border-radius:var(--radius);border:1px solid var(--border)}
+#qr svg{display:block;width:min(15rem,70vw);height:auto}
+.avatar{width:5.5rem;height:5.5rem;border-radius:50%;object-fit:cover;display:block;margin:.25rem auto 1rem;border:1px solid var(--border)}
+.initial{display:flex;align-items:center;justify-content:center;font-size:2.2rem;font-weight:600;color:#fff}
+.did{font-family:"Source Code Pro",ui-monospace,monospace;font-size:.85rem;color:var(--muted-fg);overflow-wrap:anywhere}
+.ok{color:var(--success);font-weight:600;margin-bottom:.75rem}.err{color:var(--destructive)}
+footer{max-width:40rem;margin:0 auto;padding:0 1.25rem 2rem;text-align:center}
+[hidden]{display:none!important}label{display:block;margin:1rem 0 .3rem}
+input{font:inherit;width:100%;padding:.6rem;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);color:var(--fg)}`
 
-const PAGE = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Beispiel-Web-App</title><link rel="icon" href="data:,">
+// the Web of Trust mark (apps/landing/public/favicon.svg)
+const LOGO = `<svg viewBox="0 0 100 100" aria-hidden="true"><rect x="5" y="5" width="90" height="90" rx="18" fill="#2563eb"/><g transform="translate(17,15.5) scale(3)" fill="#fff" stroke="#fff" stroke-width="2" stroke-linecap="round"><circle cx="18.72" cy="8.82" r="2.5"/><circle cx="5.28" cy="5.28" r="2.5"/><circle cx="8.82" cy="18.72" r="2.5"/><line x1="6.04" x2="8.06" y1="8.18" y2="15.82"/><line x1="15.81" x2="8.18" y1="8.05" y2="6.04"/><line x1="16.59" x2="10.94" y1="10.94" y2="16.59"/></g></svg>`
+const ICON = `data:image/svg+xml,${encodeURIComponent(LOGO.replace('<svg ', '<svg xmlns="http://www.w3.org/2000/svg" '))}`
+
+// One way per device: on a computer the QR code shows at once (scan it with the app), on a phone one
+// button opens the app on this device. The other way stays one quiet link away. The demo wallet in the
+// browser only with ?demo (for development).
+const PAGE = `<!doctype html><html lang="de"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Beispiel-Web-App · Anmelden</title><link rel="icon" href="${ICON}">
 <style>${STYLE}</style>
-<h1>Beispiel-Web-App</h1>
-<p id="state">Nicht angemeldet.</p>
-<div class="row" id="choices">
-  <button id="phone">Mit dem Telefon anmelden</button>
-  <button id="here" class="secondary">Auf diesem Gerät anmelden</button>
-</div>
-<label class="muted" id="demobox"><input type="checkbox" id="demo" style="width:auto;margin-right:.4rem">Demo-Wallet im Browser benutzen (statt der Web-of-Trust-App)</label>
-<div id="qrbox" hidden><p>Scanne den Code mit der Kamera deines Telefons.</p><div id="qr"></div>
-<p class="muted">Der Code gilt fünf Minuten. Er verschwindet, sobald du in der App bestätigt hast.</p></div>
+<header>${LOGO}<b>Beispiel-Web-App</b><span>Vorführung</span></header>
+<main><div class="card">
+<section id="laden"><p class="muted">Lädt …</p></section>
+<section id="qrbox" hidden>
+  <h1>Mit Web of Trust anmelden</h1>
+  <p class="muted">Scanne den Code mit der Web-of-Trust-App und bestätige dort.</p>
+  <div id="qr"></div>
+  <p class="muted">Der Code erneuert sich von selbst.</p>
+  <button class="quiet" id="zuHier">Auf diesem Gerät anmelden</button>
+</section>
+<section id="hierbox" hidden>
+  <h1>Mit Web of Trust anmelden</h1>
+  <p class="muted">Die Web-of-Trust-App öffnet sich. Bestätige dort, dann kommst du hierher zurück.</p>
+  <button class="button" id="hier">Mit Web of Trust anmelden</button>
+  <button class="quiet" id="zuQr">Mit einem anderen Gerät anmelden</button>
+</section>
+<section id="drin" hidden>
+  <p class="ok">Angemeldet</p>
+  <div id="bild"></div>
+  <h1 id="name"></h1>
+  <p class="did" id="did"></p>
+  <button class="quiet" id="ab">Abmelden</button>
+</section>
+<p class="err" id="fehler" hidden></p>
+</div></main>
+<footer><p class="muted">Deine Identität bleibt in deiner App. Diese Seite sieht nur, was du dort freigibst.</p></footer>
 <script>
 const $=id=>document.getElementById(id)
-const show=s=>{$('state').innerHTML='';const d=document.createElement('div');d.className='ok';d.textContent='Angemeldet als '+(s.name?s.name+' · ':'')+s.user;$('state').append(d);$('choices').hidden=true;$('qrbox').hidden=true;$('demobox').hidden=true}
-const w=()=>$('demo').checked?'&wallet=demo':''
-fetch('/status').then(r=>r.json()).then(s=>{if(s.user)show(s)})
-let timer
-$('phone').onclick=async()=>{
-  const r=await (await fetch('/start?geraet=anderes'+w())).json()
-  $('qr').innerHTML=r.qrSvg; $('qrbox').hidden=false
-  clearInterval(timer); timer=setInterval(async()=>{const s=await (await fetch('/status')).json(); if(s.user){clearInterval(timer);show(s)}},1000)
+const demo=new URLSearchParams(location.search).has('demo')?'&wallet=demo':''
+const mobil=matchMedia('(pointer: coarse)').matches&&matchMedia('(max-width: 48rem)').matches
+let poll=0,erneuern=0
+const nur=id=>{for(const s of ['laden','qrbox','hierbox','drin'])$(s).hidden=s!==id;$('fehler').hidden=true}
+const stopp=()=>{clearInterval(poll);clearTimeout(erneuern)}
+const fehler=t=>{$('fehler').textContent=t;$('fehler').hidden=false}
+const start=async g=>{const r=await fetch('/start?geraet='+g+demo);if(!r.ok)throw new Error('busy');return r.json()}
+async function qr(){
+  stopp()
+  try{const r=await start('anderes');$('qr').innerHTML=r.qrSvg;nur('qrbox')}catch{fehler('Gerade nicht möglich. Versuch es gleich noch einmal.');return}
+  poll=setInterval(status,1500)
+  erneuern=setTimeout(qr,270000)   // the request lives five minutes
 }
-$('here').onclick=async()=>{ const r=await (await fetch('/start?geraet=gleich'+w())).json(); location.href=r.walletLink }
+async function hier(){
+  stopp()
+  try{const r=await start('gleich');location.href=r.walletLink}catch{fehler('Gerade nicht möglich. Versuch es gleich noch einmal.')}
+}
+async function status(){const s=await (await fetch('/status')).json();if(s.user){stopp();zeige(s)}}
+function farbe(t){let h=0;for(const c of t)h=(h*31+c.charCodeAt(0))>>>0;return 'oklch(58% 0.15 '+(h%360)+')'}
+function zeige(s){
+  const b=$('bild');b.replaceChildren()
+  if(typeof s.picture==='string'&&s.picture.startsWith('data:image/')){const i=document.createElement('img');i.className='avatar';i.alt='';i.src=s.picture;b.append(i)}
+  else{const d=document.createElement('div');d.className='avatar initial';d.style.background=farbe(s.user);d.textContent=(s.name||'?').trim().charAt(0).toUpperCase()||'?';b.append(d)}
+  $('name').textContent=s.name||'Ohne Namen'
+  $('did').textContent=s.user.length>34?s.user.slice(0,20)+'…'+s.user.slice(-8):s.user
+  $('did').title=s.user
+  nur('drin')
+}
+$('zuHier').onclick=()=>{stopp();nur('hierbox')}
+$('zuQr').onclick=qr
+$('hier').onclick=hier
+$('ab').onclick=async()=>{await fetch('/abmelden',{method:'POST'});mobil?nur('hierbox'):qr()}
+fetch('/status').then(r=>r.json()).then(s=>{if(s.user)zeige(s);else if(mobil)nur('hierbox');else qr()})
 </script>`
 
-const WALLET_PAGE = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Web of Trust · Anmeldung</title><link rel="icon" href="data:,">
+const WALLET_PAGE = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Web of Trust · Anmeldung</title><link rel="icon" href="${ICON}">
 <style>${STYLE}</style>
 <h1>Web of Trust</h1>
 <div id="app"><p>Lädt …</p></div>
@@ -79,7 +151,8 @@ const freshId = (): string => b64uOf(rand(16))
 
 async function bodyOf (req: IncomingMessage): Promise<string> {
   let raw = ''
-  for await (const chunk of req) { raw += chunk; if (raw.length > 64_000) throw new Error('zu groß') }
+  // room for a profile picture in the token
+  for await (const chunk of req) { raw += chunk; if (raw.length > 256_000) throw new Error('zu groß') }
   return raw
 }
 
@@ -150,8 +223,8 @@ export async function serve (opts: ServeOptions = {}): Promise<{ server: Server,
     if (req.method === 'GET' && path === RETURN_PATH) {
       const id = cookieId(req), code = url.searchParams.get('response_code') ?? ''
       const r = app.redeem(id ?? '', code, now())   // a code is used up by any attempt
-      if (r.ok && id) { signIn(res, { user: r.user, ...(r.name ? { name: r.name } : {}) }); res.writeHead(303, { Location: '/' }); res.end(); return }
-      html(res, 400, `<!doctype html><meta charset="utf-8"><style>${STYLE}</style><h1>Anmeldung nicht möglich</h1><p>${escapeHtml(r.ok ? 'keine Sitzung' : r.reason)}</p><p><a href="/">Zur Startseite</a></p>`)
+      if (r.ok && id) { signIn(res, { user: r.user, ...(r.name ? { name: r.name } : {}), ...(r.picture ? { picture: r.picture } : {}) }); res.writeHead(303, { Location: '/' }); res.end(); return }
+      html(res, 400, `<!doctype html><html lang="de"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Anmeldung nicht möglich</title><link rel="icon" href="${ICON}"><style>${STYLE}</style><header>${LOGO}<b>Beispiel-Web-App</b></header><main><div class="card"><h1>Anmeldung nicht möglich</h1><p class="muted">${escapeHtml(r.ok ? 'keine Sitzung' : r.reason)}</p><a class="button" href="/">Noch einmal</a></div></main>`)
       return
     }
     if (req.method === 'POST' && path === RESPONSE_PATH) {
@@ -163,6 +236,11 @@ export async function serve (opts: ServeOptions = {}): Promise<{ server: Server,
       if (!r.ok) { json(res, 400, { error: 'invalid_request', error_description: r.reason }); return }
       json(res, 200, 'redirect_uri' in r ? { redirect_uri: r.redirect_uri } : {})
       return
+    }
+    if (req.method === 'POST' && path === '/abmelden') {
+      const id = cookieId(req); if (id) { authenticated.delete(id); app.forget(id) }
+      res.setHeader('Set-Cookie', `sitzung=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure ? '; Secure' : ''}`)
+      json(res, 200, {}); return
     }
     if (req.method === 'GET' && path === WALLET_PATH) { html(res, 200, WALLET_PAGE); return }
     if (req.method === 'GET' && path === WALLET_PATH + '.js' && opts.walletScript) {

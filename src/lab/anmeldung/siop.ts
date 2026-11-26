@@ -31,6 +31,7 @@ export interface IdTokenClaims {
   iat: number                // seconds
   exp: number                // seconds
   name?: string              // only if the person chose to share it
+  picture?: string           // the same; a data:image URI (the app's profile picture), never a remote URL
 }
 
 const SCHEME = 'openid://'

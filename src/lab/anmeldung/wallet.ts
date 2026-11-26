@@ -61,7 +61,7 @@ export interface Answer {
 /** The person confirmed: build and sign the answer. */
 export async function confirm (
   r: LoginRequest, rootIkm: Uint8Array, nowMs: number,
-  opts: { name?: string, subtle?: SubtleCrypto } = {},
+  opts: { name?: string, picture?: string, subtle?: SubtleCrypto } = {},
 ): Promise<Answer> {
   const checked = review(r)
   if (!checked.ok) throw new Error(checked.reason)
@@ -69,6 +69,6 @@ export async function confirm (
   const key = await loginKey(rootIkm, r.client_id, subtle)
   const did = anchorOfEd(key.pubRaw)
   const iat = Math.floor(nowMs / 1000)
-  const claims: IdTokenClaims = { iss: did, sub: did, aud: r.client_id, nonce: r.nonce, iat, exp: iat + TOKEN_LIFETIME_S, ...(opts.name ? { name: opts.name } : {}) }
+  const claims: IdTokenClaims = { iss: did, sub: did, aud: r.client_id, nonce: r.nonce, iat, exp: iat + TOKEN_LIFETIME_S, ...(opts.name ? { name: opts.name } : {}), ...(opts.picture ? { picture: opts.picture } : {}) }
   return { response_uri: r.response_uri, body: { id_token: await signIdToken(key, claims, subtle), state: r.state }, did }
 }

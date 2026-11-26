@@ -35,7 +35,13 @@ const MAX_TOKEN_AGE_S = 600
 const CLOCK_SKEW_S = 60
 
 export type Mode = 'cross-device' | 'same-device'
-export type Login = { user: string, name?: string }
+export type Login = { user: string, name?: string, picture?: string }
+
+/** a profile picture the page may show: an inline image, never a remote URL (no tracking, no mixed content) */
+export const MAX_PICTURE_CHARS = 100_000
+export function pictureOf (v: unknown): string | undefined {
+  return typeof v === 'string' && v.length <= MAX_PICTURE_CHARS && /^data:image\/(webp|png|jpeg);base64,[A-Za-z0-9+/]+=*$/.test(v) ? v : undefined
+}
 
 // `checking` is set before the first await of `receive` and cleared only if
 // the answer fails, so two concurrent answers cannot both pass: JavaScript
@@ -112,7 +118,8 @@ export class WebApp {
     if (typeof c.iat !== 'number' || typeof c.exp !== 'number') return { ok: false, reason: 'ohne Zeitangaben' }
     if (c.iat > now + CLOCK_SKEW_S) return { ok: false, reason: 'aus der Zukunft' }
     if (c.exp < now || c.exp - c.iat > MAX_TOKEN_AGE_S) return { ok: false, reason: 'abgelaufen' }
-    return { ok: true, login: { user: c.sub, ...(typeof c.name === 'string' ? { name: c.name } : {}) } }
+    const picture = pictureOf(c.picture)
+    return { ok: true, login: { user: c.sub, ...(typeof c.name === 'string' ? { name: c.name } : {}), ...(picture ? { picture } : {}) } }
   }
 
   /** What the waiting page asks (cross-device): is this browser session logged in? (Does not collect.) */
