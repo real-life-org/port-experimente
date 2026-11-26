@@ -3,9 +3,10 @@
 // Routes:
 //   GET  /                 the page: on a computer the QR code, on a phone one button to the app
 //   POST /abmelden         end the signed-in session
-//   GET  /start            a cross-device request: QR code and wallet link
+//   GET  /start            a cross-device request: a login attempt (vorgang), QR code, wallet link
+//   GET  /erneuern?vorgang=     a fresh QR code for the same, still open attempt
 //   GET  /start?geraet=gleich   a same-device request: wallet link only
-//   GET  /status           what the page polls (cross-device)
+//   GET  /status[?vorgang=]     the signed-in account; with vorgang, collect a confirmed attempt
 //   POST /anmeldung/antwort     the response_uri (direct_post, form-encoded)
 //   GET  /fertig?response_code= the same-device return into the browser
 //   GET  /wallet, /wallet.js    the demo wallet page (demo crutch, see NOTES.md)
@@ -25,8 +26,6 @@ export const WALLET_PATH = '/wallet'
 export const SESSION_LIFETIME_MS = 60 * 60_000
 export const SWEEP_EVERY_MS = 60_000
 export const MAX_OPEN_REQUESTS = 10_000
-/** how long a collected pre-login id still turns away a late QR renewal */
-export const COLLECTED_GRACE_MS = 60_000
 /** the Web of Trust app's link for a login request */
 export const APP_LINK = 'https://web-of-trust.de/a'
 
@@ -102,27 +101,29 @@ const PAGE = `<!doctype html><html lang="de"><meta charset="utf-8"><meta name="v
 const $=id=>document.getElementById(id)
 const demo=new URLSearchParams(location.search).has('demo')?'&wallet=demo':''
 const mobil=matchMedia('(pointer: coarse)').matches&&matchMedia('(max-width: 48rem)').matches
-let poll=0,erneuern=0
+let poll=0,erneuern=0,vorgang=null
 const nur=id=>{for(const s of ['laden','qrbox','hierbox','drin','fehlerbox'])$(s).hidden=s!==id}
 const stopp=()=>{clearInterval(poll);clearTimeout(erneuern)}
-const fehler=t=>{nur('fehlerbox');$('fehler').textContent=t}
+const fehler=t=>{stopp();nur('fehlerbox');$('fehler').textContent=t}
 const weiter=()=>mobil?nur('hierbox'):qr()
-const start=async g=>{const r=await fetch('/start?geraet='+g+demo);if(r.status===409)return{confirmed:true};if(!r.ok)throw new Error('busy');return r.json()}
+const holen=async p=>{const r=await fetch(p);if(r.status===409)return{confirmed:true};if(r.status===410)return{gone:true};if(!r.ok)throw new Error('busy');return r.json()}
+// the QR way: one login attempt per tab. Renewing and collecting name it; neither touches the
+// browser's signed-in cookie except the one collect that signs in.
 async function qr(){
   stopp()
   let r
-  try{r=await start('anderes')}catch{fehler('Gerade nicht möglich.');return}
-  // just confirmed in the app: keep the code, collect the login
-  if(r.confirmed){status();poll=setInterval(status,1500);erneuern=setTimeout(qr,5000);return}
-  $('qr').innerHTML=r.qrSvg;nur('qrbox')
+  try{r=await holen(vorgang?'/erneuern?vorgang='+vorgang+demo:'/start?geraet=anderes'+demo)}catch{fehler('Gerade nicht möglich.');return}
+  if(r.gone){vorgang=null;return qr()}
+  if(!r.confirmed){vorgang=r.vorgang;$('qr').innerHTML=r.qrSvg;nur('qrbox')}
   poll=setInterval(status,1500)
-  erneuern=setTimeout(qr,270000)   // the request lives five minutes
+  erneuern=setTimeout(qr,r.confirmed?5000:270000)   // the request lives five minutes
+  if(r.confirmed)status()
 }
 async function hier(){
   stopp()
-  try{const r=await start('gleich');if(r.confirmed){status();return}location.href=r.walletLink}catch{fehler('Gerade nicht möglich.')}
+  try{const r=await holen('/start?geraet=gleich'+demo);location.href=r.walletLink}catch{fehler('Gerade nicht möglich.')}
 }
-async function status(){const s=await (await fetch('/status')).json();if(s.user){stopp();zeige(s)}}
+async function status(){const s=await (await fetch('/status'+(vorgang?'?vorgang='+vorgang:''))).json();if(s.user){stopp();vorgang=null;zeige(s)}}
 function farbe(t){let h=0;for(const c of t)h=(h*31+c.charCodeAt(0))>>>0;return 'oklch(58% 0.15 '+(h%360)+')'}
 function zeige(s){
   const b=$('bild');b.replaceChildren()
@@ -137,7 +138,7 @@ $('zuHier').onclick=()=>{stopp();nur('hierbox')}
 $('zuQr').onclick=qr
 $('nochmal').onclick=weiter
 $('hier').onclick=hier
-$('ab').onclick=async()=>{await fetch('/abmelden',{method:'POST'});weiter()}
+$('ab').onclick=async()=>{await fetch('/abmelden',{method:'POST'});vorgang=null;weiter()}
 fetch('/status').then(r=>r.json()).then(s=>{if(s.user)zeige(s);else weiter()}).catch(()=>fehler('Gerade nicht möglich.'))
 </script>`
 
@@ -148,16 +149,19 @@ const WALLET_PAGE = `<!doctype html><meta charset="utf-8"><meta name="viewport" 
 <p class="muted">Vorführung: Diese Seite steht für die Web-of-Trust-App. Sie hält eine Test-Identität nur in diesem Browser.</p>
 <script type="module" src="${WALLET_PATH}.js"></script>`
 
-// Sessions. Two kinds of id, both issued by this server (visitors without a
-// login get no id at all):
-// - pre-login: minted fresh by /start and the only id the login request is
-//   bound to. Whoever knew the browser's earlier id (an earlier pre-login id,
-//   or one planted from outside) does not know this one.
-// - authenticated: minted when the completed login is collected (/status for
-//   cross-device, /fertig for same-device). The pre-login id is dropped at
-//   that moment and can neither read the account nor collect the login again.
+// Sessions (review #141: starting, renewing and collecting are separate):
+// - a login attempt (vorgang) is a fresh random id from /start. For the QR code (cross-device) it lives
+//   only in the page's script: renewing and collecting name it, and no cookie is set for it. A
+//   background tab's QR timer can therefore never touch the browser's signed-in cookie, and nobody can
+//   plant an attempt id in a browser.
+// - same-device: the return from the app (/fertig) comes in a browser navigation, so the attempt is
+//   bound by a short-lived cookie of its own (anmeldung), separate from the signed-in one.
+// - signed in: the cookie sitzung, minted fresh when a confirmed attempt is collected, exactly once.
 // An id the server did not issue, or no longer accepts, is treated as absent.
-const cookieId = (req: IncomingMessage): string | null => /(?:^|;\s*)sitzung=([A-Za-z0-9_-]+)/.exec(req.headers.cookie ?? '')?.[1] ?? null
+const cookieOf = (req: IncomingMessage, name: string): string | null => new RegExp(`(?:^|;\\s*)${name}=([A-Za-z0-9_-]+)`).exec(req.headers.cookie ?? '')?.[1] ?? null
+const SIGNED_IN = 'sitzung', SAME_DEVICE = 'anmeldung'
+/** the same-device attempt's cookie lives as long as the request plus the return */
+const SAME_DEVICE_MAX_AGE_S = 600
 const freshId = (): string => b64uOf(rand(16))
 
 async function bodyOf (req: IncomingMessage): Promise<string> {
@@ -191,20 +195,23 @@ export async function serve (opts: ServeOptions = {}): Promise<{ server: Server,
   let app!: WebApp, origin!: string
   // signed-in sessions with their start; a login before it is the web app's (one lifecycle, webapp.ts)
   const authenticated = new Map<string, { login: Login, at: number }>()
-  // pre-login ids whose login was just collected: a QR renewal already on its way with such an id must
-  // not set a cookie, or it would overwrite the signed-in one (review #141, second round)
-  const collected = new Map<string, number>()
   const sweep = (): void => {
     const t = now()
     app?.sweep(t)
     for (const [id, s] of authenticated) if (t - s.at > SESSION_LIFETIME_MS) authenticated.delete(id)
-    for (const [id, at] of collected) if (t - at > COLLECTED_GRACE_MS) collected.delete(id)
   }
   // behind a TLS-terminating proxy (Traefik) the server speaks http, but the browser sees https
   const secure = Boolean(opts.https) || (opts.publicOrigin ?? '').startsWith('https:')
-  const signIn = (res: ServerResponse, login: Login): void => {
+  const cookie = (name: string, value: string, maxAgeS?: number): string =>
+    `${name}=${value}; HttpOnly; SameSite=Lax; Path=/${maxAgeS !== undefined ? `; Max-Age=${maxAgeS}` : ''}${secure ? '; Secure' : ''}`
+  const signIn = (res: ServerResponse, login: Login, alsoClear?: string): void => {
     const fresh = freshId(); authenticated.set(fresh, { login, at: now() })
-    res.setHeader('Set-Cookie', `sitzung=${fresh}; HttpOnly; SameSite=Lax; Path=/${secure ? '; Secure' : ''}`)
+    res.setHeader('Set-Cookie', [cookie(SIGNED_IN, fresh), ...(alsoClear ? [cookie(alsoClear, '', 0)] : [])])
+  }
+  const qrOf = async (url: string, asked: string | null) => {
+    const wallet = asked === 'demo' || asked === 'app' ? asked : (opts.wallet ?? 'demo')
+    const walletLink = wallet === 'app' ? `${APP_LINK}#${encodeURIComponent(url)}` : `${origin}${WALLET_PATH}#${encodeURIComponent(url)}`
+    return { walletLink, qrSvg: await QRCode.toString(walletLink, { type: 'svg', margin: 2, errorCorrectionLevel: 'L' }) }
   }
   const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const url = new URL(req.url ?? '/', origin), path = url.pathname
@@ -214,35 +221,41 @@ export async function serve (opts: ServeOptions = {}): Promise<{ server: Server,
       // a cap on open requests: nobody fills the memory by starting logins
       const cap = opts.maxOpenRequests ?? MAX_OPEN_REQUESTS
       if (app.held().pending >= cap) { json(res, 503, { error: 'busy' }); return }
-      const old = cookieId(req)
-      // a confirmed (or just checked) login of this browser wins over a renewed QR code: the page
-      // collects it through /status first
-      if (old && !authenticated.has(old) && (app.inFlight(old, now()) || collected.has(old))) { json(res, 409, { error: 'confirmed' }); return }
-      if (old && !authenticated.has(old)) app.forget(old)
-      const id = freshId()
-      res.setHeader('Set-Cookie', `sitzung=${id}; HttpOnly; SameSite=Lax; Path=/${secure ? '; Secure' : ''}`)
       const same = url.searchParams.get('geraet') === 'gleich'
-      const started = app.start(id, now(), same ? 'same-device' : 'cross-device')
-      // the page may ask for the demo wallet (or the app) per login; otherwise the server's choice
-      const asked = url.searchParams.get('wallet')
-      const wallet = asked === 'demo' || asked === 'app' ? asked : (opts.wallet ?? 'demo')
-      const walletLink = wallet === 'app' ? `${APP_LINK}#${encodeURIComponent(started.url)}` : `${origin}${WALLET_PATH}#${encodeURIComponent(started.url)}`
-      json(res, 200, same ? { url: started.url, walletLink } : { url: started.url, walletLink, qrSvg: await QRCode.toString(walletLink, { type: 'svg', margin: 2, errorCorrectionLevel: 'L' }) })
+      const vorgang = freshId()
+      const started = app.start(vorgang, now(), same ? 'same-device' : 'cross-device')
+      const { walletLink, qrSvg } = await qrOf(started.url, url.searchParams.get('wallet'))
+      if (same) {
+        res.setHeader('Set-Cookie', cookie(SAME_DEVICE, vorgang, SAME_DEVICE_MAX_AGE_S))
+        json(res, 200, { url: started.url, walletLink }); return
+      }
+      json(res, 200, { vorgang, url: started.url, walletLink, qrSvg })   // no cookie for the QR way
+      return
+    }
+    if (req.method === 'GET' && path === '/erneuern') {
+      // a fresh QR code for the same attempt, only while it is still open; never a cookie
+      const vorgang = url.searchParams.get('vorgang') ?? ''
+      if (app.inFlight(vorgang, now())) { json(res, 409, { error: 'confirmed' }); return }   // collect it instead
+      if (!app.isOpen(vorgang, now())) { json(res, 410, { error: 'gone' }); return }                // start anew
+      app.forget(vorgang)
+      const started = app.start(vorgang, now(), 'cross-device')
+      json(res, 200, { vorgang, url: started.url, ...(await qrOf(started.url, url.searchParams.get('wallet'))) })
       return
     }
     if (req.method === 'GET' && path === '/status') {
-      const id = cookieId(req)
+      const id = cookieOf(req, SIGNED_IN)
       const signedIn = id ? authenticated.get(id) : undefined
       if (signedIn) { json(res, 200, signedIn.login); return }
-      const done = id ? app.take(id, now()) : null
-      if (done && id) { collected.set(id, now()); signIn(res, done); json(res, 200, done); return }
+      const vorgang = url.searchParams.get('vorgang')
+      const done = vorgang ? app.take(vorgang, now()) : null   // exactly once
+      if (done) { signIn(res, done); json(res, 200, done); return }
       json(res, 200, {})
       return
     }
     if (req.method === 'GET' && path === RETURN_PATH) {
-      const id = cookieId(req), code = url.searchParams.get('response_code') ?? ''
+      const id = cookieOf(req, SAME_DEVICE), code = url.searchParams.get('response_code') ?? ''
       const r = app.redeem(id ?? '', code, now())   // a code is used up by any attempt
-      if (r.ok && id) { collected.set(id, now()); signIn(res, { user: r.user, ...(r.name ? { name: r.name } : {}), ...(r.picture ? { picture: r.picture } : {}) }); res.writeHead(303, { Location: '/' }); res.end(); return }
+      if (r.ok && id) { signIn(res, { user: r.user, ...(r.name ? { name: r.name } : {}), ...(r.picture ? { picture: r.picture } : {}) }, SAME_DEVICE); res.writeHead(303, { Location: '/' }); res.end(); return }
       html(res, 400, `<!doctype html><html lang="de"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Anmeldung nicht möglich</title><link rel="icon" href="${ICON}"><style>${STYLE}</style><header>${LOGO}<b>Beispiel-Web-App</b></header><main><div class="card"><h1>Anmeldung nicht möglich</h1><p class="muted">${escapeHtml(r.ok ? 'keine Sitzung' : r.reason)}</p><a class="button" href="/">Noch einmal</a></div></main>`)
       return
     }
@@ -257,8 +270,8 @@ export async function serve (opts: ServeOptions = {}): Promise<{ server: Server,
       return
     }
     if (req.method === 'POST' && path === '/abmelden') {
-      const id = cookieId(req); if (id) { authenticated.delete(id); app.forget(id) }
-      res.setHeader('Set-Cookie', `sitzung=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure ? '; Secure' : ''}`)
+      const id = cookieOf(req, SIGNED_IN); if (id) authenticated.delete(id)
+      res.setHeader('Set-Cookie', cookie(SIGNED_IN, '', 0))
       json(res, 200, {}); return
     }
     if (req.method === 'GET' && path === WALLET_PATH) { html(res, 200, WALLET_PAGE); return }

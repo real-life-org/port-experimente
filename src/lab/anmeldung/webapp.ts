@@ -149,6 +149,12 @@ export class WebApp {
     return false
   }
 
+  /** a request of this key is still waiting for its answer (not answered, not being checked, not expired) */
+  isOpen (session: string, nowMs: number): boolean {
+    for (const p of this.pending.values()) if (p.session === session && !p.checking && nowMs - p.created <= REQUEST_LIFETIME_MS) return true
+    return false
+  }
+
   /** The browser session starts a new login (or is replaced): what it held is dropped. */
   forget (session: string): void {
     // a request being checked is marked, not dropped: its check ends and stores nothing
