@@ -90,7 +90,10 @@ const PAGE = `<!doctype html><html lang="de"><meta charset="utf-8"><meta name="v
   <p class="did" id="did"></p>
   <button class="quiet" id="ab">Abmelden</button>
 </section>
-<p class="err" id="fehler" hidden></p>
+<section id="fehlerbox" hidden>
+  <p class="err" id="fehler"></p>
+  <button class="button" id="nochmal">Noch einmal versuchen</button>
+</section>
 </div></main>
 <footer><p class="muted">Deine Identität bleibt in deiner App. Diese Seite sieht nur, was du dort freigibst.</p></footer>
 <script>
@@ -98,19 +101,24 @@ const $=id=>document.getElementById(id)
 const demo=new URLSearchParams(location.search).has('demo')?'&wallet=demo':''
 const mobil=matchMedia('(pointer: coarse)').matches&&matchMedia('(max-width: 48rem)').matches
 let poll=0,erneuern=0
-const nur=id=>{for(const s of ['laden','qrbox','hierbox','drin'])$(s).hidden=s!==id;$('fehler').hidden=true}
+const nur=id=>{for(const s of ['laden','qrbox','hierbox','drin','fehlerbox'])$(s).hidden=s!==id}
 const stopp=()=>{clearInterval(poll);clearTimeout(erneuern)}
-const fehler=t=>{$('fehler').textContent=t;$('fehler').hidden=false}
-const start=async g=>{const r=await fetch('/start?geraet='+g+demo);if(!r.ok)throw new Error('busy');return r.json()}
+const fehler=t=>{nur('fehlerbox');$('fehler').textContent=t}
+const weiter=()=>mobil?nur('hierbox'):qr()
+const start=async g=>{const r=await fetch('/start?geraet='+g+demo);if(r.status===409)return{confirmed:true};if(!r.ok)throw new Error('busy');return r.json()}
 async function qr(){
   stopp()
-  try{const r=await start('anderes');$('qr').innerHTML=r.qrSvg;nur('qrbox')}catch{fehler('Gerade nicht möglich. Versuch es gleich noch einmal.');return}
+  let r
+  try{r=await start('anderes')}catch{fehler('Gerade nicht möglich.');return}
+  // just confirmed in the app: keep the code, collect the login
+  if(r.confirmed){status();poll=setInterval(status,1500);erneuern=setTimeout(qr,5000);return}
+  $('qr').innerHTML=r.qrSvg;nur('qrbox')
   poll=setInterval(status,1500)
   erneuern=setTimeout(qr,270000)   // the request lives five minutes
 }
 async function hier(){
   stopp()
-  try{const r=await start('gleich');location.href=r.walletLink}catch{fehler('Gerade nicht möglich. Versuch es gleich noch einmal.')}
+  try{const r=await start('gleich');if(r.confirmed){status();return}location.href=r.walletLink}catch{fehler('Gerade nicht möglich.')}
 }
 async function status(){const s=await (await fetch('/status')).json();if(s.user){stopp();zeige(s)}}
 function farbe(t){let h=0;for(const c of t)h=(h*31+c.charCodeAt(0))>>>0;return 'oklch(58% 0.15 '+(h%360)+')'}
@@ -125,9 +133,10 @@ function zeige(s){
 }
 $('zuHier').onclick=()=>{stopp();nur('hierbox')}
 $('zuQr').onclick=qr
+$('nochmal').onclick=weiter
 $('hier').onclick=hier
-$('ab').onclick=async()=>{await fetch('/abmelden',{method:'POST'});mobil?nur('hierbox'):qr()}
-fetch('/status').then(r=>r.json()).then(s=>{if(s.user)zeige(s);else if(mobil)nur('hierbox');else qr()})
+$('ab').onclick=async()=>{await fetch('/abmelden',{method:'POST'});weiter()}
+fetch('/status').then(r=>r.json()).then(s=>{if(s.user)zeige(s);else weiter()}).catch(()=>fehler('Gerade nicht möglich.'))
 </script>`
 
 const WALLET_PAGE = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Web of Trust · Anmeldung</title><link rel="icon" href="${ICON}">
@@ -199,7 +208,11 @@ export async function serve (opts: ServeOptions = {}): Promise<{ server: Server,
       // a cap on open requests: nobody fills the memory by starting logins
       const cap = opts.maxOpenRequests ?? MAX_OPEN_REQUESTS
       if (app.held().pending >= cap) { json(res, 503, { error: 'busy' }); return }
-      const old = cookieId(req); if (old && !authenticated.has(old)) app.forget(old)
+      const old = cookieId(req)
+      // a confirmed (or just checked) login of this browser wins over a renewed QR code: the page
+      // collects it through /status first
+      if (old && !authenticated.has(old) && app.inFlight(old, now())) { json(res, 409, { error: 'confirmed' }); return }
+      if (old && !authenticated.has(old)) app.forget(old)
       const id = freshId()
       res.setHeader('Set-Cookie', `sitzung=${id}; HttpOnly; SameSite=Lax; Path=/${secure ? '; Secure' : ''}`)
       const same = url.searchParams.get('geraet') === 'gleich'

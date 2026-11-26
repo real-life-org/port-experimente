@@ -138,6 +138,17 @@ export class WebApp {
     return l && nowMs - l.at <= PICKUP_LIFETIME_MS ? l.login : null
   }
 
+  /**
+   * A login of this browser session is confirmed and not yet collected, or its answer is being
+   * checked right now. A new login must not replace it: the page renews its QR code on a timer, and a
+   * confirmation that came in just before must survive until the page collects it (review #141).
+   */
+  inFlight (session: string, nowMs: number): boolean {
+    if (this.poll(session, nowMs)) return true
+    for (const p of this.pending.values()) if (p.session === session && p.checking) return true
+    return false
+  }
+
   /** The browser session starts a new login (or is replaced): what it held is dropped. */
   forget (session: string): void {
     // a request being checked is marked, not dropped: its check ends and stores nothing

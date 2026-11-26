@@ -264,3 +264,29 @@ test('die Seite: auf dem Rechner der QR-Code, auf dem Telefon ein Knopf, die Dem
   expect(html).not.toContain('id="demo"')                   // no checkbox for the demo wallet any more
   expect(html).toContain("has('demo')")
 })
+
+test('der QR-Wechsel verwirft keine Anmeldung, die kurz davor bestätigt wurde (Review #141)', async () => {
+  let t = Date.UTC(2026, 10, 26, 12, 0, 0)
+  const s = await serve({ now: () => t })
+  try {
+    let cookie = ''
+    const call = async (path: string) => {
+      const r = await fetch(s.origin + path, { headers: cookie ? { cookie } : {} })
+      const set = r.headers.get('set-cookie'); if (set) cookie = set.split(';')[0]!
+      return { status: r.status, body: await r.json() as any }
+    }
+    const { body: { url } } = await call('/start')
+    t += 269_900                                              // 4:29.9: the app confirms
+    const answer = await confirm(parseRequestUrl(url)!, new Uint8Array(32).fill(14), t, { name: 'Anton' })
+    expect(await post(answer)).toBe(200)
+    t += 100                                                  // 4:30: the page renews its code
+    expect((await call('/start')).status).toBe(409)
+    expect((await call('/status')).body).toEqual({ user: answer.did, name: 'Anton' })
+  } finally { s.server.close() }
+})
+
+test('nach einem Fehler gibt es einen Knopf zum erneuten Versuch', async () => {
+  const html = await (await fetch(origin + '/')).text()
+  expect(html).toContain('id="nochmal"')
+  expect(html).toContain("$('nochmal').onclick=weiter")
+})

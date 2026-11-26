@@ -260,3 +260,19 @@ describe('Anmeldung mit der Web-of-Trust-App', () => {
   })
 })
 
+
+describe('inFlight: eine neue Anmeldung ersetzt keine laufende Bestätigung (Review #141)', () => {
+  test('während der Prüfung und bis zur Abholung', async () => {
+    const app = new WebApp('https://shop.example', 'https://shop.example/antwort')
+    const T = Date.UTC(2026, 10, 26)
+    const { request } = app.start('s', T)
+    expect(app.inFlight('s', T)).toBe(false)
+    const a = await confirm(request, new Uint8Array(32).fill(15), T)
+    const checking = app.receive(a.body, T)                 // the check runs (await inside)
+    expect(app.inFlight('s', T)).toBe(true)
+    expect(await checking).toMatchObject({ ok: true })
+    expect(app.inFlight('s', T)).toBe(true)                 // confirmed, not yet collected
+    expect(app.take('s', T)).toMatchObject({ user: a.did })
+    expect(app.inFlight('s', T)).toBe(false)
+  })
+})
