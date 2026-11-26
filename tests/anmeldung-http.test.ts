@@ -290,3 +290,24 @@ test('nach einem Fehler gibt es einen Knopf zum erneuten Versuch', async () => {
   expect(html).toContain('id="nochmal"')
   expect(html).toContain("$('nochmal').onclick=weiter")
 })
+
+test('eine QR-Erneuerung, die nach der Abholung ankommt, setzt kein Cookie (Review #141, zweite Runde)', async () => {
+  const s = await serve()
+  try {
+    const req = async (path: string, cookie: string) => {
+      const r = await fetch(s.origin + path, { headers: cookie ? { cookie } : {} })
+      return { status: r.status, set: r.headers.get('set-cookie'), body: await r.json() as any }
+    }
+    const first = await req('/start', '')
+    const pre = first.set!.split(';')[0]!
+    const answer = await confirm(parseRequestUrl(first.body.url)!, new Uint8Array(32).fill(16), Date.now())
+    expect(await post(answer)).toBe(200)
+    const collect = await req('/status', pre)                 // the poll collects and signs in
+    const signedIn = collect.set!.split(';')[0]!
+    expect(collect.body.user).toBe(answer.did)
+    const late = await req('/start', pre)                     // the renewal was already on its way with the old id
+    expect(late.status).toBe(409)
+    expect(late.set).toBeNull()
+    expect((await req('/status', signedIn)).body.user).toBe(answer.did)
+  } finally { s.server.close() }
+})

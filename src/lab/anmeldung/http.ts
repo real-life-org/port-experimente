@@ -25,6 +25,8 @@ export const WALLET_PATH = '/wallet'
 export const SESSION_LIFETIME_MS = 60 * 60_000
 export const SWEEP_EVERY_MS = 60_000
 export const MAX_OPEN_REQUESTS = 10_000
+/** how long a collected pre-login id still turns away a late QR renewal */
+export const COLLECTED_GRACE_MS = 60_000
 /** the Web of Trust app's link for a login request */
 export const APP_LINK = 'https://web-of-trust.de/a'
 
@@ -189,10 +191,14 @@ export async function serve (opts: ServeOptions = {}): Promise<{ server: Server,
   let app!: WebApp, origin!: string
   // signed-in sessions with their start; a login before it is the web app's (one lifecycle, webapp.ts)
   const authenticated = new Map<string, { login: Login, at: number }>()
+  // pre-login ids whose login was just collected: a QR renewal already on its way with such an id must
+  // not set a cookie, or it would overwrite the signed-in one (review #141, second round)
+  const collected = new Map<string, number>()
   const sweep = (): void => {
     const t = now()
     app?.sweep(t)
     for (const [id, s] of authenticated) if (t - s.at > SESSION_LIFETIME_MS) authenticated.delete(id)
+    for (const [id, at] of collected) if (t - at > COLLECTED_GRACE_MS) collected.delete(id)
   }
   // behind a TLS-terminating proxy (Traefik) the server speaks http, but the browser sees https
   const secure = Boolean(opts.https) || (opts.publicOrigin ?? '').startsWith('https:')
@@ -211,7 +217,7 @@ export async function serve (opts: ServeOptions = {}): Promise<{ server: Server,
       const old = cookieId(req)
       // a confirmed (or just checked) login of this browser wins over a renewed QR code: the page
       // collects it through /status first
-      if (old && !authenticated.has(old) && app.inFlight(old, now())) { json(res, 409, { error: 'confirmed' }); return }
+      if (old && !authenticated.has(old) && (app.inFlight(old, now()) || collected.has(old))) { json(res, 409, { error: 'confirmed' }); return }
       if (old && !authenticated.has(old)) app.forget(old)
       const id = freshId()
       res.setHeader('Set-Cookie', `sitzung=${id}; HttpOnly; SameSite=Lax; Path=/${secure ? '; Secure' : ''}`)
@@ -229,14 +235,14 @@ export async function serve (opts: ServeOptions = {}): Promise<{ server: Server,
       const signedIn = id ? authenticated.get(id) : undefined
       if (signedIn) { json(res, 200, signedIn.login); return }
       const done = id ? app.take(id, now()) : null
-      if (done) { signIn(res, done); json(res, 200, done); return }
+      if (done && id) { collected.set(id, now()); signIn(res, done); json(res, 200, done); return }
       json(res, 200, {})
       return
     }
     if (req.method === 'GET' && path === RETURN_PATH) {
       const id = cookieId(req), code = url.searchParams.get('response_code') ?? ''
       const r = app.redeem(id ?? '', code, now())   // a code is used up by any attempt
-      if (r.ok && id) { signIn(res, { user: r.user, ...(r.name ? { name: r.name } : {}), ...(r.picture ? { picture: r.picture } : {}) }); res.writeHead(303, { Location: '/' }); res.end(); return }
+      if (r.ok && id) { collected.set(id, now()); signIn(res, { user: r.user, ...(r.name ? { name: r.name } : {}), ...(r.picture ? { picture: r.picture } : {}) }); res.writeHead(303, { Location: '/' }); res.end(); return }
       html(res, 400, `<!doctype html><html lang="de"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Anmeldung nicht möglich</title><link rel="icon" href="${ICON}"><style>${STYLE}</style><header>${LOGO}<b>Beispiel-Web-App</b></header><main><div class="card"><h1>Anmeldung nicht möglich</h1><p class="muted">${escapeHtml(r.ok ? 'keine Sitzung' : r.reason)}</p><a class="button" href="/">Noch einmal</a></div></main>`)
       return
     }
