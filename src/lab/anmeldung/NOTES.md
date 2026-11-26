@@ -30,10 +30,13 @@ phone, and the same-device way) the same day.
   started the request can redeem. Both ways check signature, audience,
   nonce (once), request age (5 min) and token time (60 s skew, at most
   10 min).
-- `http.ts`: the web app behind HTTP. One page with two buttons ("Mit dem
-  Telefon anmelden" shows a QR code, "Auf diesem Gerät anmelden" opens the
-  wallet by link), `/start`, `/status` (polled), the `response_uri`
-  (form-encoded), the return `/fertig`, and the demo wallet page.
+- `http.ts`: the web app behind HTTP, in the Web of Trust look. On a
+  computer the page shows the QR code at once and renews it; on a phone one
+  button opens the app on this device; the other way is one link away.
+  `/start`, `/erneuern` and `/status` (polled), the `response_uri`
+  (form-encoded), the return `/fertig`, `/abmelden`, and the demo wallet
+  page (only with `?demo`). After the login the page shows the name and
+  picture the person shared (picture only as an inline image).
 - `wallet-page.ts`: the demo wallet in the browser, bundled by Vite.
 - `demo.ts`, `scripts/anmeldung-demo.mjs`: the demonstration on the LAN.
 
@@ -92,6 +95,16 @@ second round found that a pre-login id the server had issued still worked
 after the login. Now `/start` mints a fresh pre-login id and binds the
 request to it, and collecting the completed login (`/status` or `/fertig`)
 mints a new, authenticated id and drops the pre-login one.
+Review of #141 found that the QR timer, calling `/start` like a deliberate
+start, could replace a signed-in cookie from a background tab. Starting,
+renewing and collecting are separate now: the QR way's login attempt has an
+id the tab's script names and a cookie of its own (`v_<id>`) held by the
+browser that started it; collecting needs both, so the id alone, which
+travels in URLs, gets nothing. `/erneuern` renews only an open attempt and
+only refreshes that attempt's own binding (so every code shown works until
+the end of its windows), and collecting sets the signed-in cookie exactly
+once. The same-device way binds its attempt with a short-lived
+cookie of its own.
 
 ## Results
 

@@ -35,7 +35,13 @@ const MAX_TOKEN_AGE_S = 600
 const CLOCK_SKEW_S = 60
 
 export type Mode = 'cross-device' | 'same-device'
-export type Login = { user: string, name?: string }
+export type Login = { user: string, name?: string, picture?: string }
+
+/** a profile picture the page may show: an inline image, never a remote URL (no tracking, no mixed content) */
+export const MAX_PICTURE_CHARS = 100_000
+export function pictureOf (v: unknown): string | undefined {
+  return typeof v === 'string' && v.length <= MAX_PICTURE_CHARS && /^data:image\/(webp|png|jpeg);base64,[A-Za-z0-9+/]+=*$/.test(v) ? v : undefined
+}
 
 // `checking` is set before the first await of `receive` and cleared only if
 // the answer fails, so two concurrent answers cannot both pass: JavaScript
@@ -112,7 +118,8 @@ export class WebApp {
     if (typeof c.iat !== 'number' || typeof c.exp !== 'number') return { ok: false, reason: 'ohne Zeitangaben' }
     if (c.iat > now + CLOCK_SKEW_S) return { ok: false, reason: 'aus der Zukunft' }
     if (c.exp < now || c.exp - c.iat > MAX_TOKEN_AGE_S) return { ok: false, reason: 'abgelaufen' }
-    return { ok: true, login: { user: c.sub, ...(typeof c.name === 'string' ? { name: c.name } : {}) } }
+    const picture = pictureOf(c.picture)
+    return { ok: true, login: { user: c.sub, ...(typeof c.name === 'string' ? { name: c.name } : {}), ...(picture ? { picture } : {}) } }
   }
 
   /** What the waiting page asks (cross-device): is this browser session logged in? (Does not collect.) */
@@ -129,6 +136,23 @@ export class WebApp {
     const l = this.loggedIn.get(session)
     this.loggedIn.delete(session)
     return l && nowMs - l.at <= PICKUP_LIFETIME_MS ? l.login : null
+  }
+
+  /**
+   * A login of this browser session is confirmed and not yet collected, or its answer is being
+   * checked right now. A new login must not replace it: the page renews its QR code on a timer, and a
+   * confirmation that came in just before must survive until the page collects it (review #141).
+   */
+  inFlight (session: string, nowMs: number): boolean {
+    if (this.poll(session, nowMs)) return true
+    for (const p of this.pending.values()) if (p.session === session && p.checking) return true
+    return false
+  }
+
+  /** a request of this key is still waiting for its answer (not answered, not being checked, not expired) */
+  isOpen (session: string, nowMs: number): boolean {
+    for (const p of this.pending.values()) if (p.session === session && !p.checking && nowMs - p.created <= REQUEST_LIFETIME_MS) return true
+    return false
   }
 
   /** The browser session starts a new login (or is replaced): what it held is dropped. */
