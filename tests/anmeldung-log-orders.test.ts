@@ -26,8 +26,12 @@ const SETS: [Setup, EventName[], string, number][] = [
   ['returning', ['confirm', 'fork'], 'E4 E5 E9 (two continuations)', 70],
   ['returning', ['cancel', 'late301'], 'E6 (a cancel after the request ran out)', 3],
   ['returning', ['cancel', 'confirm'], 'E6 E9 (cancel does not end the attempt)', 15],
-  ['returning', ['rotateService', 'start'], 'E8 (a key change of the service while a request is signed)', 10],
-  ['returning', ['start', 'late301'], 'E8 (the clock passes the window while a request is signed)', 4],
+  ['returning', ['rotateService', 'start'], 'E8 (a key change of the service while a request is signed)', 15],
+  ['returning', ['start', 'late301'], 'E8 E13 (the clock passes the window while a request is signed)', 5],
+  ['returning', ['start', 'late300'], 'E13 (the clock reaches exactly exp while a request is signed)', 5],
+  ['returning', ['start', 'late299'], 'E13 (the clock moves to just inside the window while a request is signed)', 5],
+  ['returning', ['confirm', 'late300'], 'E3 E6 (no answer exactly at exp)', 5],
+  ['returning', ['cancel', 'late300'], 'E6 (a cancel exactly at exp)', 3],
   ['returning', ['swapped', 'second'], 'E9 (an answer under another attempt\'s state)', 70],
   ['first', ['confirm', 'device1st'], 'E10 (two devices, one storage, first login)', 210],
   ['first', ['confirm', 'other'], 'E1 E10 (two persons, first login)', 252],
@@ -42,15 +46,20 @@ const SETS: [Setup, EventName[], string, number][] = [
 
 // Orders in which the test found real faults (fixed in service.ts); each was red before the fix.
 describe('orders that found faults', () => {
-  test('a key change of the service lands while a request is signed: the request is signed again under the new head (E8)', async () => {
-    // rotateService begins, start begins and issues its nonce, the key change is published, then start's key is derived
-    const r = await replay('returning', ['rotateService', 'start'], [0, 1, 1, 0, 1])
-    expect(r.order).toEqual(['rotateService(begin)', 'start(begin)', 'start(store: nonce)', 'rotateService(service key)', 'start(service key)', 'start(service key)'])
+  test('a key change of the service lands while a request is signed: the try is given up and the request is signed again under the new head (E8)', async () => {
+    // start derives its key, the key change is published, then start's nonce is stored and checked: the key state moved, so the nonce is spent and a new try follows
+    const r = await replay('returning', ['rotateService', 'start'], [0, 1, 1, 0, 1, 1, 1, 1, 1, 1])
+    expect(r.order).toEqual(['rotateService(begin)', 'start(begin)', 'start(service key)', 'rotateService(service key)', 'start(store: nonce)', 'start(store: nonce check)', 'start(store: close)', 'start(service key)', 'start(store: nonce)', 'start(store: nonce check)'])
     expect(r.problems).toEqual([])
   })
-  test('the clock passes the request window while it is signed: the request is made again at the new time (E8)', async () => {
-    const r = await replay('returning', ['start', 'late301'], [0, 0, 1, 0])
-    expect(r.order.slice(0, 4)).toEqual(['start(begin)', 'start(store: nonce)', 'late301(begin)', 'start(service key)'])
+  test('the clock passes the request window while it is signed: a new window and a new nonce, the first nonce spent (E8, E13)', async () => {
+    const r = await replay('returning', ['start', 'late301'], [0, 0, 1, 0, 0, 0, 0, 0, 0])
+    expect(r.order).toEqual(['start(begin)', 'start(service key)', 'late301(begin)', 'start(store: nonce)', 'start(store: nonce check)', 'start(store: close)', 'start(service key)', 'start(store: nonce)', 'start(store: nonce check)'])
+    expect(r.problems).toEqual([])
+  })
+  test('the clock reaches exactly exp while a request is signed: the link is not issued with a window that is closed (E13)', async () => {
+    const r = await replay('returning', ['start', 'late300'], [0, 0, 1, 0, 0, 0, 0, 0, 0])
+    expect(r.order).toContain('start(store: close)')
     expect(r.problems).toEqual([])
   })
   test('two key changes of the service side by side: the second is refused as changed meanwhile, the log stays valid (E12)', async () => {
@@ -69,7 +78,7 @@ describe('every order of small sets', () => {
 })
 
 test('the sets above are every order of their events: together', () => {
-  expect(SETS.reduce((n, x) => n + x[3], 0)).toBe(1231)
+  expect(SETS.reduce((n, x) => n + x[3], 0)).toBe(1255)
 })
 
 describe('random orders of larger sets, fixed seeds', () => {

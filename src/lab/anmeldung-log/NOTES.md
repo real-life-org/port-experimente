@@ -59,9 +59,12 @@ code (`/erneuern`), the cap on open requests, the demo wallet page.
 
 ## The flow
 
-1. The service starts a login: it takes a nonce from the verifier
-   (`issueNonce`), signs the Request Object with the key of its head, and keeps
-   it behind `https://<origin>/anmeldung-log/anfrage/<random>`.
+1. The service starts a login: one window for the try (below), a nonce, the
+   Request Object signed with the key of its head and with that window; the
+   nonce stored with the window's expiry. The link is returned only if, in a
+   store step, the window holds and the nonce is open (otherwise the nonce is
+   spent and the next try, at most three, has a new window and a new nonce).
+   The request is kept behind `https://<origin>/anmeldung-log/anfrage/<random>`.
 2. QR code or link: `https://web-of-trust.de/a#client_id=decentralized_identifier%3A<DID>&request_uri=<...>`.
 3. The wallet, before anything is shown: the outer link must have both
    parameters (a link without `request_uri` or with `request` is refused,
@@ -185,6 +188,24 @@ code (`/erneuern`), the cap on open requests, the demo wallet page.
 - **Request Object window**: `exp` later than `iat`, `iat` and `nbf` at most
   60 s ahead, `exp` later than now, `exp − iat` at most 300 s; checked at the
   time after the fetch, and again when the person answers or cancels.
+- **One window per attempt, `exp` excluded**: attempt, Request Object
+  (`iat`, `nbf`, `exp`) and nonce have the same window, from one moment
+  (`windowFrom`): the nonce expires at `exp`. One function (`checkWindow`,
+  and `windowHolds` for milliseconds) says whether it holds, and the window
+  is half-open: from `iat` (with the skew) up to, not including, `exp`. RFC
+  7519 4.1.4: "the expiration time on or after which the JWT MUST NOT be
+  accepted for processing ... the current date/time MUST be before the
+  expiration date/time listed in the `exp` claim". The service (an attempt is
+  open; the link is issued; the request is served), the wallet (opening,
+  answering, cancelling, the gate before `transport.post`) and the store
+  (`now >= expires` is expired) use that boundary. An exact-`exp` moment is
+  therefore closed everywhere. The pickup window and the code's life are other
+  windows and are not changed here.
+- **`serve` gives the port back**: the DID names the port, so the port is bound
+  first and the service created after. If anything fails after the bind (keys
+  that do not match the log, a deactivated log), the listener is closed
+  before the error is returned, and the sweep timer is only started after the
+  service exists.
   `crit` is refused. `response_uri` in the Request Object is refused (this
   profile uses `redirect_uri`).
 - **Known service**: the wallet keeps the service's log per SCID when the
@@ -366,10 +387,10 @@ single examples, in one process against the service object (no HTTP).
   Prelude states: `returning`, `first`, `answered` (A and C answered, not
   collected), `rotated` (A opened before a key change of the service, B
   after).
-- **Runs:** 29 sets of two or three events, every order (depth-first
-  replay of choice prefixes): 1231 orders, each count asserted; 4 × 25
+- **Runs:** 33 sets of two or three events, every order (depth-first
+  replay of choice prefixes): 1255 orders, each count asserted; 4 × 25
   random sets of five to seven events, four orders each from fixed seeds
-  (400 orders; a failure prints the seed and the order); three fixed
+  (400 orders; a failure prints the seed and the order); four fixed
   orders as regression tests. About 20 s for the file.
 - **Properties** (after every step, at every POST, at every issued request
   and session): E1 at most one admitted login per nonce and one session
@@ -386,7 +407,7 @@ single examples, in one process against the service object (no HTTP).
   open then; E9 a nonce is spent and an attempt closed only by an admitted
   login, `forget` or running out; E10 one storage never holds a second
   identifier for a service, and every token from it names the stored one;
-  E11 (added) no admitted login and no session for an attempt after
+  E13 (added, below); E11 (added) no admitted login and no session for an attempt after
   `forget`; E12 (added) the service's own log never goes back or forks;
   and no event ends with an unexpected error.
 - **Mutations** (applied for a run, not checked in; each property red;
@@ -420,14 +441,33 @@ single examples, in one process against the service object (no HTTP).
   only if the key state is still the one it was made from; `start` reads
   key state and time together, signs, and issues only if both still hold,
   otherwise signs again (at most three times).
+- **Faults found by E13 and fixed** (service.ts, profile.ts): a clock
+  that moved by exactly 300 s while a request was signed gave a link whose
+  request the wallet takes as expired (service inclusive at `exp`, wallet and
+  store exclusive); after 301 s the request was signed again but with the
+  nonce of the first try, whose expiry had been computed before its store
+  step and had passed. Now window and nonce come from one moment, the
+  boundary is the one above, and `start` returns a link only after a store
+  step (`inspectNonce`) found the window holding and the nonce open; a try
+  that fails spends its nonce.
+- **Property E13** (every link issued is usable by a wallet at the moment of
+  issue, and no request is served after its window): the request passes
+  `checkWindow` at that moment and its nonce is open in the store; checked
+  at every `start`, and after every step for what `requestObject` serves.
+  Events `late299`, `late300` and `late301` put the clock inside, exactly on
+  and after the boundary. Mutations (red, first set and order): the final
+  check in `start` inclusive at `exp` and without the nonce state:
+  `start, late300` order 2; the nonce's expiry one second short of the window
+  and no nonce check: `start, late299` order 2; the attempt open inclusive at
+  `exp`: `start, late300` order 1, also `confirm, late300` order 2 and
+  `cancel, late300` order 1; the wallet's own window check inclusive at `exp`:
+  `confirm, late300` order 4 and `cancel, late300` order 3. Before the fix,
+  `start, late300` order 2 and `start, late301` order 2 were red.
 - **Not covered:** HTTP, cookies and the browser binding of `http.ts`
   (the service is called with the attempt id); the sweep and the timer; a
   store that repeats a step; deactivation of the service as an event;
   requests issued before a key change of the service and fetched after it
-  (refused by the wallet, as before); the nonce's expiry is still computed
-  before the nonce's store step, so after a long pause there it ends
-  slightly before the attempt (a login is then refused, nothing is
-  admitted); sets of four events are only in the random part.
+  (refused by the wallet, as before); sets of four events are only in the random part.
 
 ## What it does not show
 

@@ -159,12 +159,30 @@ export async function checkRequestObject (jwt: unknown, o: { clientId: string, d
   return { ok: true, header, claims: c as RequestClaims }
 }
 
-/** The time window of a checked Request Object at `nowS`: why not, or null. Checked on opening and again on answering. */
+/**
+ * The one rule for the window of a login attempt: why it does not hold at
+ * `nowS` (whole seconds), or null. The window is half-open, `iat` (with
+ * skew) up to but excluding `exp`: RFC 7519 4.1.4, "the expiration time on or
+ * after which the JWT MUST NOT be accepted for processing ... the current
+ * date/time MUST be before the expiration date/time". The service (an attempt
+ * is open), the nonce (it expires at `exp`) and the wallet (opening, answering,
+ * and the gate before sending) all decide with this function or with the same
+ * boundary.
+ */
 export function checkWindow (c: Pick<RequestClaims, 'iat' | 'exp' | 'nbf'>, nowS: number): string | null {
   if (c.iat > nowS + CLOCK_SKEW_S || (c.nbf !== undefined && c.nbf > nowS + CLOCK_SKEW_S)) return 'not yet valid'
-  if (c.exp <= nowS) return 'expired'
+  if (nowS >= c.exp) return 'expired'
   return null
 }
+
+/** The window of one attempt, from one moment `nowMs`: request `iat`/`nbf`/`exp` and, times 1000, the nonce's expiry. */
+export function windowFrom (nowMs: number): { iat: number, nbf: number, exp: number } {
+  const iat = Math.floor(nowMs / 1000)
+  return { iat, nbf: iat, exp: iat + REQUEST_LIFETIME_S }
+}
+
+/** Does the window hold at `nowMs` (milliseconds): `checkWindow` at the whole second. */
+export const windowHolds = (w: Pick<RequestClaims, 'iat' | 'exp' | 'nbf'>, nowMs: number): boolean => checkWindow(w, Math.floor(nowMs / 1000)) === null
 
 /** What a key of the person's identifier is derived for: the service (its method and verified SCID) and the method of the person's own identifier. */
 export interface KeyFor { method: string, scid: string, subjectMethod: string }

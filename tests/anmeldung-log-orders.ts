@@ -12,7 +12,7 @@
 // `every` walks all orders of one set of events (replay from the start with
 // a prefix of choices, as a depth-first odometer); `drawn` runs a fixed
 // number of random orders from a seeded generator. After every step and at
-// the end of a run the properties E1 to E12 are checked; a run that breaks
+// the end of a run the properties E1 to E13 are checked; a run that breaks
 // one stops and reports the property, the order (actor per step) and, for a
 // drawn run, its seed.
 //
@@ -89,6 +89,10 @@ class PausedStore extends MemoryLoginStore {
       return out
     })
   }
+  override async inspectNonce<T> (nonce: string, clock: () => number, decide: (state: NonceState, now: number) => T): Promise<T> {
+    await this.p.pause('store: nonce check')
+    return super.inspectNonce(nonce, clock, decide)
+  }
   override async closeAttempt (nonce: string, clock: () => number, apply: (now: number) => void) {
     await this.p.pause('store: close')
     return super.closeAttempt(nonce, clock, (now) => { apply(now); this.log.closed(nonce, now) })
@@ -162,7 +166,7 @@ export class World {
         this.admissions.push({ nonce, did, now })
         const a = this.byNonce.get(nonce)
         if (this.admissions.filter((x) => x.nonce === nonce).length > 1) this.fail('E1', `a second admitted login for the nonce of attempt ${a?.id}`)
-        if (a && now - a.created > REQUEST_LIFETIME_MS) this.fail('E3', `a login admitted ${(now - a.created) / 1000} s after its request was issued`)
+        if (a && now - a.created >= REQUEST_LIFETIME_MS) this.fail('E3', `a login admitted ${(now - a.created) / 1000} s after its request was issued`)
         if (a?.forgetDone) this.fail('E11', `a login admitted for attempt ${a.id} after it was given up`)
       },
       closed: () => {},
@@ -273,6 +277,11 @@ export class World {
     const header = jwtPart(jwt, 0), claims = jwtPart(jwt, 1) as RequestClaims
     if (keys.length !== 1 || header.kid !== (keys[0] as { id: string }).id) this.fail('E8', `the request's kid ${header.kid} is not the head's key`)
     else this.pending.push(verifies(jwt, (keys[0] as { raw: Uint8Array }).raw).then((ok) => { if (!ok) this.fail('E8', `a request issued under head ${head.versionId} is not signed by that head's key`) }))
+    // E13: the link is usable by a wallet at this moment: the request passes the wallet's window check, and its nonce is open in the store
+    const late = checkWindow(claims, Math.floor(this.t / 1000))
+    if (late) this.fail('E13', `a link issued at the moment ${this.t / 1000 - T0 / 1000} s whose request is ${late} for a wallet`)
+    const ns = this.store.peek(claims.nonce, this.t)
+    if (ns !== 'open') this.fail('E13', `a link issued whose nonce is ${ns} in the store`)
     const a: Attempt = { id: s.attempt, state: s.state, nonce: claims.nonce, requestId: s.requestUri.slice((this.svc.origin + REQUEST_PATH).length), link: s.link, claims, created: claims.iat * 1000, mode, forgetStarted: false, forgetDone: false }
     this.attempts.set(a.id, a); this.byState.set(a.state, a); this.byNonce.set(a.nonce, a)
     return a
@@ -417,7 +426,9 @@ export class World {
       const admitted = this.admissions.some((x) => x.nonce === a.nonce)
       if (this.store.peek(a.nonce, this.t) === 'spent' && !admitted && !a.forgetStarted) this.fail('E9', `the nonce of attempt ${a.id} was spent without a login or forget`)
       const closed = this.svc.requestObject(a.requestId) === null
-      if (closed && this.t - a.created <= REQUEST_LIFETIME_MS && !admitted && !a.forgetStarted) this.fail('E9', `attempt ${a.id} ended without a login, forget or running out`)
+      // E13: no request is served once its window is closed for a wallet
+      if (!closed && checkWindow(a.claims, Math.floor(this.t / 1000))) this.fail('E13', `the request of attempt ${a.id} is still served ${(this.t - a.created) / 1000} s after it was issued`)
+      if (closed && this.t - a.created < REQUEST_LIFETIME_MS && !admitted && !a.forgetStarted) this.fail('E9', `attempt ${a.id} ended without a login, forget or running out`)
     }
   }
 }
@@ -426,7 +437,7 @@ export class World {
 
 export type EventName =
   | 'confirm' | 'confirm2' | 'cancel' | 'other' | 'second' | 'same' | 'swapped' | 'device2' | 'fork' | 'device1st'
-  | 'rotate' | 'rotateService' | 'open' | 'start' | 'collect' | 'redeem' | 'foreign' | 'forget' | 'tick' | 'late61' | 'late301'
+  | 'rotate' | 'rotateService' | 'open' | 'start' | 'collect' | 'redeem' | 'foreign' | 'forget' | 'tick' | 'late61' | 'late299' | 'late300' | 'late301'
 
 type Ev = { views?: string[], attempts?: string[], setups?: Setup[], run: (w: World) => Promise<unknown> }
 const OLD: Setup[] = ['returning', 'answered', 'rotated']
@@ -474,7 +485,11 @@ export const EVENTS: Record<EventName, Ev> = {
   tick: { run: async (w) => { w.t += 1000 } },
   /** past the code's life (60 s) */
   late61: { run: async (w) => { w.t += 61_000 } },
-  /** past the request's and token's life and the pickup window (300 s) */
+  /** just inside the request's window (299 s) */
+  late299: { run: async (w) => { w.t += 299_000 } },
+  /** exactly the request's life: its `exp` (300 s); the window is closed from here on */
+  late300: { run: async (w) => { w.t += 300_000 } },
+  /** past the request's and token's life and the pickup window (301 s) */
   late301: { run: async (w) => { w.t += 301_000 } },
 }
 

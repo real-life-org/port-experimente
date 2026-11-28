@@ -132,13 +132,19 @@ export async function serve (opts: ServeOptions = {}): Promise<{ server: Server,
     res.writeHead(404); res.end()
   }
   const server = createServer((req, res) => { handle(req, res).catch(() => { if (!res.headersSent) res.writeHead(500); res.end() }) })
-  await new Promise<void>((ok) => server.listen(opts.port ?? 0, '127.0.0.1', ok))
+  await new Promise<void>((ok, no) => { server.once('error', no); server.listen(opts.port ?? 0, '127.0.0.1', () => { server.off('error', no); ok() }) })
+  const port = (server.address() as { port: number }).port
+  const host = `${opts.hostName ?? 'dienst.localhost'}%3A${port}`
+  // The DID names the port, so the port is bound first; whatever fails from here on gives it back before the error is returned.
+  try {
+    service = await Service.create({ ...opts, host, keys: opts.keys ?? ServiceKeys.random(), now })
+  } catch (e) {
+    await new Promise<void>((ok) => { server.close(() => ok()); server.closeAllConnections() })
+    throw e
+  }
   // also swept while nobody asks; the timer does not keep the process alive and ends with the server
   const timer = setInterval(sweep, SWEEP_EVERY_MS)
   timer.unref?.()
   server.on('close', () => clearInterval(timer))
-  const port = (server.address() as { port: number }).port
-  const host = `${opts.hostName ?? 'dienst.localhost'}%3A${port}`
-  service = await Service.create({ ...opts, host, keys: opts.keys ?? ServiceKeys.random(), now })
   return { server, service, origin: service.origin, local: `http://127.0.0.1:${port}` }
 }

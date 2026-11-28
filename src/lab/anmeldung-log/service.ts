@@ -4,7 +4,9 @@
 // The lifecycle of one login follows src/lab/anmeldung/webapp.ts (rebuilt
 // here, that module stays as it is):
 // 1. started: each start is a fresh attempt with its own id, request, nonce
-//    and state; it lives REQUEST_LIFETIME_MS;
+//    and state, one window (profile.ts `windowFrom`: request iat/exp and the
+//    nonce's expiry from one moment, half-open at exp); a link is returned
+//    only if, in a store step, that window holds and the nonce is open;
 // 2. answered: only an admitted login ends the attempt, in the verifier's
 //    step that spends the attempt's nonce, and it is handed out there
 //    (cross-device: to the waiting browser; same-device: a one-time
@@ -25,7 +27,7 @@ import { b64uOf, edFromSeed, hkdf, rand, type KeyPair } from 'rltp-lib'
 import { create, deactivate, fromJsonl, keyHash, loginKeys, multikey, rotate, toJsonl, verify, type Entry, type Profile, type Version } from '../kennung-log/log'
 import { vh, webvh } from '../kennung-log/profiles'
 import { MemoryStore, Verifier, type Held, type NonceState, type Store } from '../kennung-log/verifier'
-import { subjectSyntaxOf, CLIENT_ID_PREFIX, DID_LOG_FIELD, ID_TOKEN_TYPE, outerLink, REQUEST_LIFETIME_S, SIOP_AUD, signRequestObject, type RequestClaims } from './profile'
+import { subjectSyntaxOf, CLIENT_ID_PREFIX, DID_LOG_FIELD, ID_TOKEN_TYPE, outerLink, REQUEST_LIFETIME_S, SIOP_AUD, signRequestObject, windowFrom, windowHolds, type RequestClaims } from './profile'
 
 export const REQUEST_LIFETIME_MS = REQUEST_LIFETIME_S * 1000
 export const PICKUP_LIFETIME_MS = 5 * 60_000
@@ -63,6 +65,8 @@ export interface LoginStore extends Store {
   closeAttempt (nonce: string, clock: () => number, apply: (now: number) => void): Promise<void>
   /** A session is issued: one step that reads what is held of `did` and runs `decide`; it writes nothing to the store. */
   issueSession<T> (did: string, clock: () => number, decide: (held: Held | undefined, now: number) => T): Promise<T>
+  /** One step that reads the nonce's state at the time of the step and runs `decide`; it writes nothing. */
+  inspectNonce<T> (nonce: string, clock: () => number, decide: (state: NonceState, now: number) => T): Promise<T>
 }
 
 export class MemoryLoginStore extends MemoryStore implements LoginStore {
@@ -77,6 +81,10 @@ export class MemoryLoginStore extends MemoryStore implements LoginStore {
     const now = clock()
     const h = this.held.get(did)
     return decide(h && structuredClone(h), now)
+  }
+  async inspectNonce<T> (nonce: string, clock: () => number, decide: (state: NonceState, now: number) => T): Promise<T> {
+    const now = clock()
+    return decide(this.nonceState(nonce, now), now)
   }
   /** What a nonce is at `now` (tests). */
   peek (nonce: string, now: number): NonceState { return this.nonceState(nonce, now) }
@@ -107,7 +115,7 @@ class Journal {
 export type Mode = 'cross-device' | 'same-device'
 export type Login = { user: string }
 /** One login attempt: one request, one nonce, bound to the browser that started it. */
-interface Attempt { id: string, nonce: string, state: string, requestId: string, created: number, mode: Mode, jwt: string }
+interface Attempt { id: string, nonce: string, state: string, requestId: string, window: { iat: number, nbf: number, exp: number }, mode: Mode, jwt: string }
 /** An admitted login for the waiting browser (cross-device). */
 type Outcome = { at: number, login: Login }
 /** What the waiting browser is told while its attempt stays open: the person cancelled, or an answer was refused. */
@@ -200,7 +208,7 @@ export class Service {
     this.redirectUri = this.origin + RESPONSE_PATH
     this.returnUri = this.origin + RETURN_PATH
     this.store = o.store ?? new MemoryLoginStore()
-    this.verifier = new Verifier({ profile: o.identityProfile ?? vh, audience: this.clientId, now: () => new Date(o.now()), store: this.store, nonceTtlSec: REQUEST_LIFETIME_S })
+    this.verifier = new Verifier({ profile: o.identityProfile ?? vh, audience: this.clientId, now: () => new Date(o.now()), store: this.store, })
   }
 
   /** A service with its own did:webvh: a log is created at `now` unless one is given. */
@@ -246,14 +254,20 @@ export class Service {
 
   /** A browser asks to log in: a fresh attempt with a signed Request Object behind a request_uri, and the outer link. */
   async start (mode: Mode = 'cross-device'): Promise<{ attempt: string, link: string, requestUri: string, state: string }> {
-    const nonce = this.o.fixed?.nonce ?? await this.verifier.issueNonce()
-    if (this.o.fixed) await this.issueFixedNonce(nonce)
     const state = this.o.fixed?.state ?? b64uOf(rand(16))
     const requestId = this.o.fixed?.requestId ?? b64uOf(rand(16))
     const id = b64uOf(rand(16))
-    const claimsAt = (now: number): RequestClaims => {
-      const iat = Math.floor(now / 1000)
-      return {
+    // One window per try, from one moment: the request's iat/nbf/exp and the nonce's expiry. The key state
+    // (log, head, key index) and the moment are read together, before any pause. The link is returned only
+    // if, in a store step, the window still holds (profile.ts, one rule) and the nonce is open, and the key
+    // state is still the one signed under; otherwise the nonce of that try is spent and the next try gets a
+    // new window and a new nonce. So a link that is returned is one a wallet can take at that moment.
+    let made: { jwt: string, nonce: string, window: Attempt['window'] } | null = null
+    for (let i = 0; i < 3 && made === null; i++) {
+      const k = this.keyState, at = this.o.now()
+      const window = windowFrom(at)
+      const nonce = this.o.fixed?.nonce ?? b64uOf(rand(16))
+      const claims: RequestClaims = {
         iss: this.clientId,
         aud: SIOP_AUD,
         client_id: this.clientId,
@@ -265,37 +279,27 @@ export class Service {
         nonce,
         state,
         client_metadata: { subject_syntax_types_supported: [subjectSyntaxOf(this.o.identityProfile ?? vh)], ...(this.o.name ? { client_name: this.o.name } : {}) },
-        iat,
-        nbf: iat,
-        exp: iat + REQUEST_LIFETIME_S,
+        ...window,
       }
-    }
-    // The key state (log, head, key index) and the time are read before the pause, as one; the request is
-    // issued only if, when the signature is done, that is still the key state and the request is still in
-    // its window; otherwise it is signed again. So every request issued is signed by the key the head names
-    // at the moment of issue and is open then: what the service issues, a wallet can take.
-    let made: { jwt: string, now: number } | null = null
-    for (let i = 0; i < 3 && made === null; i++) {
-      const k = this.keyState, now = this.o.now()
-      const jwt = await signRequestObject(await this.o.keys.auth(k.index), kidOfHead(k.head), claimsAt(now))
-      if (this.keyState === k && this.o.now() - now <= REQUEST_LIFETIME_MS) made = { jwt, now }
+      const jwt = await signRequestObject(await this.o.keys.auth(k.index), kidOfHead(k.head), claims)
+      // the nonce expires with the window, whenever this step runs (the vector uses a fixed nonce)
+      await this.store.issue(nonce, window.exp * 1000, this.o.now())
+      const usable = await this.store.inspectNonce(nonce, () => this.o.now(), (ns, now) => ns === 'open' && windowHolds(window, now))
+      if (usable && this.keyState === k) made = { jwt, nonce, window }
+      // a try that failed spends its nonce (a fixed nonce is issued again by the next try)
+      else if (!this.o.fixed) await this.store.closeAttempt(nonce, () => this.o.now(), () => {})
     }
     if (made === null) throw new Error('the service key or the clock kept moving while a request was signed')
-    const { jwt, now } = made
-    this.attempts.set(state, { id, nonce, state, requestId, created: now, mode, jwt })
+    // no await from the check to here: the attempt is registered at the moment of the check
+    const { jwt, nonce, window } = made
+    this.attempts.set(state, { id, nonce, state, requestId, window, mode, jwt })
     this.byRequestId.set(requestId, state); this.byNonce.set(nonce, state); this.byAttempt.set(id, state)
     const requestUri = this.origin + REQUEST_PATH + requestId
     return { attempt: id, link: outerLink(this.clientId, requestUri), requestUri, state }
   }
 
-  /** The vector uses a fixed nonce; the verifier admits only nonces in its store, so it is put there. */
-  private async issueFixedNonce (nonce: string): Promise<void> {
-    const now = this.o.now()
-    await this.store.issue(nonce, now + REQUEST_LIFETIME_MS, now)
-  }
-
   private open (a: Attempt | undefined, now: number): a is Attempt {
-    return a !== undefined && this.attempts.get(a.state) === a && now - a.created <= REQUEST_LIFETIME_MS
+    return a !== undefined && this.attempts.get(a.state) === a && windowHolds(a.window, now)
   }
   private end (a: Attempt, j: Journal): void {
     j.delete(this.attempts, a.state); j.delete(this.byRequestId, a.requestId); j.delete(this.byNonce, a.nonce); j.delete(this.byAttempt, a.id)

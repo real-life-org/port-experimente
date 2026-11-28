@@ -1,5 +1,6 @@
 import { afterAll, expect, test } from 'vitest'
 import type { Server } from 'node:http'
+import { createServer } from 'node:net'
 import { fromJsonl, multikey, rotate, type Entry } from '../src/lab/kennung-log/log'
 import { scidVh } from '../src/lab/kennung-log/profiles'
 import { serve } from '../src/lab/anmeldung-log/http'
@@ -800,4 +801,29 @@ test('opening an existing log: foreign keys and a deactivated log are refused wi
   later(); await s.service.deactivate()
   const dead = fromJsonl(s.service.didLog()) as Entry[]
   await expect(Service.create({ host, keys, now: clock, log: dead })).rejects.toThrow(/deactivated/)
+})
+
+test('serve that fails after binding gives the port back: wrong keys, a deactivated log', async () => {
+  const keys = ServiceKeys.random()
+  const first = await serve({ now: clock, keys })
+  const port = Number(new URL(first.local).port)
+  later(); await first.service.rotateKey()
+  const log = fromJsonl(first.service.didLog()) as Entry[]
+  later(); await first.service.deactivate()
+  const dead = fromJsonl(first.service.didLog()) as Entry[]
+  await new Promise<void>((ok) => first.server.close(() => ok()))
+  const free = (): Promise<boolean> => new Promise((ok) => {
+    const probe = createServer()
+    probe.once('error', () => ok(false))
+    probe.listen(port, '127.0.0.1', () => probe.close(() => ok(true)))
+  })
+  expect(await free()).toBe(true)
+  await expect(serve({ now: clock, port, keys: ServiceKeys.random(), log })).rejects.toThrow(/service keys|none of the service keys/)
+  expect(await free()).toBe(true)
+  await expect(serve({ now: clock, port, keys, log: dead })).rejects.toThrow(/deactivated/)
+  expect(await free()).toBe(true)
+  // and the same port serves again with the right log and keys
+  const again = await serve({ now: clock, port, keys, log })
+  servers.push(again.server)
+  expect(again.local).toBe(first.local)
 })
