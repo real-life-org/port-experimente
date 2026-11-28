@@ -11,8 +11,9 @@
 //    response_code in the redirect_uri of the HTTP answer). A refused or
 //    misdirected answer, and `user_cancelled`, leave attempt and nonce open
 //    (the waiting browser is told, as a notice);
-// 3. collected or redeemed exactly once: a session is issued in one store
-//    step with a fresh look at the identifier (contested: no session);
+// 3. collected or redeemed exactly once, within its window: a session is issued
+//    in one store step with a fresh look at the identifier (contested: no
+//    session); the window is read in that step, with its time;
 // 4. closed for good without a login: by the browser that started it
 //    (`forget`, which spends the nonce in one store step) or by running out.
 // Transport-free; http.ts puts it behind HTTP.
@@ -21,7 +22,7 @@
 // (`Journal`), and are put back if the step fails or is tried again.
 
 import { b64uOf, edFromSeed, hkdf, rand, type KeyPair } from 'rltp-lib'
-import { create, deactivate, fromJsonl, loginKeys, rotate, toJsonl, verify, type Entry, type Profile, type Version } from '../kennung-log/log'
+import { create, deactivate, fromJsonl, keyHash, loginKeys, multikey, rotate, toJsonl, verify, type Entry, type Profile, type Version } from '../kennung-log/log'
 import { vh, webvh } from '../kennung-log/profiles'
 import { MemoryStore, Verifier, type Held, type NonceState, type Store } from '../kennung-log/verifier'
 import { subjectSyntaxOf, CLIENT_ID_PREFIX, DID_LOG_FIELD, ID_TOKEN_TYPE, outerLink, REQUEST_LIFETIME_S, SIOP_AUD, signRequestObject, type RequestClaims } from './profile'
@@ -141,10 +142,32 @@ export interface ServiceOptions {
 
 const isoSeconds = (ms: number): string => new Date(Math.floor(ms / 1000) * 1000).toISOString().replace(/\.000Z$/, 'Z')
 
+/**
+ * The key state of the service in a log that exists: the index n whose
+ * derived authentication key is the one `loginKeys(head)` returns, with the
+ * head's update key and its pre-rotation commitment being update keys n and
+ * n + 1 of the same keys. Throws when the head is deactivated or the keys do
+ * not match, so the service never signs with a key the head does not name.
+ */
+async function keyIndexOf (keys: ServiceKeys, head: Version, entries: number): Promise<number> {
+  if (head.deactivated) throw new Error('service log: the DID is deactivated, the service cannot be opened on it')
+  const login = loginKeys(head.doc)
+  if (login.length !== 1) throw new Error('service log: the head must name exactly one login key')
+  const want = multikey((login[0] as { raw: Uint8Array }).raw)
+  for (let n = 0; n <= entries; n++) {
+    if (multikey((await keys.auth(n)).pubRaw) !== want) continue
+    const [u, next] = await Promise.all([keys.update(n), keys.update(n + 1)])
+    const nextHash = await keyHash(multikey(next.pubRaw))
+    if (head.updateKeys.length === 1 && head.updateKeys[0] === multikey(u.pubRaw) && head.nextKeyHashes.length === 1 && head.nextKeyHashes[0] === nextHash) return n
+    throw new Error('service log: the update key and the pre-rotation commitment of the head do not match the service keys')
+  }
+  throw new Error('service log: none of the service keys is the login key of the head')
+}
+
 export class Service {
   private log!: Entry[]
   private head!: Version
-  private keyIndex = 0
+  private keyIndex: number
   readonly did: string
   readonly clientId: string
   readonly origin: string
@@ -161,8 +184,8 @@ export class Service {
   private readonly codes = new Map<string, Code>()
   private readonly sessions = new Map<string, { login: Login, at: number }>()
 
-  private constructor (readonly o: ServiceOptions & { log: Entry[], head: Version, did: string, origin: string }) {
-    this.log = o.log; this.head = o.head
+  private constructor (readonly o: ServiceOptions & { log: Entry[], head: Version, did: string, origin: string, keyIndex: number }) {
+    this.log = o.log; this.head = o.head; this.keyIndex = o.keyIndex
     this.did = o.did
     this.clientId = CLIENT_ID_PREFIX + o.did
     this.origin = o.origin
@@ -179,7 +202,8 @@ export class Service {
     if (!check.ok) throw new Error(`service log: ${check.reason}`)
     const m = /^(.*?)(?:%3[Aa]([0-9]{1,5}))?(?::|$)/.exec(o.host) as RegExpExecArray
     const origin = new URL(`https://${m[1]}${m[2] ? ':' + m[2] : ''}`).origin
-    return new Service({ ...o, log: check.log, head: check.head, did: check.did, origin })
+    const keyIndex = await keyIndexOf(o.keys, check.head, check.log.length)
+    return new Service({ ...o, log: check.log, head: check.head, did: check.did, origin, keyIndex })
   }
 
   /** The log as served at the did:webvh location (JSON Lines). */
@@ -322,13 +346,15 @@ export class Service {
    * A login handed out becomes a session in one store step with a fresh look
    * at the identifier: contested or deactivated by now, there is no session.
    * `take` removes what was handed out (the outcome or the code), in the same
-   * step, and says whether it was still there.
+   * step, and says whether it was there and still within its window. It
+   * reads the window against `now`, the time the store gives the step: the
+   * only place the window is decided.
    */
-  private async issue (login: Login, take: (j: Journal) => boolean): Promise<Collected> {
+  private async issue (login: Login, take: (j: Journal, now: number) => boolean): Promise<Collected> {
     const j = new Journal()
     return j.run(this.store.issueSession<Collected>(login.user, () => this.o.now(), (held, now) => {
       j.rollback()
-      if (!take(j)) return null
+      if (!take(j, now)) return null
       if (!held || held.contested || held.head.deactivated) return { error: 'refused' }
       const session = b64uOf(rand(16))
       j.set(this.sessions, session, { login, at: now })
@@ -339,10 +365,15 @@ export class Service {
   /** Cross-device: an admitted login, exactly once, within its pickup window; otherwise a notice while the attempt is open. */
   async collect (attempt: string): Promise<Collected> {
     const o = this.outcomes.get(attempt)
-    if (o && this.o.now() - o.at <= PICKUP_LIFETIME_MS) {
-      return this.issue(o.login, (j) => { if (this.outcomes.get(attempt) !== o) return false; j.delete(this.outcomes, attempt); return true })
+    if (o) {
+      // present or not, within its window or not: decided in the store step, with its time
+      const done = await this.issue(o.login, (j, now) => {
+        if (this.outcomes.get(attempt) !== o) return false
+        j.delete(this.outcomes, attempt)
+        return now - o.at <= PICKUP_LIFETIME_MS
+      })
+      if (done) return done
     }
-    if (o) this.outcomes.delete(attempt)
     const n = this.notices.get(attempt)
     const a = this.attempts.get(this.byAttempt.get(attempt) ?? '')
     return n && this.open(a, this.o.now()) ? { notice: n } : null
@@ -352,8 +383,12 @@ export class Service {
   async redeem (attempt: string, code: string): Promise<Collected> {
     const c = this.codes.get(code)
     if (!c) return null
-    if (this.o.now() - c.created > CODE_LIFETIME_MS || c.attempt !== attempt) { this.codes.delete(code); return null }
-    return this.issue(c.login, (j) => { if (this.codes.get(code) !== c) return false; j.delete(this.codes, code); return true })
+    // used up by the first attempt, right or wrong; the window is read in the step
+    return this.issue(c.login, (j, now) => {
+      if (this.codes.get(code) !== c) return false
+      j.delete(this.codes, code)
+      return now - c.created <= CODE_LIFETIME_MS && c.attempt === attempt
+    })
   }
 
   /** The signed-in account of a session, within its lifetime. */

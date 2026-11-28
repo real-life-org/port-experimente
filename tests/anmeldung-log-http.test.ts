@@ -1,11 +1,11 @@
 import { afterAll, expect, test } from 'vitest'
 import type { Server } from 'node:http'
-import { multikey, rotate, type Entry } from '../src/lab/kennung-log/log'
+import { fromJsonl, multikey, rotate, type Entry } from '../src/lab/kennung-log/log'
 import { scidVh } from '../src/lab/kennung-log/profiles'
 import { serve } from '../src/lab/anmeldung-log/http'
 import { readFileSync } from 'node:fs'
 import { fromB64u } from 'rltp-lib'
-import { MemoryLoginStore, ServiceKeys, type Service } from '../src/lab/anmeldung-log/service'
+import { MemoryLoginStore, Service, ServiceKeys } from '../src/lab/anmeldung-log/service'
 import { commitState, deriveKey, MemoryStorage, Wallet, type Shown, type WalletState } from '../src/lab/anmeldung-log/wallet'
 import { limited, type Transport } from '../src/lab/anmeldung-log/transport'
 import { loopbackSend, loopbackTransport } from './anmeldung-log-loopback'
@@ -23,7 +23,7 @@ const later = (s = 2) => { t += s * 1000 }
 const servers: Server[] = []
 afterAll(async () => { await Promise.all(servers.map((s) => new Promise<void>((ok) => s.close(() => ok())))) })
 
-async function service (o: { keys?: ServiceKeys, hostName?: string, store?: MemoryLoginStore } = {}) {
+async function service (o: { keys?: ServiceKeys, hostName?: string, store?: MemoryLoginStore, log?: Entry[], port?: number } = {}) {
   const s = await serve({ now: clock, name: 'Beispieldienst', ...o })
   servers.push(s.server)
   return s
@@ -671,4 +671,133 @@ test('two first confirmations side by side with different genesis times: exactly
   expect(logs[0]).toBe(logs[1])
   expect(w.identity(s.service.scid)!.log).toHaveLength(1)
   expect(JSON.stringify(w.identity(s.service.scid)!.log[0]) + '\n').toBe(logs[0])
+})
+
+// ---- the pickup window is read in the store step, with the time of the decision
+
+/** a store that can hold a session step before it starts, and can run the step once more earlier than the real one (a retry) */
+class StepStore extends MemoryLoginStore {
+  hold?: Promise<void>
+  tryFirstAt?: number
+  finalAt?: number
+  override async issueSession<T> (did: string, clock: () => number, decide: Parameters<MemoryLoginStore['issueSession']>[2] & ((held: any, now: number) => T)): Promise<T> {
+    if (this.hold) await this.hold
+    if (this.tryFirstAt !== undefined) { const at = this.tryFirstAt; await super.issueSession(did, () => at, decide) }
+    const final = this.finalAt
+    return super.issueSession(did, final === undefined ? clock : () => final, decide)
+  }
+}
+const gate = () => { let open!: () => void; const p = new Promise<void>((ok) => { open = ok }); return { p, open } }
+
+/** an admitted QR login not yet collected: the attempt id */
+async function answeredQr (s: { service: Service }, w: Wallet): Promise<string> {
+  const st = await s.service.start()
+  expect(await w.confirm(await opened(w, st.link))).toMatchObject({ status: 200 })
+  return st.attempt
+}
+/** an admitted same-device login not yet redeemed: attempt id and code */
+async function answeredSame (s: { service: Service }, w: Wallet): Promise<{ attempt: string, code: string }> {
+  const st = await s.service.start('same-device')
+  const sent = await w.confirm(await opened(w, st.link))
+  if ('error' in sent) throw new Error(sent.error)
+  return { attempt: st.attempt, code: new URL(sent.redirect_uri!).searchParams.get('response_code')! }
+}
+
+test('QR pickup: the window runs out while the store step waits: no session', async () => {
+  const store = new StepStore()
+  const s = await service({ store })
+  const w = wallet(secretOf(40))
+  const attempt = await answeredQr(s, w)
+  const g = gate(); store.hold = g.p
+  later(4 * 60)
+  const pending = s.service.collect(attempt)               // checked in time, then waits in the store
+  later(2 * 60)                                            // 6 minutes after the answer
+  g.open()
+  expect(await pending).toBeNull()
+  expect(s.service.held()).toMatchObject({ sessions: 0, outcomes: 0 })
+})
+
+test('same-device redeem: the code runs out while the store step waits: no session', async () => {
+  const store = new StepStore()
+  const s = await service({ store })
+  const w = wallet(secretOf(41))
+  const { attempt, code } = await answeredSame(s, w)
+  const g = gate(); store.hold = g.p
+  later(30)
+  const pending = s.service.redeem(attempt, code)
+  later(40)                                                // 70 s after the answer, the code lives 60 s
+  g.open()
+  expect(await pending).toBeNull()
+  expect(s.service.held()).toMatchObject({ sessions: 0, codes: 0 })
+})
+
+test('a store that repeats the session step: the time of the last run decides (QR pickup and redeem)', async () => {
+  const store = new StepStore()
+  const s = await service({ store })
+  const w = wallet(secretOf(42))
+  const qr = await answeredQr(s, w)
+  const same = await answeredSame(s, w)
+  const answered = t
+  later(10)                                                // the clock the service reads before the step: in time
+  store.tryFirstAt = answered + 1000                       // first run in time, the repeat after both windows
+  store.finalAt = answered + 6 * 60_000
+  expect(await s.service.collect(qr)).toBeNull()
+  expect(await s.service.redeem(same.attempt, same.code)).toBeNull()
+  expect(s.service.held()).toMatchObject({ sessions: 0, outcomes: 0, codes: 0 })
+})
+
+test('in time, both ways still issue a session, also when the step is repeated', async () => {
+  const store = new StepStore()
+  const s = await service({ store })
+  const w = wallet(secretOf(43))
+  const qr = await answeredQr(s, w)
+  const same = await answeredSame(s, w)
+  store.tryFirstAt = t
+  later(10)
+  expect(await s.service.collect(qr)).toMatchObject({ session: expect.any(String) })
+  expect(await s.service.redeem(same.attempt, same.code)).toMatchObject({ session: expect.any(String) })
+  expect(s.service.held().sessions).toBe(2)
+})
+
+// ---- a service opened again on a rotated log signs with the key its head names
+
+async function reopened (s: Awaited<ReturnType<typeof service>>, keys: ServiceKeys) {
+  const port = Number(new URL(s.local).port)
+  const log = fromJsonl(s.service.didLog()) as Entry[]
+  s.server.closeAllConnections()
+  await new Promise<void>((ok) => s.server.close(() => ok()))
+  return service({ keys, log, port })
+}
+
+test('a service opened again on its rotated log (once, twice): a new request is accepted and a further rotation works', async () => {
+  for (const rotations of [1, 2]) {
+    const keys = ServiceKeys.random()
+    const s = await service({ keys })
+    const w = wallet(secretOf(50 + rotations))
+    const first = await loginQr(s, w)
+    for (let i = 0; i < rotations; i++) { later(); await s.service.rotateKey() }
+    const kid = s.service.kid, head = s.service.headVersion
+    const again = await reopened(s, keys)
+    expect(again.service.headVersion).toBe(head)
+    expect(again.service.kid).toBe(kid)
+    const after = await loginQr(again, w)
+    expect(after.sent).toMatchObject({ status: 200 })
+    expect(after.collected).toEqual(first.collected)
+    later(); await again.service.rotateKey()
+    expect(again.service.headVersion).not.toBe(head)
+    expect((await loginQr(again, w)).collected).toEqual(first.collected)
+    later(); await again.service.deactivate()               // the update key index is right as well
+  }
+})
+
+test('opening an existing log: foreign keys and a deactivated log are refused with a clear error', async () => {
+  const keys = ServiceKeys.random()
+  const s = await service({ keys })
+  later(); await s.service.rotateKey()
+  const log = fromJsonl(s.service.didLog()) as Entry[]
+  const host = s.service.o.host
+  await expect(Service.create({ host, keys: ServiceKeys.random(), now: clock, log })).rejects.toThrow(/service keys|none of the service keys/)
+  later(); await s.service.deactivate()
+  const dead = fromJsonl(s.service.didLog()) as Entry[]
+  await expect(Service.create({ host, keys, now: clock, log: dead })).rejects.toThrow(/deactivated/)
 })

@@ -22,7 +22,10 @@ Registries and the IANA Internet Protocol Version 6 Address Space registry
   check), where a did:webvh log lives (`locate`), the derivation context.
 - `service.ts`: the Relying Party. A `did:webvh` written with
   `kennung-log/log.ts` (update key, pre-rotation, one Ed25519 key in the
-  document), key change of the service (`rotateKey`), a signed Request Object
+  document), key change of the service (`rotateKey`; a service opened on an
+  existing log takes its key state from the head: the index whose derived
+  key is the head's login key, with update key and pre-rotation commitment
+  matching, else opening throws, also for a deactivated log), a signed Request Object
   per login behind a `request_uri`, the answer checked by
   `kennung-log/verifier.ts`, and the lifecycle of one login.
 - `http.ts`: the service behind HTTP (endpoints only, no page):
@@ -243,7 +246,9 @@ code (`/erneuern`), the cap on open requests, the demo wallet page.
   (pickup for the waiting browser, or a one-time code). Collecting it, or
   redeeming the code, issues the session in one store step that reads the
   identifier again: contested or deactivated by then, there is no session
-  (`{"error":"refused"}`, final). While the attempt is open the waiting
+  (`{"error":"refused"}`, final). The pickup window (5 min) and the code's
+  life (60 s) are read in that step with the time the store gives it, and
+  nowhere earlier: a step that waits or is repeated decides with its own time. While the attempt is open the waiting
   browser is told, as a notice that ends nothing, of a cancel
   (`{"error":"user_cancelled"}`) and of an answer that reached the
   verifier's step and was refused (`{"error":"refused"}`).
