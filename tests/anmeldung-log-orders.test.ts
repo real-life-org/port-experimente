@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'vitest'
-import { drawn, eventsFor, every, replay, type EventName, type Outcome, type Setup } from './anmeldung-log-orders'
+import { MemoryLoginStore, REQUEST_PATH, Service, ServiceKeys } from '../src/lab/anmeldung-log/service'
+import type { NonceState } from '../src/lab/kennung-log/verifier'
+import { SERVICE_SEED, T0, drawn, eventsFor, every, fixedServiceLog, replay, type EventName, type Outcome, type Setup } from './anmeldung-log-orders'
 
 // The login after the profile in many orders (tests/anmeldung-log-orders.ts):
 // every order of small sets of events, each set aimed at one or more of the
@@ -26,10 +28,10 @@ const SETS: [Setup, EventName[], string, number][] = [
   ['returning', ['confirm', 'fork'], 'E4 E5 E9 (two continuations)', 70],
   ['returning', ['cancel', 'late301'], 'E6 (a cancel after the request ran out)', 3],
   ['returning', ['cancel', 'confirm'], 'E6 E9 (cancel does not end the attempt)', 15],
-  ['returning', ['rotateService', 'start'], 'E8 (a key change of the service while a request is signed)', 15],
-  ['returning', ['start', 'late301'], 'E8 E13 (the clock passes the window while a request is signed)', 5],
-  ['returning', ['start', 'late300'], 'E13 (the clock reaches exactly exp while a request is signed)', 5],
-  ['returning', ['start', 'late299'], 'E13 (the clock moves to just inside the window while a request is signed)', 5],
+  ['returning', ['rotateService', 'start'], 'E8 (a key change of the service while a request is signed)', 21],
+  ['returning', ['start', 'late301'], 'E8 E13 (the clock passes the window while a request is signed)', 6],
+  ['returning', ['start', 'late300'], 'E13 (the clock reaches exactly exp while a request is signed)', 6],
+  ['returning', ['start', 'late299'], 'E13 (the clock moves to just inside the window while a request is signed)', 6],
   ['returning', ['confirm', 'late300'], 'E3 E6 (no answer exactly at exp)', 5],
   ['returning', ['cancel', 'late300'], 'E6 (a cancel exactly at exp)', 3],
   ['returning', ['swapped', 'second'], 'E9 (an answer under another attempt\'s state)', 70],
@@ -48,17 +50,17 @@ const SETS: [Setup, EventName[], string, number][] = [
 describe('orders that found faults', () => {
   test('a key change of the service lands while a request is signed: the try is given up and the request is signed again under the new head (E8)', async () => {
     // start derives its key, the key change is published, then start's nonce is stored and checked: the key state moved, so the nonce is spent and a new try follows
-    const r = await replay('returning', ['rotateService', 'start'], [0, 1, 1, 0, 1, 1, 1, 1, 1, 1])
-    expect(r.order).toEqual(['rotateService(begin)', 'start(begin)', 'start(service key)', 'rotateService(service key)', 'start(store: nonce)', 'start(store: nonce check)', 'start(store: close)', 'start(service key)', 'start(store: nonce)', 'start(store: nonce check)'])
+    const r = await replay('returning', ['rotateService', 'start'], [0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1])
+    expect(r.order).toEqual(['rotateService(begin)', 'start(begin)', 'start(service key)', 'rotateService(service key)', 'start(store: nonce)', 'start(store: nonce check)', 'start(store: nonce check returns)', 'start(store: close)', 'start(service key)', 'start(store: nonce)', 'start(store: nonce check)', 'start(store: nonce check returns)'])
     expect(r.problems).toEqual([])
   })
   test('the clock passes the request window while it is signed: a new window and a new nonce, the first nonce spent (E8, E13)', async () => {
-    const r = await replay('returning', ['start', 'late301'], [0, 0, 1, 0, 0, 0, 0, 0, 0])
-    expect(r.order).toEqual(['start(begin)', 'start(service key)', 'late301(begin)', 'start(store: nonce)', 'start(store: nonce check)', 'start(store: close)', 'start(service key)', 'start(store: nonce)', 'start(store: nonce check)'])
+    const r = await replay('returning', ['start', 'late301'], [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0])
+    expect(r.order).toEqual(['start(begin)', 'start(service key)', 'late301(begin)', 'start(store: nonce)', 'start(store: nonce check)', 'start(store: nonce check returns)', 'start(store: close)', 'start(service key)', 'start(store: nonce)', 'start(store: nonce check)', 'start(store: nonce check returns)'])
     expect(r.problems).toEqual([])
   })
   test('the clock reaches exactly exp while a request is signed: the link is not issued with a window that is closed (E13)', async () => {
-    const r = await replay('returning', ['start', 'late300'], [0, 0, 1, 0, 0, 0, 0, 0, 0])
+    const r = await replay('returning', ['start', 'late300'], [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0])
     expect(r.order).toContain('start(store: close)')
     expect(r.problems).toEqual([])
   })
@@ -66,6 +68,28 @@ describe('orders that found faults', () => {
     const r = await replay('returning', ['rotateService', 'rotateService'], [0, 1, 0, 1])
     expect(r.order).toEqual(['rotateService(begin)', 'rotateService(begin)', 'rotateService(service key)', 'rotateService(service key)'])
     expect(r.problems).toEqual([])
+  })
+})
+
+describe('the return of a store step', () => {
+  // The store decides at exp − 1 ms; the clock reaches exactly exp before the answer reaches start().
+  test('start never returns a link whose request is null at once: the answer of the step is not trusted past the clock (E13)', async () => {
+    let t = T0
+    let slips = 0
+    class SlippingStore extends MemoryLoginStore {
+      override async inspectNonce<T> (nonce: string, clock: () => number, decide: (state: NonceState, now: number) => T): Promise<T> {
+        const exp = this.nonces.get(nonce)?.expires as number
+        // the first step decides at exp − 1 ms, and the answer comes back once the clock stands at exp
+        const first = slips++ === 0
+        const r = await super.inspectNonce(nonce, first ? () => exp - 1 : clock, decide)
+        if (first) t = exp
+        return r
+      }
+    }
+    const svc = await Service.create({ host: 'dienst.example', keys: new ServiceKeys(SERVICE_SEED), now: () => t, store: new SlippingStore(), log: await fixedServiceLog() })
+    const s = await svc.start('cross-device')
+    expect(slips).toBeGreaterThan(1)   // the first try was given up, a new window was taken
+    expect(svc.requestObject(s.requestUri.slice((svc.origin + REQUEST_PATH).length))).not.toBeNull()
   })
 })
 
@@ -78,7 +102,7 @@ describe('every order of small sets', () => {
 })
 
 test('the sets above are every order of their events: together', () => {
-  expect(SETS.reduce((n, x) => n + x[3], 0)).toBe(1255)
+  expect(SETS.reduce((n, x) => n + x[3], 0)).toBe(1264)
 })
 
 describe('random orders of larger sets, fixed seeds', () => {

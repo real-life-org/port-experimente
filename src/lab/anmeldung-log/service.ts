@@ -285,12 +285,14 @@ export class Service {
       // the nonce expires with the window, whenever this step runs (the vector uses a fixed nonce)
       await this.store.issue(nonce, window.exp * 1000, this.o.now())
       const usable = await this.store.inspectNonce(nonce, () => this.o.now(), (ns, now) => ns === 'open' && windowHolds(window, now))
-      if (usable && this.keyState === k) made = { jwt, nonce, window }
+      // The step decided at the time it read; the answer reaches this line later. From here to the registration
+      // below there is no await, so the window and the key state are checked again at this moment.
+      if (usable && windowHolds(window, this.o.now()) && this.keyState === k) made = { jwt, nonce, window }
       // a try that failed spends its nonce (a fixed nonce is issued again by the next try)
       else if (!this.o.fixed) await this.store.closeAttempt(nonce, () => this.o.now(), () => {})
     }
     if (made === null) throw new Error('the service key or the clock kept moving while a request was signed')
-    // no await from the check to here: the attempt is registered at the moment of the check
+    // no await from the last check (the line above the loop's end) to the return: the attempt is registered and the link given at that moment
     const { jwt, nonce, window } = made
     this.attempts.set(state, { id, nonce, state, requestId, window, mode, jwt })
     this.byRequestId.set(requestId, state); this.byNonce.set(nonce, state); this.byAttempt.set(id, state)

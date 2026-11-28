@@ -367,7 +367,9 @@ single examples, in one process against the service object (no HTTP).
 
 - **Planner.** Every place where the parts wait is a pause the planner
   holds: each store step of the service and the verifier (`issue`,
-  `transact`, `closeAttempt`, `issueSession`), each GET and POST of the
+  `transact`, `closeAttempt`, `issueSession`) and, for `inspectNonce`, also
+  the return of its answer (`store: nonce check returns`: the step has
+  decided, the answer reaches the caller only when the planner says), each GET and POST of the
   wallet's transport, each key derivation of the wallet (the option
   `derive` of `Wallet`, default `deriveKey`) and of the service (its
   `ServiceKeys`). Each event is an actor; its pauses are tagged through
@@ -388,10 +390,11 @@ single examples, in one process against the service object (no HTTP).
   collected), `rotated` (A opened before a key change of the service, B
   after).
 - **Runs:** 33 sets of two or three events, every order (depth-first
-  replay of choice prefixes): 1255 orders, each count asserted; 4 × 25
+  replay of choice prefixes): 1264 orders, each count asserted; 4 × 25
   random sets of five to seven events, four orders each from fixed seeds
   (400 orders; a failure prints the seed and the order); four fixed
-  orders as regression tests. About 20 s for the file.
+  orders as regression tests, and one test with a store whose answer arrives
+  after the clock moved (below). About 18 s for the file.
 - **Properties** (after every step, at every POST, at every issued request
   and session): E1 at most one admitted login per nonce and one session
   per attempt; E2 a session only for the attempt whose answer was admitted,
@@ -440,7 +443,11 @@ single examples, in one process against the service object (no HTTP).
   (`keyState`) replaced as a whole only by `publish`, which takes a change
   only if the key state is still the one it was made from; `start` reads
   key state and time together, signs, and issues only if both still hold,
-  otherwise signs again (at most three times).
+  otherwise signs again (at most three times). The extra pause after the
+  nonce check changed the number of orders of four sets (`rotateService,
+  start` 15 to 21; `start` with `late301`, `late300`, `late299` 5 to 6 each)
+  and added one step to the three fixed orders that contain a nonce check;
+  they run the same story as before with that one pause inserted.
 - **Faults found by E13 and fixed** (service.ts, profile.ts): a clock
   that moved by exactly 300 s while a request was signed gave a link whose
   request the wallet takes as expired (service inclusive at `exp`, wallet and
@@ -448,8 +455,38 @@ single examples, in one process against the service object (no HTTP).
   nonce of the first try, whose expiry had been computed before its store
   step and had passed. Now window and nonce come from one moment, the
   boundary is the one above, and `start` returns a link only after a store
-  step (`inspectNonce`) found the window holding and the nonce open; a try
+  step (`inspectNonce`) found the window holding and the nonce open and the window and key state hold again when the answer returns; a try
   that fails spends its nonce.
+- **Fault found in the return of a store step (E13) and fixed**
+  (service.ts): the store read the nonce at `exp` − 1 ms and the answer
+  reached `start` when the clock stood at `exp`; `start` gave a link whose
+  request was `null` when fetched at once. The decision of a store step is
+  true for the time the store read; once the `await` returns, `start` checks
+  the window and the key state again with no await before it registers the
+  attempt and returns the link. Test `the return of a store step` (a store
+  that decides at `exp` − 1 ms and moves the clock to `exp` before it
+  answers) and `start, late300` / `start, late301` are red without that line
+  (E13: a link is returned whose request is not served at the moment it is
+  returned) and green with it. The fixed orders of the two late-clock faults
+  above still pass without the window check in `start` altogether, because the
+  store's own expiry rules out `exp` + 1 s and later; what they pin is the
+  retry path (close, new window, new nonce). The key-state fault is red
+  without the key-state comparison.
+- **Other returns of a store step.** The same shape (decision in the step, an
+  output outward after the `await`, no new synchronous check) was looked
+  for in `service.ts`, `wallet.ts` and `kennung-log/verifier.ts`. The wallet
+  already checks at the output: `#send` repeats the window and the held heads
+  synchronously before `transport.post`, after `#commit` or the answer was
+  made. The verifier hands out nothing that must be usable at once (`login`
+  returns the verdict of its step; `challenge` issues a nonce with a lifetime,
+  not a promise). `collect` and `redeem` return a session issued validly in
+  the step; that is not the promise of a link: a session lives 60 min and is
+  checked when it is used (`session`), a delay of the answer by some
+  milliseconds shortens nothing anyone can notice, and nobody holds a session
+  that must work "now" against a window of milliseconds. The same holds for
+  the code that `receive` returns in `redirect_uri` (60 s, checked at
+  `redeem`). Decision: no change, no test; it would become a promise only if a
+  session lifetime came down to the size of a step's delay.
 - **Property E13** (every link issued is usable by a wallet at the moment of
   issue, and no request is served after its window): the request passes
   `checkWindow` at that moment and its nonce is open in the store; checked

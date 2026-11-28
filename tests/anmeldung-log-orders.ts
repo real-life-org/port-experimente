@@ -91,7 +91,10 @@ class PausedStore extends MemoryLoginStore {
   }
   override async inspectNonce<T> (nonce: string, clock: () => number, decide: (state: NonceState, now: number) => T): Promise<T> {
     await this.p.pause('store: nonce check')
-    return super.inspectNonce(nonce, clock, decide)
+    const r = await super.inspectNonce(nonce, clock, decide)
+    // the decision is made; the answer reaches the caller only when the planner lets it (the clock may move in between)
+    await this.p.pause('store: nonce check returns')
+    return r
   }
   override async closeAttempt (nonce: string, clock: () => number, apply: (now: number) => void) {
     await this.p.pause('store: close')
@@ -112,12 +115,12 @@ class PausedStore extends MemoryLoginStore {
 
 // ---- fixed inputs
 
-const HOST = 'dienst.example'
-const T0 = Date.parse('2026-11-28T10:00:00Z')
-const SERVICE_SEED = new Uint8Array(32).fill(7)
+export const HOST = 'dienst.example'
+export const T0 = Date.parse('2026-11-28T10:00:00Z')
+export const SERVICE_SEED = new Uint8Array(32).fill(7)
 const SECRET = { p1: new Uint8Array(32).fill(1), p2: new Uint8Array(32).fill(2) }
 let serviceLogOnce: Promise<Entry[]> | null = null
-const fixedServiceLog = (): Promise<Entry[]> => (serviceLogOnce ??= serviceLog(HOST, new ServiceKeys(SERVICE_SEED), new Date(T0 - 60_000).toISOString().replace(/\.\d{3}Z$/, 'Z')))
+export const fixedServiceLog = (): Promise<Entry[]> => (serviceLogOnce ??= serviceLog(HOST, new ServiceKeys(SERVICE_SEED), new Date(T0 - 60_000).toISOString().replace(/\.\d{3}Z$/, 'Z')))
 
 // ---- one run
 
@@ -270,7 +273,7 @@ export class World {
     const s = await this.svc.start(mode)
     // synchronously after start returned: the head of the moment of issue
     const served = this.svc.requestObject(s.requestUri.slice((this.svc.origin + REQUEST_PATH).length))
-    if (served === null) { this.fail('E8', 'a request is out of its window at the moment it is issued'); throw new Error('E8') }
+    if (served === null) { this.fail('E13', 'a link is returned whose request is not served at the moment it is returned'); throw new Error('E13') }
     const jwt = served
     const head = (fromJsonl(this.svc.didLog()) as Entry[]).at(-1) as Entry
     const keys = loginKeys(head.state)
