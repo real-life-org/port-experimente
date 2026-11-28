@@ -186,8 +186,10 @@ export class Wallet {
    * error `subject_syntax_types_not_supported` goes to its checked
    * redirect_uri, through the gate (`#send`), before the refusal is returned.
    * Right before a request is shown, the held service state is checked again
-   * (it may have changed while the request was fetched), with no await
-   * between that check and the return.
+   * (it may have changed while the request was fetched), and then the
+   * request's window with the clock read at that moment (it may have run out
+   * while the signature was checked), with no await between these checks and
+   * the return.
    */
   async open (link: string): Promise<Opened> {
     const get = async (url: string, kind: 'log' | 'request'): Promise<{ text: string } | { error: string }> => {
@@ -251,6 +253,9 @@ export class Wallet {
     const now = heldService(this.state(), check.scid, check.log)
     if (now === 'deactivated') return no('service log: the service DID is deactivated')
     if (now === 'newer') return no('service log: does not continue the log held for this service')
+    // and the window, with the clock read now: it may have run out while the signature was checked
+    const late = checkWindow(c.claims, Math.floor(this.#now() / 1000))
+    if (late) return no(`request: ${late}`)
     this.#checked.set(shown, c)
     return { ok: true, request: shown }
   }

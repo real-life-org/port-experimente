@@ -1016,3 +1016,80 @@ test('same device: the starting browser gives the attempt up with its cookie alo
   expect(store.peek(r.claims.nonce, t)).toBe('spent')
   expect(s.service.held().attempts).toBe(0)
 })
+
+/** a store whose next session step decides, then waits, then fails without writing anything */
+class FailingSessionStore extends MemoryLoginStore {
+  armed = false
+  readonly decided = gate()
+  readonly release = gate()
+  override async issueSession<T> (did: string, clock: () => number, decide: Parameters<MemoryLoginStore['issueSession']>[2] & ((held: any, now: number) => T)): Promise<T> {
+    if (!this.armed) return super.issueSession(did, clock, decide)
+    this.armed = false
+    await super.issueSession(did, clock, decide)
+    this.decided.open()
+    await this.release.p
+    throw new Error('the commit failed')
+  }
+}
+
+test('a pickup whose store step then fails, given up meanwhile: no later pickup gets a session (cross-device and same-device)', async () => {
+  // cross-device: collect is pending, forget, the step fails and puts the outcome back
+  const store = new FailingSessionStore()
+  const s = await service({ store })
+  const w = wallet(secretOf(71))
+  const st = await s.service.start()
+  expect(await w.confirm(await opened(w, st.link))).toMatchObject({ status: 200 })
+  store.armed = true
+  const pending = s.service.collect(st.attempt)
+  await store.decided.p
+  await s.service.forget(st.attempt)
+  store.release.open()
+  await expect(pending).rejects.toThrow('the commit failed')
+  expect(await s.service.collect(st.attempt)).toBeNull()
+  expect(s.service.held().sessions).toBe(0)
+
+  // same-device: redeem is pending, forget, the step fails and puts the code back
+  const store2 = new FailingSessionStore()
+  const s2 = await service({ store: store2 })
+  const w2 = wallet(secretOf(72))
+  const st2 = await s2.service.start('same-device')
+  const sent = await w2.confirm(await opened(w2, st2.link))
+  const code = new URL((sent as { redirect_uri: string }).redirect_uri).searchParams.get('response_code') as string
+  store2.armed = true
+  const pending2 = s2.service.redeem(st2.attempt, code)
+  await store2.decided.p
+  await s2.service.forget(st2.attempt)
+  store2.release.open()
+  await expect(pending2).rejects.toThrow('the commit failed')
+  expect(await s2.service.redeem(st2.attempt, code)).toBeNull()
+  expect(s2.service.held().sessions).toBe(0)
+})
+
+test('open: the request runs out while its signature is checked: it is not shown', async () => {
+  const s = await service()
+  const inner = loopbackTransport()
+  const verify = crypto.subtle.verify.bind(crypto.subtle)
+  const saved = t
+  let armed = false
+  const w = new Wallet(secretOf(73), {
+    now: clock,
+    transport: {
+      post: (u, b, o) => inner.post(u, b, o),
+      get: async (u, o) => {
+        const r = await inner.get(u, o)
+        // once the Request Object is fetched: the next signature check moves the clock to its exp
+        if (!('error' in r) && u.includes('/anmeldung-log/anfrage/')) {
+          const exp = JSON.parse(Buffer.from(r.text.split('.')[1]!, 'base64url').toString()).exp as number
+          armed = true
+          crypto.subtle.verify = (async (...a: Parameters<SubtleCrypto['verify']>) => { const ok = await verify(...a); if (armed) { armed = false; t = exp * 1000 } return ok }) as SubtleCrypto['verify']
+        }
+        return r
+      },
+    },
+  })
+  try {
+    const link = (await browser(s.local).call('/anmeldung-log/start')).body.link
+    expect(await w.open(link)).toEqual({ ok: false, reason: 'request: expired' })
+    expect(armed).toBe(false)   // the clock did move during the check
+  } finally { crypto.subtle.verify = verify; t = saved }
+})

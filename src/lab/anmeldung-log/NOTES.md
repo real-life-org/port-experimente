@@ -290,7 +290,10 @@ code (`/erneuern`), the cap on open requests, the demo wallet page.
   admitted it has been written. `forget` spends the nonce whenever the attempt
   is known, also while such a step is not yet written; if that step then
   fails and puts the service's maps back, the attempt stays closed and its
-  nonce spent.
+  nonce spent. `forget` is remembered by the attempt's id, set before any
+  pause, and not read off the maps: an outcome or a code that a pending
+  pickup step has taken out, and puts back when it fails, is not collected
+  or redeemed afterwards either.
 - **Store**: the verifier's `Store` (`transact`, one step per DID, the nonce
   spent only with an admitted login) and three further steps of the service
   (`LoginStore`): `closeAttempt` (an attempt ends without a login: its nonce
@@ -451,7 +454,7 @@ single examples, in one process against the service object (no HTTP).
   collected), `rotated` (A opened before a key change of the service, B
   after).
 - **Runs:** 33 sets of two or three events, every order (depth-first
-  replay of choice prefixes): 1267 orders, each count asserted; 4 × 25
+  replay of choice prefixes): 1264 orders, each count asserted; 4 × 25
   random sets of five to seven events, four orders each from fixed seeds
   (400 orders; a failure prints the seed and the order); five fixed
   orders as regression tests (among them: two key changes of the service

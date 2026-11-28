@@ -38,7 +38,7 @@ const SETS: [Setup, EventName[], string, number][] = [
   ['first', ['confirm', 'device1st'], 'E10 (two devices, one storage, first login)', 210],
   ['first', ['confirm', 'other'], 'E1 E10 (two persons, first login)', 252],
   ['answered', ['forget', 'collect'], 'E11 (given up, then collected)', 6],
-  ['returning', ['confirm', 'forget'], 'E9 E11 (given up while the answer is checked)', 15],
+  ['returning', ['confirm', 'forget'], 'E9 E11 (given up while the answer is checked)', 12],
   ['returning', ['rotateService', 'tick', 'rotateService'], 'E12 (two key changes of the service, a second apart)', 30],
   ['returning', ['rotateService', 'open'], 'E4 E8 (the wallet follows a key change of the service)', 28],
   ['returning', ['confirm', 'tick', 'collect'], 'all (a login collected, the clock moving)', 31],

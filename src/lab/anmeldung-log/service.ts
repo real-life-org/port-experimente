@@ -221,6 +221,12 @@ export class Service {
   readonly #notices = new Map<string, Notice>()         // attempt id -> what the waiting browser is told while it stays open
   readonly #codes = new Map<string, Code>()
   readonly #sessions = new Map<string, { login: Login, at: number }>()
+  /**
+   * Attempts the starting browser gave up, by id, with the time. `forget` is
+   * remembered here and not read off the maps: what a pending store step has
+   * taken out of them, and puts back when it fails, stays given up.
+   */
+  readonly #forgotten = new Map<string, number>()
 
   private constructor (o: ServiceOptions, k: { log: Entry[], head: Version, did: string, origin: string, keyIndex: number }) {
     const { log: _given, ...rest } = o
@@ -347,7 +353,7 @@ export class Service {
   }
 
   #open (a: Attempt | undefined, now: number): a is Attempt {
-    return a !== undefined && !a.closed && this.#attempts.get(a.state) === a && windowHolds(a.window, now)
+    return a !== undefined && !a.closed && !this.#forgotten.has(a.id) && this.#attempts.get(a.state) === a && windowHolds(a.window, now)
   }
   #end (a: Attempt, j: Journal): void {
     j.delete(this.#attempts, a.state); j.delete(this.#byRequestId, a.requestId); j.delete(this.#byNonce, a.nonce); j.delete(this.#byAttempt, a.id)
@@ -378,7 +384,7 @@ export class Service {
     const fail = (status: number, error: string, description: string, extra: Record<string, unknown> = {}): Reply => ({ status, body: { error, error_description: description, ...extra } })
     const a = this.#attempts.get(form.get('state') ?? '')
     if (!a) return fail(400, 'invalid_request', 'unknown request')
-    if (!this.#open(a, this.#o.now())) return fail(400, 'invalid_request', 'request expired')
+    if (!this.#open(a, this.#o.now())) return fail(400, 'invalid_request', 'the request is no longer open')
     const error = form.get('error')
     if (error !== null) {
       if (error === 'user_cancelled' && a.mode === 'cross-device') this.#notices.set(a.id, 'user_cancelled')
@@ -453,7 +459,7 @@ export class Service {
       const done = await this.#issue(o.login, (j, now) => {
         if (this.#outcomes.get(attempt) !== o || !o.ready) return false
         j.delete(this.#outcomes, attempt)
-        return now - o.at <= PICKUP_LIFETIME_MS
+        return !this.#forgotten.has(attempt) && now - o.at <= PICKUP_LIFETIME_MS
       })
       if (done) return done
     }
@@ -470,7 +476,7 @@ export class Service {
     return this.#issue(c.login, (j, now) => {
       if (this.#codes.get(code) !== c) return false
       j.delete(this.#codes, code)
-      return now - c.created <= CODE_LIFETIME_MS && c.attempt.id === attempt
+      return !this.#forgotten.has(c.attempt.id) && now - c.created <= CODE_LIFETIME_MS && c.attempt.id === attempt
     })
   }
 
@@ -490,6 +496,9 @@ export class Service {
    * the attempt stays closed and its nonce spent.
    */
   async forget (attempt: string): Promise<void> {
+    // remembered first, before any pause: from here on nothing is admitted, collected or redeemed for this attempt,
+    // whatever a pending store step still holds or puts back
+    this.#forgotten.set(attempt, this.#o.now())
     const a = this.#attempts.get(this.#byAttempt.get(attempt) ?? '') ?? this.#outcomes.get(attempt)?.attempt ?? [...this.#codes.values()].find((c) => c.attempt.id === attempt)?.attempt
     const j = new Journal()
     const clear = (): void => {
@@ -511,6 +520,8 @@ export class Service {
     for (const k of this.#notices.keys()) if (!this.#byAttempt.has(k)) this.#notices.delete(k)
     for (const [k, c] of this.#codes) if (now - c.created > CODE_LIFETIME_MS) this.#codes.delete(k)
     for (const [k, s] of this.#sessions) if (now - s.at > SESSION_LIFETIME_MS) this.#sessions.delete(k)
+    // what a given-up attempt could still have had (an answer within its request window, a pickup within its own) has run out by then
+    for (const [k, at] of this.#forgotten) if (now - at > REQUEST_LIFETIME_MS + PICKUP_LIFETIME_MS) this.#forgotten.delete(k)
   }
 
   /** What the service holds of a person's identifier (the verifier's copy). */
