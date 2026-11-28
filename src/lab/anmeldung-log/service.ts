@@ -258,7 +258,10 @@ export class Service {
       nbf: iat,
       exp: iat + REQUEST_LIFETIME_S,
     }
-    const jwt = await signRequestObject(await this.o.keys.auth(this.keyIndex), this.kid, claims)
+    // key index and kid are read together, before any pause: a key change during the signing cannot
+    // pair the new kid with the old key (the request is then one under the old key, which a wallet refuses)
+    const keyIndex = this.keyIndex, kid = this.kid
+    const jwt = await signRequestObject(await this.o.keys.auth(keyIndex), kid, claims)
     this.attempts.set(state, { id, nonce, state, requestId, created: now, mode, jwt })
     this.byRequestId.set(requestId, state); this.byNonce.set(nonce, state); this.byAttempt.set(id, state)
     const requestUri = this.origin + REQUEST_PATH + requestId
