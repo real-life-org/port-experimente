@@ -11,9 +11,16 @@
 // A login runs in two parts. The checks that need no state (the log, the
 // token's signature, audience, nonce claim and time) run first, on a
 // private copy of the input. Then one step per DID, against what is held
-// at that moment: compare the heads, keep evidence, spend the nonce, admit
-// or refuse. That step is `Store.transact`; the memory store runs it
-// without a pause, a database would run it as one transaction.
+// at that moment: compare the heads, keep evidence, admit or refuse, and
+// spend the nonce only with an admitted login. That step is
+// `Store.transact`; the memory store runs it without a pause, a database
+// would run it as one transaction.
+//
+// Two things happen in that step and are kept apart: keeping the log state
+// (a verified continuation, a fork, a deactivation is kept whatever the
+// login), and admitting the login, which spends the nonce. A refused
+// answer leaves the nonce open, so an invalid or misdirected answer cannot
+// use up a request.
 
 import { b64uOf, fromB64u, platformSubtle, rand, type KeyPair } from 'rltp-lib'
 import { loginKeys, verify, type Entry, type Profile, type Version } from './log'
@@ -57,6 +64,23 @@ export type LoginResult =
   /** did:vh `featureNotSupported`: a well-formed log this verifier cannot process. */
   | { kind: 'unsupported', reason: string }
 
+/** Admitted logins: a login that passed every check of the verifier. */
+export type Admitted = Extract<LoginResult, { kind: 'ok' }>
+
+/**
+ * Hooks into the step of one login, both synchronous, both inside the step:
+ * - `before`: why this answer is not considered at all (nothing kept,
+ *   nonce untouched), or null;
+ * - `admit`: for a login the verifier would admit, why the caller refuses it
+ *   (nonce untouched, the log state still kept), or null; a null admits
+ *   it, and the nonce is spent in the same step. What `admit` changes on
+ *   the caller's side belongs to the step: it runs once per try of the step.
+ */
+export interface LoginHooks {
+  before?: (now: number) => string | null
+  admit?: (r: Admitted, now: number) => string | null
+}
+
 export interface LoginInput {
   log: unknown
   token: string
@@ -66,6 +90,9 @@ export interface LoginInput {
 
 /** A nonce at the moment of the step: issued and open, spent, expired, or never issued. */
 export type NonceState = 'open' | 'spent' | 'expired' | 'unknown'
+
+/** What one step decides: the state to keep for the DID, the result, and whether the nonce is spent. */
+export type Decision<T> = { held?: Held, result: T, spend?: boolean }
 
 /** What the service keeps. `transact` is the one step per DID. */
 export interface Store {
@@ -77,15 +104,16 @@ export interface Store {
    * One step for one DID: take the time (`clock`, inside the step: the time
    * of the decision), read what is held and the nonce's state at that time,
    * call `decide` (synchronous, no I/O), write the `held` it returns, and spend
-   * the nonce if it was open, whatever the result. Nothing else touches the
-   * DID or the nonce in between.
+   * the nonce if `decide` says so (`spend`) and it was open; written together
+   * or not at all. Nothing else touches the DID or the nonce in between. A
+   * store that retries a step calls `decide` again; only the last call counts.
    */
-  transact<T> (did: string, nonce: string, clock: () => number, decide: (held: Held | undefined, nonce: NonceState, now: number) => { held?: Held, result: T }): Promise<T>
+  transact<T> (did: string, nonce: string, clock: () => number, decide: (held: Held | undefined, nonce: NonceState, now: number) => Decision<T>): Promise<T>
 }
 
 export class MemoryStore implements Store {
-  private readonly held = new Map<string, Held>()
-  private readonly nonces = new Map<string, { expires: number, spent: boolean }>()
+  protected readonly held = new Map<string, Held>()
+  protected readonly nonces = new Map<string, { expires: number, spent: boolean }>()
 
   /** How many nonces are kept (open, or spent and not yet expired). */
   get nonceCount (): number { return this.nonces.size }
@@ -97,15 +125,20 @@ export class MemoryStore implements Store {
   }
   async read (did: string): Promise<Held | undefined> { const h = this.held.get(did); return h && structuredClone(h) }
 
-  async transact<T> (did: string, nonce: string, clock: () => number, decide: (held: Held | undefined, nonce: NonceState, now: number) => { held?: Held, result: T }): Promise<T> {
+  /** A nonce's state at `now`. */
+  protected nonceState (nonce: string, now: number): NonceState {
+    const n = this.nonces.get(nonce)
+    return !n ? 'unknown' : n.spent ? 'spent' : now >= n.expires ? 'expired' : 'open'
+  }
+
+  async transact<T> (did: string, nonce: string, clock: () => number, decide: (held: Held | undefined, nonce: NonceState, now: number) => Decision<T>): Promise<T> {
     // No await from here to the end: in one process this is a single step.
     const now = clock()
-    const n = this.nonces.get(nonce)
-    const state: NonceState = !n ? 'unknown' : n.spent ? 'spent' : now >= n.expires ? 'expired' : 'open'
+    const state = this.nonceState(nonce, now)
     const h = this.held.get(did)
     const out = decide(h && structuredClone(h), state, now)
     if (out.held) this.held.set(did, structuredClone(out.held))
-    if (n && state === 'open') n.spent = true
+    if (out.spend && state === 'open') (this.nonces.get(nonce) as { spent: boolean }).spent = true
     return out.result
   }
 }
@@ -139,7 +172,7 @@ export class Verifier {
     return nonce
   }
 
-  async login (raw: LoginInput): Promise<LoginResult> {
+  async login (raw: LoginInput, hooks: LoginHooks = {}): Promise<LoginResult> {
     // A private copy before anything else: nothing the caller changes later reaches what is checked or kept.
     let input: { log: unknown, token: unknown, nonce: unknown }
     try { input = JSON.parse(JSON.stringify({ log: raw?.log, token: raw?.token, nonce: raw?.nonce })) } catch { return { kind: 'invalid', reason: 'input is not JSON data' } }
@@ -154,15 +187,21 @@ export class Verifier {
 
     // The time of the nonce's expiry and of the token's `iat` and `exp` is the
     // time of the decision: taken in the step, not before the checks above.
-    return this.store.transact(did, nonce, () => this.o.now().getTime(), (held, nonceState, nowMs): { held?: Held, result: LoginResult } => {
-      const admit = (next: Held, step: 'first contact' | 'same head' | 'continued', write: boolean): { held?: Held, result: LoginResult } => {
+    return this.store.transact(did, nonce, () => this.o.now().getTime(), (held, nonceState, nowMs): Decision<LoginResult> => {
+      const skip = hooks.before?.(nowMs) ?? null
+      if (skip !== null) return { result: { kind: 'invalid', reason: skip } }
+      // the nonce is spent only here, with a login that is admitted
+      const admit = (next: Held, step: 'first contact' | 'same head' | 'continued', write: boolean): Decision<LoginResult> => {
         const keep = write ? { held: next } : {}
         if (next.head.deactivated) return { ...keep, result: { kind: 'invalid', reason: 'the DID is deactivated' } }
         if (typeof token === 'string') return { ...keep, result: { kind: 'invalid', reason: `token: ${token}` } }
         const t = Math.floor(nowMs / 1000)
         if (token.iat > t + 60 || token.exp <= t) return { ...keep, result: { kind: 'invalid', reason: 'token: outside its time' } }
         if (nonceState !== 'open') return { ...keep, result: { kind: 'invalid', reason: `nonce: ${nonceState === 'spent' ? 'already used' : nonceState === 'expired' ? 'expired' : 'not issued here'}` } }
-        return { ...keep, result: { kind: 'ok', did, versionId: next.head.versionId, step } }
+        const ok: Admitted = { kind: 'ok', did, versionId: next.head.versionId, step }
+        const refused = hooks.admit?.(ok, nowMs) ?? null
+        if (refused !== null) return { ...keep, result: { kind: 'invalid', reason: refused } }
+        return { ...keep, result: ok, spend: true }
       }
 
       if (!held) {

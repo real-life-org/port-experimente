@@ -20,8 +20,9 @@ export function webvhSyntax (id: string): { kind: 'invalid' | 'unsupported', rea
   if (!id.startsWith('did:webvh:')) return bad('not did:webvh')
   const [scid, domain, ...segments] = id.slice('did:webvh:'.length).split(':')
   if (!scid || !/^[1-9A-HJ-NP-Za-km-z]{46}$/.test(scid)) return bad('the scid is not 46 base58btc characters')
-  // webvh-domain = encoded-domain-name [ "%3A" port-number ]
-  const m = /^(.*?)(?:%3[Aa]([0-9]{1,5}))?$/.exec(domain ?? '') as RegExpExecArray
+  // webvh-domain = encoded-domain-name [ "%3A" port-number ]; a line break (or any character `.` does not match) is no domain
+  const m = /^(.*?)(?:%3[Aa]([0-9]{1,5}))?$/.exec(domain ?? '')
+  if (!m) return bad('the domain has a character that a host name cannot have')
   const name = m[1] as string
   if (m[2] !== undefined && !(Number(m[2]) >= 1 && Number(m[2]) <= 65535)) return bad('the port is not in 1 to 65535')
   if (/%3[Aa]/.test(name)) return bad('a percent-encoded colon within the domain name')

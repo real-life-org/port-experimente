@@ -304,3 +304,42 @@ test('one rule, checked on the result: rotate succeeds only if the login can use
   }
   expect(accepted).toBe(3)
 })
+
+test('a refused answer leaves the nonce open; only an admitted login spends it; a valid continuation is kept either way', async () => {
+  const store = new MemoryStore()
+  const v = verifier(store)
+  const o1 = await genesis(vh)
+  expect(await login(v, o1)).toMatchObject({ kind: 'ok' })
+  const o2 = await change(o1, 'owner', 1, 1)
+  const nonce = await v.issueNonce()
+  // a continuation with a token by the old key: refused, the continuation kept, the nonce still open
+  expect(await v.login({ log: o2.log, nonce, token: await tokenFor(o2, nonce, { key: o1.auth }) })).toEqual({ kind: 'invalid', reason: 'token: signature does not verify' })
+  expect((await v.holding(didOf(o1)))?.head.versionId).toBe(headOf(o2).versionId)
+  // a token for another nonce under this one
+  expect(await v.login({ log: o2.log, nonce, token: await tokenFor(o2, 'another') })).toEqual({ kind: 'invalid', reason: 'token: another nonce' })
+  // the right answer: ok, and only now the nonce is spent
+  expect(await v.login({ log: o2.log, nonce, token: await tokenFor(o2, nonce) })).toMatchObject({ kind: 'ok', step: 'same head' })
+  expect(await v.login({ log: o2.log, nonce, token: await tokenFor(o2, nonce) })).toEqual({ kind: 'invalid', reason: 'nonce: already used' })
+})
+
+test('the hooks of the step: `before` keeps nothing; `admit` refusing a continuation of a held log keeps the new head and leaves the nonce open', async () => {
+  const v = verifier()
+  const o1 = await genesis(vh)
+  const n1 = await v.issueNonce()
+  // first contact: `before` and `admit` refusing keep nothing (a first contact is kept only with a login)
+  expect(await v.login({ log: o1.log, nonce: n1, token: await tokenFor(o1, n1) }, { before: () => 'closed' })).toEqual({ kind: 'invalid', reason: 'closed' })
+  expect(await v.holding(didOf(o1))).toBeUndefined()
+  expect(await v.login({ log: o1.log, nonce: n1, token: await tokenFor(o1, n1) }, { admit: () => 'the account is not admitted' })).toEqual({ kind: 'invalid', reason: 'the account is not admitted' })
+  expect(await v.holding(didOf(o1))).toBeUndefined()
+  let admitted = 0
+  expect(await v.login({ log: o1.log, nonce: n1, token: await tokenFor(o1, n1) }, { admit: () => { admitted++; return null } })).toMatchObject({ kind: 'ok' })
+  expect(admitted).toBe(1)
+  expect(await v.login({ log: o1.log, nonce: n1, token: await tokenFor(o1, n1) })).toEqual({ kind: 'invalid', reason: 'nonce: already used' })
+  // a continuation of the held log: `admit` refuses, the held head advances anyway, the nonce stays open for the same answer
+  const o2 = await change(o1, 'owner', 1, 1)
+  const n2 = await v.issueNonce()
+  const token = await tokenFor(o2, n2)
+  expect(await v.login({ log: o2.log, nonce: n2, token }, { admit: () => 'the account is not admitted' })).toEqual({ kind: 'invalid', reason: 'the account is not admitted' })
+  expect((await v.holding(didOf(o1)))?.head.versionId).toBe(headOf(o2).versionId)
+  expect(await v.login({ log: o2.log, nonce: n2, token })).toMatchObject({ kind: 'ok', step: 'same head' })
+})
