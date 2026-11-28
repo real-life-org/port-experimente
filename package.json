@@ -41,6 +41,7 @@
     "@real-life/trust-protocol": "0.3.2",
     "@types/node": "22",
     "@types/qrcode": "1.5.5",
+    "didwebvh-ts": "3.1.0",
     "qrcode": "1.5.4",
     "rltp-lib": "npm:@real-life/trust-protocol@0.22.0",
     "typescript": "~5.7.2",

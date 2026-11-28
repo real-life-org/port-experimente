@@ -126,6 +126,9 @@ S9 is almost all waiting.
   holder device, world, scenarios.
 - `src/lab/anmeldung/`: logging into a web app with the Web of Trust app,
   SIOPv2-shaped, one identifier per web app (prototype, `NOTES.md`).
+- `src/lab/kennung-log/`: a login identifier with a did:webvh-format log
+  without a host, and the verifier of a service that holds a copy of it;
+  checked against didwebvh-ts (`NOTES.md`).
 - `rust/`: WebAssembly wrappers (`p2panda-wasm`, `beekem-wasm`, `mls-wasm`),
   built by `scripts/build-wasm.sh`; the bindings land under
   `src/candidates/*/pkg/`. `rust/mls-wasm/examples/vectors.rs` exchanges

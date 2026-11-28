@@ -1,0 +1,504 @@
+{
+  "first contact": [
+    {
+      "who": "owner",
+      "presents": "v1",
+      "result": "ok, first contact",
+      "holds": "v1"
+    },
+    {
+      "who": "owner",
+      "presents": "v1",
+      "result": "ok, same head",
+      "holds": "v1"
+    }
+  ],
+  "an honest key change": [
+    {
+      "who": "owner",
+      "presents": "v1",
+      "result": "ok, first contact",
+      "holds": "v1"
+    },
+    {
+      "who": "owner",
+      "presents": "v2",
+      "result": "ok, continued",
+      "holds": "v2"
+    },
+    {
+      "who": "owner",
+      "presents": "v2",
+      "result": "ok, same head",
+      "holds": "v2"
+    }
+  ],
+  "a device with the old state": [
+    {
+      "who": "laptop",
+      "presents": "v1",
+      "result": "ok, first contact",
+      "holds": "v1"
+    },
+    {
+      "who": "phone, after the change",
+      "presents": "v2",
+      "result": "ok, continued",
+      "holds": "v2"
+    },
+    {
+      "who": "laptop, not synced",
+      "presents": "v1",
+      "result": "stale, the service names v2",
+      "holds": "v2"
+    },
+    {
+      "who": "laptop, after syncing with the phone",
+      "presents": "v2",
+      "result": "ok, same head",
+      "holds": "v2"
+    }
+  ],
+  "an older log played back": [
+    {
+      "who": "owner",
+      "presents": "v1",
+      "result": "ok, first contact",
+      "holds": "v1"
+    },
+    {
+      "who": "owner",
+      "presents": "v2",
+      "result": "ok, continued",
+      "holds": "v2"
+    },
+    {
+      "who": "someone with the old log and the old authentication key",
+      "presents": "v1",
+      "result": "stale, the service names v2",
+      "holds": "v2"
+    },
+    {
+      "who": "owner",
+      "presents": "v2",
+      "result": "ok, same head",
+      "holds": "v2"
+    }
+  ],
+  "two continuations, the owner first": [
+    {
+      "who": "owner",
+      "presents": "v1",
+      "result": "ok, first contact",
+      "holds": "v1"
+    },
+    {
+      "who": "owner",
+      "presents": "v2 (owner)",
+      "result": "ok, continued",
+      "holds": "v2 (owner)"
+    },
+    {
+      "who": "copy",
+      "presents": "v2 (copy)",
+      "result": "contested",
+      "holds": "v2 (owner), contested, 1 log(s) as evidence"
+    },
+    {
+      "who": "owner",
+      "presents": "v2 (owner)",
+      "result": "contested",
+      "holds": "v2 (owner), contested, 1 log(s) as evidence"
+    },
+    {
+      "who": "copy",
+      "presents": "v2 (copy)",
+      "result": "contested",
+      "holds": "v2 (owner), contested, 1 log(s) as evidence"
+    }
+  ],
+  "two continuations, the copy first": [
+    {
+      "who": "owner",
+      "presents": "v1",
+      "result": "ok, first contact",
+      "holds": "v1"
+    },
+    {
+      "who": "copy",
+      "presents": "v2 (copy)",
+      "result": "ok, continued",
+      "holds": "v2 (copy)"
+    },
+    {
+      "who": "owner",
+      "presents": "v2 (owner)",
+      "result": "contested",
+      "holds": "v2 (copy), contested, 1 log(s) as evidence"
+    },
+    {
+      "who": "copy",
+      "presents": "v2 (copy)",
+      "result": "contested",
+      "holds": "v2 (copy), contested, 1 log(s) as evidence"
+    },
+    {
+      "who": "owner",
+      "presents": "v2 (owner)",
+      "result": "contested",
+      "holds": "v2 (copy), contested, 1 log(s) as evidence"
+    }
+  ],
+  "a token under the old key after the change": [
+    {
+      "who": "owner",
+      "presents": "v1",
+      "result": "ok, first contact",
+      "holds": "v1"
+    },
+    {
+      "who": "owner",
+      "presents": "v2",
+      "result": "ok, continued",
+      "holds": "v2"
+    },
+    {
+      "who": "v2 with a token by the old key, naming v2",
+      "presents": "v2",
+      "result": "invalid: token: signature does not verify",
+      "holds": "v2"
+    },
+    {
+      "who": "v2 with a token by the old key, naming v1",
+      "presents": "v2",
+      "result": "invalid: token: signed under another version than the head",
+      "holds": "v2"
+    },
+    {
+      "who": "owner",
+      "presents": "v2",
+      "result": "ok, same head",
+      "holds": "v2"
+    }
+  ],
+  "a continuation with a key that was not committed": [
+    {
+      "who": "owner",
+      "presents": "v1",
+      "result": "ok, first contact",
+      "holds": "v1"
+    },
+    {
+      "who": "thief, with its own key",
+      "presents": "v2 (own key)",
+      "result": "invalid: log: an update key was not committed to by the previous entry (entry 2)",
+      "holds": "v1"
+    },
+    {
+      "who": "thief, with the first update key",
+      "presents": "v2 (first update key)",
+      "result": "invalid: log: an update key was not committed to by the previous entry (entry 2)",
+      "holds": "v1"
+    },
+    {
+      "who": "thief, leaving updateKeys out",
+      "presents": "v2 (updateKeys left out)",
+      "result": "invalid: log: pre-rotation is active and updateKeys or nextKeyHashes is missing (entry 2)",
+      "holds": "v1"
+    },
+    {
+      "who": "owner",
+      "presents": "v2 (owner)",
+      "result": "ok, continued",
+      "holds": "v2 (owner)"
+    }
+  ],
+  "deactivation": [
+    {
+      "who": "owner",
+      "presents": "v1",
+      "result": "ok, first contact",
+      "holds": "v1"
+    },
+    {
+      "who": "owner, deactivated",
+      "presents": "v3 (deactivated)",
+      "result": "invalid: the DID is deactivated",
+      "holds": "v3 (deactivated)"
+    },
+    {
+      "who": "owner, an old device",
+      "presents": "v1",
+      "result": "stale, the service names v3 (deactivated)",
+      "holds": "v3 (deactivated)"
+    },
+    {
+      "who": "owner, deactivated",
+      "presents": "v3 (deactivated)",
+      "result": "invalid: the DID is deactivated",
+      "holds": "v3 (deactivated)"
+    },
+    {
+      "who": "someone with the last update key",
+      "presents": "v4 (after deactivation)",
+      "result": "invalid: log: entry after deactivation (entry 4)",
+      "holds": "v3 (deactivated)"
+    }
+  ],
+  "tampered entries": {
+    "cases": 42,
+    "rejected": 42,
+    "reSigned": 26,
+    "reSignedRejected": 26,
+    "reasons": {
+      "versionId: another version number (entry 1)": {
+        "as changed": "entry 1: signature does not verify",
+        "re-signed by the key that signed the entry": "entry 1: version number is not the next one"
+      },
+      "versionId: another version number (entry 2)": {
+        "as changed": "entry 2: signature does not verify",
+        "re-signed by the key that signed the entry": "entry 2: version number is not the next one"
+      },
+      "versionId: another entry hash (entry 1)": {
+        "as changed": "entry 1: signature does not verify",
+        "re-signed by the key that signed the entry": "entry 1: entryHash does not match"
+      },
+      "versionId: another entry hash (entry 2)": {
+        "as changed": "entry 2: signature does not verify",
+        "re-signed by the key that signed the entry": "entry 2: entryHash does not match"
+      },
+      "versionTime: one second later (entry 1)": {
+        "as changed": "entry 1: signature does not verify",
+        "re-signed by the key that signed the entry": "entry 1: scid does not match the first entry"
+      },
+      "versionTime: one second later (entry 2)": {
+        "as changed": "entry 2: signature does not verify",
+        "re-signed by the key that signed the entry": "entry 2: entryHash does not match"
+      },
+      "versionTime: with fractional seconds (entry 1)": {
+        "as changed": "entry 1: signature does not verify",
+        "re-signed by the key that signed the entry": "entry 1: scid does not match the first entry"
+      },
+      "versionTime: with fractional seconds (entry 2)": {
+        "as changed": "entry 2: signature does not verify",
+        "re-signed by the key that signed the entry": "entry 2: entryHash does not match"
+      },
+      "parameters.method: another method (entry 1)": {
+        "as changed": "entry 1: method is missing or not supported",
+        "re-signed by the key that signed the entry": "entry 1: method is missing or not supported"
+      },
+      "parameters.method: another method (entry 2)": {
+        "as changed": "entry 2: method is not supported",
+        "re-signed by the key that signed the entry": "entry 2: method is not supported"
+      },
+      "parameters.scid: another value (entry 1)": {
+        "as changed": "entry 1: signature does not verify",
+        "re-signed by the key that signed the entry": "entry 1: scid does not match the first entry"
+      },
+      "parameters.scid: another value (entry 2)": {
+        "as changed": "entry 2: scid in a later entry",
+        "re-signed by the key that signed the entry": "entry 2: scid in a later entry"
+      },
+      "parameters.updateKeys: another key (entry 1)": {
+        "as changed": "entry 1: proof is not by an authorized key",
+        "re-signed by the key that signed the entry": "entry 1: proof is not by an authorized key"
+      },
+      "parameters.updateKeys: another key (entry 2)": {
+        "as changed": "entry 2: an update key was not committed to by the previous entry",
+        "re-signed by the key that signed the entry": "entry 2: an update key was not committed to by the previous entry"
+      },
+      "parameters.nextKeyHashes: another hash (entry 1)": {
+        "as changed": "entry 1: signature does not verify",
+        "re-signed by the key that signed the entry": "entry 1: scid does not match the first entry"
+      },
+      "parameters.nextKeyHashes: another hash (entry 2)": {
+        "as changed": "entry 2: signature does not verify",
+        "re-signed by the key that signed the entry": "entry 2: entryHash does not match"
+      },
+      "parameters: portable true added (entry 1)": {
+        "as changed": "entry 1: parameter portable is not defined for this method",
+        "re-signed by the key that signed the entry": "entry 1: parameter portable is not defined for this method"
+      },
+      "parameters: portable true added (entry 2)": {
+        "as changed": "entry 2: parameter portable is not defined for this method",
+        "re-signed by the key that signed the entry": "entry 2: parameter portable is not defined for this method"
+      },
+      "parameters: an unknown parameter added (entry 1)": {
+        "as changed": "entry 1: parameter extra is not defined for this method",
+        "re-signed by the key that signed the entry": "entry 1: parameter extra is not defined for this method"
+      },
+      "parameters: an unknown parameter added (entry 2)": {
+        "as changed": "entry 2: parameter extra is not defined for this method",
+        "re-signed by the key that signed the entry": "entry 2: parameter extra is not defined for this method"
+      },
+      "state.id: another DID (entry 1)": {
+        "as changed": "entry 1: signature does not verify",
+        "re-signed by the key that signed the entry": "entry 1: scid does not match the first entry"
+      },
+      "state.id: another DID (entry 2)": {
+        "as changed": "entry 2: signature does not verify",
+        "re-signed by the key that signed the entry": "entry 2: entryHash does not match"
+      },
+      "state: another authentication key (entry 1)": {
+        "as changed": "entry 1: signature does not verify",
+        "re-signed by the key that signed the entry": "entry 1: scid does not match the first entry"
+      },
+      "state: another authentication key (entry 2)": {
+        "as changed": "entry 2: signature does not verify",
+        "re-signed by the key that signed the entry": "entry 2: entryHash does not match"
+      },
+      "proof.proofValue: one character changed (entry 1)": {
+        "as changed": "entry 1: signature does not verify",
+        "re-signed by the key that signed the entry": "not applicable"
+      },
+      "proof.proofValue: one character changed (entry 2)": {
+        "as changed": "entry 2: signature does not verify",
+        "re-signed by the key that signed the entry": "not applicable"
+      },
+      "proof.verificationMethod: another key (entry 1)": {
+        "as changed": "entry 1: proof is not by an authorized key",
+        "re-signed by the key that signed the entry": "not applicable"
+      },
+      "proof.verificationMethod: another key (entry 2)": {
+        "as changed": "entry 2: proof is not by an authorized key",
+        "re-signed by the key that signed the entry": "not applicable"
+      },
+      "proof.cryptosuite: ecdsa-jcs-2019 (entry 1)": {
+        "as changed": "entry 1: cryptosuite is not eddsa-jcs-2022",
+        "re-signed by the key that signed the entry": "not applicable"
+      },
+      "proof.cryptosuite: ecdsa-jcs-2019 (entry 2)": {
+        "as changed": "entry 2: cryptosuite is not eddsa-jcs-2022",
+        "re-signed by the key that signed the entry": "not applicable"
+      },
+      "proof.proofPurpose: authentication (entry 1)": {
+        "as changed": "entry 1: proofPurpose is not assertionMethod",
+        "re-signed by the key that signed the entry": "not applicable"
+      },
+      "proof.proofPurpose: authentication (entry 2)": {
+        "as changed": "entry 2: proofPurpose is not assertionMethod",
+        "re-signed by the key that signed the entry": "not applicable"
+      },
+      "proof.created: another time (entry 1)": {
+        "as changed": "entry 1: signature does not verify",
+        "re-signed by the key that signed the entry": "not applicable"
+      },
+      "proof.created: another time (entry 2)": {
+        "as changed": "entry 2: signature does not verify",
+        "re-signed by the key that signed the entry": "not applicable"
+      },
+      "proof: the proof twice (entry 1)": {
+        "as changed": "entry 1: proof is not a list of one proof",
+        "re-signed by the key that signed the entry": "not applicable"
+      },
+      "proof: the proof twice (entry 2)": {
+        "as changed": "entry 2: proof is not a list of one proof",
+        "re-signed by the key that signed the entry": "not applicable"
+      },
+      "proof: an object, not a list (entry 1)": {
+        "as changed": "entry 1: proof is not a list of one proof",
+        "re-signed by the key that signed the entry": "not applicable"
+      },
+      "proof: an object, not a list (entry 2)": {
+        "as changed": "entry 2: proof is not a list of one proof",
+        "re-signed by the key that signed the entry": "not applicable"
+      },
+      "entry: an extra property (entry 1)": {
+        "as changed": "entry 1: entry has other properties than versionId, versionTime, parameters, state, proof",
+        "re-signed by the key that signed the entry": "entry 1: entry has other properties than versionId, versionTime, parameters, state, proof"
+      },
+      "entry: an extra property (entry 2)": {
+        "as changed": "entry 2: entry has other properties than versionId, versionTime, parameters, state, proof",
+        "re-signed by the key that signed the entry": "entry 2: entry has other properties than versionId, versionTime, parameters, state, proof"
+      },
+      "log: the second of three entries removed (entry 2)": {
+        "as changed": "entry 2: an update key was not committed to by the previous entry",
+        "re-signed by the key that signed the entry": "not applicable"
+      },
+      "log: second and third entry swapped (entry 2)": {
+        "as changed": "entry 2: an update key was not committed to by the previous entry",
+        "re-signed by the key that signed the entry": "not applicable"
+      }
+    },
+    "atTheService": [
+      {
+        "who": "owner",
+        "presents": "v1",
+        "result": "ok, first contact",
+        "holds": "v1"
+      },
+      {
+        "who": "someone with a tampered v2",
+        "presents": "v2 (tampered)",
+        "result": "invalid: log: signature does not verify (entry 2)",
+        "holds": "v1"
+      },
+      {
+        "who": "owner",
+        "presents": "v2",
+        "result": "ok, continued",
+        "holds": "v2"
+      }
+    ]
+  },
+  "rules, broken by an entry an authorized key wrote": {
+    "versionTime equal to the previous entry's": "invalid at entry 2: versionTime is not later than the previous entry's",
+    "versionTime before the previous entry's": "invalid at entry 2: versionTime is not later than the previous entry's",
+    "versionTime with fractional seconds": "invalid at entry 2: versionTime is not a UTC time in whole seconds",
+    "versionTime without a zone": "invalid at entry 2: versionTime is not a UTC time in whole seconds",
+    "versionTime in a non-UTC zone": "invalid at entry 2: versionTime is not a UTC time in whole seconds",
+    "versionTime six minutes after the verifier's clock": "invalid at entry 2: versionTime is in the future",
+    "versionTime four minutes after the verifier's clock": "valid (2 entries)",
+    "the first entry with fractional seconds": "invalid at entry 1: versionTime is not a UTC time in whole seconds",
+    "nextKeyHashes left out under pre-rotation": "invalid at entry 2: pre-rotation is active and updateKeys or nextKeyHashes is missing",
+    "scid in a later entry": "invalid at entry 2: scid in a later entry",
+    "method repeated in a later entry": "valid (2 entries)",
+    "method changed in a later entry": "invalid at entry 2: method is not supported",
+    "portable false under did:vh": "invalid at entry 2: parameter portable is not defined for this method",
+    "a witness configured": "invalid at entry 2: witnesses are not supported here",
+    "a parameter set to null": "invalid at entry 2: parameter ttl is null",
+    "ttl as a string": "invalid at entry 2: ttl is not an unsigned integer",
+    "state.id another DID": "invalid at entry 2: state.id is not the DID",
+    "an entry after updateKeys [] without pre-rotation": "invalid at entry 4: no key is authorized to sign this entry",
+    "deactivated true in one entry under pre-rotation, update keys kept": "valid (2 entries)"
+  },
+  "the same keys under three names": {
+    "dids": {
+      "did:webvh (example.com)": "did:webvh:QmcaL12ddx4nYkpEX8eMSEyk1eC6gFWmKzAeDiiKGKH8Fk:example.com",
+      "did:vh": "did:vh:QmNUqdn2JX1LRFY12wnDk8iFyk2fHoALrvBNYSYqzpCbBQ",
+      "did:scid:vh:1": "did:scid:vh:1:QmTHy9ahfSyZe46VvYpw9igCj3QfxLAgLsWAFWvV839d2r"
+    },
+    "distinctScids": 3,
+    "crossCheck": {
+      "written as did:webvh (example.com), verified as did:webvh (example.com)": "valid",
+      "written as did:webvh (example.com), verified as did:vh": "invalid: method is missing or not supported",
+      "written as did:webvh (example.com), verified as did:scid:vh:1": "invalid: method is missing or not supported",
+      "written as did:vh, verified as did:webvh (example.com)": "invalid: method is missing or not supported",
+      "written as did:vh, verified as did:vh": "valid",
+      "written as did:vh, verified as did:scid:vh:1": "invalid: state.id is not the DID",
+      "written as did:scid:vh:1, verified as did:webvh (example.com)": "invalid: method is missing or not supported",
+      "written as did:scid:vh:1, verified as did:vh": "invalid: state.id is not the DID",
+      "written as did:scid:vh:1, verified as did:scid:vh:1": "valid"
+    }
+  },
+  "sizes": {
+    "did:webvh (example.com): genesis, key change, pre-rotation off, deactivation": [
+      1248,
+      1168,
+      1119,
+      1070
+    ],
+    "did:vh: genesis, key change, pre-rotation off, deactivation": [
+      1186,
+      1108,
+      1060,
+      1010
+    ],
+    "did:scid:vh:1: genesis, key change, pre-rotation off, deactivation": [
+      1214,
+      1136,
+      1088,
+      1038
+    ]
+  }
+}
