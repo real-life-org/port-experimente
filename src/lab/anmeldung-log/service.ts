@@ -140,6 +140,9 @@ export interface ServiceOptions {
   fixed?: { nonce: string, state: string, requestId: string }
 }
 
+/** The `kid` of the request signing key under one head: `<did>#<fragment>` of its document. */
+const kidOfHead = (head: Version): string => (loginKeys(head.doc)[0] as { id: string }).id
+
 const isoSeconds = (ms: number): string => new Date(Math.floor(ms / 1000) * 1000).toISOString().replace(/\.000Z$/, 'Z')
 
 /**
@@ -164,10 +167,15 @@ async function keyIndexOf (keys: ServiceKeys, head: Version, entries: number): P
   throw new Error('service log: none of the service keys is the login key of the head')
 }
 
+/**
+ * What the service signs with: its log, the head, and the index of the
+ * service keys the head names. One value, replaced as a whole and only by
+ * `publish`; whoever signs or changes it reads it once, before any pause.
+ */
+interface KeyState { readonly log: Entry[], readonly head: Version, readonly index: number }
+
 export class Service {
-  private log!: Entry[]
-  private head!: Version
-  private keyIndex: number
+  private keyState: KeyState
   readonly did: string
   readonly clientId: string
   readonly origin: string
@@ -185,7 +193,7 @@ export class Service {
   private readonly sessions = new Map<string, { login: Login, at: number }>()
 
   private constructor (readonly o: ServiceOptions & { log: Entry[], head: Version, did: string, origin: string, keyIndex: number }) {
-    this.log = o.log; this.head = o.head; this.keyIndex = o.keyIndex
+    this.keyState = { log: o.log, head: o.head, index: o.keyIndex }
     this.did = o.did
     this.clientId = CLIENT_ID_PREFIX + o.did
     this.origin = o.origin
@@ -207,61 +215,73 @@ export class Service {
   }
 
   /** The log as served at the did:webvh location (JSON Lines). */
-  didLog (): string { return toJsonl(this.log) }
-  get scid (): string { return (this.log[0] as Entry).parameters.scid as string }
-  get headVersion (): string { return this.head.versionId }
+  didLog (): string { return toJsonl(this.keyState.log) }
+  get scid (): string { return (this.keyState.log[0] as Entry).parameters.scid as string }
+  get headVersion (): string { return this.keyState.head.versionId }
   /** The `kid` of the request signing key: `<did>#<fragment>` of the head's document. */
-  get kid (): string { return (loginKeys(this.head.doc)[0] as { id: string }).id }
+  get kid (): string { return kidOfHead(this.keyState.head) }
 
   /** The service changes its key: the committed update key signs, the document gets the next authentication key. */
   async rotateKey (): Promise<void> {
-    const n = this.keyIndex + 1
+    const from = this.keyState, n = from.index + 1
     const [signer, next, auth] = await Promise.all([this.o.keys.update(n), this.o.keys.update(n + 1), this.o.keys.auth(n)])
-    await this.publish(await rotate(this.log, { signer, next: [next.pubRaw], authKey: auth.pubRaw, time: this.nextTime() }))
-    this.keyIndex = n
+    await this.publish(from, await rotate(from.log, { signer, next: [next.pubRaw], authKey: auth.pubRaw, time: this.nextTime(from) }), n)
   }
 
   /** The service ends its DID (did:webvh 1.0, Deactivate). */
   async deactivate (): Promise<void> {
-    await this.publish(await deactivate(this.log, { signer: await this.o.keys.update(this.keyIndex + 1), time: this.nextTime() }))
+    const from = this.keyState
+    await this.publish(from, await deactivate(from.log, { signer: await this.o.keys.update(from.index + 1), time: this.nextTime(from) }), from.index)
   }
 
-  private nextTime (): string { return isoSeconds(Math.max(Math.floor(this.o.now() / 1000) * 1000, Date.parse(this.head.versionTime) + 1000)) }
-  private async publish (log: Entry[]): Promise<void> {
+  private nextTime (from: KeyState): string { return isoSeconds(Math.max(Math.floor(this.o.now() / 1000) * 1000, Date.parse(from.head.versionTime) + 1000)) }
+  /** A change made from the key state `from` is taken only if that is still the key state: no change is built on a state that has moved meanwhile. */
+  private async publish (from: KeyState, log: Entry[], index: number): Promise<void> {
     const check = await verify(log, { profile: webvh(this.o.host), now: new Date(Math.max(this.o.now(), Date.parse((log[log.length - 1] as Entry).versionTime))), did: this.did })
     if (!check.ok) throw new Error(`service log: ${check.reason}`)
-    this.log = check.log; this.head = check.head
+    // no await from the comparison to the write
+    if (this.keyState !== from) throw new Error('service log: changed meanwhile by another change; this one is not published')
+    this.keyState = { log: check.log, head: check.head, index }
   }
 
   /** A browser asks to log in: a fresh attempt with a signed Request Object behind a request_uri, and the outer link. */
   async start (mode: Mode = 'cross-device'): Promise<{ attempt: string, link: string, requestUri: string, state: string }> {
-    const now = this.o.now()
     const nonce = this.o.fixed?.nonce ?? await this.verifier.issueNonce()
     if (this.o.fixed) await this.issueFixedNonce(nonce)
     const state = this.o.fixed?.state ?? b64uOf(rand(16))
     const requestId = this.o.fixed?.requestId ?? b64uOf(rand(16))
     const id = b64uOf(rand(16))
-    const iat = Math.floor(now / 1000)
-    const claims: RequestClaims = {
-      iss: this.clientId,
-      aud: SIOP_AUD,
-      client_id: this.clientId,
-      response_type: 'id_token',
-      response_mode: 'direct_post',
-      scope: 'openid',
-      id_token_type: ID_TOKEN_TYPE,
-      redirect_uri: this.redirectUri,
-      nonce,
-      state,
-      client_metadata: { subject_syntax_types_supported: [subjectSyntaxOf(this.o.identityProfile ?? vh)], ...(this.o.name ? { client_name: this.o.name } : {}) },
-      iat,
-      nbf: iat,
-      exp: iat + REQUEST_LIFETIME_S,
+    const claimsAt = (now: number): RequestClaims => {
+      const iat = Math.floor(now / 1000)
+      return {
+        iss: this.clientId,
+        aud: SIOP_AUD,
+        client_id: this.clientId,
+        response_type: 'id_token',
+        response_mode: 'direct_post',
+        scope: 'openid',
+        id_token_type: ID_TOKEN_TYPE,
+        redirect_uri: this.redirectUri,
+        nonce,
+        state,
+        client_metadata: { subject_syntax_types_supported: [subjectSyntaxOf(this.o.identityProfile ?? vh)], ...(this.o.name ? { client_name: this.o.name } : {}) },
+        iat,
+        nbf: iat,
+        exp: iat + REQUEST_LIFETIME_S,
+      }
     }
-    // key index and kid are read together, before any pause: a key change during the signing cannot
-    // pair the new kid with the old key (the request is then one under the old key, which a wallet refuses)
-    const keyIndex = this.keyIndex, kid = this.kid
-    const jwt = await signRequestObject(await this.o.keys.auth(keyIndex), kid, claims)
+    // The key state (log, head, key index) and the time are read before the pause, as one; the request is
+    // issued only if, when the signature is done, that is still the key state and the request is still in
+    // its window; otherwise it is signed again. So every request issued is signed by the key the head names
+    // at the moment of issue and is open then: what the service issues, a wallet can take.
+    let made: { jwt: string, now: number } | null = null
+    for (let i = 0; i < 3 && made === null; i++) {
+      const k = this.keyState, now = this.o.now()
+      const jwt = await signRequestObject(await this.o.keys.auth(k.index), kidOfHead(k.head), claimsAt(now))
+      if (this.keyState === k && this.o.now() - now <= REQUEST_LIFETIME_MS) made = { jwt, now }
+    }
+    if (made === null) throw new Error('the service key or the clock kept moving while a request was signed')
+    const { jwt, now } = made
     this.attempts.set(state, { id, nonce, state, requestId, created: now, mode, jwt })
     this.byRequestId.set(requestId, state); this.byNonce.set(nonce, state); this.byAttempt.set(id, state)
     const requestUri = this.origin + REQUEST_PATH + requestId

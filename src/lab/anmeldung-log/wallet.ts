@@ -127,15 +127,18 @@ export class Wallet {
   readonly #now: () => number
   readonly #storage: WalletStorage
   readonly #transport: Transport
+  readonly #derive: typeof deriveKey
   readonly #checked = new WeakMap<Shown, Checked>()
   readonly profile: Profile
 
-  constructor (secret: Uint8Array, o: { now: () => number, profile?: Profile, storage?: WalletStorage, transport?: Transport }) {
+  /** `derive` is the key derivation (default `deriveKey`; tests pass one that pauses). */
+  constructor (secret: Uint8Array, o: { now: () => number, profile?: Profile, storage?: WalletStorage, transport?: Transport, derive?: typeof deriveKey }) {
     this.#secret = secret
     this.#now = o.now
     this.#storage = o.storage ?? new MemoryStorage()
     this.profile = o.profile ?? vh
     this.#transport = o.transport ?? httpsTransport()
+    this.#derive = o.derive ?? deriveKey
   }
 
   /** A copy of what the wallet holds (a second device with the same state starts from it). */
@@ -264,7 +267,7 @@ export class Wallet {
     // the first entry is written before the step (it needs await); the step takes it only if there is still none
     let first: { log: Entry[], index: number } | null = null
     if (!this.state().identities[c.scid]) {
-      const [u0, u1, a0] = await Promise.all([deriveKey(this.#secret, k, 'update', 0), deriveKey(this.#secret, k, 'update', 1), deriveKey(this.#secret, k, 'auth', 0)])
+      const [u0, u1, a0] = await Promise.all([this.#derive(this.#secret, k, 'update', 0), this.#derive(this.#secret, k, 'update', 1), this.#derive(this.#secret, k, 'auth', 0)])
       first = { log: await create({ profile: this.profile, updateKey: u0, next: [u1.pubRaw], authKey: a0.pubRaw, time: isoSeconds(this.#now()) }), index: 0 }
     }
     const step = this.#commit<{ log: Entry[], index: number }>((s, nowMs) => {
@@ -282,7 +285,7 @@ export class Wallet {
     const head = headOf(id.log)
     const did = (id.log[0] as Entry).state.id as string
     const iat = Math.floor(step.nowMs / 1000)
-    const token = await signToken(await deriveKey(this.#secret, k, 'auth', id.index), kidOf(did, head), {
+    const token = await signToken(await this.#derive(this.#secret, k, 'auth', id.index), kidOf(did, head), {
       iss: did, sub: did, aud: c.clientId, nonce: c.claims.nonce, iat, exp: iat + TOKEN_LIFETIME_S,
     })
     return { form: { id_token: token, state: c.claims.state, [DID_LOG_FIELD]: toJsonl(id.log) }, head }
@@ -344,7 +347,7 @@ export class Wallet {
     if (!from) throw new Error('no identifier for this service')
     const k = this.#keyFor(scid)
     const n = from.index + 1
-    const [signer, next, auth] = await Promise.all([deriveKey(this.#secret, k, 'update', n), deriveKey(this.#secret, k, 'update', n + 1), deriveKey(this.#secret, k, 'auth', n)])
+    const [signer, next, auth] = await Promise.all([this.#derive(this.#secret, k, 'update', n), this.#derive(this.#secret, k, 'update', n + 1), this.#derive(this.#secret, k, 'auth', n)])
     const now = this.#now()
     const prev = Date.parse((from.log[from.log.length - 1] as Entry).versionTime)
     if (Math.floor(now / 1000) * 1000 <= prev) throw new Error('rotate: the clock is not later than the last entry')

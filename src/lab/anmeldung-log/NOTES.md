@@ -338,6 +338,97 @@ the request URI SHOULD NOT exceed 512 ASCII characters), Request Object 1110,
 service log 1261 (one entry), person log 1186 (one entry), ID token 688, POST
 body 2285.
 
+## Orders
+
+`tests/anmeldung-log-orders.test.ts` with the harness
+`tests/anmeldung-log-orders.ts` plays the login in many orders instead of
+single examples, in one process against the service object (no HTTP).
+
+- **Planner.** Every place where the parts wait is a pause the planner
+  holds: each store step of the service and the verifier (`issue`,
+  `transact`, `closeAttempt`, `issueSession`), each GET and POST of the
+  wallet's transport, each key derivation of the wallet (the option
+  `derive` of `Wallet`, default `deriveKey`) and of the service (its
+  `ServiceKeys`). Each event is an actor; its pauses are tagged through
+  `AsyncLocalStorage`. When every actor is finished or waiting, the planner
+  picks one actor and lets all its waiting pauses go on (a `Promise.all` is
+  one step). Every event begins with a pause of its own, so what it reads
+  first is read when the planner says. The clock moves only by events
+  (`tick` +1 s, `late61` +61 s, `late301` +301 s), in whole seconds.
+- **Events:** confirm (twice, also by a second instance), cancel, another
+  person's wallet answers the same request, a second request of the same
+  browser, the same-device way with its code, an answer under another
+  attempt's `state`, a second device with the old state, a third device
+  that changed the key on its own (fork), a second device on the same
+  storage at the first login (its clock a second ahead), key change of the
+  person and of the service, opening anew, a further start, collect,
+  redeem, another browser collecting and redeeming, `forget`, the clock.
+  Prelude states: `returning`, `first`, `answered` (A and C answered, not
+  collected), `rotated` (A opened before a key change of the service, B
+  after).
+- **Runs:** 29 sets of two or three events, every order (depth-first
+  replay of choice prefixes): 1231 orders, each count asserted; 4 × 25
+  random sets of five to seven events, four orders each from fixed seeds
+  (400 orders; a failure prints the seed and the order); three fixed
+  orders as regression tests. About 20 s for the file.
+- **Properties** (after every step, at every POST, at every issued request
+  and session): E1 at most one admitted login per nonce and one session
+  per attempt; E2 a session only for the attempt whose answer was admitted,
+  with that login; E3 no POST with token or log after the request ran out,
+  no admitted login after it, no session after the pickup window or the
+  code; E4 no held head goes back (the service's per identifier, the
+  wallet's service log, the wallet's own log and index); E5 no session for
+  a contested or deactivated identifier; E6 every POST (answers and errors)
+  only to the service's origin and only while the request is in its window
+  and the service is not held deactivated; E7 every token names the head
+  stored at the moment of the POST and is signed by its key; E8 every
+  request issued is signed by the key the head names at that moment and is
+  open then; E9 a nonce is spent and an attempt closed only by an admitted
+  login, `forget` or running out; E10 one storage never holds a second
+  identifier for a service, and every token from it names the stored one;
+  E11 (added) no admitted login and no session for an attempt after
+  `forget`; E12 (added) the service's own log never goes back or forks;
+  and no event ends with an unexpected error.
+- **Mutations** (applied for a run, not checked in; each property red;
+  first red set and the order number in it): E1 the verifier's nonce check
+  and the open-attempt check both removed: `confirm, confirm2` order 4 (the
+  nonce check alone is not seen: the attempt check stops the same orders);
+  E2 redeem without the attempt comparison: `redeem, foreign` order 3; E3
+  pickup window read before the store step: `collect, late301` order 2;
+  E3 the gate's window check removed: `confirm, late301` order 4; E4 the
+  verifier takes an older log: `confirm, device2` order 1; E4 the wallet's
+  head comparison and the `commitState` service check removed: `rotated:
+  confirm, second` order 36; E5 the contested check at the session removed:
+  `fork, collect` order 1; E6 cancel posts past the gate: `cancel, late301`
+  order 3; E7 the gate's head comparison removed: `rotate, confirm` order 2;
+  E8 the request issued without the check after signing: `rotateService,
+  start` order 3 and `start, late301` order 2; E9 the store spends the
+  nonce on every step: `confirm, device2` order 1, `swapped, second` order
+  1; E10 a fresh first entry preferred and the `commitState` identity
+  check removed: `first: confirm, device1st` order 36; E11 `forget` leaves
+  the outcome: `forget, collect` order 1; E12 `publish` without the
+  comparison: `rotateService, tick, rotateService` order 7. Most mutations
+  are also caught by the random sets.
+- **Faults found and fixed** (service.ts; regression tests with the
+  order): a key change of the service landing while a request was signed
+  issued a request under the old key, which no wallet takes (E8); a clock
+  passing the window while a request was signed issued a request that was
+  already out of its window (E8); two key changes side by side read the key
+  index before the pause and the log after it and failed with an unrelated
+  error (E12). Now the log, the head and the key index are one value
+  (`keyState`) replaced as a whole only by `publish`, which takes a change
+  only if the key state is still the one it was made from; `start` reads
+  key state and time together, signs, and issues only if both still hold,
+  otherwise signs again (at most three times).
+- **Not covered:** HTTP, cookies and the browser binding of `http.ts`
+  (the service is called with the attempt id); the sweep and the timer; a
+  store that repeats a step; deactivation of the service as an event;
+  requests issued before a key change of the service and fetched after it
+  (refused by the wallet, as before); the nonce's expiry is still computed
+  before the nonce's store step, so after a long pause there it ends
+  slightly before the attempt (a login is then refused, nothing is
+  admitted); sets of four events are only in the random part.
+
 ## What it does not show
 
 - Not built: a service moving to another domain (`portable`), services
