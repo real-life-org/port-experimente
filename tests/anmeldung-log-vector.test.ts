@@ -9,7 +9,7 @@ const FILE = new URL('../src/lab/anmeldung-log/vector.json', import.meta.url)
 
 test('the vector is what the code builds from its inputs', async () => {
   const v = await buildVector()
-  if (process.env.WRITE_VECTOR) writeFileSync(FILE, JSON.stringify(v, null, 2) + '\n')
+  if (process.env.WRITE_VECTOR === '1') writeFileSync(FILE, JSON.stringify(v, null, 2) + '\n')
   expect(JSON.parse(readFileSync(FILE, 'utf8'))).toEqual(JSON.parse(JSON.stringify(v)))
   expect(v.service_reply).toEqual({ status: 200, body: {} })
 })
@@ -49,6 +49,13 @@ test('checkVector notices what is missing or does not match: each change to a co
       const e = JSON.parse(log[0]!); e.parameters.nextKeyHashes = ['QmUnrelatedUnrelatedUnrelatedUnrelatedUnrelated1']; log[0] = JSON.stringify(e)
       c.person_log = log.join('\n')
     }, /^person log: nextKeyHashes is not the hash of the derived update key 1/],
+    ['a seed with one hex digit more', (c) => { c.inputs.service.seed += 'a' }, /^inputs.service.seed is not 64 hex digits/],
+    ['a secret with a character that is no hex digit', (c) => { c.inputs.person.secret = 'z' + c.inputs.person.secret.slice(1) }, /^inputs.person.secret is not 64 hex digits/],
+    ['another profile', (c) => { c.profile = 'x-other/1' as never }, /^profile is not x-anmeldung-log\/1/],
+    ['another derivation rule', (c) => { c.derivation_rule = c.derivation_rule.replace('SHA-256', 'SHA-512') }, /^derivation_rule is not the rule of this code/],
+    ['a service log whose first entry is null', (c) => { c.service_log = 'null\n' }, /^service log: the first entry is not a log entry/],
+    ['a person log whose first entry is null', (c) => { c.person_log = 'null\n' }, /^person log: the first entry is not a log entry/],
+    ['a service log whose first entry is an array', (c) => { c.service_log = '[]\n' }, /^service log: the first entry is not a log entry/],
     ['the service\'s genesis commitment', (c) => {
       const log = c.service_log.split('\n')
       const e = JSON.parse(log[0]!); e.parameters.nextKeyHashes = ['QmUnrelatedUnrelatedUnrelatedUnrelatedUnrelated1']; log[0] = JSON.stringify(e)
@@ -61,4 +68,12 @@ test('checkVector notices what is missing or does not match: each change to a co
     const problems = await checkVector(c)
     expect([name, problems.some((p) => want.test(p))], JSON.stringify(problems)).toEqual([name, true])
   }
+})
+
+test('the vector keeps the body the wallet posted, byte for byte, and gives it to the service as it is', async () => {
+  // a line that adds a second state after the wallet's: the body stays as posted, and the service takes the first value
+  const v = await buildVector(undefined, { line: (body) => body + '&state=other' })
+  expect(v.post.body.endsWith('&state=other')).toBe(true)
+  expect(new URLSearchParams(v.post.body).getAll('state')).toEqual([v.inputs.state, 'other'])
+  expect(v.service_reply).toEqual({ status: 200, body: {} })
 })

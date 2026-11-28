@@ -130,7 +130,7 @@ interface is shaped so that a database can run it as one transaction.
 | a token by the old key, naming the old version | invalid (not under the head) |
 | a new head with the authentication key unchanged, a token naming the old head | invalid (not under the head) |
 | a valid continuation with a failing token | invalid; the continuation is kept; the nonce stays open; a sibling of it is then contested |
-| a token for another nonce, or any other refused answer | invalid; the nonce stays open; the right answer then is ok |
+| a token for another nonce, or another refused answer | invalid; the nonce stays open; a right answer then is ok while the nonce is still open and the identifier still eligible: not after what the refused answer left kept stands against it (after a kept deactivation: invalid with the deactivated log, stale with an older one; after a kept fork: contested; after a kept continuation: an answer under the older head is stale) |
 | a continuation with a key that was not committed | invalid; nothing locked; the owner's continuation is taken after it |
 | deactivation | invalid (deactivated), and the deactivation is kept; an old device is stale; an entry after it is invalid |
 | a tampered log | invalid; nothing locked |

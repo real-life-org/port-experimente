@@ -16,7 +16,18 @@ import type { Transport } from './transport'
 import { deriveKey, MemoryStorage, Wallet } from './wallet'
 
 const hex = (b: Uint8Array): string => [...b].map((x) => x.toString(16).padStart(2, '0')).join('')
-const unhex = (s: string): Uint8Array => Uint8Array.from(s.match(/../g)!.map((x) => parseInt(x, 16)))
+/** A seed or secret of this vector: exactly 32 bytes as 64 hex digits, nothing more or less. */
+const HEX32 = /^[0-9a-fA-F]{64}$/
+const unhex = (s: string): Uint8Array => {
+  if (typeof s !== 'string' || !HEX32.test(s)) throw new Error('not 64 hex digits')
+  return Uint8Array.from(s.match(/../g)!.map((x) => parseInt(x, 16)))
+}
+/** The first entry of a log, if it has the shape every reading below relies on: an object with `parameters` and `state` objects. */
+const genesisOf = (log: unknown[]): Entry | null => {
+  const e = log[0] as Record<string, unknown> | null | undefined
+  const obj = (x: unknown): boolean => typeof x === 'object' && x !== null && !Array.isArray(x)
+  return obj(e) && obj(e!.parameters) && obj(e!.state) ? e as unknown as Entry : null
+}
 const td = new TextDecoder(), te = new TextEncoder()
 const part = (jwt: string, i: number): Record<string, unknown> => JSON.parse(td.decode(fromB64u(jwt.split('.')[i] as string)))
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
@@ -37,18 +48,18 @@ const DERIVATION_RULE = 'seed = HKDF-SHA-256(ikm, salt = empty, info = UTF-8 of 
  * given texts at the given URLs and keeps what the wallet posts instead of
  * sending it. The wallet runs its whole way, gate included.
  */
-function fixedTransport (served: () => Record<string, string>): { transport: Transport, posts: { url: string, body: string }[] } {
+function fixedTransport (served: () => Record<string, string>, line: (body: string) => string = (b) => b): { transport: Transport, posts: { url: string, body: string }[] } {
   const posts: { url: string, body: string }[] = []
   return {
     posts,
     transport: {
       get: async (url) => { const text = served()[url]; return text === undefined ? { error: 'unexpected fetch ' + url } : { status: 200, type: '', text } },
-      post: async (url, body) => { posts.push({ url, body }); return { status: 200, type: 'application/json', text: '{}' } },
+      post: async (url, body) => { posts.push({ url, body: line(body) }); return { status: 200, type: 'application/json', text: '{}' } },
     },
   }
 }
 
-async function parts (i: Inputs, served: () => Record<string, string>) {
+async function parts (i: Inputs, served: () => Record<string, string>, line?: (body: string) => string) {
   const now = Date.parse(i.time)
   const keys = new ServiceKeys(unhex(i.service.seed))
   const service = await Service.create({
@@ -56,17 +67,21 @@ async function parts (i: Inputs, served: () => Record<string, string>) {
     log: await serviceLog(i.service.host, keys, i.service.log_time),
     fixed: { nonce: i.nonce, state: i.state, requestId: i.request_id },
   })
-  const net = fixedTransport(served)
+  const net = fixedTransport(served, line)
   const wallet = new Wallet(unhex(i.person.secret), { now: () => now, storage: new MemoryStorage(), profile: vh, transport: net.transport })
   return { now, service, wallet, posts: net.posts }
 }
 
 const SERVICE_KEYS = [['update', 0], ['update', 1], ['auth', 0]] as const
 
-/** Build the vector from its inputs. */
-export async function buildVector (i: Inputs = VECTOR_INPUTS) {
+/**
+ * Build the vector from its inputs. `line` (tests only) changes what the
+ * wallet posts on its way to the service, as a line could: the vector keeps
+ * and replays the body as it arrives.
+ */
+export async function buildVector (i: Inputs = VECTOR_INPUTS, o: { line?: (body: string) => string } = {}) {
   const served: Record<string, string> = {}
-  const { service, wallet, posts } = await parts(i, () => served)
+  const { service, wallet, posts } = await parts(i, () => served, o.line)
   const started = await service.start('cross-device')
   const jwt = service.requestObject(i.request_id) as string
   const logText = service.didLog()
@@ -76,8 +91,10 @@ export async function buildVector (i: Inputs = VECTOR_INPUTS) {
   if (!opened.ok) throw new Error(opened.reason)
   const sent = await wallet.confirm(opened.request)
   if ('error' in sent) throw new Error(sent.error)
+  // the body exactly as posted; the fields are read from a view of it, never written back into it
   const posted = posts[0] as { url: string, body: string }
-  const answer = { url: posted.url, form: Object.fromEntries(new URLSearchParams(posted.body)) as Record<string, string> }
+  const view = new URLSearchParams(posted.body)
+  const answer = { url: posted.url, idToken: view.get('id_token') as string, didLog: view.get(DID_LOG_FIELD) as string }
   const scid = opened.request.scid
   const k: KeyFor = { method: 'did:webvh', scid, subjectMethod: subjectMethodOf(vh) }
   const serviceDerivation = []
@@ -90,7 +107,7 @@ export async function buildVector (i: Inputs = VECTOR_INPUTS) {
     const key = await deriveKey(unhex(i.person.secret), k, role, index)
     derivation.push({ role, index, hkdf_info: keyContext(k, role, index), public_key_multibase: multikey(key.pubRaw) })
   }
-  const body = new URLSearchParams(answer.form).toString()
+  const body = posted.body
   const reply = await service.receive(new URLSearchParams(body))
   return {
     profile: PROFILE,
@@ -108,8 +125,8 @@ export async function buildVector (i: Inputs = VECTOR_INPUTS) {
     subject_method: k.subjectMethod,
     derivation,
     person_did: (wallet.identity(scid) as { did: string }).did,
-    person_log: answer.form.did_log as string,
-    id_token: { compact: answer.form.id_token as string, header: part(answer.form.id_token as string, 0), payload: part(answer.form.id_token as string, 1) },
+    person_log: answer.didLog,
+    id_token: { compact: answer.idToken, header: part(answer.idToken, 0), payload: part(answer.idToken, 1) },
     post: { url: answer.url, content_type: 'application/x-www-form-urlencoded', body },
     service_reply: reply,
   }
@@ -125,7 +142,10 @@ async function verifies (pubRaw: Uint8Array, jwt: string): Promise<boolean> {
 }
 
 /**
- * Check a vector against the code, from its texts alone: the rows of both
+ * Check a vector against the code, from its texts alone: the profile and the
+ * derivation rule are this code's; seed and secret are 64 hex digits; the
+ * first entry of each log has the shape of an entry (else a named problem,
+ * and the checks that read it are left out); the rows of both
  * key derivations complete (update 0, update 1, auth 0, each once); every
  * key derived anew from the inputs and the stated rule; the genesis
  * commitments (`nextKeyHashes`) and keys of both logs against the derived
@@ -139,6 +159,14 @@ export async function checkVector (v: Vector): Promise<string[]> {
   const problems: string[] = []
   const expect = (ok: boolean, what: string): void => { if (!ok) problems.push(what) }
   const i = v.inputs
+
+  // what the vector says it is, and the inputs every key is derived from
+  expect(v.profile === PROFILE, `profile is not ${PROFILE}`)
+  expect(v.derivation_rule === DERIVATION_RULE, 'derivation_rule is not the rule of this code')
+  const seedOk = HEX32.test(String(i?.service?.seed)), secretOk = HEX32.test(String(i?.person?.secret))
+  expect(seedOk, 'inputs.service.seed is not 64 hex digits')
+  expect(secretOk, 'inputs.person.secret is not 64 hex digits')
+  if (!seedOk || !secretOk) return problems
 
   // both derivations name exactly the keys the first entry needs, each once
   const rows = (ds: { role: string, index: number }[]): string => ds.map((d) => `${d.role}${d.index}`).sort().join(',')
@@ -154,17 +182,20 @@ export async function checkVector (v: Vector): Promise<string[]> {
     expect(d.hkdf_info === serviceKeyInfo(d.role, d.index), `service ${d.role} ${d.index}: hkdf_info is not the rule's`)
     expect(multikey(key.pubRaw) === d.public_key_multibase, `service ${d.role} ${d.index}: derived key differs`)
   }
-  const sLog = fromJsonl(v.service_log) as Entry[] | null
+  const sLog = fromJsonl(v.service_log) as unknown[] | null
   if (!sLog) return [...problems, 'service log is not JSON Lines']
-  const s0 = sLog[0] as Entry
-  expect(toJsonl(sLog) === v.service_log, 'service log is not in canonical JSON Lines')
-  expect(same(s0.parameters.updateKeys, [multikey(sKeys.update0 ?? new Uint8Array())]), 'service log: update key 0 is not the derived one')
-  expect((s0.state.verificationMethod as { publicKeyMultibase: string }[])[0]?.publicKeyMultibase === multikey(sKeys.auth0 ?? new Uint8Array()), 'service log: auth key 0 is not the derived one')
-  expect(same(s0.parameters.nextKeyHashes, [await keyHash(multikey(sKeys.update1 ?? new Uint8Array()))]), 'service log: nextKeyHashes is not the hash of the derived update key 1')
-  expect(s0.versionTime === i.service.log_time, 'service log: versionTime is not inputs.service.log_time')
-  expect(v.service_did === `did:webvh:${String(s0.parameters.scid)}:${i.service.host}`, 'service_did does not name inputs.service.host')
-  expect(s0.state.id === v.service_did, 'service_did is not the id in the service log')
-  expect(s0.parameters.scid === v.service_scid && v.service_did.startsWith(`did:webvh:${v.service_scid}:`), 'service_scid is not the SCID of the log and the DID')
+  const s0 = genesisOf(sLog)
+  if (!s0) problems.push('service log: the first entry is not a log entry')
+  else {
+    expect(toJsonl(sLog as Entry[]) === v.service_log, 'service log is not in canonical JSON Lines')
+    expect(same(s0.parameters.updateKeys, [multikey(sKeys.update0 ?? new Uint8Array())]), 'service log: update key 0 is not the derived one')
+    expect((s0.state.verificationMethod as { publicKeyMultibase?: unknown }[] | undefined)?.[0]?.publicKeyMultibase === multikey(sKeys.auth0 ?? new Uint8Array()), 'service log: auth key 0 is not the derived one')
+    expect(same(s0.parameters.nextKeyHashes, [await keyHash(multikey(sKeys.update1 ?? new Uint8Array()))]), 'service log: nextKeyHashes is not the hash of the derived update key 1')
+    expect(s0.versionTime === i.service.log_time, 'service log: versionTime is not inputs.service.log_time')
+    expect(v.service_did === `did:webvh:${String(s0.parameters.scid)}:${i.service.host}`, 'service_did does not name inputs.service.host')
+    expect(s0.state.id === v.service_did, 'service_did is not the id in the service log')
+    expect(s0.parameters.scid === v.service_scid && v.service_did.startsWith(`did:webvh:${v.service_scid}:`), 'service_scid is not the SCID of the log and the DID')
+  }
   const where = locate(v.service_did)
   expect(!('error' in where) && where.logUrl === v.service_log_url, 'service_log_url is not the did:webvh location of service_did')
 
@@ -190,20 +221,24 @@ export async function checkVector (v: Vector): Promise<string[]> {
     expect(d.hkdf_info === keyContext(k, d.role, d.index), `person ${d.role} ${d.index}: hkdf_info is not the profile's context`)
     expect(multikey(key.pubRaw) === d.public_key_multibase, `person ${d.role} ${d.index}: derived key differs`)
   }
-  const pLog = fromJsonl(v.person_log) as Entry[] | null
+  const pLog = fromJsonl(v.person_log) as unknown[] | null
   if (!pLog) return [...problems, 'person log is not JSON Lines']
-  const p0 = pLog[0] as Entry
-  expect(toJsonl(pLog) === v.person_log, 'person log is not in canonical JSON Lines')
-  expect(same(p0.parameters.updateKeys, [multikey(pKeys.update0 ?? new Uint8Array())]), 'person log: update key 0 is not the derived one')
-  expect((p0.state.verificationMethod as { publicKeyMultibase: string }[])[0]?.publicKeyMultibase === multikey(pKeys.auth0 ?? new Uint8Array()), 'person log: auth key 0 is not the derived one')
-  expect(p0.state.id === v.person_did && v.person_did.startsWith(v.subject_method + ':'), 'person_did is not the id in the person log')
-  expect(same(p0.parameters.nextKeyHashes, [await keyHash(multikey(pKeys.update1 ?? new Uint8Array()))]), 'person log: nextKeyHashes is not the hash of the derived update key 1')
-  expect(p0.versionTime === i.time, 'person log: versionTime is not inputs.time')
+  const p0 = genesisOf(pLog)
+  if (!p0) problems.push('person log: the first entry is not a log entry')
+  else {
+    expect(toJsonl(pLog as Entry[]) === v.person_log, 'person log is not in canonical JSON Lines')
+    expect(same(p0.parameters.updateKeys, [multikey(pKeys.update0 ?? new Uint8Array())]), 'person log: update key 0 is not the derived one')
+    expect((p0.state.verificationMethod as { publicKeyMultibase?: unknown }[] | undefined)?.[0]?.publicKeyMultibase === multikey(pKeys.auth0 ?? new Uint8Array()), 'person log: auth key 0 is not the derived one')
+    expect(p0.state.id === v.person_did && v.person_did.startsWith(v.subject_method + ':'), 'person_did is not the id in the person log')
+    expect(same(p0.parameters.nextKeyHashes, [await keyHash(multikey(pKeys.update1 ?? new Uint8Array()))]), 'person log: nextKeyHashes is not the hash of the derived update key 1')
+    expect(p0.versionTime === i.time, 'person log: versionTime is not inputs.time')
+  }
 
   // the ID token
   const t = v.id_token
   expect(same(part(t.compact, 0), t.header) && same(part(t.compact, 1), t.payload), 'id_token: decoded parts differ from the compact JWS')
-  expect(t.header.kid === kidOf(v.person_did, (pLog[pLog.length - 1] as Entry).versionId), 'id_token: kid is not the person key under the log head')
+  const pHead = pLog[pLog.length - 1] as { versionId?: unknown } | null
+  expect(typeof pHead?.versionId === 'string' && t.header.kid === kidOf(v.person_did, pHead.versionId), 'id_token: kid is not the person key under the log head')
   expect(t.payload.iss === v.person_did && t.payload.sub === v.person_did && t.payload.aud === clientId && t.payload.nonce === i.nonce, 'id_token: iss, sub, aud or nonce')
   expect(t.payload.iat === Math.floor(Date.parse(i.time) / 1000), 'id_token: iat is not inputs.time')
   expect(await verifies(pKeys.auth0 ?? new Uint8Array(), t.compact), 'id_token signature under the derived person auth key 0')

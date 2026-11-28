@@ -292,11 +292,13 @@ code (`/erneuern`), the cap on open requests, the demo wallet page.
   fails and puts the service's maps back, the attempt stays closed and its
   nonce spent.
 - **Store**: the verifier's `Store` (`transact`, one step per DID, the nonce
-  spent only with an admitted login) and two further steps of the service
+  spent only with an admitted login) and three further steps of the service
   (`LoginStore`): `closeAttempt` (an attempt ends without a login: its nonce
-  is spent and the service's maps change in the same step) and
-  `issueSession` (reads the identifier and issues the session in one step,
-  writes nothing to the store). The service's maps change in a store step
+  is spent and the service's maps change in the same step), `issueSession`
+  (reads the identifier and issues the session in one step, writes nothing
+  to the store) and `inspectNonce` (reads the nonce's state at the time of
+  the step and decides with it, writes nothing; `start` uses it to see that
+  the nonce is open and the request's window holds before it gives a link). The service's maps change in a store step
   only inside its callback, through a journal that is put back when the
   step fails or is tried again.
 - **Account and session**: a good answer is handed out in the verifier's step
@@ -396,17 +398,22 @@ line break in the domain; an invalid Punycode label under a URL parser that
 refuses it); `Wallet.open` and `Service.receive` never throw, for a list of
 broken links, DIDs, logs, Request Objects, forms and tokens.
 
-`tests/anmeldung-log-vector.test.ts` (4): `vector.json` is what the code builds
-from fixed inputs; checked from its texts alone: both derivations complete,
+`tests/anmeldung-log-vector.test.ts` (5): `vector.json` is what the code builds
+from fixed inputs (only `WRITE_VECTOR=1` writes it anew); the body is kept as
+the wallet posted it and given to the service as it is; checked from its
+texts alone: profile and derivation rule are this code's, seed and secret
+exactly 64 hex digits, the first entry of each log has the shape of an entry
+(else a named problem, never an exception), both derivations complete,
 every key of service and person derived anew from the inputs and the stated
 rule, the genesis commitments against the derived update key 1, every field
 that repeats another compared (compact JWS against its decoded parts, POST
 against token, state and log, logs against DIDs, link against request,
 inputs against the parts built from them, the media type of the POST), both
 signatures by hand, then wallet and service; one changed byte is refused;
-each of eleven changes to a copy (rows removed or doubled, media type,
-service name, host, times, request id, both genesis commitments) is
-reported.
+each of eighteen changes to a copy (rows removed or doubled, media type,
+service name, host, times, request id, a seed one digit longer, a secret
+with a character that is no hex digit, profile, derivation rule, a first log
+entry that is `null` or an array, both genesis commitments) is reported.
 
 Sizes in the vector (bytes): outer link 233, `request_uri` 68 (RFC 9101 5.2:
 the request URI SHOULD NOT exceed 512 ASCII characters), Request Object 1110,
