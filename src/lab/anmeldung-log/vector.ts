@@ -18,8 +18,9 @@ import { deriveKey, MemoryStorage, Wallet } from './wallet'
 const hex = (b: Uint8Array): string => [...b].map((x) => x.toString(16).padStart(2, '0')).join('')
 /** A seed or secret of this vector: exactly 32 bytes as 64 hex digits, nothing more or less. */
 const HEX32 = /^[0-9a-fA-F]{64}$/
+const isHex32 = (s: unknown): s is string => typeof s === 'string' && HEX32.test(s)
 const unhex = (s: string): Uint8Array => {
-  if (typeof s !== 'string' || !HEX32.test(s)) throw new Error('not 64 hex digits')
+  if (!isHex32(s)) throw new Error('not 64 hex digits')
   return Uint8Array.from(s.match(/../g)!.map((x) => parseInt(x, 16)))
 }
 /** The first entry of a log, if it has the shape every reading below relies on: an object with `parameters` and `state` objects. */
@@ -30,6 +31,10 @@ const genesisOf = (log: unknown[]): Entry | null => {
 }
 const td = new TextDecoder(), te = new TextEncoder()
 const part = (jwt: string, i: number): Record<string, unknown> => JSON.parse(td.decode(fromB64u(jwt.split('.')[i] as string)))
+/** The decoded part of a compact JWS, or null when there is no JWS or it cannot be read. */
+const partOrNull = (jwt: string | null, i: number): Record<string, unknown> | null => {
+  try { return jwt === null ? null : part(jwt, i) } catch { return null }
+}
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
 
 export const VECTOR_INPUTS = {
@@ -94,7 +99,7 @@ export async function buildVector (i: Inputs = VECTOR_INPUTS, o: { line?: (body:
   // the body exactly as posted; the fields are read from a view of it, never written back into it
   const posted = posts[0] as { url: string, body: string }
   const view = new URLSearchParams(posted.body)
-  const answer = { url: posted.url, idToken: view.get('id_token') as string, didLog: view.get(DID_LOG_FIELD) as string }
+  const answer = { url: posted.url, idToken: view.get('id_token'), didLog: view.get(DID_LOG_FIELD) as string }
   const scid = opened.request.scid
   const k: KeyFor = { method: 'did:webvh', scid, subjectMethod: subjectMethodOf(vh) }
   const serviceDerivation = []
@@ -126,7 +131,7 @@ export async function buildVector (i: Inputs = VECTOR_INPUTS, o: { line?: (body:
     derivation,
     person_did: (wallet.identity(scid) as { did: string }).did,
     person_log: answer.didLog,
-    id_token: { compact: answer.idToken, header: part(answer.idToken, 0), payload: part(answer.idToken, 1) },
+    id_token: { compact: answer.idToken, header: partOrNull(answer.idToken, 0), payload: partOrNull(answer.idToken, 1) },
     post: { url: answer.url, content_type: 'application/x-www-form-urlencoded', body },
     service_reply: reply,
   }
@@ -163,7 +168,7 @@ export async function checkVector (v: Vector): Promise<string[]> {
   // what the vector says it is, and the inputs every key is derived from
   expect(v.profile === PROFILE, `profile is not ${PROFILE}`)
   expect(v.derivation_rule === DERIVATION_RULE, 'derivation_rule is not the rule of this code')
-  const seedOk = HEX32.test(String(i?.service?.seed)), secretOk = HEX32.test(String(i?.person?.secret))
+  const seedOk = isHex32(i?.service?.seed), secretOk = isHex32(i?.person?.secret)
   expect(seedOk, 'inputs.service.seed is not 64 hex digits')
   expect(secretOk, 'inputs.person.secret is not 64 hex digits')
   if (!seedOk || !secretOk) return problems
@@ -235,8 +240,10 @@ export async function checkVector (v: Vector): Promise<string[]> {
   }
 
   // the ID token
-  const t = v.id_token
-  expect(same(part(t.compact, 0), t.header) && same(part(t.compact, 1), t.payload), 'id_token: decoded parts differ from the compact JWS')
+  const tok = v.id_token
+  const t = { compact: tok?.compact ?? '', header: tok?.header ?? {}, payload: tok?.payload ?? {} } as { compact: string, header: Record<string, unknown>, payload: Record<string, unknown> }
+  expect(typeof tok?.compact === 'string' && tok.header !== null && tok.payload !== null, 'id_token: missing or unreadable')
+  expect(same(partOrNull(t.compact, 0) ?? {}, t.header) && same(partOrNull(t.compact, 1) ?? {}, t.payload), 'id_token: decoded parts differ from the compact JWS')
   const pHead = pLog[pLog.length - 1] as { versionId?: unknown } | null
   expect(typeof pHead?.versionId === 'string' && t.header.kid === kidOf(v.person_did, pHead.versionId), 'id_token: kid is not the person key under the log head')
   expect(t.payload.iss === v.person_did && t.payload.sub === v.person_did && t.payload.aud === clientId && t.payload.nonce === i.nonce, 'id_token: iss, sub, aud or nonce')

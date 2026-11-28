@@ -62,10 +62,18 @@ export function limited (send: Send, o: { timeoutMs?: number } = {}): Transport 
         if (res.status >= 300 && res.status < 400) { abort.abort(); return { error: 'a redirect (not followed)' } }
         const chunks: Uint8Array[] = []
         let size = 0
-        for await (const c of res.body) {
-          size += c.length
-          if (size > maxBytes) { abort.abort(); return { error: 'too large' } }
-          chunks.push(c)
+        // read by hand: when the cap is crossed the exchange ends at once, without waiting for the iterator's cleanup
+        const it = res.body[Symbol.asyncIterator]()
+        for (;;) {
+          const n = await it.next()
+          if (n.done) break
+          size += n.value.length
+          if (size > maxBytes) {
+            abort.abort()
+            try { Promise.resolve(it.return?.()).catch(() => {}) } catch { /* a cleanup that throws changes nothing */ }
+            return { error: 'too large' }
+          }
+          chunks.push(n.value)
         }
         const bytes = new Uint8Array(size); let at = 0
         for (const c of chunks) { bytes.set(c, at); at += c.length }

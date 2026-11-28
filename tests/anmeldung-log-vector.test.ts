@@ -77,3 +77,22 @@ test('the vector keeps the body the wallet posted, byte for byte, and gives it t
   expect(new URLSearchParams(v.post.body).getAll('state')).toEqual([v.inputs.state, 'other'])
   expect(v.service_reply).toEqual({ status: 200, body: {} })
 })
+
+test('a line that removes the id_token: the vector still returns the posted body and the service reply, the token shown as missing', async () => {
+  const v = await buildVector(undefined, { line: (body) => { const f = new URLSearchParams(body); f.delete('id_token'); return f.toString() } })
+  expect(v.id_token).toEqual({ compact: null, header: null, payload: null })
+  expect(new URLSearchParams(v.post.body).has('id_token')).toBe(false)
+  expect(v.service_reply.status).toBe(400)
+})
+
+test('a seed or secret that is not a string is a named problem, never a throw', async () => {
+  const good = JSON.parse(readFileSync(FILE, 'utf8')) as Vector
+  for (const bad of [[good.inputs.service.seed], { toString: () => good.inputs.service.seed }]) {
+    for (const which of ['service', 'person'] as const) {
+      const v = structuredClone(good) as any
+      if (which === 'service') v.inputs.service.seed = bad; else v.inputs.person.secret = bad
+      const problems = await checkVector(v)
+      expect(problems).toContain(which === 'service' ? 'inputs.service.seed is not 64 hex digits' : 'inputs.person.secret is not 64 hex digits')
+    }
+  }
+})

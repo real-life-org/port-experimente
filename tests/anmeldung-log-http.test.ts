@@ -994,6 +994,7 @@ test('status with vorgang is a pickup of that attempt, also in a browser already
   const s = await service()
   const wA = wallet(secretOf(67)), wB = wallet(secretOf(68))
   const { b } = await loginQr(s, wA)                        // this browser is signed in as A
+  expect((await b.call('/anmeldung-log/status')).body).toEqual({ user: wA.identity(s.service.scid)!.did })   // and it is, before B's attempt begins
   const { vorgang, link } = (await b.call('/anmeldung-log/start')).body
   expect((await b.call('/anmeldung-log/status?vorgang=' + vorgang)).body).toEqual({})     // nothing to collect yet, and not A's session
   await wB.confirm(await opened(wB, link))

@@ -475,3 +475,15 @@ test('a seed handed in as a Node Buffer is copied too: clearing the buffer after
   const want = await deriveKey(plain, { method: 'did:webvh', scid: o.request.scid, subjectMethod: 'did:vh' }, 'update', 0)
   expect(w.identity(o.request.scid)!.log[0]!.parameters.updateKeys).toEqual([multikeyOf(want.pubRaw)])
 })
+
+test('too large ends the exchange at once, also when the iterator never finishes its cleanup', async () => {
+  const send: Send = async () => ({ status: 200, type: 'text/plain', body: {
+    [Symbol.asyncIterator] () {
+      return { next: async () => ({ done: false as const, value: new Uint8Array(50) }), return: () => new Promise<IteratorResult<Uint8Array>>(() => {}) }
+    },
+  } as AsyncIterable<Uint8Array> })
+  const t = limited(send, { timeoutMs: 3000 })
+  const began = Date.now()
+  expect(await t.get('https://dienst.example/x', { maxBytes: 10 })).toEqual({ error: 'too large' })
+  expect(Date.now() - began).toBeLessThan(1500)
+})
