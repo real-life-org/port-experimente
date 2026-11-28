@@ -279,7 +279,9 @@ code (`/erneuern`), the cap on open requests, the demo wallet page.
   nowhere earlier: a step that waits or is repeated decides with its own time. While the attempt is open the waiting
   browser is told, as a notice that ends nothing, of a cancel
   (`{"error":"user_cancelled"}`) and of an answer that reached the
-  verifier's step and was refused (`{"error":"refused"}`).
+  verifier's step and was refused (`{"error":"refused"}`). A notice proves
+  nothing about who sent it: whoever fetched the request knows its `state`
+  and can cause either one. It is shown, and decides nothing.
 - **Attempts**: every start is a fresh attempt with its own id; the service
   API takes no session id to reuse.
 - **Errors from the wallet** go only to the `redirect_uri` of a request that
