@@ -120,9 +120,10 @@ export type Login = { user: string }
  * One login attempt: one request, one nonce, bound to the browser that
  * started it. `closed` is set once `forget` has spent its nonce; it is never
  * put back, so a store step that fails afterwards and restores the maps
- * cannot open the attempt again.
+ * cannot open the attempt again. `givenUp` is set by `forget` before any
+ * pause: from then on nothing is admitted, collected or redeemed for it.
  */
-interface Attempt { id: string, nonce: string, state: string, requestId: string, window: { iat: number, nbf: number, exp: number }, mode: Mode, jwt: string, closed?: true }
+interface Attempt { id: string, nonce: string, state: string, requestId: string, window: { iat: number, nbf: number, exp: number }, mode: Mode, jwt: string, closed?: true, givenUp?: true }
 /**
  * An admitted login handed out (cross-device: the outcome for the waiting
  * browser; same-device: the code). It carries its attempt, so `forget` finds
@@ -222,11 +223,13 @@ export class Service {
   readonly #codes = new Map<string, Code>()
   readonly #sessions = new Map<string, { login: Login, at: number }>()
   /**
-   * Attempts the starting browser gave up, by id, with the time. `forget` is
-   * remembered here and not read off the maps: what a pending store step has
-   * taken out of them, and puts back when it fails, stays given up.
+   * Every attempt this service issued, by id, until its windows have run
+   * out. `forget` finds its attempt here and nowhere else, so an id the
+   * service never issued leaves nothing behind, and an attempt that a
+   * pending store step has taken out of the other maps is still found. That
+   * it was given up is written on the attempt itself (`givenUp`).
    */
-  readonly #forgotten = new Map<string, number>()
+  readonly #issued = new Map<string, Attempt>()
 
   private constructor (o: ServiceOptions, k: { log: Entry[], head: Version, did: string, origin: string, keyIndex: number }) {
     const { log: _given, ...rest } = o
@@ -346,14 +349,15 @@ export class Service {
     if (made === null) throw new Error('the service key or the clock kept moving while a request was signed')
     // no await from the last check (the line above the loop's end) to the return: the attempt is registered and the link given at that moment
     const { jwt, nonce, window } = made
-    this.#attempts.set(state, { id, nonce, state, requestId, window, mode, jwt })
+    const attempt: Attempt = { id, nonce, state, requestId, window, mode, jwt }
+    this.#attempts.set(state, attempt); this.#issued.set(id, attempt)
     this.#byRequestId.set(requestId, state); this.#byNonce.set(nonce, state); this.#byAttempt.set(id, state)
     const requestUri = this.#origin + REQUEST_PATH + requestId
     return { attempt: id, link: outerLink(this.clientId, requestUri), requestUri, state }
   }
 
   #open (a: Attempt | undefined, now: number): a is Attempt {
-    return a !== undefined && !a.closed && !this.#forgotten.has(a.id) && this.#attempts.get(a.state) === a && windowHolds(a.window, now)
+    return a !== undefined && !a.closed && !a.givenUp && this.#attempts.get(a.state) === a && windowHolds(a.window, now)
   }
   #end (a: Attempt, j: Journal): void {
     j.delete(this.#attempts, a.state); j.delete(this.#byRequestId, a.requestId); j.delete(this.#byNonce, a.nonce); j.delete(this.#byAttempt, a.id)
@@ -459,7 +463,7 @@ export class Service {
       const done = await this.#issue(o.login, (j, now) => {
         if (this.#outcomes.get(attempt) !== o || !o.ready) return false
         j.delete(this.#outcomes, attempt)
-        return !this.#forgotten.has(attempt) && now - o.at <= PICKUP_LIFETIME_MS
+        return !o.attempt.givenUp && now - o.at <= PICKUP_LIFETIME_MS
       })
       if (done) return done
     }
@@ -476,7 +480,7 @@ export class Service {
     return this.#issue(c.login, (j, now) => {
       if (this.#codes.get(code) !== c) return false
       j.delete(this.#codes, code)
-      return !this.#forgotten.has(c.attempt.id) && now - c.created <= CODE_LIFETIME_MS && c.attempt.id === attempt
+      return !c.attempt.givenUp && now - c.created <= CODE_LIFETIME_MS && c.attempt.id === attempt
     })
   }
 
@@ -496,16 +500,16 @@ export class Service {
    * the attempt stays closed and its nonce spent.
    */
   async forget (attempt: string): Promise<void> {
-    // remembered first, before any pause: from here on nothing is admitted, collected or redeemed for this attempt,
-    // whatever a pending store step still holds or puts back
-    this.#forgotten.set(attempt, this.#o.now())
-    const a = this.#attempts.get(this.#byAttempt.get(attempt) ?? '') ?? this.#outcomes.get(attempt)?.attempt ?? [...this.#codes.values()].find((c) => c.attempt.id === attempt)?.attempt
+    // only an attempt this service issued (an unknown id leaves nothing behind); marked first, before any pause:
+    // from here on nothing is admitted, collected or redeemed for it, whatever a pending store step holds or puts back
+    const a = this.#issued.get(attempt)
+    if (!a) return
+    a.givenUp = true
     const j = new Journal()
     const clear = (): void => {
       j.delete(this.#outcomes, attempt); j.delete(this.#notices, attempt)
       for (const [k, c] of this.#codes) if (c.attempt.id === attempt) j.delete(this.#codes, k)
     }
-    if (!a) { clear(); return }
     await j.run(this.#store.closeAttempt(a.nonce, () => this.#o.now(), () => { j.rollback(); if (this.#attempts.get(a.state) === a) this.#end(a, j); clear() }))
     // the step is written (no await since it returned): closed for good, also against a step that puts the maps back later
     a.closed = true
@@ -520,12 +524,15 @@ export class Service {
     for (const k of this.#notices.keys()) if (!this.#byAttempt.has(k)) this.#notices.delete(k)
     for (const [k, c] of this.#codes) if (now - c.created > CODE_LIFETIME_MS) this.#codes.delete(k)
     for (const [k, s] of this.#sessions) if (now - s.at > SESSION_LIFETIME_MS) this.#sessions.delete(k)
-    // what a given-up attempt could still have had (an answer within its request window, a pickup within its own) has run out by then
-    for (const [k, at] of this.#forgotten) if (now - at > REQUEST_LIFETIME_MS + PICKUP_LIFETIME_MS) this.#forgotten.delete(k)
+    // an attempt is known until everything it can still have has run out: an answer within its request window, then a pickup within its own
+    for (const [k, a] of this.#issued) if (now > a.window.exp * 1000 + PICKUP_LIFETIME_MS) this.#issued.delete(k)
   }
 
   /** What the service holds of a person's identifier (the verifier's copy). */
   holding (did: string) { return this.#verifier.holding(did) }
+
+  /** How many issued attempts the service still knows (tests). */
+  known (): number { return this.#issued.size }
 
   held (): { attempts: number, outcomes: number, notices: number, codes: number, sessions: number } {
     return { attempts: this.#attempts.size, outcomes: this.#outcomes.size, notices: this.#notices.size, codes: this.#codes.size, sessions: this.#sessions.size }

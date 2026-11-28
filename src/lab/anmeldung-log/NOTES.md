@@ -290,8 +290,10 @@ code (`/erneuern`), the cap on open requests, the demo wallet page.
   admitted it has been written. `forget` spends the nonce whenever the attempt
   is known, also while such a step is not yet written; if that step then
   fails and puts the service's maps back, the attempt stays closed and its
-  nonce spent. `forget` is remembered by the attempt's id, set before any
-  pause, and not read off the maps: an outcome or a code that a pending
+  nonce spent. `forget` finds its attempt in the list of attempts the service
+  issued (kept until their windows have run out; an id it never issued
+  leaves nothing behind) and marks it given up before any pause, instead of
+  reading the other maps: an outcome or a code that a pending
   pickup step has taken out, and puts back when it fails, is not collected
   or redeemed afterwards either.
 - **Store**: the verifier's `Store` (`transact`, one step per DID, the nonce

@@ -1094,3 +1094,16 @@ test('open: the request runs out while its signature is checked: it is not shown
     expect(armed).toBe(false)   // the clock did move during the check
   } finally { crypto.subtle.verify = verify; t = saved }
 })
+
+test('giving up an attempt the service never issued leaves nothing behind; one it issued is remembered until its windows have run out', async () => {
+  const s = await service()
+  for (let i = 0; i < 1000; i++) await s.service.forget('never-issued-' + i)
+  expect(s.service.known()).toBe(0)
+  const st = await s.service.start()
+  expect(s.service.known()).toBe(1)
+  await s.service.forget(st.attempt)
+  expect(s.service.known()).toBe(1)                          // still known: a pending step could put something back
+  expect(s.service.requestObject(st.requestUri.split('/').at(-1)!)).toBeNull()
+  const saved = t
+  try { t += (300 + 300 + 1) * 1000; s.service.sweep(); expect(s.service.known()).toBe(0) } finally { t = saved }
+})
