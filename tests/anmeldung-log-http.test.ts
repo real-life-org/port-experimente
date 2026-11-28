@@ -22,7 +22,8 @@ let t = Date.parse('2026-11-28T10:00:00Z')
 const clock = () => t
 const later = (s = 2) => { t += s * 1000 }
 const servers: Server[] = []
-afterAll(async () => { await Promise.all(servers.map((s) => new Promise<void>((ok) => s.close(() => ok())))) })
+// every listener is stopped and every open connection closed, also one a failed test left open
+afterAll(async () => { await Promise.all(servers.map((s) => new Promise<void>((ok) => { s.close(() => ok()); s.closeAllConnections() }))) })
 
 async function service (o: { keys?: ServiceKeys, hostName?: string, store?: MemoryLoginStore, log?: Entry[], port?: number } = {}) {
   const s = await serve({ now: clock, name: 'Beispieldienst', ...o })
@@ -368,7 +369,8 @@ test('two confirmations side by side, and a key change beside a confirmation: on
   const [x1, x2] = await Promise.all([w.confirm(r1), w.confirm(r2)])
   expect([x1, x2]).toMatchObject([{ status: 200 }, { status: 200 }])
   const u1 = (await b1.call('/anmeldung-log/status?vorgang=' + a1.vorgang)).body, u2 = (await b2.call('/anmeldung-log/status?vorgang=' + a2.vorgang)).body
-  expect(u1).toEqual(u2)
+  const user = { user: w.identity(s.service.scid)!.did }
+  expect([u1, u2]).toEqual([user, user])
   expect(w.identity(s.service.scid)!.log).toHaveLength(1)
   // the service moves on; the person changes the key while a confirmation of the newer head runs
   later()

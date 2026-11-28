@@ -453,8 +453,11 @@ single examples, in one process against the service object (no HTTP).
 - **Runs:** 33 sets of two or three events, every order (depth-first
   replay of choice prefixes): 1267 orders, each count asserted; 4 × 25
   random sets of five to seven events, four orders each from fixed seeds
-  (400 orders; a failure prints the seed and the order); four fixed
-  orders as regression tests, and one test with a store whose answer arrives
+  (400 orders; a failure prints the seed and the order); five fixed
+  orders as regression tests (among them: two key changes of the service
+  side by side, one moving the log by exactly one entry and the other
+  refused as changed meanwhile; a view under the newer service head
+  confirmed first, then the one under the older head sends nothing), and one test with a store whose answer arrives
   after the clock moved (below). About 18 s for the file.
 - **Properties** (after every step, at every POST, at every issued request
   and session): E1 at most one admitted login per nonce and one session
@@ -462,14 +465,18 @@ single examples, in one process against the service object (no HTTP).
   with that login; E3 no POST with token or log after the request ran out,
   no admitted login after it, no session after the pickup window or the
   code; E4 no held head goes back (the service's per identifier, the
-  wallet's service log, the wallet's own log and index); E5 no session for
+  wallet's service log, the wallet's own log and index; a head seen before
+  that is gone, from the store or because the wallet storage holds nothing
+  any more, counts as going back); E5 no session for
   a contested or deactivated identifier; E6 every POST (answers and errors)
-  only to the service's origin and only while the request is in its window
-  and the service is not held deactivated; E7 every token names the head
+  only to the service's origin and only while the request is in its window,
+  the service is not held deactivated and the service head held is not newer
+  than the one the request was checked under; E7 every token names the head
   stored at the moment of the POST and is signed by its key; E8 every
   request issued is signed by the key the head names at that moment and is
   open then; E9 a nonce is spent and an attempt closed only by an admitted
-  login, `forget` or running out; E10 one storage never holds a second
+  login, `forget` or running out, and an admitted login does both (within
+  the window its nonce is spent and its request no longer served); E10 one storage never holds a second
   identifier for a service, and every token from it names the stored one;
   E13 (added, below); E11 (added) no admitted login and no session for an attempt after
   `forget`; E12 (added) the service's own log never goes back or forks;

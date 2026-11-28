@@ -150,6 +150,10 @@ export class World {
   readonly errors: string[] = []
   readonly lastSession = new Map<number, { did: string, now: number, held: Held | undefined }>()
   code: { attempt: string, code: string } | null = null
+  // the service log each actor fetched last, the log each view was checked under, the view an actor answers or cancels
+  private readonly fetchedLog = new Map<number, string[]>()
+  private readonly checkedLog = new WeakMap<Shown, string[]>()
+  private readonly posting = new Map<number, Shown>()
   // what was seen before, for "nothing goes back"
   private seenService: string[] = []
   private readonly seenHeld = new Map<string, string[]>()
@@ -206,7 +210,7 @@ export class World {
       for (const v of needs) {
         if (!which(v)) continue
         const [w, at] = v.split(':') as [string, 'A' | 'B' | 'C']
-        const o = await (this.wallets.get(w) as WalletRec).wallet.open((this.attempts.get(this.named[at]) as Attempt).link)
+        const o = await this.open(this.wallets.get(w) as WalletRec, (this.attempts.get(this.named[at]) as Attempt).link)
         if (!o.ok) throw new Error(`prelude: ${v}: ${o.reason}`)
         this.views.set(v, o.request)
       }
@@ -226,7 +230,7 @@ export class World {
     if (this.setup === 'answered') {
       // person 1 has answered A (cross-device) and C (same-device); nothing is collected yet
       for (const v of ['W1:A', 'W1:C']) {
-        const sent = await w1.wallet.confirm(this.views.get(v) as Shown)
+        const sent = await this.confirm(w1, this.views.get(v) as Shown)
         if ('error' in sent || sent.status !== 200) throw new Error(`prelude: ${v} not admitted`)
         if (sent.redirect_uri) this.code = { attempt: this.named.C, code: new URL(sent.redirect_uri).searchParams.get('response_code') as string }
       }
@@ -267,6 +271,18 @@ export class World {
     const got = await this.collect(s.id)
     if (!got || !('session' in got)) throw new Error('prelude: no session')
   }
+
+  private actor (): number { return this.p.als.getStore() ?? -1 }
+  /** A wallet opens a link; the view is noted with the service log the wallet fetched for it (E6 at the POST). */
+  async open (w: WalletRec, link: string): Promise<Awaited<ReturnType<Wallet['open']>>> {
+    const o = await w.wallet.open(link)
+    const fetched = this.fetchedLog.get(this.actor())
+    if (o.ok && fetched) this.checkedLog.set(o.request, fetched)
+    return o
+  }
+  /** A wallet answers or cancels a view; its POST is looked at against the log that view was checked under. */
+  confirm (w: WalletRec, view: Shown): ReturnType<Wallet['confirm']> { this.posting.set(this.actor(), view); return w.wallet.confirm(view) }
+  cancel (w: WalletRec, view: Shown): ReturnType<Wallet['cancel']> { this.posting.set(this.actor(), view); return w.wallet.cancel(view) }
 
   /** The browser starts an attempt; the issued request is checked against the head of this moment (E8). */
   async start (mode: Mode): Promise<Attempt> {
@@ -337,7 +353,11 @@ export class World {
       get: async (url) => {
         await this.p.pause('GET')
         const svc = this.svc
-        if (url === svc.origin + '/.well-known/did.jsonl') return { status: 200, type: 'text/jsonl', text: svc.didLog() }
+        if (url === svc.origin + '/.well-known/did.jsonl') {
+          const text = svc.didLog()
+          this.fetchedLog.set(this.actor(), (fromJsonl(text) as Entry[]).map((e) => e.versionId))
+          return { status: 200, type: 'text/jsonl', text }
+        }
         if (url.startsWith(svc.origin + REQUEST_PATH)) {
           const jwt = svc.requestObject(url.slice((svc.origin + REQUEST_PATH).length))
           return jwt ? { status: 200, type: 'application/oauth-authz-req+jwt', text: jwt } : { status: 404, type: '', text: '' }
@@ -370,6 +390,11 @@ export class World {
     if (!a) this.fail('E6', `${w.name} posts for a state no request carried`)
     else if (checkWindow(a.claims, nowS)) this.fail(form.has('id_token') || form.has('did_log') ? 'E3' : 'E6', `${w.name} posts ${form.has('id_token') ? 'an answer' : form.get('error')} ${nowS - a.claims.exp} s after the request ran out`)
     if (s.services[scid]?.deactivated) this.fail('E6', `${w.name} posts although it holds the service as deactivated`)
+    // E6: the service head held at this moment is the one the request was checked under, or older (never a newer one)
+    const view = this.posting.get(this.actor())
+    const checked = view && this.checkedLog.get(view)
+    const heldService = s.services[scid]?.log.map((e) => e.versionId)
+    if (checked && heldService && !goesOn(heldService, checked)) this.fail('E6', `${w.name} posts for a request checked under service head ${checked.length}, while it holds head ${heldService.length}`)
     const token = form.get('id_token')
     if (token === null) return
     // E7: the token names the head held at this moment, and is signed by its key
@@ -393,7 +418,8 @@ export class World {
     const own = (fromJsonl(this.svc.didLog()) as Entry[]).map((e) => e.versionId)
     if (!goesOn(this.seenService, own)) this.fail('E12', 'the service\'s own log went back or forked')
     this.seenService = own
-    // E4: what the service holds of each identifier
+    // E4: what the service holds of each identifier; a head seen before and gone now went back as well
+    for (const did of this.seenHeld.keys()) if (!this.store.heldOf(did)) this.fail('E4', `the service's head for ${did.slice(0, 24)}… is gone`)
     for (const did of this.store.heldDids()) {
       const h = this.store.heldOf(did) as Held
       const ids = h.log.map((e) => e.versionId)
@@ -405,8 +431,9 @@ export class World {
     // E4, E10: what each wallet storage holds
     for (const w of new Set([...this.wallets.values()].map((x) => x.storage))) {
       const s = w.load()
-      if (!s) continue
       const before = this.seenWallet.get(w)
+      // a storage that held something and holds nothing now went back (one that never held anything passes)
+      if (!s) { if (before && (Object.keys(before.services).length > 0 || Object.keys(before.identities).length > 0)) this.fail('E4', 'a wallet\'s held state is gone'); continue }
       for (const [scid, b] of Object.entries(before?.services ?? {})) {
         const n = s.services[scid]
         if (!n || !goesOn(b.log.map((e) => e.versionId), n.log.map((e) => e.versionId)) || (b.deactivated && !n.deactivated)) this.fail('E4', 'a wallet\'s held service head went back')
@@ -424,11 +451,17 @@ export class World {
       }
       this.storageDid.set(w, dids)
     }
-    // E9: a nonce is spent, an attempt closed, only by an admitted login, `forget`, or running out
+    // E9: a nonce is spent, an attempt closed, only by an admitted login, `forget`, or running out; and an admitted login does both
     for (const a of this.attempts.values()) {
       const admitted = this.admissions.some((x) => x.nonce === a.nonce)
-      if (this.store.peek(a.nonce, this.t) === 'spent' && !admitted && !a.forgetStarted) this.fail('E9', `the nonce of attempt ${a.id} was spent without a login or forget`)
+      const ns = this.store.peek(a.nonce, this.t)
+      if (ns === 'spent' && !admitted && !a.forgetStarted) this.fail('E9', `the nonce of attempt ${a.id} was spent without a login or forget`)
       const closed = this.svc.requestObject(a.requestId) === null
+      // within the window the nonce's record is still kept, so an admitted login shows as spent there, and its request is no longer served
+      if (admitted && this.t - a.created < REQUEST_LIFETIME_MS) {
+        if (ns !== 'spent') this.fail('E9', `attempt ${a.id} was admitted, but its nonce is ${ns}`)
+        if (!closed) this.fail('E9', `attempt ${a.id} was admitted, but its request is still served`)
+      }
       // E13: no request is served once its window is closed for a wallet
       if (!closed && checkWindow(a.claims, Math.floor(this.t / 1000))) this.fail('E13', `the request of attempt ${a.id} is still served ${(this.t - a.created) / 1000} s after it was issued`)
       if (closed && this.t - a.created < REQUEST_LIFETIME_MS && !admitted && !a.forgetStarted) this.fail('E9', `attempt ${a.id} ended without a login, forget or running out`)
@@ -445,8 +478,9 @@ export type EventName =
 type Ev = { views?: string[], attempts?: string[], setups?: Setup[], run: (w: World) => Promise<unknown> }
 const OLD: Setup[] = ['returning', 'answered', 'rotated']
 const confirmIn = (wallet: string, view: string) => async (w: World) => {
-  const sent = await (w.wallets.get(wallet) as WalletRec).wallet.confirm(w.views.get(view) as Shown)
+  const sent = await w.confirm(w.wallets.get(wallet) as WalletRec, w.views.get(view) as Shown)
   if (view.endsWith(':C') && 'redirect_uri' in sent && sent.redirect_uri) w.code = { attempt: w.named.C, code: new URL(sent.redirect_uri).searchParams.get('response_code') as string }
+  return sent
 }
 export const EVENTS: Record<EventName, Ev> = {
   /** the person confirms (wallet W1, attempt A) */
@@ -454,7 +488,7 @@ export const EVENTS: Record<EventName, Ev> = {
   /** the same wallet confirms the same request a second time */
   confirm2: { views: ['W1:A'], run: confirmIn('W1', 'W1:A') },
   /** the person cancels */
-  cancel: { views: ['W1:A'], run: (w) => (w.wallets.get('W1') as WalletRec).wallet.cancel(w.views.get('W1:A') as Shown) },
+  cancel: { views: ['W1:A'], run: (w) => w.cancel(w.wallets.get('W1') as WalletRec, w.views.get('W1:A') as Shown) },
   /** another person's wallet answers the same request */
   other: { views: ['W2:A'], run: confirmIn('W2', 'W2:A') },
   /** a second request of the same browser (attempt B), confirmed */
@@ -474,7 +508,7 @@ export const EVENTS: Record<EventName, Ev> = {
   /** the service changes its key */
   rotateService: { run: (w) => w.svc.rotateKey() },
   /** the wallet opens A anew and confirms that view */
-  open: { run: async (w) => { const x = (w.wallets.get('W1') as WalletRec).wallet; const o = await x.open((w.attempts.get(w.named.A) as Attempt).link); if (o.ok) await x.confirm(o.request) } },
+  open: { run: async (w) => { const x = w.wallets.get('W1') as WalletRec; const o = await w.open(x, (w.attempts.get(w.named.A) as Attempt).link); return o.ok ? w.confirm(x, o.request) : o } },
   /** the browser starts a further attempt (E8 at the moment of issue) */
   start: { run: (w) => w.start('cross-device') },
   /** the browser that started A collects */
@@ -499,7 +533,10 @@ export const EVENTS: Record<EventName, Ev> = {
 /** Errors an event may end with; anything else is a problem. */
 const EXPECTED_ERRORS = [/^service log: changed meanwhile by another change/, /^rotate: the clock is not later than the last entry/, /^rotate: the identifier changed meanwhile/, /^no identifier for this service/]
 
-export type RunResult = { problems: Problem[], order: string[] }
+/** What one event ended with: its value, or the message of the error it threw. */
+export type EventResult = { ok: unknown } | { error: string }
+/** `results` per event (in the order of `events`); `serviceEntries` the length of the service's own log after the prelude and at the end. */
+export type RunResult = { problems: Problem[], order: string[], results: EventResult[], serviceEntries: { before: number, after: number } }
 
 /** One run of a set of events, with `choose` picking among the actors ready at each step. */
 export async function run (setup: Setup, events: EventName[], choose: (ready: number[]) => number): Promise<RunResult> {
@@ -507,7 +544,10 @@ export async function run (setup: Setup, events: EventName[], choose: (ready: nu
   const needs = new Set([...events.flatMap((e) => EVENTS[e].views ?? []), ...(setup === 'answered' ? ['W1:A', 'W1:C'] : [])])
   await w.build(needs, [...events.flatMap((e) => EVENTS[e].attempts ?? []), ...(setup === 'answered' ? ['C'] : [])])
   await Promise.all(w.pending.splice(0))
-  if (w.problems.length) return { problems: w.problems, order: ['prelude'] }
+  const entries = (): number => (fromJsonl(w.svc.didLog()) as Entry[]).length
+  const before = entries()
+  const results: EventResult[] = events.map(() => ({ error: 'not finished' }))
+  if (w.problems.length) return { problems: w.problems, order: ['prelude'], results, serviceEntries: { before, after: before } }
   w.p.free = false
   const done = events.map(() => false)
   events.forEach((e, i) => {
@@ -515,9 +555,10 @@ export async function run (setup: Setup, events: EventName[], choose: (ready: nu
       try {
         // every event begins when the planner says: what it reads first is read then
         await w.p.pause('begin')
-        await EVENTS[e].run(w)
+        results[i] = { ok: await EVENTS[e].run(w) }
       } catch (err) {
         const m = (err as Error).message
+        results[i] = { error: m }
         if (!EXPECTED_ERRORS.some((r) => r.test(m))) w.fail('error', `${e}: ${m}`)
       } finally { done[i] = true }
     })
@@ -539,7 +580,7 @@ export async function run (setup: Setup, events: EventName[], choose: (ready: nu
     order.push(`${events[pick]}(${labels.join('+')})`)
   }
   await Promise.all(w.pending.splice(0))
-  return { problems: w.problems, order }
+  return { problems: w.problems, order, results, serviceEntries: { before, after: entries() } }
 }
 
 export type Outcome = { orders: number, failure: (RunResult & { index: number, seed?: number }) | null }

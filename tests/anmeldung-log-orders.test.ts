@@ -64,10 +64,20 @@ describe('orders that found faults', () => {
     expect(r.order).toContain('start(store: close)')
     expect(r.problems).toEqual([])
   })
-  test('two key changes of the service side by side: the second is refused as changed meanwhile, the log stays valid (E12)', async () => {
+  test('two key changes of the service side by side: one moves the log on by exactly one entry, the other is refused as changed meanwhile (E12)', async () => {
     const r = await replay('returning', ['rotateService', 'rotateService'], [0, 1, 0, 1])
     expect(r.order).toEqual(['rotateService(begin)', 'rotateService(begin)', 'rotateService(service key)', 'rotateService(service key)'])
     expect(r.problems).toEqual([])
+    expect(r.results.filter((x) => 'ok' in x)).toHaveLength(1)
+    expect(r.results.filter((x) => 'error' in x).map((x) => (x as { error: string }).error)).toEqual([expect.stringMatching(/changed meanwhile/)])
+    expect(r.serviceEntries.after - r.serviceEntries.before).toBe(1)
+  })
+  test('a view checked under the newer service head is confirmed first; then the view checked under the older head sends nothing (E6, E4)', async () => {
+    // rotated: A opened under the first head, B after the key change; B goes all the way first, then A
+    const r = await replay('rotated', ['confirm', 'second'], Array(40).fill(1))
+    expect(r.problems).toEqual([])
+    expect(r.order.findIndex((x) => x.startsWith('confirm'))).toBeGreaterThan(r.order.map((x) => x.startsWith('second')).lastIndexOf(true))
+    expect(r.results).toEqual([{ ok: { error: 'a newer head of the service is held' } }, { ok: { status: 200, body: {} } }])
   })
 })
 

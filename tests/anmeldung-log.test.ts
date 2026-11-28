@@ -16,7 +16,8 @@ const T = Date.parse('2026-11-28T10:00:00Z')
 let clockShift = 0
 const iso = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z')
 const servers: Server[] = []
-afterAll(async () => { await Promise.all(servers.map((s) => new Promise<void>((ok) => s.close(() => ok())))) })
+// every listener is stopped and every open connection closed, also one a failed test left open
+afterAll(async () => { await Promise.all(servers.map((s) => new Promise<void>((ok) => { s.close(() => ok()); s.closeAllConnections() }))) })
 const wallet = (n = 1) => new Wallet(new Uint8Array(32).fill(n), { now: () => T + clockShift, transport: loopbackTransport() })
 
 interface Route { type: string, body: string, status?: number, location?: string, before?: () => void }
