@@ -3,10 +3,10 @@ import { createServer, type Server } from 'node:http'
 import { b64uOf } from 'rltp-lib'
 import { deactivate, rotate, toJsonl, type Entry } from '../src/lab/kennung-log/log'
 import { CLIENT_ID_PREFIX, keyContext, locate, outerLink, parseOuter, REQUEST_TYP, SIOP_AUD, signRequestObject, type RequestClaims } from '../src/lab/anmeldung-log/profile'
-import { serviceLog, ServiceKeys } from '../src/lab/anmeldung-log/service'
+import { Service, serviceLog, ServiceKeys } from '../src/lab/anmeldung-log/service'
 import { deriveKey, Wallet } from '../src/lab/anmeldung-log/wallet'
-import { globallyReachable, httpsTransport, IPV4_SPECIAL, IPV6_SPECIAL, limited, registerRow, v4, v6 } from '../src/lab/anmeldung-log/transport'
-import { loopbackTransport } from './anmeldung-log-loopback'
+import { globallyReachable, httpsTransport, IPV4_SPECIAL, IPV6_SPECIAL, limited, registerRow, v4, v6, type Send } from '../src/lab/anmeldung-log/transport'
+import { holding, loopbackTransport } from './anmeldung-log-loopback'
 
 // What the wallet refuses before anything is shown or sent, against services
 // built by hand on 127.0.0.1 (each with its own did:webvh under
@@ -102,6 +102,7 @@ const refusals: [string, (f: Fake) => Promise<string>, string][] = [
     const sig = new Uint8Array(await crypto.subtle.sign('Ed25519', key.priv, new TextEncoder().encode(input)))
     return offer(f, { jwt: `${input}.${b64uOf(sig)}` })
   }, 'request: typ is not oauth-authz-req+jwt'],
+  ['a request whose iss is not text', (f) => offer(f, { claims: { iss: 42 } as any }), 'request: iss is not text'],
   ['an expired request', (f) => offer(f, { claims: { iat: Math.floor(T / 1000) - 400, nbf: Math.floor(T / 1000) - 400, exp: Math.floor(T / 1000) - 100 } }), 'request: expired'],
   ['a request whose exp is not later than its iat', (f) => offer(f, { claims: { exp: Math.floor(T / 1000) } }), 'request: exp is not later than iat'],
   ['a request valid for longer than the profile allows', (f) => offer(f, { claims: { exp: Math.floor(T / 1000) + 3600 } }), 'request: valid for longer than this profile allows'],
@@ -363,4 +364,92 @@ test('further parameters in the outer link are ignored and steer nothing (RFC 67
   const o = await wallet().open(link)
   if (!o.ok) throw new Error(o.reason)
   expect([o.request.claims.redirect_uri, o.request.claims.nonce, o.request.claims.state]).toEqual([f.origin + '/antwort', 'n-1', 's-1'])
+})
+
+test('a DNS name that begins with 0x is a name; every IP literal the URL parser reads is refused before sending', async () => {
+  const reached: string[] = []
+  const t = limited(async (u) => { reached.push(u.hostname); throw new Error('not reached') })
+  expect(await t.get('https://0xlogin.example/x', { maxBytes: 10 })).toEqual({ error: 'unreachable' })
+  expect(await t.get('https://0x10.example/x', { maxBytes: 10 })).toEqual({ error: 'unreachable' })
+  expect(reached).toEqual(['0xlogin.example', '0x10.example'])
+  for (const u of ['https://127.1/x', 'https://017700000001/x', 'https://0x7f.0.0.1/x', 'https://2130706433/x', 'https://[::ffff:127.0.0.1]/x', 'https://[0:0:0:0:0:0:0:1]/x', 'https://8.8.8.8./x']) {
+    expect([u, await t.get(u, { maxBytes: 10 })]).toEqual([u, { error: 'a local address' }])
+  }
+  expect(reached).toHaveLength(2)
+})
+
+test('the time limit ends the exchange, also when the way to send ignores the signal (no head, or a body that stalls)', async () => {
+  const noHead: Send = () => new Promise(() => {})
+  const stalls: Send = async () => ({ status: 200, type: 'text/plain', body: (async function * () { yield new Uint8Array([97]); await new Promise(() => {}) })() })
+  for (const send of [noHead, stalls]) {
+    const t = limited(send, { timeoutMs: 100 })
+    const began = Date.now()
+    const r = await Promise.race([t.get('https://dienst.example/x', { maxBytes: 10 }), new Promise((ok) => setTimeout(() => ok('still waiting'), 2000))])
+    expect(r).toEqual({ error: 'timeout' })
+    expect(Date.now() - began).toBeLessThan(1500)
+  }
+})
+
+// ---- input from outside never makes the wallet's open or the service's receive throw (a list, to be extended)
+
+const SCID = 'QmfGEUAcMpzo25kF2Rhn8L5FAXysfGnkzjwdKoNPi615XQ'
+const BROKEN_DIDS = [
+  `did:webvh:${SCID}:example.\ncom`, `did:webvh:${SCID}:xn--a.example`, `did:webvh:${SCID}:xn--.example`, `did:webvh:${SCID}:exa%mple.com`,
+  `did:webvh:${SCID}:example.com%3A99999`, `did:webvh:${SCID}:example.com:%ZZ`, `did:webvh:${SCID}:`, `did:webvh:${SCID}:example.com:..`,
+  'did:webvh:\n', `did:webvh:${SCID}:a.b%00`, `did:webvh:${SCID}:example.com%3A`, `did:webvh:${SCID}:\u0000.example`,
+]
+
+test('locate returns a refusal, never an exception, for a DID that is not one it resolves', () => {
+  // Node's URL parser takes an invalid Punycode label as it is; a parser that follows the URL Standard strictly (as browsers do) refuses it
+  const lenient = new Set([`did:webvh:${SCID}:xn--a.example`])
+  for (const did of BROKEN_DIDS) expect([did, 'error' in (locate(did) as object)]).toEqual([did, !lenient.has(did)])
+  const Real = globalThis.URL
+  class Strict extends Real { constructor (u: string | URL, base?: string | URL) { if (/\/\/xn--a\./.test(String(u))) throw new TypeError('Invalid URL'); super(u, base) } }
+  globalThis.URL = Strict as typeof URL
+  try { for (const did of lenient) expect([did, locate(did)]).toEqual([did, { error: 'not a did:webvh this code resolves: the URL parser refuses its host' }]) } finally { globalThis.URL = Real }
+})
+
+test('Wallet.open refuses and never throws: broken links and DIDs, broken logs and broken Request Objects', async () => {
+  const links: unknown[] = [undefined, null, 42, '', 'https://web-of-trust.de/a#%', `https://web-of-trust.de/a#client_id=${CLIENT_ID_PREFIX}did:webvh:${SCID}:example.com&request_uri=%`,
+    ...BROKEN_DIDS.map((did) => outerLink(CLIENT_ID_PREFIX + did, 'https://example.com/r'))]
+  for (const link of links) expect([link, await wallet().open(link as string)]).toMatchObject([link, { ok: false }])
+  const f = await fake()
+  const logs = ['null\n', '[]\n', '\n', '', '{"a":1}', '1\n2\n', '"x"\n', toJsonl(f.log) + 'null\n', '[null]\n']
+  for (const body of logs) {
+    f.routes.set('/.well-known/did.jsonl', { type: 'text/jsonl', body })
+    expect([body, await wallet().open(await offer(f))]).toMatchObject([body, { ok: false }])
+  }
+  f.routes.set('/.well-known/did.jsonl', { type: 'text/jsonl', body: toJsonl(f.log) })
+  const header = { alg: 'EdDSA', typ: REQUEST_TYP, kid: `${f.did}#key-1` }
+  const jwts = ['', 'a.b.c', '...', `${b64(null)}.${b64(null)}.x`, `${b64([])}.${b64({})}.x`, `${b64({ ...header, kid: 42 })}.${b64(claims(f))}.x`, `${b64(header)}.${b64([1])}.x`, `${b64(header)}.${b64('x')}.x`]
+  for (const jwt of jwts) expect([jwt, await wallet().open(await offer(f, { jwt }))]).toMatchObject([jwt, { ok: false }])
+  const signed: Record<string, unknown>[] = [{ client_metadata: null }, { client_metadata: { subject_syntax_types_supported: 'did:vh' } }, { redirect_uri: 42 }, { redirect_uri: 'not a url' },
+    { iat: 'x' }, { nbf: null }, { id_token_type: 42 }, { state: {} }, { client_metadata: { subject_syntax_types_supported: ['did:vh'], client_name: {} } }, { iss: null }, { exp: 1e400 }]
+  for (const c of signed) expect([c, await wallet().open(await offer(f, { claims: c as any }))]).toMatchObject([c, { ok: false }])
+})
+
+test('Service.receive answers and never throws: broken forms, logs and tokens', async () => {
+  const svc = await Service.create({ host: 'dienst.example', keys: new ServiceKeys(new Uint8Array(32).fill(70)), now: () => T })
+  const st = await svc.start()
+  const state = new URL(st.requestUri).pathname && st.state
+  // a real answer, kept, to break one part of it
+  const f = await fake()
+  const kept = holding(loopbackTransport())
+  const w = new Wallet(new Uint8Array(32).fill(71), { now: () => T, transport: kept.transport })
+  const o = await w.open(await offer(f))
+  if (!o.ok) throw new Error(o.reason)
+  await w.confirm(o.request)
+  const good = kept.held[0]!.form
+  const [h, p, sig] = good.id_token!.split('.') as [string, string, string]
+  const forms: Record<string, string>[] = [{}, { state }, { state: 'unknown' }, { state, error: '' }, { state, did_log: 'null\n', id_token: 'x' }, { state, did_log: '[null]\n', id_token: 'x' },
+    { state, did_log: '\n', id_token: 'x' }, { state, did_log: '"x"', id_token: 'x' }, { state, did_log: '{}', id_token: 'x' }, { state, did_log: '[]', id_token: 'x' },
+    { state, did_log: good.did_log!, id_token: '' }, { state, did_log: good.did_log!, id_token: 'a.b.c' }, { state, did_log: good.did_log!, id_token: `${b64(null)}.${b64(null)}.x` },
+    { state, did_log: good.did_log!, id_token: `${h}.${b64(5)}.${sig}` }, { state, did_log: good.did_log!, id_token: `${b64({ alg: 'EdDSA', kid: {} })}.${p}.${sig}` },
+    { state, did_log: good.did_log!, id_token: `${h}.${p}.%%%` }, { state, did_log: good.did_log! + 'null\n', id_token: good.id_token! }]
+  for (const form of forms) {
+    const r = await svc.receive(new URLSearchParams(form))
+    expect([form, typeof r.status]).toEqual([form, 'number'])
+  }
+  const twice = new URLSearchParams([['state', state], ['state', 'x'], ['id_token', 'a'], ['id_token', 'b'], ['did_log', 'c']])
+  expect(typeof (await svc.receive(twice)).status).toBe('number')
 })

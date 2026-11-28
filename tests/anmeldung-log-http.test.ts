@@ -1,12 +1,12 @@
 import { afterAll, expect, test } from 'vitest'
 import type { Server } from 'node:http'
 import { createServer } from 'node:net'
-import { fromJsonl, multikey, rotate, type Entry } from '../src/lab/kennung-log/log'
+import { fromJsonl, multikey, rotate, toJsonl, type Entry } from '../src/lab/kennung-log/log'
 import { scidVh } from '../src/lab/kennung-log/profiles'
 import { serve } from '../src/lab/anmeldung-log/http'
 import { readFileSync } from 'node:fs'
 import { fromB64u } from 'rltp-lib'
-import { MemoryLoginStore, Service, ServiceKeys } from '../src/lab/anmeldung-log/service'
+import { MemoryLoginStore, Service, ServiceKeys, serviceLog } from '../src/lab/anmeldung-log/service'
 import { commitState, deriveKey, MemoryStorage, Wallet, type Shown, type WalletState } from '../src/lab/anmeldung-log/wallet'
 import { limited, type Transport } from '../src/lab/anmeldung-log/transport'
 import { holding, loopbackSend, loopbackTransport } from './anmeldung-log-loopback'
@@ -81,7 +81,7 @@ test('first login, laptop plus phone: the request is fetched and checked, the an
   expect(id.did.startsWith('did:vh:')).toBe(true)
   expect((await b.call('/anmeldung-log/status?vorgang=' + vorgang)).body).toEqual({ user: id.did })
   expect((await b.call('/anmeldung-log/status')).body).toEqual({ user: id.did })               // signed in
-  expect((await b.call('/anmeldung-log/status?vorgang=' + vorgang)).body).toEqual({ user: id.did })   // the session, not a second collect
+  expect((await b.call('/anmeldung-log/status?vorgang=' + vorgang)).body).toEqual({})               // a pickup, and there is nothing left to collect
   expect((await browser(s.local).call('/anmeldung-log/status?vorgang=' + vorgang)).body).toEqual({})   // another browser gets nothing
   expect((await s.service.holding(id.did))?.head.versionId).toBe(id.log[0]!.versionId)
 })
@@ -800,7 +800,7 @@ test('opening an existing log: foreign keys and a deactivated log are refused wi
   const s = await service({ keys })
   later(); await s.service.rotateKey()
   const log = fromJsonl(s.service.didLog()) as Entry[]
-  const host = s.service.o.host
+  const host = s.service.host
   await expect(Service.create({ host, keys: ServiceKeys.random(), now: clock, log })).rejects.toThrow(/service keys|none of the service keys/)
   later(); await s.service.deactivate()
   const dead = fromJsonl(s.service.didLog()) as Entry[]
@@ -830,4 +830,187 @@ test('serve that fails after binding gives the port back: wrong keys, a deactiva
   const again = await serve({ now: clock, port, keys, log })
   servers.push(again.server)
   expect(again.local).toBe(first.local)
+})
+
+// ---- the service after its deactivation, its private state, its clock, and a store step that fails after admitting
+
+const isoAt = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z')
+
+/** service keys whose next derivation of an authentication key waits for `gate` */
+class GatedKeys extends ServiceKeys {
+  gate?: Promise<void>
+  override async auth (n: number) { const g = this.gate; this.gate = undefined; if (g) await g; return super.auth(n) }
+}
+
+test('after the service ended its DID: no login is started, no key change made, also when the deactivation lands while a request is signed', async () => {
+  const s = await service()
+  later(); await s.service.deactivate()
+  await expect(s.service.start()).rejects.toThrow(/deactivated/)
+  await expect(s.service.rotateKey()).rejects.toThrow(/deactivated/)
+  await expect(s.service.deactivate()).rejects.toThrow(/deactivated/)
+  expect(s.service.held().attempts).toBe(0)
+  // the deactivation lands while start signs: the try is given up, and the next try finds the head deactivated
+  const keys = new GatedKeys(new Uint8Array(32).fill(61))
+  const s2 = await service({ keys })
+  const g = gate(); keys.gate = g.p
+  const pending = s2.service.start()
+  later(); await s2.service.deactivate()
+  g.open()
+  await expect(pending).rejects.toThrow(/deactivated/)
+  expect(s2.service.held().attempts).toBe(0)
+})
+
+test('the service keeps its log, keys and sessions to itself: no field a caller can reach, and only copies go out', async () => {
+  const s = await service()
+  const svc = s.service as any
+  const log = s.service.didLog()
+  expect(Object.getOwnPropertyNames(svc)).toEqual([])
+  for (const k of ['o', 'keyState', 'store', 'verifier', 'attempts', 'outcomes', 'codes', 'sessions']) expect([k, svc[k]]).toEqual([k, undefined])
+  expect(s.service.host).toBe(new URL(s.origin).hostname + '%3A' + new URL(s.origin).port)
+  const w = wallet(secretOf(62))
+  const st = await s.service.start()
+  await w.confirm(await opened(w, st.link))
+  const got = await s.service.collect(st.attempt)
+  if (!got || !('session' in got)) throw new Error('no session')
+  const did = got.login.user
+  got.login.user = 'did:vh:someone-else'
+  expect(s.service.session(got.session)).toEqual({ user: did })
+  s.service.session(got.session)!.user = 'did:vh:someone-else'
+  expect(s.service.session(got.session)).toEqual({ user: did })
+  expect(s.service.didLog()).toBe(log)
+})
+
+test('the wallet keeps its secret, profile and state to itself: changing what was handed in or handed out changes nothing', async () => {
+  const s = await service()
+  const secret = secretOf(63)
+  let inner: WalletState | null = null
+  const storage = { load: () => inner, save: (x: WalletState) => { inner = structuredClone(x) } }
+  const w = new Wallet(secret, { now: clock, storage, transport: loopbackTransport() })
+  secret.fill(99)
+  expect(Object.isFrozen(w.profile)).toBe(true)
+  await loginQr(s, w)
+  const want = await deriveKey(secretOf(63), { method: 'did:webvh', scid: s.service.scid, subjectMethod: 'did:vh' }, 'update', 0)
+  expect(w.identity(s.service.scid)!.log[0]!.parameters.updateKeys).toEqual([multikey(want.pubRaw)])
+  const st = w.state()
+  delete st.identities[s.service.scid]
+  expect(w.identity(s.service.scid)).toBeDefined()
+})
+
+test('a key change of the service whose entry a wallet on the same clock takes as in the future is not published', async () => {
+  const keys = ServiceKeys.random()
+  const log = await serviceLog('dienst.example', keys, isoAt(t + 300_000))      // the head exactly at the tolerance
+  const svc = await Service.create({ host: 'dienst.example', keys, now: clock, log })
+  await expect(svc.rotateKey()).rejects.toThrow(/in the future/)
+  await expect(svc.deactivate()).rejects.toThrow(/in the future/)
+  expect(svc.didLog()).toBe(toJsonl(log))
+  later(2)
+  await svc.rotateKey()                                     // later, the same change is published
+  expect(fromJsonl(svc.didLog())).toHaveLength(2)
+})
+
+/** a store whose next login step decides, then waits, then fails without writing anything (an asynchronous commit that fails) */
+class FailingCommitStore extends MemoryLoginStore {
+  armed = false
+  readonly decided = gate()
+  readonly release = gate()
+  override async transact<T> (did: string, nonce: string, clock: () => number, decide: Parameters<MemoryLoginStore['transact']>[3] & ((...a: any[]) => { result: T })): Promise<T> {
+    if (!this.armed) return super.transact(did, nonce, clock, decide)
+    this.armed = false
+    await super.transact(did, nonce, clock, (h, n, now) => { decide(h, n, now); return { result: null } })
+    this.decided.open()
+    await this.release.p
+    throw new Error('the commit failed')
+  }
+}
+
+test('an admitted answer whose store step then fails: nothing is collected meanwhile, forget spends the nonce anyway, and the attempt stays closed', async () => {
+  const store = new FailingCommitStore()
+  const s = await service({ store })
+  const kept = holding(loopbackTransport())
+  const w = new Wallet(secretOf(64), { now: clock, transport: kept.transport })
+  const st = await s.service.start()
+  const r = await opened(w, st.link)
+  await w.confirm(r)
+  const form = new URLSearchParams(kept.held[0]!.form)
+  store.armed = true
+  const pending = s.service.receive(form)
+  await store.decided.p
+  expect(await s.service.collect(st.attempt)).toBeNull()    // not written yet: nothing to collect
+  await s.service.forget(st.attempt)
+  expect(store.peek(r.claims.nonce, t)).toBe('spent')
+  store.release.open()
+  await expect(pending).rejects.toThrow('the commit failed')
+  expect(store.peek(r.claims.nonce, t)).toBe('spent')
+  expect(s.service.requestObject(st.requestUri.split('/').at(-1)!)).toBeNull()
+  expect(await s.service.receive(form)).toMatchObject({ status: 400 })
+  expect(await s.service.collect(st.attempt)).toBeNull()
+})
+
+test('the clock reaches exp while the gate serializes the answer: no POST', async () => {
+  const s = await service()
+  const rec = recording(() => t)
+  const w = new Wallet(secretOf(65), { now: clock, transport: rec.transport })
+  await loginQr(s, w)
+  const r = await opened(w, (await browser(s.local).call('/anmeldung-log/start')).body.link)
+  const before = rec.posts.length
+  const toString = URLSearchParams.prototype.toString
+  const saved = t
+  URLSearchParams.prototype.toString = function () { t = r.claims.exp * 1000; URLSearchParams.prototype.toString = toString; return toString.call(this) }
+  try { expect(await w.confirm(r)).toEqual({ error: 'the request: expired' }) } finally { URLSearchParams.prototype.toString = toString; t = saved }
+  expect(rec.posts.length).toBe(before)
+})
+
+test('open: a deactivation or a newer head of the service stored while the request is fetched: the request is not shown', async () => {
+  for (const change of ['deactivated', 'newer'] as const) {
+    const s = await service()
+    const storage = new MemoryStorage()
+    let during: (() => Promise<void>) | null = null
+    const inner = loopbackTransport()
+    const transport: Transport = {
+      get: async (url, o) => { const x = await inner.get(url, o); const d = during; if (url.includes('/anfrage/') && d) { during = null; await d() } return x },
+      post: inner.post,
+    }
+    const w = new Wallet(secretOf(66), { now: clock, transport, storage })
+    await loginQr(s, w)
+    during = change === 'deactivated'
+      ? async () => { const x = storage.load()!; x.services[s.service.scid]!.deactivated = true; storage.save(x) }
+      : async () => {
+        // the service moves on and another device of the person follows it; its state reaches this storage
+        later(); await s.service.rotateKey()
+        const w2 = new Wallet(secretOf(66), { now: clock, transport: loopbackTransport(), storage: new MemoryStorage(w.state()) })
+        await w2.confirm(await opened(w2, (await browser(s.local).call('/anmeldung-log/start')).body.link))
+        storage.save(w2.state())
+      }
+    const link = (await browser(s.local).call('/anmeldung-log/start')).body.link
+    expect(await w.open(link), change).toEqual({ ok: false, reason: change === 'deactivated' ? 'service log: the service DID is deactivated' : 'service log: does not continue the log held for this service' })
+  }
+})
+
+// ---- the browser endpoints: collecting with vorgang, giving up on the same device
+
+test('status with vorgang is a pickup of that attempt, also in a browser already signed in as someone else', async () => {
+  const s = await service()
+  const wA = wallet(secretOf(67)), wB = wallet(secretOf(68))
+  const { b } = await loginQr(s, wA)                        // this browser is signed in as A
+  const { vorgang, link } = (await b.call('/anmeldung-log/start')).body
+  expect((await b.call('/anmeldung-log/status?vorgang=' + vorgang)).body).toEqual({})     // nothing to collect yet, and not A's session
+  await wB.confirm(await opened(wB, link))
+  const B = wB.identity(s.service.scid)!.did
+  expect((await b.call('/anmeldung-log/status?vorgang=' + vorgang)).body).toEqual({ user: B })
+  expect((await b.call('/anmeldung-log/status')).body).toEqual({ user: B })
+})
+
+test('same device: the starting browser gives the attempt up with its cookie alone', async () => {
+  const store = new MemoryLoginStore()
+  const s = await service({ store })
+  const w = wallet(secretOf(69))
+  const b = browser(s.local)
+  const { link } = (await b.call('/anmeldung-log/start?geraet=gleich')).body
+  const r = await opened(w, link)
+  expect((await browser(s.local).call('/anmeldung-log/abbrechen', 'POST')).status).toBe(403)
+  expect(store.peek(r.claims.nonce, t)).toBe('open')
+  expect((await b.call('/anmeldung-log/abbrechen', 'POST')).status).toBe(200)
+  expect(b.jar.has('anmeldung')).toBe(false)
+  expect(store.peek(r.claims.nonce, t)).toBe('spent')
+  expect(s.service.held().attempts).toBe(0)
 })

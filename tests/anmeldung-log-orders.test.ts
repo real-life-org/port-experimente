@@ -37,7 +37,7 @@ const SETS: [Setup, EventName[], string, number][] = [
   ['returning', ['swapped', 'second'], 'E9 (an answer under another attempt\'s state)', 70],
   ['first', ['confirm', 'device1st'], 'E10 (two devices, one storage, first login)', 210],
   ['first', ['confirm', 'other'], 'E1 E10 (two persons, first login)', 252],
-  ['answered', ['forget', 'collect'], 'E11 (given up, then collected)', 3],
+  ['answered', ['forget', 'collect'], 'E11 (given up, then collected)', 6],
   ['returning', ['confirm', 'forget'], 'E9 E11 (given up while the answer is checked)', 15],
   ['returning', ['rotateService', 'tick', 'rotateService'], 'E12 (two key changes of the service, a second apart)', 30],
   ['returning', ['rotateService', 'open'], 'E4 E8 (the wallet follows a key change of the service)', 28],
@@ -102,7 +102,7 @@ describe('every order of small sets', () => {
 })
 
 test('the sets above are every order of their events: together', () => {
-  expect(SETS.reduce((n, x) => n + x[3], 0)).toBe(1264)
+  expect(SETS.reduce((n, x) => n + x[3], 0)).toBe(1267)
 })
 
 describe('random orders of larger sets, fixed seeds', () => {

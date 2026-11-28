@@ -5,9 +5,11 @@
 //   GET  /anmeldung-log/start?geraet=gleich   same-device: the outer link, the attempt bound by a cookie
 //   GET  /anmeldung-log/anfrage/<id>     the request_uri: the signed Request Object
 //   POST /anmeldung-log/antwort          the redirect_uri (direct_post, form-encoded)
-//   GET  /anmeldung-log/status?vorgang=  the signed-in account; with vorgang, collect a confirmed attempt once,
-//                                        or the notice of an attempt that stays open (cancelled, refused)
-//   POST /anmeldung-log/abbrechen?vorgang=   the starting browser gives the attempt up for good
+//   GET  /anmeldung-log/status           the signed-in account
+//   GET  /anmeldung-log/status?vorgang=  a pickup: collect a confirmed attempt once (also in a browser signed in
+//                                        already), or the notice of an attempt that stays open (cancelled, refused)
+//   POST /anmeldung-log/abbrechen?vorgang=   the starting browser gives the attempt up for good (QR: its binding;
+//                                        same device: its cookie, with or without vorgang)
 //   GET  /anmeldung-log/fertig?response_code=   the same-device return into the browser
 //
 // The browser bindings are those of src/lab/anmeldung/http.ts, rebuilt: a QR
@@ -96,13 +98,15 @@ export async function serve (opts: ServeOptions = {}): Promise<{ server: Server,
       return
     }
     if (req.method === 'GET' && path === '/anmeldung-log/status') {
-      const id = cookieOf(req, SIGNED_IN)
-      const login = id ? service.session(id) : null
-      if (login) { json(res, 200, login); return }
       const vorgang = url.searchParams.get('vorgang')
-      // collected only by the browser that started the attempt; any other leaves it untouched
-      const done = vorgang && bound(req, vorgang) ? await service.collect(vorgang) : null
-      if (done && vorgang) {
+      if (vorgang === null) {
+        const id = cookieOf(req, SIGNED_IN)
+        json(res, 200, (id ? service.session(id) : null) ?? {})
+        return
+      }
+      // a pickup, before any session the browser has: collected only by the browser that started the attempt; any other leaves it untouched
+      const done = bound(req, vorgang) ? await service.collect(vorgang) : null
+      if (done) {
         // a notice: the attempt stays open, and so does its binding
         if ('notice' in done) { json(res, 200, { error: done.notice }); return }
         bindings.delete(vorgang)
@@ -113,8 +117,8 @@ export async function serve (opts: ServeOptions = {}): Promise<{ server: Server,
       return
     }
     if (req.method === 'POST' && path === '/anmeldung-log/abbrechen') {
-      // only the browser that started the attempt: its binding (QR) or its same-device cookie
-      const vorgang = url.searchParams.get('vorgang') ?? ''
+      // only the browser that started the attempt: its binding (QR) or its same-device cookie (which names the attempt by itself)
+      const vorgang = url.searchParams.get('vorgang') ?? cookieOf(req, SAME_DEVICE) ?? ''
       const qr = bound(req, vorgang), same = cookieOf(req, SAME_DEVICE) === vorgang
       if (!vorgang || (!qr && !same)) { json(res, 403, { error: 'not this browser\'s attempt' }); return }
       await service.forget(vorgang)

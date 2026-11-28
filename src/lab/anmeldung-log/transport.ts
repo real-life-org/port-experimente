@@ -5,8 +5,9 @@
 // Two layers:
 // - `limited(send)`: the rules every exchange keeps (https URL without
 //   credentials and without an IP address as host, size cap, time limit over
-//   the whole exchange, no redirect: a 3xx is aborted and its socket closed
-//   before the answer is returned);
+//   the whole exchange: at the deadline the exchange returns `timeout`, also
+//   when the way to send does not heed the abort signal; no redirect: a 3xx is
+//   aborted and its socket closed before the answer is returned);
 // - `httpsSend`: the one way to send in this module, `node:https` with its own
 //   `lookup`. Not the name decides but the address the socket connects to:
 //   the lookup resolves the name once, refuses unless every address it got is
@@ -41,34 +42,40 @@ export function limited (send: Send, o: { timeoutMs?: number } = {}): Transport 
     try { u = new URL(url) } catch { return { error: 'not a URL' } }
     if (u.protocol !== 'https:') return { error: 'not https' }
     if (u.username || u.password) return { error: 'credentials in the URL' }
-    const host = u.hostname.toLowerCase()
-    // an IP address as host is never looked up, so it is refused here (did:webvh 1.0 refuses it in the DID too)
-    if (isIP(host.replace(/^\[|\]$/g, '')) !== 0 || /^[0-9.]+$|^0x/i.test(host)) return { error: 'a local address' }
+    // an IP address as host is never looked up, so it is refused here (did:webvh 1.0 refuses it in the DID too). The URL
+    // parser has already turned every IPv4 form it reads as an address (0x7f000001, 127.1, octal) into dotted decimal and
+    // put IPv6 in brackets; a DNS name, also one that begins with 0x, stays a name.
+    if (isIP(u.hostname.replace(/^\[|\]$/g, '')) !== 0) return { error: 'a local address' }
     const abort = new AbortController()
-    const timer = setTimeout(() => abort.abort(), o.timeoutMs ?? LIMITS.timeoutMs)
-    try {
-      const res = await send(u, {
-        method,
-        headers: { ...(body !== undefined ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}), ...(accept ? { Accept: accept } : {}) },
-        ...(body !== undefined ? { body } : {}),
-        signal: abort.signal,
-      })
-      // not followed, and not left open: the exchange is aborted, which closes the socket
-      if (res.status >= 300 && res.status < 400) { abort.abort(); return { error: 'a redirect (not followed)' } }
-      const chunks: Uint8Array[] = []
-      let size = 0
-      for await (const c of res.body) {
-        size += c.length
-        if (size > maxBytes) { abort.abort(); return { error: 'too large' } }
-        chunks.push(c)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    // the deadline settles the exchange itself; aborting the signal also lets a way to send that heeds it close its connection
+    const deadline = new Promise<{ error: string }>((settle) => { timer = setTimeout(() => { abort.abort(); settle({ error: 'timeout' }) }, o.timeoutMs ?? LIMITS.timeoutMs) })
+    const work = async (): Promise<Fetched | { error: string }> => {
+      try {
+        const res = await send(u, {
+          method,
+          headers: { ...(body !== undefined ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}), ...(accept ? { Accept: accept } : {}) },
+          ...(body !== undefined ? { body } : {}),
+          signal: abort.signal,
+        })
+        // not followed, and not left open: the exchange is aborted, which closes the socket
+        if (res.status >= 300 && res.status < 400) { abort.abort(); return { error: 'a redirect (not followed)' } }
+        const chunks: Uint8Array[] = []
+        let size = 0
+        for await (const c of res.body) {
+          size += c.length
+          if (size > maxBytes) { abort.abort(); return { error: 'too large' } }
+          chunks.push(c)
+        }
+        const bytes = new Uint8Array(size); let at = 0
+        for (const c of chunks) { bytes.set(c, at); at += c.length }
+        return { status: res.status, type: res.type, text: new TextDecoder('utf-8', { fatal: false }).decode(bytes) }
+      } catch (e) {
+        if ((e as { code?: string })?.code === LOCAL_ADDRESS) return { error: 'a local address' }
+        return { error: abort.signal.aborted ? 'timeout' : 'unreachable' }
       }
-      const bytes = new Uint8Array(size); let at = 0
-      for (const c of chunks) { bytes.set(c, at); at += c.length }
-      return { status: res.status, type: res.type, text: new TextDecoder('utf-8', { fatal: false }).decode(bytes) }
-    } catch (e) {
-      if ((e as { code?: string })?.code === LOCAL_ADDRESS) return { error: 'a local address' }
-      return { error: abort.signal.aborted ? 'timeout' : 'unreachable' }
-    } finally { clearTimeout(timer) }
+    }
+    try { return await Promise.race([work(), deadline]) } finally { clearTimeout(timer) }
   }
   return {
     get: (url, r) => exchange(url, 'GET', r.maxBytes, undefined, r.accept),

@@ -25,14 +25,22 @@ Registries and the IANA Internet Protocol Version 6 Address Space registry
   document), key change of the service (`rotateKey`; a service opened on an
   existing log takes its key state from the head: the index whose derived
   key is the head's login key, with update key and pre-rotation commitment
-  matching, else opening throws, also for a deactivated log), a signed Request Object
-  per login behind a `request_uri`, the answer checked by
-  `kennung-log/verifier.ts`, and the lifecycle of one login.
+  matching, else opening throws, also for a deactivated log; after its own
+  deactivation it starts no login and makes no further change), a signed
+  Request Object per login behind a `request_uri`, the answer checked by
+  `kennung-log/verifier.ts`, and the lifecycle of one login. A new entry of
+  its own log is verified against the service's clock as it stands, with
+  the tolerance of `kennung-log/log.ts` (300 s): an entry that a wallet on
+  the same clock would take as in the future is not published, and the
+  caller tries again later.
 - `http.ts`: the service behind HTTP (endpoints only, no page):
   `/.well-known/did.jsonl`, `/anmeldung-log/start`, `/anmeldung-log/anfrage/<id>`
-  (request_uri), `/anmeldung-log/antwort` (redirect_uri), `/anmeldung-log/status`,
-  `/anmeldung-log/abbrechen` (the starting browser gives the attempt up),
-  `/anmeldung-log/fertig`.
+  (request_uri), `/anmeldung-log/antwort` (redirect_uri), `/anmeldung-log/status`
+  (without `vorgang` the signed-in account; with `vorgang` a pickup of that
+  attempt with the binding check, also in a browser that is signed in
+  already), `/anmeldung-log/abbrechen` (the starting browser gives the attempt
+  up: QR with its binding, the same device with its cookie, with or without
+  `vorgang`), `/anmeldung-log/fertig`.
 - `wallet.ts`: the demo wallet as a module. Resolve and verify the service's
   log, check the request, derive the keys, create and store the person's log
   at the first login, sign, answer, cancel, change the person's key. All its
@@ -75,19 +83,25 @@ code (`/erneuern`), the cap on open requests, the demo wallet page.
    the Request Object is fetched and checked, with the time after the fetch,
    against the key its `kid` names in the head's document; its
    `redirect_uri` must be on exactly the HTTPS origin of the DID (host and
-   port). The caller gets a frozen view of the request; the checked state
-   stays in the wallet.
+   port). Right before the request is shown, the held service state is
+   checked again (deactivated, or a newer head stored while the request was
+   fetched: refused), with no await between that check and the return. The
+   caller gets a frozen view of the request; the checked state stays in the
+   wallet. `open` sends no ID token; when the service lists none of the
+   wallet's DID methods, it sends `subject_syntax_types_not_supported` to the
+   checked `redirect_uri` through the gate and refuses.
 4. The person confirms: in one step, at that moment, the request must still
    be in its window and the service head it was checked under must be the
    held one or continue it; then the head and, at the first login, the
    identifier (keys from the secret and the verified SCID, log at the current
    time) are stored. The ID token is signed (`iss` = `sub` = the DID, `aud` =
    the whole `client_id`, `nonce`, `iat`, `exp` 300 s later, `kid`
-   `<did>?versionId=<head>#key-1`). Then the gate, synchronously right before
-   the POST: the request still in its window, the held service head still
-   the checked one or its continuation (not deactivated), and the person's
-   held head still the one the token names; if only that last one moved (a
-   key change meanwhile), the token is signed again under the held head.
+   `<did>?versionId=<head>#key-1`). Then the gate: the body is built, and
+   synchronously right before the POST the held service head must still be
+   the checked one or its continuation (not deactivated), the person's held
+   head still the one the token names (if only that one moved, a key change
+   meanwhile, the token is signed again under the held head), and last the
+   request still in its window, with the clock read right before the call.
    Otherwise nothing is sent. The POST carries `id_token`, `state`, `did_log`
    to the `redirect_uri`, no redirect followed.
 5. The service: `state` names the attempt; `verifier.login` checks log,
@@ -161,8 +175,12 @@ code (`/erneuern`), the cap on open requests, the demo wallet page.
   anyone but the service (profile section 10.3); the same-device return opened
   only on that origin.
 - **Fetch limits**: https only, Request Object at most 16 KiB, log at most
-  256 KiB, answer at most 16 KiB, 5 s for the whole exchange, no redirect
-  followed, no credentials in the URL, no IP address as host.
+  256 KiB, answer at most 16 KiB, 5 s for the whole exchange (at the deadline
+  the exchange returns `timeout`, also when the way to send does not heed the
+  abort signal), no redirect followed, no credentials in the URL, no IP
+  address as host (judged on the host as the URL parser gives it, which turns
+  every IPv4 form it reads as an address into dotted decimal; a DNS name that
+  begins with `0x` is a name).
 - **Only globally reachable addresses**: the default transport resolves the
   name once in its own `lookup` and connects to exactly those addresses, and
   only if every one of them is globally reachable after the two IANA
@@ -227,17 +245,23 @@ code (`/erneuern`), the cap on open requests, the demo wallet page.
   log as text in, or the token out. The vector and the tests that deliver an
   answer themselves give the wallet a transport of their own.
 - **One gate before the transport**: the wallet prepares everything first
-  (keys derived, token signed, body built); then one function, the only one
-  in the module that calls `transport.post`, checks without an await between
-  the check and the call: the request's window at that moment, the held
-  service head against the checked one, and for an answer the person's held
-  head against the one the token names. Answers, `user_cancelled` and
+  (keys derived, token signed); then one function, the only one in the
+  module that calls `transport.post`, builds the body and checks without an
+  await between the check and the call: the held service head against the
+  checked one, for an answer the person's held head against the one the token
+  names, and last the request's window, with the clock read right before the
+  call. Answers, `user_cancelled` and
   `subject_syntax_types_not_supported` all go through it. The token sent
   names the head held when it is sent.
 - **Private state**: what the wallet checked, its storage, transport and
   secret, and its inner steps are JavaScript private fields and methods
   (`#`); a caller, also one in plain JavaScript, reaches only `profile` and
-  the public methods.
+  the public methods. The secret and the profile handed in are copied
+  (`profile` is a frozen copy), and `state()` returns a copy. The service
+  likewise: its key state (log, head, key index), options, store, verifier
+  and maps are private fields; it gives out its log as text and every login
+  (`collect`, `redeem`, `session`) as a new object, and the seed of
+  `ServiceKeys` is copied.
 - **The key that signs requests** is the document's one `authentication` key
   (that is what `kennung-log/log.ts` writes and rotates); OpenID4VP asks only
   that it be in `verificationMethod`. Its `kid` is `<did>#key-1`, without
@@ -261,7 +285,12 @@ code (`/erneuern`), the cap on open requests, the demo wallet page.
   browser that started it (`forget`, `POST /anmeldung-log/abbrechen`, which
   spends the nonce in one store step) and by running out. An answer for an
   attempt that is no longer open at the time of the step decides and keeps
-  nothing.
+  nothing. What an admitted answer hands out (the outcome, the code) carries
+  its attempt and is taken (collected, redeemed) only once the store step that
+  admitted it has been written. `forget` spends the nonce whenever the attempt
+  is known, also while such a step is not yet written; if that step then
+  fails and puts the service's maps back, the attempt stays closed and its
+  nonce spent.
 - **Store**: the verifier's `Store` (`transact`, one step per DID, the nonce
   spent only with an admitted login) and two further steps of the service
   (`LoginStore`): `closeAttempt` (an attempt ends without a login: its nonce
@@ -290,7 +319,7 @@ code (`/erneuern`), the cap on open requests, the demo wallet page.
 
 ## Measured
 
-`tests/anmeldung-log-http.test.ts` (34, over HTTP on 127.0.0.1):
+`tests/anmeldung-log-http.test.ts` (50, over HTTP on 127.0.0.1):
 first login with two devices and on the same device; return; key change of
 the person; second wallet with the old state is `stale` and told the head;
 two continuations `contested`, then the owner too; the waiting browser learns
@@ -324,13 +353,24 @@ in; a valid continuation with an unusable token is kept, the nonce stays
 open, the right answer then logs in; a browser without the attempt's cookie
 collects nothing first, and the right one then does; contested between the
 answer and the pickup gives no session on either way; an attempt given up
-while its answer is checked keeps nothing; fresh attempt ids and the sweep.
+while its answer is checked keeps nothing; fresh attempt ids and the sweep;
+after its deactivation the service starts no login and makes no change, also
+when the deactivation lands while a request is signed; a key change whose
+entry lies beyond the tolerance of the service's clock is not published,
+and is later; service and wallet have no field a caller reaches, and changing
+what goes out (a login, the state) or what went in (secret) changes nothing;
+an admitted answer whose store step then fails: nothing collected meanwhile,
+`forget` spends the nonce, the attempt stays closed; the clock reaching
+`exp` while the gate builds the body: no POST; a deactivation or a newer
+service head stored while `open` fetches the request: not shown; status with
+`vorgang` collects in a browser signed in as someone else; the same-device
+browser gives up with its cookie alone.
 
-`tests/anmeldung-log.test.ts` (40): every refusal sends nothing. Changed
+`tests/anmeldung-log.test.ts` (47): every refusal sends nothing. Changed
 request, `kid` not in the document, `kid` of another DID, another key under the
 right `kid`, `client_id` outside ≠ inside (also without the prefix inside),
 `redirect_uri` on another host, another port, over http, unsigned
-(`alg: none`), no `typ`, expired, `exp` not later than `iat`, too long a
+(`alg: none`), no `typ`, `iss` not text, expired, `exp` not later than `iat`, too long a
 window, wrong `aud`, `response_uri` instead of `redirect_uri`,
 `id_token_type=subject_signed`, a log of another DID, a log changed after
 signing, another service's SCID in the DID text with that service's log,
@@ -348,8 +388,13 @@ injected resolver (refused addresses, a mixed answer refused, a global
 address tried, one lookup); the default transport against a real loopback
 service (refused, no request reaches it); https, credentials, IP hosts
 refused before sending; a fetch with no answer and one that stalls in its
-body end after the time limit; a 3xx is aborted and its socket closed well
-before the time limit, for GET and POST.
+body end after the time limit, also when the way to send ignores the abort
+signal; a 3xx is aborted and its socket closed well before the time limit,
+for GET and POST; a DNS name beginning with `0x` is sent, every IP literal
+form the URL parser reads is refused; `locate` refuses and never throws (a
+line break in the domain; an invalid Punycode label under a URL parser that
+refuses it); `Wallet.open` and `Service.receive` never throw, for a list of
+broken links, DIDs, logs, Request Objects, forms and tokens.
 
 `tests/anmeldung-log-vector.test.ts` (4): `vector.json` is what the code builds
 from fixed inputs; checked from its texts alone: both derivations complete,
@@ -399,7 +444,7 @@ single examples, in one process against the service object (no HTTP).
   collected), `rotated` (A opened before a key change of the service, B
   after).
 - **Runs:** 33 sets of two or three events, every order (depth-first
-  replay of choice prefixes): 1264 orders, each count asserted; 4 × 25
+  replay of choice prefixes): 1267 orders, each count asserted; 4 × 25
   random sets of five to seven events, four orders each from fixed seeds
   (400 orders; a failure prints the seed and the order); four fixed
   orders as regression tests, and one test with a store whose answer arrives

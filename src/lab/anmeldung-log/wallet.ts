@@ -21,13 +21,14 @@
 // still in its window, and the service head it was checked under is the held
 // one or continues it.
 //
-// Sending: everything is prepared first (keys derived, token signed, body
-// built); then `#send`, the only place that calls `transport.post`, checks
-// synchronously right before that call, with no await in between: the
-// request's window at that moment, the held service head against the
-// checked one, and, for an answer, that the person's head the token was
-// signed under is still the held one. If the person's head moved meanwhile
-// (a key change), the answer is signed again under the held head.
+// Sending: everything is prepared first (keys derived, token signed); then
+// `#send`, the only place that calls `transport.post`, builds the body and
+// then checks synchronously right before that call, with no await in
+// between: the held service head against the checked one, for an answer
+// that the person's head the token was signed under is still the held one,
+// and last the request's window, with the clock read right before the call.
+// If the person's head moved meanwhile (a key change), the answer is signed
+// again under the held head.
 
 import { edFromSeed, hkdf, type KeyPair } from 'rltp-lib'
 import { create, fromJsonl, rotate, toJsonl, verify, type Entry, type Profile, type Version } from '../kennung-log/log'
@@ -88,6 +89,20 @@ function relate (held: Entry[], copy: Entry[]): Relation {
 }
 const goesOn = (r: Relation): boolean => r === 'same' || r === 'extends'
 
+/**
+ * The one rule for the held service against a service log that was checked:
+ * `newer` if the held log is not the checked one or continued by it,
+ * `deactivated` if the held service is deactivated, else null. Opening
+ * (before the request is fetched and again before it is shown), answering,
+ * cancelling and the gate all decide with it.
+ */
+function heldService (s: WalletState, scid: string, checked: Entry[]): 'deactivated' | 'newer' | null {
+  const held = s.services[scid]
+  if (held && !goesOn(relate(held.log, checked))) return 'newer'
+  if (held?.deactivated) return 'deactivated'
+  return null
+}
+
 function freeze<T> (o: T): T {
   if (o && typeof o === 'object') { for (const v of Object.values(o)) freeze(v); Object.freeze(o) }
   return o
@@ -129,20 +144,26 @@ export class Wallet {
   readonly #transport: Transport
   readonly #derive: typeof deriveKey
   readonly #checked = new WeakMap<Shown, Checked>()
+  /** The method of the person's identifiers: a frozen copy of the profile handed in. */
   readonly profile: Profile
 
-  /** `derive` is the key derivation (default `deriveKey`; tests pass one that pauses). */
+  /**
+   * `derive` is the key derivation (default `deriveKey`; tests pass one that
+   * pauses). The secret and the profile are copied: changing what was handed
+   * in changes no key.
+   */
   constructor (secret: Uint8Array, o: { now: () => number, profile?: Profile, storage?: WalletStorage, transport?: Transport, derive?: typeof deriveKey }) {
-    this.#secret = secret
+    this.#secret = secret.slice()
     this.#now = o.now
     this.#storage = o.storage ?? new MemoryStorage()
-    this.profile = o.profile ?? vh
+    const p = o.profile ?? vh
+    this.profile = Object.freeze({ ...p, parameters: Object.freeze([...p.parameters]) })
     this.#transport = o.transport ?? httpsTransport()
     this.#derive = o.derive ?? deriveKey
   }
 
-  /** A copy of what the wallet holds (a second device with the same state starts from it). */
-  state (): WalletState { return this.#storage.load() ?? { services: {}, identities: {} } }
+  /** A copy of what the wallet holds (a second device with the same state starts from it); changing it changes nothing held. */
+  state (): WalletState { return structuredClone(this.#storage.load() ?? { services: {}, identities: {} }) }
 
   /** The person's identifier toward a service, if one exists. */
   identity (scid: string): { did: string, log: Entry[], index: number } | undefined {
@@ -160,7 +181,13 @@ export class Wallet {
    * Steps 1 to 5. The log and the Request Object come through the transport
    * and from nowhere else: what binds a did:webvh to its host is that its log
    * was fetched there, so the wallet has no way to be handed either as text.
-   * Nothing is sent.
+   * No ID token is sent. One thing can be sent: when a request passed every
+   * check but the service supports none of the wallet's DID methods, the
+   * error `subject_syntax_types_not_supported` goes to its checked
+   * redirect_uri, through the gate (`#send`), before the refusal is returned.
+   * Right before a request is shown, the held service state is checked again
+   * (it may have changed while the request was fetched), with no await
+   * between that check and the return.
    */
   async open (link: string): Promise<Opened> {
     const get = async (url: string, kind: 'log' | 'request'): Promise<{ text: string } | { error: string }> => {
@@ -186,8 +213,7 @@ export class Wallet {
     if (raw === null) return no('service log: not JSON Lines')
     const check = await verify(raw, { profile: webvh(where.rest), now: new Date(this.#now()), did })
     if (!check.ok) return no(`service log: ${check.reason}`)
-    const known = this.state().services[check.scid]
-    if (known && !goesOn(relate(known.log, check.log))) return no('service log: does not continue the log held for this service')
+    if (heldService(this.state(), check.scid, check.log) === 'newer') return no('service log: does not continue the log held for this service')
     if (check.head.deactivated) {
       // kept, so that no older head of this service is taken later
       this.#commit((s) => {
@@ -221,18 +247,25 @@ export class Wallet {
       await this.#sendError(c, 'subject_syntax_types_not_supported')
       return no('the service supports none of the wallet\'s DID methods')
     }
+    // the held service state, again, right before the request is shown: no await from here to the return
+    const now = heldService(this.state(), check.scid, check.log)
+    if (now === 'deactivated') return no('service log: the service DID is deactivated')
+    if (now === 'newer') return no('service log: does not continue the log held for this service')
     this.#checked.set(shown, c)
     return { ok: true, request: shown }
+  }
+
+  /** The held service head against the one a request was checked under: why not, or null. */
+  #serviceBad (c: Checked, s: WalletState): string | null {
+    const h = heldService(s, c.scid, c.serviceLog)
+    return h === 'deactivated' ? 'the service DID is deactivated' : h === 'newer' ? 'a newer head of the service is held' : null
   }
 
   /** At a given moment: the request still in its window, and the service head it was checked under the held one or its continuation. */
   #stillGood (c: Checked, s: WalletState, nowMs: number): string | null {
     const late = checkWindow(c.claims, Math.floor(nowMs / 1000))
     if (late) return `the request: ${late}`
-    const held = s.services[c.scid]
-    if (held?.deactivated) return 'the service DID is deactivated'
-    if (held && !goesOn(relate(held.log, c.serviceLog))) return 'a newer head of the service is held'
-    return null
+    return this.#serviceBad(c, s)
   }
 
   /** The person confirmed: the answer, posted to the checked redirect_uri through `#send`. */
@@ -306,22 +339,26 @@ export class Wallet {
   }
 
   /**
-   * The only call of `transport.post` in this module. Synchronous from the
-   * checks to that call: the request's window now, the held service head
-   * against the checked one, and for an answer (`signedUnder`) the person's
-   * held head against the one the token names. MOVED if only that last one
-   * differs (the caller signs again).
+   * The only call of `transport.post` in this module. First the body is
+   * built; then, synchronously up to that call: the held service head
+   * against the checked one, for an answer (`signedUnder`) the person's held
+   * head against the one the token names (MOVED if only that differs: the
+   * caller signs again), and last the request's window, with the clock read
+   * right before the call.
    */
   #send (c: Checked, form: Record<string, string>, signedUnder?: string): Promise<Sent> | typeof MOVED {
+    const body = new URLSearchParams(form).toString()
     const s = this.state()
-    const bad = this.#stillGood(c, s, this.#now())
+    const bad = this.#serviceBad(c, s)
     if (bad) return Promise.resolve({ error: bad })
     if (signedUnder !== undefined) {
       const id = s.identities[c.scid]
       if (!id) return Promise.resolve({ error: 'the identifier is gone' })
       if (headOf(id.log) !== signedUnder) return MOVED
     }
-    return this.#reply(c, this.#transport.post(c.claims.redirect_uri, new URLSearchParams(form).toString(), { maxBytes: LIMITS.replyBytes }))
+    const late = checkWindow(c.claims, Math.floor(this.#now() / 1000))
+    if (late) return Promise.resolve({ error: `the request: ${late}` })
+    return this.#reply(c, this.#transport.post(c.claims.redirect_uri, body, { maxBytes: LIMITS.replyBytes }))
   }
 
   async #reply (c: Checked, pending: ReturnType<Transport['post']>): Promise<Sent> {

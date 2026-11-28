@@ -83,20 +83,29 @@ export type Location = { origin: string, logUrl: string, rest: string, scidText:
  * the origin it lives on. `rest` is the method-specific id after the SCID (the
  * host part of the profile in kennung-log/profiles.ts). The SCID returned here
  * is text of the DID, never a verified value: verification gives the SCID.
- * IDNA is not done (such a domain is refused, as in profiles.ts).
+ * IDNA is not done (such a domain is refused, as in profiles.ts). Never
+ * throws: whatever the syntax check or the URL parser refuses (an invalid
+ * Punycode label, for one) is an error value.
  */
 export function locate (did: string): Location | { error: string } {
+  if (typeof did !== 'string') return { error: 'not a DID' }
   if (did.includes('/') || did.includes('?') || did.includes('#')) return { error: 'not a bare DID' }
   const bad = webvhSyntax(did)
   if (bad) return { error: `not a did:webvh this code resolves: ${bad.reason}` }
-  const [scidText, domain, ...segments] = did.slice('did:webvh:'.length).split(':') as [string, string, ...string[]]
-  const m = /^(.*?)(?:%3[Aa]([0-9]{1,5}))?$/.exec(domain) as RegExpExecArray
-  const host = decodeURIComponent(m[1] as string).toLowerCase()
-  const port = m[2] !== undefined ? `:${Number(m[2])}` : ''
-  const path = segments.map((s) => encodeURIComponent(decodeURIComponent(s))).join('/')
-  const base = `https://${host}${port}`
-  const logUrl = path ? `${base}/${path}/did.jsonl` : `${base}/.well-known/did.jsonl`
-  return { origin: new URL(base).origin, logUrl, rest: did.slice('did:webvh:'.length + scidText.length + 1), scidText }
+  try {
+    const [scidText, domain, ...segments] = did.slice('did:webvh:'.length).split(':') as [string, string, ...string[]]
+    const m = /^(.*?)(?:%3[Aa]([0-9]{1,5}))?$/.exec(domain)
+    if (!m) return { error: 'not a did:webvh this code resolves: the domain is not a host name' }
+    const host = decodeURIComponent(m[1] as string).toLowerCase()
+    const port = m[2] !== undefined ? `:${Number(m[2])}` : ''
+    const path = segments.map((s) => encodeURIComponent(decodeURIComponent(s))).join('/')
+    const base = `https://${host}${port}`
+    const origin = new URL(base).origin
+    const logUrl = path ? `${base}/${path}/did.jsonl` : `${base}/.well-known/did.jsonl`
+    return { origin, logUrl, rest: did.slice('did:webvh:'.length + scidText.length + 1), scidText }
+  } catch {
+    return { error: 'not a did:webvh this code resolves: the URL parser refuses its host' }
+  }
 }
 
 /** A Request Object: compact JWS, EdDSA, `typ` oauth-authz-req+jwt, `kid` a key of the service's DID document. */
@@ -138,6 +147,8 @@ export async function checkRequestObject (jwt: unknown, o: { clientId: string, d
   if (!good) return no('signature does not verify')
   const c = claims as Record<string, unknown>
   if (c.client_id !== o.clientId) return no('client_id outside and inside differ')
+  // every claim handed on as typed (`RequestClaims`) is checked for its type here; `iss` is written by the service and otherwise ignored
+  if ('iss' in c && typeof c.iss !== 'string') return no('iss is not text')
   if (c.aud !== SIOP_AUD) return no(`aud is not ${SIOP_AUD}`)
   if ('request' in c || 'request_uri' in c) return no('a Request Object must not hold request or request_uri')
   if ('response_uri' in c) return no('response_uri is not part of this profile (redirect_uri with direct_post)')
