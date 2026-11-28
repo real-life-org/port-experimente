@@ -196,13 +196,30 @@ export interface RotateOptions {
   time: string
 }
 
+/**
+ * The head's document with its one authentication key replaced. Every other
+ * member (`service`, `alsoKnownAs`, ...) and every other member of the
+ * verification method is kept. A document this cannot continue safely, where
+ * it is unclear what the key change replaces, is refused with an error:
+ * anything but exactly one verification method that `authentication` lists
+ * by id, as its only entry.
+ */
+function withAuthKey (doc: Record<string, unknown>, authKey: Uint8Array): Record<string, unknown> {
+  const vms = doc.verificationMethod
+  const auth = doc.authentication
+  const vm = Array.isArray(vms) && vms.length === 1 ? vms[0] as Record<string, unknown> : undefined
+  if (!vm || typeof vm !== 'object' || typeof vm.id !== 'string' || !Array.isArray(auth) || auth.length !== 1 || auth[0] !== vm.id) {
+    throw new Error('rotate: cannot change the authentication key: the document must have exactly one verification method, listed as the only entry of authentication')
+  }
+  return { ...doc, verificationMethod: [{ ...vm, publicKeyMultibase: multikey(authKey) }] }
+}
+
 /** A key change under pre-rotation: the committed key signs and becomes the update key. */
 export async function rotate (log: Entry[], o: RotateOptions): Promise<Entry[]> {
   const head = log[log.length - 1] as Entry
-  const did = head.state.id as string
   return append(log, {
     parameters: { updateKeys: [multikey(o.signer.pubRaw)], nextKeyHashes: await Promise.all(o.next.map((k) => keyHash(multikey(k)))) },
-    state: o.authKey ? didDocument(did, o.authKey) : head.state,
+    state: o.authKey ? withAuthKey(head.state, o.authKey) : head.state,
     signer: o.signer,
     time: o.time,
   })
@@ -232,8 +249,15 @@ function committed (log: Entry[]): unknown[] {
 
 /** The JSON Lines form (one entry per line, `\n` after each). */
 export const toJsonl = (log: Entry[]): string => log.map((e) => JSON.stringify(e) + '\n').join('')
+/**
+ * Read the JSON Lines form, or null. did:webvh 1.0 says each entry has "all
+ * extra whitespace removed, a \n character appended, and the result added to
+ * the DID Log file" (The DID Log File). It does not mention empty lines, so
+ * this is the strict reading: at most one final `\n`, and every other line,
+ * an empty or blank one included, must hold a JSON value. Nothing is skipped.
+ */
 export function fromJsonl (text: string): unknown[] | null {
-  try { return text.split('\n').filter((l) => l !== '').map((l) => JSON.parse(l)) } catch { return null }
+  try { return (text.endsWith('\n') ? text.slice(0, -1) : text).split('\n').map((l) => JSON.parse(l)) } catch { return null }
 }
 
 // ── verification ────────────────────────────────────────────────────────

@@ -195,3 +195,46 @@ test('did:webvh: the future limit compares to the fraction (now plus tolerance e
     expect((await verify(await edge(frac), { profile: p, now, toleranceSec: tol })).ok, frac).toBe(ok)
   }
 })
+
+test('a key change keeps every other member of the DID document, and refuses a shape it cannot continue', async () => {
+  const [u0, u1, u2, u3, a0, a1, a2] = await Promise.all([fresh(), fresh(), fresh(), fresh(), fresh(), fresh(), fresh()])
+  const p = webvh('example.com')
+  const first = await create({ profile: p, updateKey: u0, next: [u1.pubRaw], authKey: a0.pubRaw, time: at(0) })
+  const head = first[0] as Entry
+  const did = head.state.id as string
+  const extra = {
+    service: [{ id: `${did}#hub`, type: 'LinkedDomains', serviceEndpoint: 'https://example.com/hub' }],
+    alsoKnownAs: ['https://example.com/alice'],
+  }
+  // A document with a service endpoint, written under pre-rotation.
+  const params = { updateKeys: [multikey(u1.pubRaw)], nextKeyHashes: [await keyHash(multikey(u2.pubRaw))] }
+  let log = await append(first, { parameters: params, state: { ...head.state, ...extra }, signer: u1, time: at(1) })
+  expect(await verify(log, { profile: p, now: NOW })).toMatchObject({ ok: true })
+  log = await rotate(log, { signer: u2, next: [u3.pubRaw], authKey: a1.pubRaw, time: at(2) })
+  const state = (log[log.length - 1] as Entry).state
+  expect(state.service).toEqual(extra.service)
+  expect(state.alsoKnownAs).toEqual(extra.alsoKnownAs)
+  expect(state.authentication).toEqual(head.state.authentication)
+  expect((state.verificationMethod as { publicKeyMultibase: string }[])[0]!.publicKeyMultibase).toBe(multikey(a1.pubRaw))
+  expect(await verify(log, { profile: p, now: NOW })).toMatchObject({ ok: true })
+
+  // Two verification methods: which one is replaced is unclear, so it is refused.
+  const vm = (head.state.verificationMethod as Record<string, unknown>[])[0]!
+  const two = { ...head.state, verificationMethod: [vm, { ...vm, id: `${did}#key-2` }] }
+  const odd = await append(first, { parameters: params, state: two, signer: u1, time: at(1) })
+  await expect(rotate(odd, { signer: u2, next: [u3.pubRaw], authKey: a2.pubRaw, time: at(2) })).rejects.toThrow(/verification method/)
+  // Without a new authentication key the document is carried over as it is.
+  expect(((await rotate(odd, { signer: u2, next: [u3.pubRaw], time: at(2) })).at(-1) as Entry).state).toEqual(two)
+})
+
+test('JSON Lines: exactly one trailing newline is allowed, every other line holds a JSON value', async () => {
+  const [u0, a0] = await Promise.all([fresh(), fresh()])
+  const log = await create({ profile: webvh('example.com'), updateKey: u0, next: [], authKey: a0.pubRaw, time: at(0) })
+  const two = await append(log, { parameters: {}, state: (log[0] as Entry).state, signer: u0, time: at(1) })
+  const [l1, l2] = toJsonl(two).split('\n') as [string, string]
+  expect(fromJsonl(`${l1}\n${l2}\n`)).toEqual(two)
+  expect(fromJsonl(`${l1}\n${l2}`)).toEqual(two)
+  for (const bad of [`\n${l1}\n${l2}\n`, `${l1}\n\n${l2}\n`, `${l1}\n${l2}\n\n`, `${l1}\n   \n${l2}\n`, `${l1}\n${l2}\n  `, '', '\n']) {
+    expect(fromJsonl(bad)).toBeNull()
+  }
+})

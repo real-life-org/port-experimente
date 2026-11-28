@@ -19,11 +19,21 @@ Spec text read from the sources: did:webvh `spec-v1.0/specification.md` and
 `create` writes the first entry (Create, steps 1 to 6): one or more update
 keys, the hashes of the next ones (pre-rotation), a document with one
 Ed25519 key for `authentication`. `rotate` lets the committed key sign,
-commit to a new one, and changes the document's key or keeps it.
+commit to a new one, and changes the document's key or keeps it. A key
+change replaces only the public key of the one verification method and
+keeps every other member of the document (`service`, `alsoKnownAs`, ...).
+A document with other than exactly one verification method, listed as the
+only entry of `authentication`, is refused with an error: it is unclear
+which key the change replaces.
 `deactivate` turns pre-rotation off and writes `deactivated: true` with
 `updateKeys: []` one second later (two entries, as Deactivate says for a DID
 under pre-rotation). `append` writes any entry, signed by any key, for the
-cases that break a rule.
+cases that break a rule. `fromJsonl` reads JSON Lines strictly: at most one
+final newline, every other line, a blank one included, must hold a JSON
+value, else the input is invalid. did:webvh 1.0 (The DID Log File) says each
+entry has "all extra whitespace removed, a \n character appended, and the
+result added to the DID Log file"; it says nothing about empty lines, so this
+is the stricter reading, not a rule of the spec.
 
 `verify` copies its input (as JSON) and checks the copy, entry by entry:
 parameters, the keys that may sign (pre-rotation or not), the proof,
