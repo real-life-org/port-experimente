@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 import { b64uOf, platformSubtle } from 'rltp-lib'
-import { rotate, type Entry } from '../src/lab/kennung-log/log'
+import { append, authenticationKeys, keyHash, multikey, rotate, type Entry } from '../src/lab/kennung-log/log'
 import { vh } from '../src/lab/kennung-log/profiles'
 import { kidOf, MemoryStore, signToken, Verifier, type Held, type NonceState, type Store } from '../src/lab/kennung-log/verifier'
 import { at, change, genesis, keyOf, NOW, type Holder } from '../src/lab/kennung-log/scenarios'
@@ -182,4 +182,81 @@ test('expired nonces are dropped when a new one is issued; a spent one stays unt
   await v.issueNonce()
   expect(store.nonceCount).toBe(1)
   expect((await v.login(answer)).kind).toBe('invalid')
+})
+
+// ── one rule for rotation and login ─────────────────────────────────────
+
+/** A genesis whose head document is `edit(doc)`, written under pre-rotation by the committed key. */
+async function withDoc (edit: (doc: Record<string, unknown>) => Record<string, unknown>): Promise<Holder> {
+  const g = await genesis(vh)
+  const head = headOf(g)
+  const next = await keyOf('doc editor next')
+  const params = { updateKeys: [multikey(g.next.pubRaw)], nextKeyHashes: [await keyHash(multikey(next.pubRaw))] }
+  return { log: await append(g.log, { parameters: params, state: edit(head.state), signer: g.next, time: at(1) }), next, auth: g.auth }
+}
+const methodOf = (doc: Record<string, unknown>): Record<string, unknown> => (doc.verificationMethod as Record<string, unknown>[])[0]!
+
+test('a key in JWK form is refused by rotate before anything is written', async () => {
+  const h = await withDoc((doc) => {
+    const { publicKeyMultibase, ...vm } = methodOf(doc)
+    return { ...doc, verificationMethod: [{ ...vm, type: 'JsonWebKey', publicKeyJwk: { kty: 'OKP', crv: 'Ed25519', x: 'AAAA' } }] }
+  })
+  const a1 = await keyOf('jwk new auth')
+  const before = JSON.stringify(h.log)
+  await expect(rotate(h.log, { signer: h.next, next: [], authKey: a1.pubRaw, time: at(2) })).rejects.toThrow(/authentication key/)
+  expect(JSON.stringify(h.log)).toBe(before)
+})
+
+test('service endpoint, rotation, login with the new key; the old key is refused', async () => {
+  const hub = { id: 'did:example:x#hub', type: 'LinkedDomains', serviceEndpoint: 'https://example.com/hub' }
+  const h = await withDoc((doc) => ({ ...doc, service: [{ ...hub, id: `${doc.id}#hub` }] }))
+  const store = new MemoryStore()
+  const v = verifier(store)
+  expect(await login(v, h)).toMatchObject({ kind: 'ok', step: 'first contact' })
+  const moved = await change(h, 'owner', 2, 2)
+  const nonce = await v.issueNonce()
+  const did = didOf(moved)
+  const t = { iss: did, sub: did, aud: AUD, nonce, iat: T, exp: T + 300 }
+  const kid = kidOf(did, headOf(moved).versionId)
+  expect(await v.login({ log: moved.log, nonce, token: await signToken(moved.auth, kid, t) })).toMatchObject({ kind: 'ok', step: 'continued' })
+  const n2 = await v.issueNonce()
+  expect(await v.login({ log: moved.log, nonce: n2, token: await signToken(h.auth, kid, { ...t, nonce: n2 }) })).toEqual({ kind: 'invalid', reason: 'token: signature does not verify' })
+  expect((await store.read(did))?.head.doc.service).toEqual([{ ...hub, id: `${did}#hub` }])
+})
+
+test('rotate and login share one rule: what rotate takes, login can use; what login refuses, rotate refuses', async () => {
+  const mk = (edit: (vm: Record<string, unknown>, doc: Record<string, unknown>) => Record<string, unknown>) =>
+    (doc: Record<string, unknown>) => ({ ...doc, verificationMethod: [edit(methodOf(doc), doc)] })
+  const accepted: Record<string, (doc: Record<string, unknown>) => Record<string, unknown>> = {
+    plain: (doc) => doc,
+    'extra member on the method': mk((vm) => ({ ...vm, comment: 'x' })),
+    'other fragment': (doc) => {
+      const id = `${doc.id}#signing`
+      return { ...doc, verificationMethod: [{ ...methodOf(doc), id }], authentication: [id] }
+    },
+    'extra document members': (doc) => ({ ...doc, alsoKnownAs: ['https://example.com/a'], service: [] }),
+  }
+  const refused: Record<string, (doc: Record<string, unknown>) => Record<string, unknown>> = {
+    'JWK': mk(({ publicKeyMultibase, ...vm }) => ({ ...vm, type: 'JsonWebKey', publicKeyJwk: { kty: 'OKP', crv: 'Ed25519', x: 'AAAA' } })),
+    'another controller': mk((vm) => ({ ...vm, controller: 'did:example:other' })),
+    'not a Multikey': mk((vm) => ({ ...vm, type: 'Ed25519VerificationKey2020' })),
+    'not an Ed25519 multikey': mk((vm) => ({ ...vm, publicKeyMultibase: 'z6LSbysY2xFMRpGMhb7tFTLMpeuPRaqaWM1yECx2AtzE3KCc' })),
+  }
+  for (const [name, edit] of Object.entries(accepted)) {
+    const h = await withDoc(edit)
+    const a1 = await keyOf(`shared rule ${name}`)
+    const log = await rotate(h.log, { signer: h.next, next: [], authKey: a1.pubRaw, time: at(2) })
+    const did = didOf(h)
+    const fragment = String((methodOf(headOf(h).state).id as string).split('#')[1])
+    const v = verifier()
+    const nonce = await v.issueNonce()
+    const token = await signToken(a1, kidOf(did, (log[log.length - 1] as Entry).versionId, fragment), { iss: did, sub: did, aud: AUD, nonce, iat: T, exp: T + 300 })
+    expect(await v.login({ log, nonce, token }), name).toMatchObject({ kind: 'ok' })
+  }
+  for (const [name, edit] of Object.entries(refused)) {
+    const h = await withDoc(edit)
+    const a1 = await keyOf(`shared rule ${name}`)
+    await expect(rotate(h.log, { signer: h.next, next: [], authKey: a1.pubRaw, time: at(2) }), name).rejects.toThrow(/authentication key/)
+    expect(authenticationKeys(headOf(h).state).size, name).toBe(0)
+  }
 })

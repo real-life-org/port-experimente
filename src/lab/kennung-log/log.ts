@@ -106,18 +106,29 @@ export function didDocument (did: string, authKey: Uint8Array): Record<string, u
   }
 }
 
-/** The Ed25519 keys a document lists under `authentication`, by id. */
+/**
+ * The one rule for which authentication method this lab supports, used by
+ * the login verifier and by `rotate`: an entry of `authentication` (an id
+ * or an embedded method) that names a method with a string `id`, type
+ * `Multikey`, controlled by the document's own DID, whose
+ * `publicKeyMultibase` is an Ed25519 key. Anything else (a JWK, another
+ * type or controller, another curve) is not supported.
+ */
+export function supportedAuthMethod (doc: Record<string, unknown>, entry: unknown): { id: string, raw: Uint8Array } | undefined {
+  const byId = (id: unknown): unknown => (Array.isArray(doc.verificationMethod) ? doc.verificationMethod as unknown[] : [])
+    .find((v) => v && typeof v === 'object' && (v as any).id === id)
+  const vm: any = typeof entry === 'string' ? byId(entry) : entry
+  if (!vm || typeof vm.id !== 'string' || vm.type !== 'Multikey' || vm.controller !== doc.id) return undefined
+  const raw = rawOfMultikey(vm.publicKeyMultibase)
+  return raw ? { id: vm.id, raw } : undefined
+}
+
+/** The Ed25519 keys a document lists under `authentication`, by id (the methods `supportedAuthMethod` takes). */
 export function authenticationKeys (doc: Record<string, unknown>): Map<string, Uint8Array> {
   const out = new Map<string, Uint8Array>()
-  const vms = Array.isArray(doc.verificationMethod) ? doc.verificationMethod as unknown[] : []
-  const byId = new Map<string, unknown>()
-  for (const v of vms) if (v && typeof v === 'object' && typeof (v as any).id === 'string') byId.set((v as any).id, v)
-  const auth = Array.isArray(doc.authentication) ? doc.authentication as unknown[] : []
-  for (const a of auth) {
-    const vm: any = typeof a === 'string' ? byId.get(a) : a
-    if (!vm || typeof vm.id !== 'string' || vm.type !== 'Multikey' || vm.controller !== doc.id) continue
-    const raw = rawOfMultikey(vm.publicKeyMultibase)
-    if (raw) out.set(vm.id, raw)
+  for (const a of Array.isArray(doc.authentication) ? doc.authentication as unknown[] : []) {
+    const m = supportedAuthMethod(doc, a)
+    if (m) out.set(m.id, m.raw)
   }
   return out
 }
@@ -202,7 +213,8 @@ export interface RotateOptions {
  * verification method is kept. A document this cannot continue safely, where
  * it is unclear what the key change replaces, is refused with an error:
  * anything but exactly one verification method that `authentication` lists
- * by id, as its only entry.
+ * by id, as its only entry, and that `supportedAuthMethod` takes (the rule
+ * the login verifier uses). Refused before anything is signed.
  */
 function withAuthKey (doc: Record<string, unknown>, authKey: Uint8Array): Record<string, unknown> {
   const vms = doc.verificationMethod
@@ -210,6 +222,9 @@ function withAuthKey (doc: Record<string, unknown>, authKey: Uint8Array): Record
   const vm = Array.isArray(vms) && vms.length === 1 ? vms[0] as Record<string, unknown> : undefined
   if (!vm || typeof vm !== 'object' || typeof vm.id !== 'string' || !Array.isArray(auth) || auth.length !== 1 || auth[0] !== vm.id) {
     throw new Error('rotate: cannot change the authentication key: the document must have exactly one verification method, listed as the only entry of authentication')
+  }
+  if (!supportedAuthMethod(doc, auth[0])) {
+    throw new Error('rotate: cannot change the authentication key: the method is not an Ed25519 Multikey controlled by the DID (the only kind login supports)')
   }
   return { ...doc, verificationMethod: [{ ...vm, publicKeyMultibase: multikey(authKey) }] }
 }
