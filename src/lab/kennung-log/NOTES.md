@@ -107,8 +107,13 @@ input: the log, and the token against the head of that log (signature,
 `kid`, audience, nonce claim equal to the request's nonce, no `crit`).
 Then one step per DID (`Store.transact`): take the time, compare with the
 held log, keep evidence, check the nonce's expiry and the token's `iat` and
-`exp` against that time, spend the nonce, admit or refuse, against what is
-held at that moment. The memory store runs that step without a pause; the
+`exp` against that time, admit or refuse, against what is held at that
+moment, and spend the nonce only with an admitted login. Keeping the log
+state and admitting the login are kept apart inside that step: evidence is
+kept whatever the login; the nonce is spent only when the login is
+admitted. A caller can hook into the step (`before`: the answer is not
+considered at all; `admit`: the caller refuses or takes an admitted login
+in the same step). The memory store runs that step without a pause; the
 interface is shaped so that a database can run it as one transaction.
 
 | Case | Result |
@@ -124,7 +129,8 @@ interface is shaped so that a database can run it as one transaction.
 | a token by the old key, naming the new head | invalid (signature) |
 | a token by the old key, naming the old version | invalid (not under the head) |
 | a new head with the authentication key unchanged, a token naming the old head | invalid (not under the head) |
-| a valid continuation with a failing token | invalid; the continuation is kept; a sibling of it is then contested |
+| a valid continuation with a failing token | invalid; the continuation is kept; the nonce stays open; a sibling of it is then contested |
+| a token for another nonce, or any other refused answer | invalid; the nonce stays open; the right answer then is ok |
 | a continuation with a key that was not committed | invalid; nothing locked; the owner's continuation is taken after it |
 | deactivation | invalid (deactivated), and the deactivation is kept; an old device is stale; an entry after it is invalid |
 | a tampered log | invalid; nothing locked |
@@ -153,9 +159,13 @@ interface is shaped so that a database can run it as one transaction.
 4. **The token names its head.** A token under an earlier head fails,
    whether its key changed or not: the `versionId` in the protected `kid`
    must be the head's.
-5. **A nonce is spent once.** It is issued by the verifier with an expiry
-   (300 s by default) and spent in the step by the first login that names
-   it and gets that far, whatever the result. The clock is read in the step,
+5. **A nonce is spent once, by an admitted login.** It is issued by the
+   verifier with an expiry (300 s by default) and spent in the step by the
+   first login that names it and is admitted; a refused answer leaves it
+   open, so an invalid or misdirected answer cannot use up a request (SIOPv2
+   asks for nonce equality and replay protection and leaves the way to the
+   RP). The same valid answer twice, one after the other or at once, is ok
+   at most once. The clock is read in the step,
    so a nonce or token that expires while the call waits for the store is
    not `ok`. Issuing a nonce drops the ones that have expired (spent ones
    stay until their expiry, so a replay still reads "already used"; after

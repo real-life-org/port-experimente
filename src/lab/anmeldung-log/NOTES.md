@@ -11,6 +11,10 @@ Spec text read: SIOPv2 draft 13 and OpenID4VP 1.0 (local copies, line
 numbers below refer to them), RFC 9101 and RFC 6749 (rfc-editor.org, text),
 did:webvh 1.0 (identity.foundation/didwebvh/v1.0 and
 `spec-v1.0/specification.md`), especially The DID to HTTPS Transformation.
+For the transport: the IANA IPv4 and IPv6 Special-Purpose Address
+Registries and the IANA Internet Protocol Version 6 Address Space registry
+(iana.org, read 2026-11-28; the two special-purpose registers last updated
+2025-10-09), RFC 6052, RFC 3056, RFC 4380 (rfc-editor.org, text).
 
 ## What is built
 
@@ -24,15 +28,19 @@ did:webvh 1.0 (identity.foundation/didwebvh/v1.0 and
 - `http.ts`: the service behind HTTP (endpoints only, no page):
   `/.well-known/did.jsonl`, `/anmeldung-log/start`, `/anmeldung-log/anfrage/<id>`
   (request_uri), `/anmeldung-log/antwort` (redirect_uri), `/anmeldung-log/status`,
+  `/anmeldung-log/abbrechen` (the starting browser gives the attempt up),
   `/anmeldung-log/fertig`.
 - `wallet.ts`: the demo wallet as a module. Resolve and verify the service's
   log, check the request, derive the keys, create and store the person's log
   at the first login, sign, answer, cancel, change the person's key. All its
-  writes go through one step (`commit`) with a condition on the result.
-- `transport.ts`: how the wallet fetches (size cap, time limit, no redirect,
-  https only) and the default transport, `node:https` with a lookup that
-  refuses local addresses. Tests give the wallet their own transport
-  (`tests/anmeldung-log-loopback.ts`).
+  writes go through one step (`commitState`) with a condition on the result;
+  every POST goes through one gate (`#send`). Its state and inner methods are
+  JavaScript private fields (`#`).
+- `transport.ts`: how the wallet reads (GET) and sends (POST): size cap, time
+  limit, no redirect, https only; the default transport is `node:https` with
+  a lookup that connects only to globally reachable addresses, after the two
+  IANA special-purpose registers held as data in the file. Tests give the
+  wallet their own transport (`tests/anmeldung-log-loopback.ts`).
 - `vector.ts`, `vector.json`: one complete positive vector.
 
 Not reused by import from `src/lab/anmeldung/`: its `WebApp` writes the old
@@ -67,17 +75,23 @@ code (`/erneuern`), the cap on open requests, the demo wallet page.
    be in its window and the service head it was checked under must be the
    held one or continue it; then the head and, at the first login, the
    identifier (keys from the secret and the verified SCID, log at the current
-   time) are stored. Otherwise nothing is sent. The ID token (`iss` = `sub` =
-   the DID, `aud` = the whole `client_id`, `nonce`, `iat`, `exp` 300 s later,
-   `kid` `<did>?versionId=<head>#key-1`); a POST with `id_token`, `state`,
-   `did_log` to the `redirect_uri`, no redirect followed.
+   time) are stored. The ID token is signed (`iss` = `sub` = the DID, `aud` =
+   the whole `client_id`, `nonce`, `iat`, `exp` 300 s later, `kid`
+   `<did>?versionId=<head>#key-1`). Then the gate, synchronously right before
+   the POST: the request still in its window, the held service head still
+   the checked one or its continuation (not deactivated), and the person's
+   held head still the one the token names; if only that last one moved (a
+   key change meanwhile), the token is signed again under the held head.
+   Otherwise nothing is sent. The POST carries `id_token`, `state`, `did_log`
+   to the `redirect_uri`, no redirect followed.
 5. The service: `state` names the attempt; `verifier.login` checks log,
    token (signature under the head, `aud` equal to the whole `client_id`,
-   `iss` = `sub` = the DID, nonce issued here and spent once, time) and the
-   held log state. Its step for the nonce also ends the attempt and hands out
-   a good login: to the starting browser (QR) or as a one-time code in the
-   returned `redirect_uri` (same device). Collecting or redeeming issues the
-   session in one store step that looks at the identifier again.
+   `iss` = `sub` = the DID, the nonce of this open attempt, time) and the
+   held log state. Only an admitted login ends the attempt: in the verifier's
+   step that spends the nonce it is handed out to the starting browser (QR)
+   or as a one-time code in the returned `redirect_uri` (same device).
+   Collecting or redeeming issues the session in one store step that looks
+   at the identifier again.
 
 ## Where each rule comes from
 
@@ -109,6 +123,12 @@ code (`/erneuern`), the cap on open requests, the demo wallet page.
 | The SCID of the requested DID must be that of the log; the log must be that DID's | did:webvh 1.0, Read; kennung-log `verify(..., { did })` |
 | `request_uri` an https URI | RFC 9101 5.2 |
 | Request Object served as `application/oauth-authz-req+jwt` | RFC 9101 4 |
+| Nonce compared and not replayed; how is the RP's | SIOPv2 Z. 669, 677 |
+| IPv4: refused unless the most specific row says "Globally Reachable: True"; rows nest | IANA IPv4 Special-Purpose Address Registry (every row, footnote 2), table `IPV4_SPECIAL` |
+| IPv6: refused unless the most specific row says "Globally Reachable: True"; rows nest | IANA IPv6 Special-Purpose Address Registry (every row, footnote 1), table `IPV6_SPECIAL` |
+| IPv6 only from 2000::/3 | IANA Internet Protocol Version 6 Address Space (2000::/3 the one "Global Unicast" block) |
+| `64:ff9b::/96` judged by the IPv4 address in its last 32 bits | RFC 6052 2.2 (format), 3.1 (MUST NOT represent non-global IPv4) |
+| `2002::/16` (register "N/A", "See RFC 3056") judged by its IPv4 address, bits 16–47 | RFC 3056 2 (`2002:V4ADDR::/48`) |
 
 ## Profile rules (ours, not from a spec)
 
@@ -137,15 +157,28 @@ code (`/erneuern`), the cap on open requests, the demo wallet page.
 - **Fetch limits**: https only, Request Object at most 16 KiB, log at most
   256 KiB, answer at most 16 KiB, 5 s for the whole exchange, no redirect
   followed, no credentials in the URL, no IP address as host.
-- **No connection into the local network**: the default transport resolves
-  the name once in its own `lookup` and connects to exactly those addresses.
-  It refuses when any of them is private (10/8, 172.16/12, 192.168/16,
-  fc00::/7, fec0::/10), loopback, link-local (169.254/16, fe80::/10),
-  carrier-grade NAT (100.64/10), multicast or above (224/4 and up, ff00::/8),
-  unspecified or `0/8`, also IPv4 inside IPv6 (`::ffff:a.b.c.d`,
-  `::a.b.c.d`, `64:ff9b::/96`) by the IPv4 rule. A name that answers with a
-  public and a local address is refused. This is shown for Node only; for the
-  app (WebView, Capacitor) it is a requirement on its HTTP layer.
+- **Only globally reachable addresses**: the default transport resolves the
+  name once in its own `lookup` and connects to exactly those addresses, and
+  only if every one of them is globally reachable after the two IANA
+  special-purpose registers (an allow rule, not a list of local ranges):
+  IPv4 is refused in multicast (224/4) and class E (240/4) and wherever the
+  most specific register row does not say "True"; IPv6 is taken only from
+  2000::/3, minus the rows there that do not say "True" (documentation
+  `2001:db8::/32` and `3fff::/20`, benchmarking `2001:2::/48`, the old ORCHID
+  block, the rest of `2001::/23`); Teredo `2001::/32` ("N/A") is refused;
+  6to4 `2002::/16` and the Well-Known Prefix `64:ff9b::/96` are judged by the
+  IPv4 address inside; everything else outside 2000::/3 is refused, among it
+  `64:ff9b:1::/48`, IPv4-mapped and IPv4-compatible addresses, `fc00::/7`,
+  `fe80::/10`, `ff00::/8`. ORCHIDv2, AMT, AS112 and the anycast rows the
+  registers mark "True" are allowed. A name that answers with one address
+  that is not allowed is refused. What is promised is exactly this: the
+  wallet connects only to addresses that these two registers mark globally
+  reachable; what a device's routing makes of such an address (a local
+  NAT64, a VPN, a route to a private network) lies outside it. Shown for
+  Node only; for the app (WebView, Capacitor) it is a requirement on its
+  HTTP layer.
+- **Redirects**: a 3xx is not followed; the exchange is aborted, which
+  closes the socket, before the error is returned.
 - **Request Object window**: `exp` later than `iat`, `iat` and `nbf` at most
   60 s ahead, `exp` later than now, `exp − iat` at most 300 s; checked at the
   time after the fetch, and again when the person answers or cancels.
@@ -157,10 +190,23 @@ code (`/erneuern`), the cap on open requests, the demo wallet page.
   also from a request that is refused, and nothing older is taken after it.
   When the person answers or cancels, the head the request was checked under
   is compared with the head held at that moment, in the same step that
-  stores: an older confirmation after a newer one sends nothing and changes
-  nothing. Every write of the wallet (answer, cancel, deactivation, key
-  change) goes through this one step, which refuses any result in which a
-  held service log or identifier log would go back.
+  stores, and again in the gate right before the POST: an older confirmation
+  after a newer one sends nothing and changes nothing. Every write of the
+  wallet (answer, cancel, deactivation, key change) goes through this one
+  step, which refuses any result in which a held service log or identifier
+  log would go back.
+- **One gate before the transport**: the wallet prepares everything first
+  (keys derived, token signed, body built); then one function, the only one
+  in the module that calls `transport.post`, checks without an await between
+  the check and the call: the request's window at that moment, the held
+  service head against the checked one, and for an answer the person's held
+  head against the one the token names. Answers, `user_cancelled` and
+  `subject_syntax_types_not_supported` all go through it. The token sent
+  names the head held when it is sent.
+- **Private state**: what the wallet checked, its storage, transport and
+  secret, and its inner steps are JavaScript private fields and methods
+  (`#`); a caller, also one in plain JavaScript, reaches only `profile` and
+  the public methods.
 - **The key that signs requests** is the document's one `authentication` key
   (that is what `kennung-log/log.ts` writes and rotates); OpenID4VP asks only
   that it be in `verificationMethod`. Its `kid` is `<did>#key-1`, without
@@ -169,22 +215,38 @@ code (`/erneuern`), the cap on open requests, the demo wallet page.
   `error_description`, `did_log_result` (`stale`, `contested`, `invalid`,
   `unsupported`) and, for `stale`, `held_version_id`. OpenID4VP does not define
   an answer for a refused response.
-- **What ends an attempt**: an answer that reaches the verifier's step for
-  the attempt's nonce ends the attempt in that same step, and the store
-  spends the nonce there: attempt and nonce end together, whatever the
-  result. `user_cancelled` ends both too, in one store step. Nothing else ends
-  an attempt: no `did_log`, a log that is not JSON Lines or does not verify,
-  no `id_token`, or an error other than `user_cancelled` (answered with 200,
-  the attempt stays open). An answer for an attempt that was given up
-  (`forget`) or has run out by the time of the step decides and keeps
+- **What ends an attempt**: a login consumes the attempt and its nonce
+  atomically exactly when signature, `iss`/`sub`, audience, time and the
+  nonce of this open attempt are valid and the account check admits it (not
+  `stale`, not `contested`, not deactivated). That happens in the verifier's
+  step, which spends the nonce only then, and the login is handed out in the
+  same step. Invalid or swapped answers (a token for attempt A under the
+  `state` of B; a valid log with an unusable token; no `did_log`, a log that
+  does not verify, no `id_token`, another error) leave the attempt and its
+  nonce open. Valid evidence (a continuation, a fork, a deactivation) is kept
+  by the verifier whatever the login, and a fork locks the identifier.
+  `user_cancelled` is acknowledged (200) and shown to the waiting browser,
+  but does not end the attempt. Ended for good without a login only by the
+  browser that started it (`forget`, `POST /anmeldung-log/abbrechen`, which
+  spends the nonce in one store step) and by running out. An answer for an
+  attempt that is no longer open at the time of the step decides and keeps
   nothing.
+- **Store**: the verifier's `Store` (`transact`, one step per DID, the nonce
+  spent only with an admitted login) and two further steps of the service
+  (`LoginStore`): `closeAttempt` (an attempt ends without a login: its nonce
+  is spent and the service's maps change in the same step) and
+  `issueSession` (reads the identifier and issues the session in one step,
+  writes nothing to the store). The service's maps change in a store step
+  only inside its callback, through a journal that is put back when the
+  step fails or is tried again.
 - **Account and session**: a good answer is handed out in the verifier's step
   (pickup for the waiting browser, or a one-time code). Collecting it, or
   redeeming the code, issues the session in one store step that reads the
-  identifier again: contested or deactivated by then, there is no session.
-  The waiting browser learns a refused answer (`{"error":"refused"}`) and a
-  cancel (`{"error":"user_cancelled"}`); an answer that did not end the
-  attempt it does not learn, the attempt is still open.
+  identifier again: contested or deactivated by then, there is no session
+  (`{"error":"refused"}`, final). While the attempt is open the waiting
+  browser is told, as a notice that ends nothing, of a cancel
+  (`{"error":"user_cancelled"}`) and of an answer that reached the
+  verifier's step and was refused (`{"error":"refused"}`).
 - **Attempts**: every start is a fresh attempt with its own id; the service
   API takes no session id to reuse.
 - **Errors from the wallet** go only to the `redirect_uri` of a request that
@@ -193,7 +255,7 @@ code (`/erneuern`), the cap on open requests, the demo wallet page.
 
 ## Measured
 
-`tests/anmeldung-log-http.test.ts` (24, over HTTP on 127.0.0.1):
+`tests/anmeldung-log-http.test.ts` (34, over HTTP on 127.0.0.1):
 first login with two devices and on the same device; return; key change of
 the person; second wallet with the old state is `stale` and told the head;
 two continuations `contested`, then the owner too; the waiting browser learns
@@ -201,22 +263,35 @@ the refusal; key change of the service, the wallet follows; a held service
 log that the new one does not continue is refused; another service gives
 another identifier and other keys; two wallets with the same secret derive
 the same keys, and their first entries (other times) give two identifiers;
-cancel; the same answer twice; wrong `aud`; an answer after expiry; a DID
-method the service does not list (the attempt stays open). Wallet: an older
+the same answer twice; wrong `aud`; an answer after expiry; a DID method the
+service does not list (the attempt stays open). Wallet: an older
 confirmation after a newer one sends nothing and keeps the newer head, also
 for cancel; the request runs out while the person decides: nothing sent,
-nothing stored; a copied or changed view, or another wallet's, is refused and
-the view cannot be changed; two confirmations side by side give one
-identifier; a key change beside a confirmation keeps the newer service head.
-Service: no log, an unreadable log, no token, another error leave the
-attempt open and the right answer then logs in; swapped answers between two
-attempts are refused by the nonce and the other attempt still logs in; a
-browser without the attempt's cookie collects nothing first, and the right
-one then does; contested between the answer and the pickup gives no session
-on either way; an attempt given up while its answer is checked keeps nothing;
-fresh attempt ids and the sweep.
+nothing stored; the clock reaches `exp` while the wallet derives and signs:
+no POST; the service head is deactivated or moves on while it signs: no
+POST; a key change lands between signing and sending: the token sent names
+the head held at that moment (checked on the POST itself), also with key
+changes beside confirmations in several orders; the transport is called
+only from the gate, with no await between check and call; the checked state
+and the inner methods are not reachable from JavaScript; `commitState`
+itself refuses every way a held log or index goes back; two first
+confirmations side by side with different genesis times store exactly one
+identifier and both send it; a copied or changed view, or another wallet's,
+is refused and the view cannot be changed; two confirmations side by side
+give one identifier; a key change beside a confirmation keeps the newer
+service head. Service: cancel is shown to the waiting browser and leaves
+attempt and nonce open; only the starting browser gives the attempt up, and
+then the nonce is spent; after a cancel the person can still confirm; no
+log, an unreadable log, no token, another error leave the attempt open and
+the right answer then logs in; swapped answers between two attempts are
+refused by the nonce, both attempts and nonces stay open and both then log
+in; a valid continuation with an unusable token is kept, the nonce stays
+open, the right answer then logs in; a browser without the attempt's cookie
+collects nothing first, and the right one then does; contested between the
+answer and the pickup gives no session on either way; an attempt given up
+while its answer is checked keeps nothing; fresh attempt ids and the sweep.
 
-`tests/anmeldung-log.test.ts` (38): every refusal sends nothing. Changed
+`tests/anmeldung-log.test.ts` (40): every refusal sends nothing. Changed
 request, `kid` not in the document, `kid` of another DID, another key under the
 right `kid`, `client_id` outside ≠ inside (also without the prefix inside),
 `redirect_uri` on another host, another port, over http, unsigned
@@ -231,19 +306,27 @@ naming another SCID changes nothing; further parameters in the outer link
 steer nothing; the transformation examples of did:webvh
 1.0; the return address opened only on the service origin; the window checked
 after a slow fetch; a shorter service log and a deactivated one (kept, also
-at first sight); the address ranges; the default transport with an injected
-resolver (local refused, a mixed answer refused, a public address tried, one
-lookup); the default transport against a real loopback service (refused, no
-request reaches it); https, credentials, IP hosts refused before sending; a
-fetch with no answer and one that stalls in its body end after the time
-limit.
+at first sight); every row of both IANA registers, with an address that row
+decides; further addresses (multicast, class E, IPv4 inside IPv6, outside
+2000::/3, `64:ff9b:1::/48`, 6to4, Teredo); the default transport with an
+injected resolver (refused addresses, a mixed answer refused, a global
+address tried, one lookup); the default transport against a real loopback
+service (refused, no request reaches it); https, credentials, IP hosts
+refused before sending; a fetch with no answer and one that stalls in its
+body end after the time limit; a 3xx is aborted and its socket closed well
+before the time limit, for GET and POST.
 
-`tests/anmeldung-log-vector.test.ts` (3): `vector.json` is what the code builds
-from fixed inputs; checked from its texts alone: every key of service and
-person derived anew from the inputs and the stated rule, every field that
-repeats another compared (compact JWS against its decoded parts, POST against
-token, state and log, logs against DIDs, link against request), both
-signatures by hand, then wallet and service; one changed byte is refused.
+`tests/anmeldung-log-vector.test.ts` (4): `vector.json` is what the code builds
+from fixed inputs; checked from its texts alone: both derivations complete,
+every key of service and person derived anew from the inputs and the stated
+rule, the genesis commitments against the derived update key 1, every field
+that repeats another compared (compact JWS against its decoded parts, POST
+against token, state and log, logs against DIDs, link against request,
+inputs against the parts built from them, the media type of the POST), both
+signatures by hand, then wallet and service; one changed byte is refused;
+each of eleven changes to a copy (rows removed or doubled, media type,
+service name, host, times, request id, both genesis commitments) is
+reported.
 
 Sizes in the vector (bytes): outer link 233, `request_uri` 68 (RFC 9101 5.2:
 the request URI SHOULD NOT exceed 512 ASCII characters), Request Object 1110,
@@ -262,11 +345,12 @@ body 2285.
   DID's origin, so one origin can carry several account spaces under one DID.
   A path as an account space of its own would need a response address bound
   in advance (for example in the DID document); not built.
-- Who holds a request can use it up: whoever fetched it (`state`, `nonce`)
-  can end the attempt with `user_cancelled`, or answer it with a log of their
-  own; in the QR way the waiting browser then gets that account. The attempt
-  carries no binding to a wallet chosen in advance; the rule above only keeps
-  unreadable answers and other errors from ending it.
+- Who fetches a request can answer it with a valid identifier of their own:
+  that answer is a valid login for this attempt, and in the QR way the
+  waiting browser then gets that account. Invalid answers and
+  `user_cancelled` no longer end the attempt, but no rule for consuming an
+  attempt closes this without a binding to the wallet that is meant, which
+  the attempt does not carry.
 - The two-device way still cannot tell who started the request: the signed
   request proves the service, not that the confirming person sits at the
   browser that is logged in (profile section 9, stage 5).
@@ -275,8 +359,12 @@ body 2285.
   syncing the person's own devices (here a copy of the state,
   `MemoryStorage(w.state())`). Rotations on two devices without that sync
   make the identifier contested. With the same secret alone a second wallet
-  derives the same keys but not the same identifier. Backup and recovery of
-  the log, also after a rotation (profile section 11), are not modelled.
+  derives the same keys; its first entry gives another identifier when it is
+  written in another second, and the same one when written in the same
+  second (the time is the only other input). For an existing identifier,
+  which may have been rotated, the sync is needed either way. Backup and
+  recovery of the log, also after a rotation (profile section 11), are not
+  modelled.
 - Sessions already running when an identifier becomes contested stay; what
   happens to them is the operator's decision. Settling a contested
   identifier; deactivation of a person's identifier at the service beyond

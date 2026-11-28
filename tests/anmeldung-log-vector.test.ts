@@ -27,3 +27,38 @@ test('a vector with one changed byte in the ID token or the request object is re
   const form = new URLSearchParams(v.post.body); form.set('id_token', flip(form.get('id_token')!))
   expect((await checkVector({ ...v, post: { ...v.post, body: form.toString() } })).some((p) => p.startsWith('service refuses'))).toBe(true)
 })
+
+test('checkVector notices what is missing or does not match: each change to a copy of the vector is an error', async () => {
+  const v = JSON.parse(readFileSync(FILE, 'utf8')) as Vector
+  const copy = (): Vector => structuredClone(v)
+  const changes: [string, (c: Vector) => void, RegExp][] = [
+    ['both update/1 rows removed', (c) => {
+      c.service_derivation = c.service_derivation.filter((d) => !(d.role === 'update' && d.index === 1))
+      c.derivation = c.derivation.filter((d) => !(d.role === 'update' && d.index === 1))
+    }, /^service_derivation: the rows are not exactly/],
+    ['the person\'s auth/0 row removed', (c) => { c.derivation = c.derivation.filter((d) => d.role !== 'auth') }, /^derivation: the rows are not exactly/],
+    ['a row given twice', (c) => { c.derivation = [...c.derivation, c.derivation[0]!] }, /^derivation: the rows are not exactly/],
+    ['the POST media type', (c) => { c.post.content_type = 'text/plain' as never }, /^post: content_type/],
+    ['the service name in the inputs', (c) => { c.inputs.service.name = 'Anderer Dienst' }, /^request_object: client_name is not inputs.service.name/],
+    ['the service host in the inputs', (c) => { c.inputs.service.host = 'anderer.example' }, /^service_did does not name inputs.service.host/],
+    ['the time in the inputs', (c) => { c.inputs.time = '2026-11-28T12:00:01Z' }, /^request_object: iat is not inputs.time/],
+    ['the service log time in the inputs', (c) => { c.inputs.service.log_time = '2026-11-27T12:00:01Z' }, /^service log: versionTime/],
+    ['the request id in the inputs', (c) => { c.inputs.request_id = 'b3RoZXI' }, /^request_uri is not the service origin/],
+    ['the person\'s genesis commitment', (c) => {
+      const log = c.person_log.split('\n')
+      const e = JSON.parse(log[0]!); e.parameters.nextKeyHashes = ['QmUnrelatedUnrelatedUnrelatedUnrelatedUnrelated1']; log[0] = JSON.stringify(e)
+      c.person_log = log.join('\n')
+    }, /^person log: nextKeyHashes is not the hash of the derived update key 1/],
+    ['the service\'s genesis commitment', (c) => {
+      const log = c.service_log.split('\n')
+      const e = JSON.parse(log[0]!); e.parameters.nextKeyHashes = ['QmUnrelatedUnrelatedUnrelatedUnrelatedUnrelated1']; log[0] = JSON.stringify(e)
+      c.service_log = log.join('\n')
+    }, /^service log: nextKeyHashes is not the hash of the derived update key 1/],
+  ]
+  for (const [name, change, want] of changes) {
+    const c = copy()
+    change(c)
+    const problems = await checkVector(c)
+    expect([name, problems.some((p) => want.test(p))], JSON.stringify(problems)).toEqual([name, true])
+  }
+})

@@ -5,19 +5,25 @@
 // here, that module stays as it is):
 // 1. started: each start is a fresh attempt with its own id, request, nonce
 //    and state; it lives REQUEST_LIFETIME_MS;
-// 2. answered: an answer that reaches the verifier's step for the attempt's
-//    nonce ends the attempt in that same step, and a good one is handed out
-//    there (cross-device: to the waiting browser; same-device: a one-time
-//    response_code in the redirect_uri of the HTTP answer); `user_cancelled`
-//    ends it too, in one step with spending the nonce; nothing else does;
+// 2. answered: only an admitted login ends the attempt, in the verifier's
+//    step that spends the attempt's nonce, and it is handed out there
+//    (cross-device: to the waiting browser; same-device: a one-time
+//    response_code in the redirect_uri of the HTTP answer). A refused or
+//    misdirected answer, and `user_cancelled`, leave attempt and nonce open
+//    (the waiting browser is told, as a notice);
 // 3. collected or redeemed exactly once: a session is issued in one store
-//    step with a fresh look at the identifier (contested: no session).
+//    step with a fresh look at the identifier (contested: no session);
+// 4. closed for good without a login: by the browser that started it
+//    (`forget`, which spends the nonce in one store step) or by running out.
 // Transport-free; http.ts puts it behind HTTP.
+//
+// The service's maps change in a store step only inside that step
+// (`Journal`), and are put back if the step fails or is tried again.
 
 import { b64uOf, edFromSeed, hkdf, rand, type KeyPair } from 'rltp-lib'
 import { create, deactivate, fromJsonl, loginKeys, rotate, toJsonl, verify, type Entry, type Profile, type Version } from '../kennung-log/log'
 import { vh, webvh } from '../kennung-log/profiles'
-import { MemoryStore, Verifier, type Held, type LoginResult, type Store } from '../kennung-log/verifier'
+import { MemoryStore, Verifier, type Held, type NonceState, type Store } from '../kennung-log/verifier'
 import { subjectSyntaxOf, CLIENT_ID_PREFIX, DID_LOG_FIELD, ID_TOKEN_TYPE, outerLink, REQUEST_LIFETIME_S, SIOP_AUD, signRequestObject, type RequestClaims } from './profile'
 
 export const REQUEST_LIFETIME_MS = REQUEST_LIFETIME_S * 1000
@@ -46,18 +52,75 @@ export async function serviceLog (host: string, keys: ServiceKeys, time: string)
   return create({ profile: webvh(host), updateKey: u0, next: [u1.pubRaw], authKey: a0.pubRaw, time })
 }
 
+/**
+ * The verifier's store with the two further steps the service needs. Each
+ * runs its callback synchronously inside the step; a store that retries a
+ * step calls it again; a step that fails rejects.
+ */
+export interface LoginStore extends Store {
+  /** An attempt ends for good without a login: its nonce is spent (no answer can be admitted under it any more), and `apply` runs in the same step. */
+  closeAttempt (nonce: string, clock: () => number, apply: (now: number) => void): Promise<void>
+  /** A session is issued: one step that reads what is held of `did` and runs `decide`; it writes nothing to the store. */
+  issueSession<T> (did: string, clock: () => number, decide: (held: Held | undefined, now: number) => T): Promise<T>
+}
+
+export class MemoryLoginStore extends MemoryStore implements LoginStore {
+  async closeAttempt (nonce: string, clock: () => number, apply: (now: number) => void): Promise<void> {
+    // no await: one step
+    const now = clock()
+    apply(now)
+    const n = this.nonces.get(nonce)
+    if (n) n.spent = true
+  }
+  async issueSession<T> (did: string, clock: () => number, decide: (held: Held | undefined, now: number) => T): Promise<T> {
+    const now = clock()
+    const h = this.held.get(did)
+    return decide(h && structuredClone(h), now)
+  }
+  /** What a nonce is at `now` (tests). */
+  peek (nonce: string, now: number): NonceState { return this.nonceState(nonce, now) }
+}
+
+/** Changes to the service's maps inside one store step, so they can be put back. */
+class Journal {
+  private undo: (() => void)[] = []
+  set<K, V> (m: Map<K, V>, k: K, v: V): void {
+    const had = m.has(k), old = m.get(k)
+    this.undo.push(() => { if (had) m.set(k, old as V); else m.delete(k) })
+    m.set(k, v)
+  }
+  delete<K, V> (m: Map<K, V>, k: K): void {
+    if (!m.has(k)) return
+    const old = m.get(k) as V
+    this.undo.push(() => { m.set(k, old) })
+    m.delete(k)
+  }
+  /** Put back what this journal changed (before a retry of the step, or when it failed). */
+  rollback (): void { while (this.undo.length > 0) (this.undo.pop() as () => void)() }
+  /** Run a store step whose callbacks write through this journal; a failed step is put back. */
+  async run<T> (step: Promise<T>): Promise<T> {
+    try { return await step } catch (e) { this.rollback(); throw e }
+  }
+}
+
 export type Mode = 'cross-device' | 'same-device'
 export type Login = { user: string }
 /** One login attempt: one request, one nonce, bound to the browser that started it. */
-interface Attempt { id: string, nonce: string, state: string, requestId: string, created: number, mode: Mode, jwt: string, code?: string }
-/** How an attempt ended, for the waiting browser (cross-device). */
-type Outcome = { at: number, login: Login } | { at: number, error: 'user_cancelled' | 'refused' }
+interface Attempt { id: string, nonce: string, state: string, requestId: string, created: number, mode: Mode, jwt: string }
+/** An admitted login for the waiting browser (cross-device). */
+type Outcome = { at: number, login: Login }
+/** What the waiting browser is told while its attempt stays open: the person cancelled, or an answer was refused. */
+export type Notice = 'user_cancelled' | 'refused'
 interface Code { attempt: string, login: Login, created: number }
 
 /** What the answer endpoint returns: HTTP status and JSON body. */
 export type Reply = { status: number, body: Record<string, unknown> }
-/** What collecting or redeeming gives: a fresh signed-in session, or why not. */
-export type Collected = { session: string, login: Login } | { error: 'user_cancelled' | 'refused' } | null
+/**
+ * What collecting or redeeming gives: a fresh signed-in session; a final
+ * refusal (the identifier is contested or deactivated by now); a notice
+ * while the attempt stays open; or nothing.
+ */
+export type Collected = { session: string, login: Login } | { error: 'refused' } | { notice: Notice } | null
 
 export interface ServiceOptions {
   /** The host part of the DID after the SCID, e.g. `dienst.example%3A8443` (did:webvh syntax, port encoded). */
@@ -68,8 +131,8 @@ export interface ServiceOptions {
   name?: string
   /** The method of the persons' identifiers (default did:vh, kennung-log/profiles.ts). */
   identityProfile?: Profile
-  /** The verifier's store (default in memory). */
-  store?: Store
+  /** The store (default in memory). */
+  store?: LoginStore
   /** A log written earlier (fixed vectors); otherwise one is created at `now`. */
   log?: Entry[]
   /** Fixed values for the vector; random otherwise. */
@@ -77,8 +140,6 @@ export interface ServiceOptions {
 }
 
 const isoSeconds = (ms: number): string => new Date(Math.floor(ms / 1000) * 1000).toISOString().replace(/\.000Z$/, 'Z')
-/** A nonce that is never issued (issued ones are 16 random bytes): a store step that touches no nonce. */
-const NO_NONCE = ''
 
 export class Service {
   private log!: Entry[]
@@ -90,12 +151,13 @@ export class Service {
   readonly redirectUri: string
   readonly returnUri: string
   private readonly verifier: Verifier
-  private readonly store: Store
+  private readonly store: LoginStore
   private readonly attempts = new Map<string, Attempt>()       // state -> attempt
   private readonly byRequestId = new Map<string, string>()     // request id -> state
   private readonly byNonce = new Map<string, string>()         // nonce -> state
   private readonly byAttempt = new Map<string, string>()       // attempt id -> state
-  private readonly outcomes = new Map<string, Outcome>()       // attempt id -> how it ended (cross-device)
+  private readonly outcomes = new Map<string, Outcome>()       // attempt id -> the admitted login (cross-device)
+  private readonly notices = new Map<string, Notice>()         // attempt id -> what the waiting browser is told while it stays open
   private readonly codes = new Map<string, Code>()
   private readonly sessions = new Map<string, { login: Login, at: number }>()
 
@@ -106,15 +168,8 @@ export class Service {
     this.origin = o.origin
     this.redirectUri = this.origin + RESPONSE_PATH
     this.returnUri = this.origin + RETURN_PATH
-    this.store = o.store ?? new MemoryStore()
-    // the verifier's one step per DID also ends the attempt and hands out the login (see `step`)
-    const inner = this.store
-    const stepped: Store = {
-      issue: (n, e, t) => inner.issue(n, e, t),
-      read: (d) => inner.read(d),
-      transact: (did, nonce, clock, decide) => inner.transact(did, nonce, clock, (held, ns, now) => this.step(nonce, now, () => decide(held, ns, now))),
-    }
-    this.verifier = new Verifier({ profile: o.identityProfile ?? vh, audience: this.clientId, now: () => new Date(o.now()), store: stepped, nonceTtlSec: REQUEST_LIFETIME_S })
+    this.store = o.store ?? new MemoryLoginStore()
+    this.verifier = new Verifier({ profile: o.identityProfile ?? vh, audience: this.clientId, now: () => new Date(o.now()), store: this.store, nonceTtlSec: REQUEST_LIFETIME_S })
   }
 
   /** A service with its own did:webvh: a log is created at `now` unless one is given. */
@@ -195,8 +250,9 @@ export class Service {
   private open (a: Attempt | undefined, now: number): a is Attempt {
     return a !== undefined && this.attempts.get(a.state) === a && now - a.created <= REQUEST_LIFETIME_MS
   }
-  private end (a: Attempt): void {
-    this.attempts.delete(a.state); this.byRequestId.delete(a.requestId); this.byNonce.delete(a.nonce); this.byAttempt.delete(a.id)
+  private end (a: Attempt, j: Journal): void {
+    j.delete(this.attempts, a.state); j.delete(this.byRequestId, a.requestId); j.delete(this.byNonce, a.nonce); j.delete(this.byAttempt, a.id)
+    j.delete(this.notices, a.id)
   }
 
   /** GET request_uri: the Request Object while its attempt is open. */
@@ -206,34 +262,17 @@ export class Service {
   }
 
   /**
-   * Inside the verifier's step for the nonce of one attempt (no await): the
-   * attempt must still be open, or nothing is decided and nothing kept (a
-   * forgotten or expired attempt). Then the verifier decides, the attempt ends
-   * (the store spends the nonce in the same step), and a good login is handed
-   * out: to the waiting browser, or as a one-time code for the same device.
-   */
-  private step<T> (nonce: string, now: number, decide: () => { held?: Held, result: T }): { held?: Held, result: T } {
-    const a = this.attempts.get(this.byNonce.get(nonce) ?? '')
-    if (!this.open(a, now)) return { result: { kind: 'invalid', reason: 'the request is no longer open' } as T }
-    const out = decide()
-    this.end(a)
-    const r = out.result as LoginResult
-    if (r.kind === 'ok') {
-      if (a.mode === 'same-device') {
-        a.code = this.o.fixed ? 'response-code' : b64uOf(rand(16))
-        this.codes.set(a.code, { attempt: a.id, login: { user: r.did }, created: now })
-      } else this.outcomes.set(a.id, { at: now, login: { user: r.did } })
-    } else if (a.mode === 'cross-device') this.outcomes.set(a.id, { at: now, error: 'refused' })
-    return out
-  }
-
-  /**
    * The answer at the redirect_uri (direct_post, form-encoded): `id_token`,
    * `state` and the person's log in `did_log`; or `error` and `state`.
-   * What ends an attempt: an answer that reaches the verifier's step, and
-   * `user_cancelled`; both end the attempt and spend its nonce in one step.
-   * Anything else (no log, an unreadable log, no token, another error) is
-   * answered and leaves the attempt open.
+   *
+   * What ends an attempt: only a login the verifier admits for this
+   * attempt's nonce (signature, `iss`/`sub`, audience, time, the nonce of
+   * this open attempt, and the account check), in the verifier's step that
+   * spends the nonce; the login is handed out in that same step. Everything
+   * else leaves the attempt and its nonce open: a refused answer (the
+   * verifier may still keep a verified continuation, a fork, a
+   * deactivation), an answer for another attempt, an unreadable one, and
+   * `user_cancelled`, which is acknowledged and shown to the waiting browser.
    */
   async receive (form: URLSearchParams): Promise<Reply> {
     const fail = (status: number, error: string, description: string, extra: Record<string, unknown> = {}): Reply => ({ status, body: { error, error_description: description, ...extra } })
@@ -242,12 +281,7 @@ export class Service {
     if (!this.open(a, this.o.now())) return fail(400, 'invalid_request', 'request expired')
     const error = form.get('error')
     if (error !== null) {
-      if (error === 'user_cancelled') {
-        await this.store.transact(NO_NONCE, a.nonce, () => this.o.now(), (_h, _n, now) => {
-          if (this.open(a, now)) { this.end(a); if (a.mode === 'cross-device') this.outcomes.set(a.id, { at: now, error: 'user_cancelled' }) }
-          return { result: null }
-        })
-      }
+      if (error === 'user_cancelled' && a.mode === 'cross-device') this.notices.set(a.id, 'user_cancelled')
       return { status: 200, body: {} }                      // OpenID4VP 1.0: an error response processed, 200 with JSON
     }
     const logText = form.get(DID_LOG_FIELD)
@@ -255,46 +289,71 @@ export class Service {
     if (log === null) return fail(400, 'invalid_request', `${DID_LOG_FIELD} is not a DID log in JSON Lines`, { did_log_result: 'invalid' })
     const token = form.get('id_token')
     if (!token) return fail(400, 'invalid_request', 'id_token is missing')
-    const r = await this.verifier.login({ log, token, nonce: a.nonce })
+    const j = new Journal()
+    let code: string | undefined
+    let reached = false
+    const r = await j.run(this.verifier.login({ log, token, nonce: a.nonce }, {
+      // a forgotten or expired attempt: nothing is decided, nothing kept
+      before: (now) => { j.rollback(); code = undefined; reached = true; return this.open(a, now) ? null : 'the request is no longer open' },
+      // admitted: the attempt ends and the login is handed out, in the step that spends the nonce
+      admit: (ok, now) => {
+        this.end(a, j)
+        if (a.mode === 'same-device') {
+          code = this.o.fixed ? 'response-code' : b64uOf(rand(16))
+          j.set(this.codes, code, { attempt: a.id, login: { user: ok.did }, created: now })
+        } else j.set(this.outcomes, a.id, { at: now, login: { user: ok.did } })
+        return null
+      },
+    }))
     if (r.kind !== 'ok') {
+      // the waiting browser is told of an answer that reached the step and was refused; its attempt stays open
+      if (reached && a.mode === 'cross-device' && this.open(a, this.o.now())) this.notices.set(a.id, 'refused')
       const extra = r.kind === 'stale' ? { held_version_id: r.held } : {}
       return fail(400, 'invalid_request', 'reason' in r ? r.reason : r.kind, { did_log_result: r.kind, ...extra })
     }
-    if (a.code !== undefined) {
-      const u = new URL(this.returnUri); u.searchParams.set('response_code', a.code)
+    if (code !== undefined) {
+      const u = new URL(this.returnUri); u.searchParams.set('response_code', code)
       return { status: 200, body: { redirect_uri: u.href } }
     }
     return { status: 200, body: {} }
   }
 
   /**
-   * A login handed out becomes a session in one step with a fresh look at the
-   * identifier: contested or deactivated by now, there is no session.
+   * A login handed out becomes a session in one store step with a fresh look
+   * at the identifier: contested or deactivated by now, there is no session.
+   * `take` removes what was handed out (the outcome or the code), in the same
+   * step, and says whether it was still there.
    */
-  private async issue (login: Login): Promise<Collected> {
-    return this.store.transact<Collected>(login.user, NO_NONCE, () => this.o.now(), (held, _n, now) => {
-      if (!held || held.contested || held.head.deactivated) return { result: { error: 'refused' } }
+  private async issue (login: Login, take: (j: Journal) => boolean): Promise<Collected> {
+    const j = new Journal()
+    return j.run(this.store.issueSession<Collected>(login.user, () => this.o.now(), (held, now) => {
+      j.rollback()
+      if (!take(j)) return null
+      if (!held || held.contested || held.head.deactivated) return { error: 'refused' }
       const session = b64uOf(rand(16))
-      this.sessions.set(session, { login, at: now })
-      return { result: { session, login } }
-    })
+      j.set(this.sessions, session, { login, at: now })
+      return { session, login }
+    }))
   }
 
-  /** Cross-device: what became of an attempt, exactly once, within its pickup window. */
+  /** Cross-device: an admitted login, exactly once, within its pickup window; otherwise a notice while the attempt is open. */
   async collect (attempt: string): Promise<Collected> {
     const o = this.outcomes.get(attempt)
-    this.outcomes.delete(attempt)
-    if (!o || this.o.now() - o.at > PICKUP_LIFETIME_MS) return null
-    if ('error' in o) return { error: o.error }
-    return this.issue(o.login)
+    if (o && this.o.now() - o.at <= PICKUP_LIFETIME_MS) {
+      return this.issue(o.login, (j) => { if (this.outcomes.get(attempt) !== o) return false; j.delete(this.outcomes, attempt); return true })
+    }
+    if (o) this.outcomes.delete(attempt)
+    const n = this.notices.get(attempt)
+    const a = this.attempts.get(this.byAttempt.get(attempt) ?? '')
+    return n && this.open(a, this.o.now()) ? { notice: n } : null
   }
 
   /** Same-device: the code is used up by the first attempt, right or wrong, and counts only for its attempt. */
   async redeem (attempt: string, code: string): Promise<Collected> {
     const c = this.codes.get(code)
-    this.codes.delete(code)
-    if (!c || this.o.now() - c.created > CODE_LIFETIME_MS || c.attempt !== attempt) return null
-    return this.issue(c.login)
+    if (!c) return null
+    if (this.o.now() - c.created > CODE_LIFETIME_MS || c.attempt !== attempt) { this.codes.delete(code); return null }
+    return this.issue(c.login, (j) => { if (this.codes.get(code) !== c) return false; j.delete(this.codes, code); return true })
   }
 
   /** The signed-in account of a session, within its lifetime. */
@@ -303,19 +362,29 @@ export class Service {
     return s && this.o.now() - s.at <= SESSION_LIFETIME_MS ? s.login : null
   }
 
-  /** The browser gives an attempt up: it ends, and an answer being checked for it decides and keeps nothing. */
-  forget (attempt: string): void {
+  /**
+   * The browser that started an attempt gives it up: it ends for good, its
+   * nonce is spent in the same store step, and an answer being checked for it
+   * decides and keeps nothing.
+   */
+  async forget (attempt: string): Promise<void> {
     const a = this.attempts.get(this.byAttempt.get(attempt) ?? '')
-    if (a) this.end(a)
-    this.outcomes.delete(attempt)
-    for (const [k, c] of this.codes) if (c.attempt === attempt) this.codes.delete(k)
+    const j = new Journal()
+    const clear = (): void => {
+      j.delete(this.outcomes, attempt); j.delete(this.notices, attempt)
+      for (const [k, c] of this.codes) if (c.attempt === attempt) j.delete(this.codes, k)
+    }
+    if (!a) { clear(); return }
+    await j.run(this.store.closeAttempt(a.nonce, () => this.o.now(), () => { j.rollback(); if (this.attempts.get(a.state) === a) this.end(a, j); clear() }))
   }
 
-  /** Drop what has run out: attempts past their lifetime, outcomes nobody collected, codes, sessions. */
+  /** Drop what has run out: attempts past their lifetime (their nonces have expired with them), outcomes nobody collected, codes, sessions. */
   sweep (): void {
     const now = this.o.now()
-    for (const a of this.attempts.values()) if (!this.open(a, now)) this.end(a)
+    const j = new Journal()
+    for (const a of this.attempts.values()) if (!this.open(a, now)) this.end(a, j)
     for (const [k, o] of this.outcomes) if (now - o.at > PICKUP_LIFETIME_MS) this.outcomes.delete(k)
+    for (const k of this.notices.keys()) if (!this.byAttempt.has(k)) this.notices.delete(k)
     for (const [k, c] of this.codes) if (now - c.created > CODE_LIFETIME_MS) this.codes.delete(k)
     for (const [k, s] of this.sessions) if (now - s.at > SESSION_LIFETIME_MS) this.sessions.delete(k)
   }
@@ -323,7 +392,7 @@ export class Service {
   /** What the service holds of a person's identifier (the verifier's copy). */
   holding (did: string) { return this.verifier.holding(did) }
 
-  held (): { attempts: number, outcomes: number, codes: number, sessions: number } {
-    return { attempts: this.attempts.size, outcomes: this.outcomes.size, codes: this.codes.size, sessions: this.sessions.size }
+  held (): { attempts: number, outcomes: number, notices: number, codes: number, sessions: number } {
+    return { attempts: this.attempts.size, outcomes: this.outcomes.size, notices: this.notices.size, codes: this.codes.size, sessions: this.sessions.size }
   }
 }

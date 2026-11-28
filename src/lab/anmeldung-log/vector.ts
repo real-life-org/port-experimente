@@ -7,11 +7,11 @@
 // every key from the inputs, and compares every field that repeats another.
 
 import { edFromSeed, fromB64u, hkdf, platformSubtle } from 'rltp-lib'
-import { fromJsonl, multikey, toJsonl, type Entry } from '../kennung-log/log'
+import { fromJsonl, keyHash, multikey, toJsonl, type Entry } from '../kennung-log/log'
 import { vh } from '../kennung-log/profiles'
 import { kidOf } from '../kennung-log/verifier'
 import { CLIENT_ID_PREFIX, DID_LOG_FIELD, keyContext, locate, parseOuter, PROFILE, subjectMethodOf, type KeyFor } from './profile'
-import { Service, serviceKeyInfo, serviceLog, ServiceKeys } from './service'
+import { REQUEST_PATH, Service, serviceKeyInfo, serviceLog, ServiceKeys } from './service'
 import { deriveKey, MemoryStorage, Wallet } from './wallet'
 
 const hex = (b: Uint8Array): string => [...b].map((x) => x.toString(16).padStart(2, '0')).join('')
@@ -102,17 +102,26 @@ async function verifies (pubRaw: Uint8Array, jwt: string): Promise<boolean> {
 }
 
 /**
- * Check a vector against the code, from its texts alone: every key derived
- * anew from the inputs and the stated rule; every field that repeats another
- * equal to it (compact JWS and its decoded parts, POST and token and log,
- * logs and DIDs, link and request); the signatures by hand; the wallet
- * accepts the outer link with the given log and Request Object; the service
- * admits the given POST.
+ * Check a vector against the code, from its texts alone: the rows of both
+ * key derivations complete (update 0, update 1, auth 0, each once); every
+ * key derived anew from the inputs and the stated rule; the genesis
+ * commitments (`nextKeyHashes`) and keys of both logs against the derived
+ * keys; every field that repeats another equal to it (compact JWS and its
+ * decoded parts, POST and token and log, logs and DIDs, link and request,
+ * the inputs and the parts built from them, the media type of the POST); the
+ * signatures by hand; the wallet accepts the outer link with the given log
+ * and Request Object; the service admits the given POST.
  */
 export async function checkVector (v: Vector): Promise<string[]> {
   const problems: string[] = []
   const expect = (ok: boolean, what: string): void => { if (!ok) problems.push(what) }
   const i = v.inputs
+
+  // both derivations name exactly the keys the first entry needs, each once
+  const rows = (ds: { role: string, index: number }[]): string => ds.map((d) => `${d.role}${d.index}`).sort().join(',')
+  const NEEDED = SERVICE_KEYS.map(([r, n]) => `${r}${n}`).sort().join(',')
+  expect(Array.isArray(v.service_derivation) && rows(v.service_derivation) === NEEDED, `service_derivation: the rows are not exactly ${NEEDED}`)
+  expect(Array.isArray(v.derivation) && rows(v.derivation) === NEEDED, `derivation: the rows are not exactly ${NEEDED}`)
 
   // the service: keys from the seed, log from the keys, DID and SCID from the log
   const sKeys: Record<string, Uint8Array> = {}
@@ -128,6 +137,9 @@ export async function checkVector (v: Vector): Promise<string[]> {
   expect(toJsonl(sLog) === v.service_log, 'service log is not in canonical JSON Lines')
   expect(same(s0.parameters.updateKeys, [multikey(sKeys.update0 ?? new Uint8Array())]), 'service log: update key 0 is not the derived one')
   expect((s0.state.verificationMethod as { publicKeyMultibase: string }[])[0]?.publicKeyMultibase === multikey(sKeys.auth0 ?? new Uint8Array()), 'service log: auth key 0 is not the derived one')
+  expect(same(s0.parameters.nextKeyHashes, [await keyHash(multikey(sKeys.update1 ?? new Uint8Array()))]), 'service log: nextKeyHashes is not the hash of the derived update key 1')
+  expect(s0.versionTime === i.service.log_time, 'service log: versionTime is not inputs.service.log_time')
+  expect(v.service_did === `did:webvh:${String(s0.parameters.scid)}:${i.service.host}`, 'service_did does not name inputs.service.host')
   expect(s0.state.id === v.service_did, 'service_did is not the id in the service log')
   expect(s0.parameters.scid === v.service_scid && v.service_did.startsWith(`did:webvh:${v.service_scid}:`), 'service_scid is not the SCID of the log and the DID')
   const where = locate(v.service_did)
@@ -142,7 +154,9 @@ export async function checkVector (v: Vector): Promise<string[]> {
   expect(ro.header.kid === `${v.service_did}#key-1`, 'request_object: kid is not the service key')
   expect(await verifies(sKeys.auth0 ?? new Uint8Array(), ro.compact), 'request_object signature under the derived service auth key 0')
   expect(ro.payload.client_id === clientId && ro.payload.nonce === i.nonce && ro.payload.state === i.state, 'request_object: client_id, nonce or state differ from the inputs')
-  expect(v.request_uri.endsWith('/' + i.request_id), 'request_uri does not end in request_id')
+  expect(!('error' in where) && v.request_uri === where.origin + REQUEST_PATH + i.request_id, 'request_uri is not the service origin, the request path and request_id')
+  expect((ro.payload.client_metadata as { client_name?: string } | undefined)?.client_name === i.service.name, 'request_object: client_name is not inputs.service.name')
+  expect(ro.payload.iat === Math.floor(Date.parse(i.time) / 1000), 'request_object: iat is not inputs.time')
 
   // the person: keys from the secret and the context, log from the keys, DID from the log
   const k: KeyFor = { method: 'did:webvh', scid: v.service_scid, subjectMethod: v.subject_method }
@@ -160,12 +174,15 @@ export async function checkVector (v: Vector): Promise<string[]> {
   expect(same(p0.parameters.updateKeys, [multikey(pKeys.update0 ?? new Uint8Array())]), 'person log: update key 0 is not the derived one')
   expect((p0.state.verificationMethod as { publicKeyMultibase: string }[])[0]?.publicKeyMultibase === multikey(pKeys.auth0 ?? new Uint8Array()), 'person log: auth key 0 is not the derived one')
   expect(p0.state.id === v.person_did && v.person_did.startsWith(v.subject_method + ':'), 'person_did is not the id in the person log')
+  expect(same(p0.parameters.nextKeyHashes, [await keyHash(multikey(pKeys.update1 ?? new Uint8Array()))]), 'person log: nextKeyHashes is not the hash of the derived update key 1')
+  expect(p0.versionTime === i.time, 'person log: versionTime is not inputs.time')
 
   // the ID token
   const t = v.id_token
   expect(same(part(t.compact, 0), t.header) && same(part(t.compact, 1), t.payload), 'id_token: decoded parts differ from the compact JWS')
   expect(t.header.kid === kidOf(v.person_did, (pLog[pLog.length - 1] as Entry).versionId), 'id_token: kid is not the person key under the log head')
   expect(t.payload.iss === v.person_did && t.payload.sub === v.person_did && t.payload.aud === clientId && t.payload.nonce === i.nonce, 'id_token: iss, sub, aud or nonce')
+  expect(t.payload.iat === Math.floor(Date.parse(i.time) / 1000), 'id_token: iat is not inputs.time')
   expect(await verifies(pKeys.auth0 ?? new Uint8Array(), t.compact), 'id_token signature under the derived person auth key 0')
 
   // the POST: the token, the state and the log, to the redirect_uri
@@ -173,6 +190,7 @@ export async function checkVector (v: Vector): Promise<string[]> {
   expect(same([...form.keys()], ['id_token', 'state', DID_LOG_FIELD]), 'post: fields')
   expect(form.get('id_token') === t.compact && form.get('state') === ro.payload.state && form.get(DID_LOG_FIELD) === v.person_log, 'post: fields differ from id_token, state or person_log')
   expect(v.post.url === ro.payload.redirect_uri, 'post: url is not the redirect_uri')
+  expect(v.post.content_type === 'application/x-www-form-urlencoded', 'post: content_type is not application/x-www-form-urlencoded')
 
   // the code: the wallet accepts the request, the service the POST
   const { service, wallet } = await parts(i)

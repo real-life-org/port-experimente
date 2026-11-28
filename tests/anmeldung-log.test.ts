@@ -5,7 +5,7 @@ import { deactivate, rotate, toJsonl, type Entry } from '../src/lab/kennung-log/
 import { CLIENT_ID_PREFIX, keyContext, locate, outerLink, parseOuter, REQUEST_TYP, SIOP_AUD, signRequestObject, type RequestClaims } from '../src/lab/anmeldung-log/profile'
 import { serviceLog, ServiceKeys } from '../src/lab/anmeldung-log/service'
 import { deriveKey, Wallet } from '../src/lab/anmeldung-log/wallet'
-import { httpsTransport, limited, localAddress } from '../src/lab/anmeldung-log/transport'
+import { globallyReachable, httpsTransport, IPV4_SPECIAL, IPV6_SPECIAL, limited, registerRow, v4, v6 } from '../src/lab/anmeldung-log/transport'
 import { loopbackTransport } from './anmeldung-log-loopback'
 
 // What the wallet refuses before anything is shown or sent, against services
@@ -249,30 +249,62 @@ test('a deactivated service seen for the first time is kept as deactivated', asy
 
 // ---- the transport: the address that is connected to decides
 
-test('local address ranges, IPv4 and IPv6, also IPv4 inside IPv6', () => {
-  const local = ['0.0.0.0', '10.1.2.3', '100.64.0.1', '100.127.255.255', '127.0.0.1', '169.254.169.254', '172.16.0.1', '172.31.255.255', '192.168.0.1', '224.0.0.251', '239.1.1.1',
-    '::', '::1', 'fc00::1', 'fd12:3456::1', 'fe80::1', 'fe80::1%eth0', 'fec0::1', 'ff02::1', '::ffff:10.0.0.1', '::ffff:7f00:1', '::ffff:127.0.0.1', '::127.0.0.1', '64:ff9b::a00:1', '64:ff9b::192.168.0.1', 'not an address', '1.2.3']
-  const open = ['8.8.8.8', '93.184.215.14', '100.63.255.255', '100.128.0.1', '172.15.0.1', '172.32.0.1', '192.0.2.1', '2606:4700::1111', '::ffff:8.8.8.8', '64:ff9b::808:808', '2001:db8::1']
-  for (const a of local) expect([a, localAddress(a)]).toEqual([a, true])
-  for (const a of open) expect([a, localAddress(a)]).toEqual([a, false])
+/** The first and the last address of a register block. */
+function ends (block: string): [string, string] {
+  const [a, l] = block.split('/') as [string, string]
+  const four = v4(a), bytes = (four ?? v6(a))!, len = Number(l)
+  const lo = bytes.map((b, i) => { const keep = Math.max(0, Math.min(8, len - i * 8)); return b & (0xff << (8 - keep)) & 0xff })
+  const hi = lo.map((b, i) => { const keep = Math.max(0, Math.min(8, len - i * 8)); return b | (0xff >> keep) })
+  const text = (x: number[]) => four ? x.join('.') : Array.from({ length: 8 }, (_, i) => ((x[2 * i]! << 8) | x[2 * i + 1]!).toString(16)).join(':')
+  return [text(lo), text(hi)]
+}
+const outsideGlobalUnicast = (address: string) => { const b = v6(address); return b !== null && (b[0]! & 0xe0) !== 0x20 }
+
+test('every row of both IANA special-purpose registers: an address the row decides is refused unless the row says "True"', () => {
+  let rows = 0
+  for (const row of [...IPV4_SPECIAL, ...IPV6_SPECIAL]) {
+    // an address of the block for which this row is the most specific one (the first or the last address)
+    const sample = ends(row[0]).find((x) => registerRow(x) === row)
+    expect(sample, `${row[0]}: an address this row decides`).toBeDefined()
+    const [block, , , reachable] = row
+    let want = reachable === 'True'
+    if (outsideGlobalUnicast(sample!)) want = false                                // only 2000::/3, except the Well-Known Prefix below
+    if (block === '64:ff9b::/96' || block === '2002::/16') want = globallyReachable(block === '2002::/16' ? '0.0.0.0' : '255.255.255.255')   // judged by the IPv4 inside
+    expect([block, sample, globallyReachable(sample!)]).toEqual([block, sample, want])
+    rows++
+  }
+  expect(rows).toBe(IPV4_SPECIAL.length + IPV6_SPECIAL.length)
+})
+
+test('addresses: IPv4 multicast and class E, IPv4 inside IPv6, only global unicast for IPv6, the reserved translation prefix', () => {
+  const refused = ['0.0.0.0', '10.1.2.3', '100.64.0.1', '127.0.0.1', '169.254.169.254', '172.16.0.1', '192.168.0.1', '192.0.0.8', '192.0.2.1', '198.18.0.1', '198.51.100.1', '203.0.113.1',
+    '192.88.99.1', '224.0.0.251', '239.1.1.1', '240.0.0.1', '255.255.255.255', '010.0.0.1',
+    '::', '::1', '::ffff:8.8.8.8', '::ffff:10.0.0.1', '::8.8.8.8', '64:ff9b::a00:1', '64:ff9b::192.168.0.1', '64:ff9b:1::808:808', '64:ff9b:1::1', '100::1', '5f00::1',
+    'fc00::1', 'fd12:3456::1', 'fe80::1', 'fe80::1%eth0', 'fec0::1', 'ff02::1', '4000::1', '1fff::1',
+    '2001::1', '2001:0:808:808::1', '2001:2::1', '2001:10::1', '2001:db8::1', '3fff::1', '3fff:fff::1', '2002:a00:1::1', '2002:c0a8:1::1', 'not an address', '1.2.3']
+  const reachable = ['8.8.8.8', '93.184.215.14', '100.63.255.255', '100.128.0.1', '172.15.0.1', '172.32.0.1', '192.0.0.9', '223.255.255.254',
+    '2606:4700::1111', '2a00:1450::1', '64:ff9b::808:808', '64:ff9b::8.8.8.8', '2002:808:808::1', '2001:3::1', '2001:20::1', '2001:1::1', '2620:4f:8000::1', '3fff:1000::1']
+  for (const a of refused) expect([a, globallyReachable(a)]).toEqual([a, false])
+  for (const a of reachable) expect([a, globallyReachable(a)]).toEqual([a, true])
 })
 
 test('the default transport: a name that resolves to a local address is refused at the connection; a public one is tried; one lookup', async () => {
   const asked: string[] = []
   const to = (...addresses: string[]) => httpsTransport({ timeoutMs: 500, resolve: async (h) => { asked.push(h); return addresses.map((address) => ({ address, family: address.includes(':') ? 6 : 4 })) } })
-  for (const a of ['10.0.0.5', '127.0.0.1', '::1', '::ffff:192.168.1.1', '169.254.169.254']) {
-    expect(await to(a).fetch('https://dienst.example/x', { maxBytes: 10 })).toEqual({ error: 'a local address' })
+  for (const a of ['10.0.0.5', '127.0.0.1', '::1', '::ffff:192.168.1.1', '169.254.169.254', '64:ff9b:1::808:808', '192.0.2.1']) {
+    expect(await to(a).get('https://dienst.example/x', { maxBytes: 10 })).toEqual({ error: 'a local address' })
   }
-  expect(await to('93.184.215.14', '10.0.0.5').fetch('https://dienst.example/x', { maxBytes: 10 })).toEqual({ error: 'a local address' })
+  expect(await to('93.184.215.14', '10.0.0.5').get('https://dienst.example/x', { maxBytes: 10 })).toEqual({ error: 'a local address' })
+  expect(await to('93.184.215.14', '64:ff9b:1::1').post('https://dienst.example/x', 'a=1', { maxBytes: 10 })).toEqual({ error: 'a local address' })
   asked.length = 0
-  const tried = await to('192.0.2.1').fetch('https://dienst.example/x', { maxBytes: 10 })   // TEST-NET-1: nobody answers
+  const tried = await to('8.8.8.8').get('https://dienst.example/x', { maxBytes: 10 })   // a global address: tried (no answer as dienst.example)
   expect(['unreachable', 'timeout']).toContain('error' in tried ? tried.error : tried)
   expect(asked).toEqual(['dienst.example'])
 })
 
 test('the default transport has no way to a loopback service: the system resolver gives 127.0.0.1 for localhost, and that is refused', async () => {
   const f = await fake()
-  expect(await httpsTransport().fetch(`https://localhost:${f.port}/.well-known/did.jsonl`, { maxBytes: 1000 })).toEqual({ error: 'a local address' })
+  expect(await httpsTransport().get(`https://localhost:${f.port}/.well-known/did.jsonl`, { maxBytes: 1000 })).toEqual({ error: 'a local address' })
   expect(await new Wallet(new Uint8Array(32).fill(1), { now: () => T }).open(await offer(f))).toMatchObject({ ok: false })
   expect(f.hits).toEqual([])
 })
@@ -280,10 +312,11 @@ test('the default transport has no way to a loopback service: the system resolve
 test('every transport: https only, no credentials, no IP address as host, before anything is sent', async () => {
   let sent = 0
   const t = limited(async () => { sent++; throw new Error('not reached') })
-  expect(await t.fetch('http://example.com/x', { maxBytes: 10 })).toEqual({ error: 'not https' })
-  expect(await t.fetch('https://a:b@example.com/x', { maxBytes: 10 })).toEqual({ error: 'credentials in the URL' })
+  expect(await t.get('http://example.com/x', { maxBytes: 10 })).toEqual({ error: 'not https' })
+  expect(await t.post('http://example.com/x', 'a=1', { maxBytes: 10 })).toEqual({ error: 'not https' })
+  expect(await t.get('https://a:b@example.com/x', { maxBytes: 10 })).toEqual({ error: 'credentials in the URL' })
   for (const u of ['https://127.0.0.1/x', 'https://[::1]/x', 'https://0x7f000001/x', 'https://8.8.8.8/x', 'https://[2606:4700::1111]/x']) {
-    expect(await t.fetch(u, { maxBytes: 10 })).toEqual({ error: 'a local address' })
+    expect(await t.get(u, { maxBytes: 10 })).toEqual({ error: 'a local address' })
   }
   expect(sent).toBe(0)
 })
@@ -296,10 +329,27 @@ test('a fetch that does not finish in time ends: no answer at all, and an answer
   const t = loopbackTransport({ timeoutMs: 200 })
   for (const s of [silent, stalling]) {
     const began = Date.now()
-    expect(await t.fetch(`https://dienst.localhost:${(s.address() as { port: number }).port}/x`, { maxBytes: 100 })).toEqual({ error: 'timeout' })
+    expect(await t.get(`https://dienst.localhost:${(s.address() as { port: number }).port}/x`, { maxBytes: 100 })).toEqual({ error: 'timeout' })
     expect(Date.now() - began).toBeLessThan(2000)
   }
   for (const s of [silent, stalling]) s.closeAllConnections()
+})
+
+test('a redirect is not followed and not left open: the answer is aborted and its socket closed before the time limit', async () => {
+  for (const method of ['get', 'post'] as const) {
+    let closed = false
+    const srv = createServer((req, res) => { req.socket.on('close', () => { closed = true }); res.writeHead(302, { Location: 'https://example.com/' }); res.write('a') })   // a body that never ends
+    servers.push(srv)
+    await new Promise<void>((ok) => srv.listen(0, '127.0.0.1', ok))
+    const t = loopbackTransport({ timeoutMs: 3000 })
+    const url = `https://dienst.localhost:${(srv.address() as { port: number }).port}/x`
+    const began = Date.now()
+    expect(await (method === 'get' ? t.get(url, { maxBytes: 100 }) : t.post(url, 'a=1', { maxBytes: 100 }))).toEqual({ error: 'a redirect (not followed)' })
+    for (let i = 0; i < 50 && !closed; i++) await new Promise((r) => setTimeout(r, 10))
+    expect([method, closed]).toEqual([method, true])
+    expect(Date.now() - began).toBeLessThan(1500)
+    srv.closeAllConnections()
+  }
 })
 
 test('further parameters in the outer link are ignored and steer nothing (RFC 6749 3.1, RFC 9101 5)', async () => {

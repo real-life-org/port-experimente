@@ -5,7 +5,9 @@
 //   GET  /anmeldung-log/start?geraet=gleich   same-device: the outer link, the attempt bound by a cookie
 //   GET  /anmeldung-log/anfrage/<id>     the request_uri: the signed Request Object
 //   POST /anmeldung-log/antwort          the redirect_uri (direct_post, form-encoded)
-//   GET  /anmeldung-log/status?vorgang=  the signed-in account; with vorgang, collect a confirmed attempt once
+//   GET  /anmeldung-log/status?vorgang=  the signed-in account; with vorgang, collect a confirmed attempt once,
+//                                        or the notice of an attempt that stays open (cancelled, refused)
+//   POST /anmeldung-log/abbrechen?vorgang=   the starting browser gives the attempt up for good
 //   GET  /anmeldung-log/fertig?response_code=   the same-device return into the browser
 //
 // The browser bindings are those of src/lab/anmeldung/http.ts, rebuilt: a QR
@@ -101,10 +103,22 @@ export async function serve (opts: ServeOptions = {}): Promise<{ server: Server,
       // collected only by the browser that started the attempt; any other leaves it untouched
       const done = vorgang && bound(req, vorgang) ? await service.collect(vorgang) : null
       if (done && vorgang) {
+        // a notice: the attempt stays open, and so does its binding
+        if ('notice' in done) { json(res, 200, { error: done.notice }); return }
         bindings.delete(vorgang)
         if ('error' in done) { res.setHeader('Set-Cookie', cookie(BINDING + vorgang, '', 0)); json(res, 200, { error: done.error }); return }
         signIn(res, done, BINDING + vorgang); json(res, 200, done.login); return
       }
+      json(res, 200, {})
+      return
+    }
+    if (req.method === 'POST' && path === '/anmeldung-log/abbrechen') {
+      // only the browser that started the attempt: its binding (QR) or its same-device cookie
+      const vorgang = url.searchParams.get('vorgang') ?? ''
+      const qr = bound(req, vorgang), same = cookieOf(req, SAME_DEVICE) === vorgang
+      if (!vorgang || (!qr && !same)) { json(res, 403, { error: 'not this browser\'s attempt' }); return }
+      await service.forget(vorgang)
+      if (qr) { bindings.delete(vorgang); res.setHeader('Set-Cookie', cookie(BINDING + vorgang, '', 0)) } else res.setHeader('Set-Cookie', cookie(SAME_DEVICE, '', 0))
       json(res, 200, {})
       return
     }

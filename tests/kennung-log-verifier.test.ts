@@ -304,3 +304,33 @@ test('one rule, checked on the result: rotate succeeds only if the login can use
   }
   expect(accepted).toBe(3)
 })
+
+test('a refused answer leaves the nonce open; only an admitted login spends it; a valid continuation is kept either way', async () => {
+  const store = new MemoryStore()
+  const v = verifier(store)
+  const o1 = await genesis(vh)
+  expect(await login(v, o1)).toMatchObject({ kind: 'ok' })
+  const o2 = await change(o1, 'owner', 1, 1)
+  const nonce = await v.issueNonce()
+  // a continuation with a token by the old key: refused, the continuation kept, the nonce still open
+  expect(await v.login({ log: o2.log, nonce, token: await tokenFor(o2, nonce, { key: o1.auth }) })).toEqual({ kind: 'invalid', reason: 'token: signature does not verify' })
+  expect((await v.holding(didOf(o1)))?.head.versionId).toBe(headOf(o2).versionId)
+  // a token for another nonce under this one
+  expect(await v.login({ log: o2.log, nonce, token: await tokenFor(o2, 'another') })).toEqual({ kind: 'invalid', reason: 'token: another nonce' })
+  // the right answer: ok, and only now the nonce is spent
+  expect(await v.login({ log: o2.log, nonce, token: await tokenFor(o2, nonce) })).toMatchObject({ kind: 'ok', step: 'same head' })
+  expect(await v.login({ log: o2.log, nonce, token: await tokenFor(o2, nonce) })).toEqual({ kind: 'invalid', reason: 'nonce: already used' })
+})
+
+test('the hooks of the step: `before` keeps nothing; `admit` refusing leaves the nonce open and the log state kept', async () => {
+  const v = verifier()
+  const o1 = await genesis(vh)
+  const n1 = await v.issueNonce()
+  expect(await v.login({ log: o1.log, nonce: n1, token: await tokenFor(o1, n1) }, { before: () => 'closed' })).toEqual({ kind: 'invalid', reason: 'closed' })
+  expect(await v.holding(didOf(o1))).toBeUndefined()
+  expect(await v.login({ log: o1.log, nonce: n1, token: await tokenFor(o1, n1) }, { admit: () => 'the account is not admitted' })).toEqual({ kind: 'invalid', reason: 'the account is not admitted' })
+  let admitted = 0
+  expect(await v.login({ log: o1.log, nonce: n1, token: await tokenFor(o1, n1) }, { admit: () => { admitted++; return null } })).toMatchObject({ kind: 'ok' })
+  expect(admitted).toBe(1)
+  expect(await v.login({ log: o1.log, nonce: n1, token: await tokenFor(o1, n1) })).toEqual({ kind: 'invalid', reason: 'nonce: already used' })
+})
