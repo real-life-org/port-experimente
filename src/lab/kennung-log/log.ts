@@ -107,30 +107,45 @@ export function didDocument (did: string, authKey: Uint8Array): Record<string, u
 }
 
 /**
- * The one rule for which authentication method this lab supports, used by
- * the login verifier and by `rotate`: an entry of `authentication` (an id
- * or an embedded method) that names a method with a string `id`, type
- * `Multikey`, controlled by the document's own DID, whose
- * `publicKeyMultibase` is an Ed25519 key. Anything else (a JWK, another
- * type or controller, another curve) is not supported.
+ * The one rule for which key the login can use, and under which `kid`
+ * fragment it finds it. The login verifier reads the key only through this
+ * list; `rotate` and `create` check their result against it.
+ *
+ * An entry of `authentication` (an id or an embedded method) counts when it
+ * names a method with
+ * - a string `id` that is exactly `<doc.id>#<fragment>`: the document's own
+ *   DID, no path, no query, and a fragment that is not empty and has no `?`
+ *   or `#` (the token's `kid` is `<did>?versionId=<v>#<fragment>`, and the
+ *   verifier looks the key up under `<did>#<fragment>`); a relative id
+ *   (`#signing`) is not supported, DID Core 5.2.1 asks the `id` of a
+ *   verification method to be a DID URL,
+ * - type `Multikey`, controlled by the document's own DID,
+ * - a `publicKeyMultibase` that is an Ed25519 key.
+ * Anything else (a JWK, another type, controller, curve or id form) is not
+ * usable by the login.
  */
-export function supportedAuthMethod (doc: Record<string, unknown>, entry: unknown): { id: string, raw: Uint8Array } | undefined {
-  const byId = (id: unknown): unknown => (Array.isArray(doc.verificationMethod) ? doc.verificationMethod as unknown[] : [])
-    .find((v) => v && typeof v === 'object' && (v as any).id === id)
-  const vm: any = typeof entry === 'string' ? byId(entry) : entry
-  if (!vm || typeof vm.id !== 'string' || vm.type !== 'Multikey' || vm.controller !== doc.id) return undefined
-  const raw = rawOfMultikey(vm.publicKeyMultibase)
-  return raw ? { id: vm.id, raw } : undefined
-}
-
-/** The Ed25519 keys a document lists under `authentication`, by id (the methods `supportedAuthMethod` takes). */
-export function authenticationKeys (doc: Record<string, unknown>): Map<string, Uint8Array> {
-  const out = new Map<string, Uint8Array>()
-  for (const a of Array.isArray(doc.authentication) ? doc.authentication as unknown[] : []) {
-    const m = supportedAuthMethod(doc, a)
-    if (m) out.set(m.id, m.raw)
+export interface LoginKey { fragment: string, id: string, raw: Uint8Array }
+export function loginKeys (doc: Record<string, unknown>): LoginKey[] {
+  const methods = Array.isArray(doc.verificationMethod) ? doc.verificationMethod as unknown[] : []
+  const out: LoginKey[] = []
+  for (const entry of Array.isArray(doc.authentication) ? doc.authentication as unknown[] : []) {
+    const vm: any = typeof entry === 'string' ? methods.find((v) => v && typeof v === 'object' && (v as any).id === entry) : entry
+    if (!vm || typeof vm.id !== 'string' || typeof doc.id !== 'string' || vm.type !== 'Multikey' || vm.controller !== doc.id) continue
+    const m = /^([^?#/]+)#([^?#]+)$/.exec(vm.id)
+    if (!m || vm.id !== `${doc.id}#${m[2]}`) continue
+    const raw = rawOfMultikey(vm.publicKeyMultibase)
+    if (raw && !out.some((k) => k.id === vm.id)) out.push({ fragment: m[2] as string, id: vm.id, raw })
   }
   return out
+}
+
+/** The postcondition of a key change: the login can use exactly `expect` in `doc`. Throws otherwise. */
+function assertLoginKeys (who: string, doc: Record<string, unknown>, expect: Uint8Array | LoginKey[]): void {
+  const got = loginKeys(doc)
+  const ok = expect instanceof Uint8Array
+    ? got.length === 1 && multikey(got[0]!.raw) === multikey(expect)
+    : got.length === expect.length && got.every((k, i) => k.id === expect[i]!.id && multikey(k.raw) === multikey(expect[i]!.raw))
+  if (!ok) throw new Error(`${who}: the login cannot use the resulting document: it must find exactly the expected key under <did>#<fragment> (loginKeys)`)
 }
 
 /** Sign an entry (without proof) with eddsa-jcs-2022, proofPurpose assertionMethod. */
@@ -170,6 +185,7 @@ export async function create (o: CreateOptions): Promise<Entry[]> {
     },
     state: didDocument(o.profile.did, o.authKey),
   }
+  assertLoginKeys('create', prelim.state, o.authKey)
   const scid = await hashOf(prelim)
   const entry = replaceAll(prelim, PLACEHOLDER, scid)
   entry.versionId = `1-${await hashOf(entry)}`   // versionId here is the SCID: the predecessor of the first entry
@@ -213,8 +229,8 @@ export interface RotateOptions {
  * verification method is kept. A document this cannot continue safely, where
  * it is unclear what the key change replaces, is refused with an error:
  * anything but exactly one verification method that `authentication` lists
- * by id, as its only entry, and that `supportedAuthMethod` takes (the rule
- * the login verifier uses). Refused before anything is signed.
+ * by id, as its only entry. Whether the login can use the result is checked
+ * by `rotate` on the new document (`loginKeys`).
  */
 function withAuthKey (doc: Record<string, unknown>, authKey: Uint8Array): Record<string, unknown> {
   const vms = doc.verificationMethod
@@ -223,8 +239,8 @@ function withAuthKey (doc: Record<string, unknown>, authKey: Uint8Array): Record
   if (!vm || typeof vm !== 'object' || typeof vm.id !== 'string' || !Array.isArray(auth) || auth.length !== 1 || auth[0] !== vm.id) {
     throw new Error('rotate: cannot change the authentication key: the document must have exactly one verification method, listed as the only entry of authentication')
   }
-  if (!supportedAuthMethod(doc, auth[0])) {
-    throw new Error('rotate: cannot change the authentication key: the method is not an Ed25519 Multikey controlled by the DID (the only kind login supports)')
+  if (loginKeys(doc).length !== 1) {
+    throw new Error('rotate: cannot change the authentication key: the method is not one the login can use (an Ed25519 Multikey controlled by the DID, with the id <did>#<fragment>)')
   }
   return { ...doc, verificationMethod: [{ ...vm, publicKeyMultibase: multikey(authKey) }] }
 }
@@ -232,9 +248,12 @@ function withAuthKey (doc: Record<string, unknown>, authKey: Uint8Array): Record
 /** A key change under pre-rotation: the committed key signs and becomes the update key. */
 export async function rotate (log: Entry[], o: RotateOptions): Promise<Entry[]> {
   const head = log[log.length - 1] as Entry
+  const state = o.authKey ? withAuthKey(head.state, o.authKey) : head.state
+  // the result must be usable by the login, whatever the reason it is not
+  assertLoginKeys('rotate', state, o.authKey ?? loginKeys(head.state))
   return append(log, {
     parameters: { updateKeys: [multikey(o.signer.pubRaw)], nextKeyHashes: await Promise.all(o.next.map((k) => keyHash(multikey(k)))) },
-    state: o.authKey ? withAuthKey(head.state, o.authKey) : head.state,
+    state,
     signer: o.signer,
     time: o.time,
   })

@@ -24,9 +24,14 @@ change replaces only the public key of the one verification method and
 keeps every other member of the document (`service`, `alsoKnownAs`, ...).
 A document with other than exactly one verification method, listed as the
 only entry of `authentication`, is refused with an error: it is unclear
-which key the change replaces. Rotation and login share one rule for
-the method (`supportedAuthMethod`: Ed25519 `Multikey` controlled by the
-DID); a JWK or any other form is refused before signing, not supported.
+which key the change replaces. One rule, checked on the result: `loginKeys` (log.ts) lists the keys the
+login can use in a document, each with the `kid` fragment it is found under
+(method id exactly `<did>#<fragment>`, non-empty fragment, no path or query, no
+relative id; `Multikey` controlled by the DID; Ed25519). The verifier reads
+keys only through it. `create` and `rotate` call it on the new document before
+signing and throw unless it yields exactly the new key (or, without a key
+change, the same keys as before), so no entry is written whose result the
+login cannot use, for whatever reason.
 `deactivate` turns pre-rotation off and writes `deactivated: true` with
 `updateKeys: []` one second later (two entries, as Deactivate says for a DID
 under pre-rotation). `append` writes any entry, signed by any key, for the

@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 import { b64uOf, platformSubtle } from 'rltp-lib'
-import { append, authenticationKeys, keyHash, multikey, rotate, type Entry } from '../src/lab/kennung-log/log'
+import { append, keyHash, loginKeys, multikey, rotate, type Entry } from '../src/lab/kennung-log/log'
 import { vh } from '../src/lab/kennung-log/profiles'
 import { kidOf, MemoryStore, signToken, Verifier, type Held, type NonceState, type Store } from '../src/lab/kennung-log/verifier'
 import { at, change, genesis, keyOf, NOW, type Holder } from '../src/lab/kennung-log/scenarios'
@@ -224,6 +224,11 @@ test('service endpoint, rotation, login with the new key; the old key is refused
   expect((await store.read(did))?.head.doc.service).toEqual([{ ...hub, id: `${did}#hub` }])
 })
 
+const withId = (idOf: (did: string) => string) => (doc: Record<string, unknown>): Record<string, unknown> => {
+  const id = idOf(doc.id as string)
+  return { ...doc, verificationMethod: [{ ...methodOf(doc), id }], authentication: [id] }
+}
+
 test('rotate and login share one rule: what rotate takes, login can use; what login refuses, rotate refuses', async () => {
   const mk = (edit: (vm: Record<string, unknown>, doc: Record<string, unknown>) => Record<string, unknown>) =>
     (doc: Record<string, unknown>) => ({ ...doc, verificationMethod: [edit(methodOf(doc), doc)] })
@@ -241,6 +246,14 @@ test('rotate and login share one rule: what rotate takes, login can use; what lo
     'another controller': mk((vm) => ({ ...vm, controller: 'did:example:other' })),
     'not a Multikey': mk((vm) => ({ ...vm, type: 'Ed25519VerificationKey2020' })),
     'not an Ed25519 multikey': mk((vm) => ({ ...vm, publicKeyMultibase: 'z6LSbysY2xFMRpGMhb7tFTLMpeuPRaqaWM1yECx2AtzE3KCc' })),
+    // method ids the login cannot find under <did>#<fragment>
+    'id with a path': withId((did) => `${did}/keys#signing`),
+    'id with a query': withId((did) => `${did}?service=x#signing`),
+    'id of another DID': withId(() => 'did:example:other#signing'),
+    'empty fragment': withId((did) => `${did}#`),
+    'no fragment': withId((did) => did),
+    // DID Core 5.2.1: the id of a verification method is a DID URL; neither side supports the relative form
+    'relative id': withId(() => '#signing'),
   }
   for (const [name, edit] of Object.entries(accepted)) {
     const h = await withDoc(edit)
@@ -257,6 +270,37 @@ test('rotate and login share one rule: what rotate takes, login can use; what lo
     const h = await withDoc(edit)
     const a1 = await keyOf(`shared rule ${name}`)
     await expect(rotate(h.log, { signer: h.next, next: [], authKey: a1.pubRaw, time: at(2) }), name).rejects.toThrow(/authentication key/)
-    expect(authenticationKeys(headOf(h).state).size, name).toBe(0)
+    expect(loginKeys(headOf(h).state), name).toEqual([])
   }
+})
+
+test('one rule, checked on the result: rotate succeeds only if the login can use the new key', async () => {
+  const shapes = [
+    (doc: Record<string, unknown>) => doc,
+    withId((did) => `${did}#signing`),
+    withId((did) => `${did}#a/b`),
+    withId((did) => `${did}/keys#signing`),
+    withId((did) => `${did}#`),
+    withId(() => '#signing'),
+    withId((did) => `${did}?x=1#k`),
+    (doc: Record<string, unknown>) => ({ ...doc, authentication: [{ ...methodOf(doc) }], verificationMethod: [] }),
+  ]
+  let accepted = 0
+  for (const [i, edit] of shapes.entries()) {
+    const h = await withDoc(edit)
+    const a1 = await keyOf(`property ${i}`)
+    let log: Entry[] | undefined
+    try { log = await rotate(h.log, { signer: h.next, next: [], authKey: a1.pubRaw, time: at(2) }) } catch { log = undefined }
+    if (!log) continue
+    accepted++
+    const head = log[log.length - 1] as Entry
+    const keys = loginKeys(head.state)
+    expect(keys.length, `shape ${i}`).toBe(1)
+    const did = didOf(h)
+    const v = verifier()
+    const nonce = await v.issueNonce()
+    const token = await signToken(a1, kidOf(did, head.versionId, keys[0]!.fragment), { iss: did, sub: did, aud: AUD, nonce, iat: T, exp: T + 300 })
+    expect(await v.login({ log, nonce, token }), `shape ${i}`).toMatchObject({ kind: 'ok' })
+  }
+  expect(accepted).toBe(3)
 })

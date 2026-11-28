@@ -16,7 +16,7 @@
 // without a pause, a database would run it as one transaction.
 
 import { b64uOf, fromB64u, platformSubtle, rand, type KeyPair } from 'rltp-lib'
-import { authenticationKeys, verify, type Entry, type Profile, type Version } from './log'
+import { loginKeys, verify, type Entry, type Profile, type Version } from './log'
 
 export interface TokenClaims {
   iss: string
@@ -208,7 +208,7 @@ async function checkToken (token: unknown, did: string, head: Version, audience:
   const m = /^([^?#]+)\?versionId=([^&#]+)#([^?#]+)$/.exec(kid)
   if (!m || m[1] !== did) return 'kid is not a key of this DID'
   if (m[2] !== head.versionId) return 'signed under another version than the head'
-  const raw = authenticationKeys(head.doc).get(`${did}#${m[3]}`)
+  const raw = loginKeys(head.doc).find((k) => k.fragment === m[3])?.raw
   if (!raw) return 'kid is not an authentication key of the head'
   let good = false
   try {
