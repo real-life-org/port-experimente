@@ -102,19 +102,19 @@
       "who": "copy",
       "presents": "v2 (copy)",
       "result": "contested",
-      "holds": "v2 (owner), contested, 1 log(s) as evidence"
+      "holds": "v2 (owner), contested, v2 (owner) and v2 (copy) as evidence"
     },
     {
       "who": "owner",
       "presents": "v2 (owner)",
       "result": "contested",
-      "holds": "v2 (owner), contested, 1 log(s) as evidence"
+      "holds": "v2 (owner), contested, v2 (owner) and v2 (copy) as evidence"
     },
     {
       "who": "copy",
       "presents": "v2 (copy)",
       "result": "contested",
-      "holds": "v2 (owner), contested, 1 log(s) as evidence"
+      "holds": "v2 (owner), contested, v2 (owner) and v2 (copy) as evidence"
     }
   ],
   "two continuations, the copy first": [
@@ -134,19 +134,19 @@
       "who": "owner",
       "presents": "v2 (owner)",
       "result": "contested",
-      "holds": "v2 (copy), contested, 1 log(s) as evidence"
+      "holds": "v2 (copy), contested, v2 (copy) and v2 (owner) as evidence"
     },
     {
       "who": "copy",
       "presents": "v2 (copy)",
       "result": "contested",
-      "holds": "v2 (copy), contested, 1 log(s) as evidence"
+      "holds": "v2 (copy), contested, v2 (copy) and v2 (owner) as evidence"
     },
     {
       "who": "owner",
       "presents": "v2 (owner)",
       "result": "contested",
-      "holds": "v2 (copy), contested, 1 log(s) as evidence"
+      "holds": "v2 (copy), contested, v2 (copy) and v2 (owner) as evidence"
     }
   ],
   "a token under the old key after the change": [
@@ -179,6 +179,38 @@
       "presents": "v2",
       "result": "ok, same head",
       "holds": "v2"
+    }
+  ],
+  "a continuation whose login fails": [
+    {
+      "who": "owner",
+      "presents": "v1",
+      "result": "ok, first contact",
+      "holds": "v1"
+    },
+    {
+      "who": "owner, with a token by the old authentication key",
+      "presents": "v2 (owner)",
+      "result": "invalid: token: signature does not verify",
+      "holds": "v2 (owner)"
+    },
+    {
+      "who": "someone with the old log and the old authentication key",
+      "presents": "v1",
+      "result": "stale, the service names v2 (owner)",
+      "holds": "v2 (owner)"
+    },
+    {
+      "who": "copy",
+      "presents": "v2 (copy)",
+      "result": "contested",
+      "holds": "v2 (owner), contested, v2 (owner) and v2 (copy) as evidence"
+    },
+    {
+      "who": "owner",
+      "presents": "v2 (owner)",
+      "result": "contested",
+      "holds": "v2 (owner), contested, v2 (owner) and v2 (copy) as evidence"
     }
   ],
   "a continuation with a key that was not committed": [
@@ -284,12 +316,12 @@
         "re-signed by the key that signed the entry": "entry 2: entryHash does not match"
       },
       "parameters.method: another method (entry 1)": {
-        "as changed": "entry 1: method is missing or not supported",
-        "re-signed by the key that signed the entry": "entry 1: method is missing or not supported"
+        "as changed": "entry 1: method is not of the form did:vh:<major>.<minor>",
+        "re-signed by the key that signed the entry": "entry 1: method is not of the form did:vh:<major>.<minor>"
       },
       "parameters.method: another method (entry 2)": {
-        "as changed": "entry 2: method is not supported",
-        "re-signed by the key that signed the entry": "entry 2: method is not supported"
+        "as changed": "entry 2: method is not of the form did:vh:<major>.<minor>",
+        "re-signed by the key that signed the entry": "entry 2: method is not of the form did:vh:<major>.<minor>"
       },
       "parameters.scid: another value (entry 1)": {
         "as changed": "entry 1: signature does not verify",
@@ -453,14 +485,31 @@
     "nextKeyHashes left out under pre-rotation": "invalid at entry 2: pre-rotation is active and updateKeys or nextKeyHashes is missing",
     "scid in a later entry": "invalid at entry 2: scid in a later entry",
     "method repeated in a later entry": "valid (2 entries)",
-    "method changed in a later entry": "invalid at entry 2: method is not supported",
+    "method changed in a later entry": "unsupported at entry 2: method did:vh:1.1 is not supported",
     "portable false under did:vh": "invalid at entry 2: parameter portable is not defined for this method",
-    "a witness configured": "invalid at entry 2: witnesses are not supported here",
+    "a witness configured": "unsupported at entry 2: witnesses are not supported here",
     "a parameter set to null": "invalid at entry 2: parameter ttl is null",
     "ttl as a string": "invalid at entry 2: ttl is not an unsigned integer",
     "state.id another DID": "invalid at entry 2: state.id is not the DID",
-    "an entry after updateKeys [] without pre-rotation": "invalid at entry 4: no key is authorized to sign this entry",
+    "an entry after updateKeys [] that set new nextKeyHashes, pre-rotation off": "invalid at entry 4: no key is authorized after updateKeys [] while pre-rotation was off",
+    "method did:vh:99.0 in a later entry": "unsupported at entry 2: method did:vh:99.0 is not supported",
+    "method did:vh:0.9 in a later entry": "invalid at entry 2: method changes to a lower version",
+    "a watcher": "unsupported at entry 2: watchers are not supported here",
+    "an entry after updateKeys [] without pre-rotation": "invalid at entry 4: no key is authorized after updateKeys [] while pre-rotation was off",
     "deactivated true in one entry under pre-rotation, update keys kept": "valid (2 entries)"
+  },
+  "rules under did:webvh where its text differs": {
+    "versionTime with fractional seconds": "valid (2 entries)",
+    "the first entry with fractional seconds": "valid (1 entries)",
+    "an empty host": "invalid at entry 1: state.id is not a did:webvh DID: the domain is not a dotted name",
+    "a host without a dot": "invalid at entry 1: state.id is not a did:webvh DID: the domain is not a dotted name",
+    "portable true in the first entry": "unsupported at entry 1: portable true is not supported here",
+    "portable false in a later entry": "valid (2 entries)",
+    "portable true in a later entry": "invalid at entry 2: portable true in a later entry",
+    "a watcher": "unsupported at entry 2: watchers are not supported here",
+    "watchers: not a URL": "invalid at entry 2: watchers is not a list of http(s) URLs",
+    "method did:webvh:1.1 in a later entry": "unsupported at entry 2: method did:webvh:1.1 is not supported",
+    "an entry after updateKeys [] that set new nextKeyHashes, pre-rotation off": "valid (4 entries)"
   },
   "the same keys under three names": {
     "dids": {
@@ -471,12 +520,12 @@
     "distinctScids": 3,
     "crossCheck": {
       "written as did:webvh (example.com), verified as did:webvh (example.com)": "valid",
-      "written as did:webvh (example.com), verified as did:vh": "invalid: method is missing or not supported",
-      "written as did:webvh (example.com), verified as did:scid:vh:1": "invalid: method is missing or not supported",
-      "written as did:vh, verified as did:webvh (example.com)": "invalid: method is missing or not supported",
+      "written as did:webvh (example.com), verified as did:vh": "invalid: method is not of the form did:vh:<major>.<minor>",
+      "written as did:webvh (example.com), verified as did:scid:vh:1": "invalid: method is not of the form did:vh:<major>.<minor>",
+      "written as did:vh, verified as did:webvh (example.com)": "invalid: method is not of the form did:webvh:<major>.<minor>",
       "written as did:vh, verified as did:vh": "valid",
       "written as did:vh, verified as did:scid:vh:1": "invalid: state.id is not the DID",
-      "written as did:scid:vh:1, verified as did:webvh (example.com)": "invalid: method is missing or not supported",
+      "written as did:scid:vh:1, verified as did:webvh (example.com)": "invalid: method is not of the form did:webvh:<major>.<minor>",
       "written as did:scid:vh:1, verified as did:vh": "invalid: state.id is not the DID",
       "written as did:scid:vh:1, verified as did:scid:vh:1": "valid"
     }

@@ -25,6 +25,13 @@ export interface Profile {
   method: string
   /** The names a `parameters` object may carry under this method. */
   parameters: readonly string[]
+  /** Whose rules apply where the two texts differ: did:vh asks for whole
+   *  seconds and allows no key after `updateKeys: []` without pre-rotation;
+   *  did:webvh 1.0 allows fractional seconds, has `portable`, and no such rule. */
+  family: 'vh' | 'webvh'
+  /** A syntax check of `state.id` beyond the template (did:webvh: the ABNF).
+   *  Returns why it fails, or null. */
+  syntax?: (id: string) => { kind: 'invalid' | 'unsupported', reason: string } | null
 }
 
 export interface Proof {
@@ -56,9 +63,11 @@ export interface Version {
   deactivated: boolean
 }
 
+/** `unsupported` is did:vh's `featureNotSupported`: the log is well formed
+ *  but uses a version or a feature this code does not build. */
 export type LogCheck =
-  | { ok: true, did: string, scid: string, versions: Version[], head: Version }
-  | { ok: false, at: number, reason: string }
+  | { ok: true, did: string, scid: string, log: Entry[], versions: Version[], head: Version }
+  | { ok: false, kind: 'invalid' | 'unsupported', at: number, reason: string }
 
 const PLACEHOLDER = '{SCID}'
 const te = new TextEncoder()
@@ -126,10 +135,14 @@ export interface CreateOptions {
   updateKey: KeyPair
   /** The public keys that may sign the next entry (pre-rotation); none turns pre-rotation off. */
   next: Uint8Array[]
+  /** Further public keys listed in `updateKeys` after the signing one. */
+  moreUpdateKeys?: Uint8Array[]
   /** The key the document lists for `authentication`. */
   authKey: Uint8Array
-  /** `versionTime`, whole seconds, UTC. */
+  /** `versionTime`, UTC. The methods ask for the current time; tests pass fixed ones. */
   time: string
+  /** Further parameters of the first entry, as written (for tests of rules). */
+  extraParameters?: Record<string, unknown>
 }
 
 /** Write the first entry (Create, steps 1 to 6). */
@@ -140,8 +153,9 @@ export async function create (o: CreateOptions): Promise<Entry[]> {
     parameters: {
       method: o.profile.method,
       scid: PLACEHOLDER,
-      updateKeys: [multikey(o.updateKey.pubRaw)],
+      updateKeys: [o.updateKey.pubRaw, ...o.moreUpdateKeys ?? []].map(multikey),
       nextKeyHashes: await Promise.all(o.next.map((k) => keyHash(multikey(k)))),
+      ...o.extraParameters,
     },
     state: didDocument(o.profile.did, o.authKey),
   }
@@ -224,17 +238,40 @@ export function fromJsonl (text: string): unknown[] | null {
 
 // ── verification ────────────────────────────────────────────────────────
 
-const TIME = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(Z|\+00:00)$/
-/** A UTC ISO 8601 time in whole seconds, as an instant, or null. */
-function timeOf (t: unknown): number | null {
-  if (typeof t !== 'string' || !TIME.test(t)) return null
-  const ms = Date.parse(t)
+const TIME = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|\+00:00)$/
+/** An instant: whole seconds in milliseconds, and the fraction's digits. */
+interface Instant { ms: number, frac: string }
+/** A UTC ISO 8601 time, as an instant, or null. Fractional seconds only
+ *  when `fraction` is true (did:webvh); did:vh asks for whole seconds. */
+function timeOf (t: unknown, fraction: boolean): Instant | null {
+  if (typeof t !== 'string') return null
+  const m = TIME.exec(t)
+  if (!m || (m[7] !== undefined && !fraction)) return null
+  const whole = `${t.slice(0, 19)}Z`
+  const ms = Date.parse(whole)
   if (Number.isNaN(ms) || new Date(ms).toISOString().slice(0, 19) !== t.slice(0, 19)) return null
-  return ms
+  return { ms, frac: (m[7] ?? '').replace(/0+$/, '') }
+}
+/** a < b, exactly (the fraction as digits, not as a float). */
+function before (a: Instant, b: Instant): boolean {
+  if (a.ms !== b.ms) return a.ms < b.ms
+  const n = Math.max(a.frac.length, b.frac.length)
+  return a.frac.padEnd(n, '0') < b.frac.padEnd(n, '0')
 }
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 const isStrArr = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string')
+const isHttpUrl = (s: string): boolean => { try { const u = new URL(s); return (u.protocol === 'https:' || u.protocol === 'http:') && u.host !== '' } catch { return false } }
 const VERSION_ID = /^([1-9][0-9]*)-([^-]+)$/
+
+/** The version of a well-formed `method` value under the profile's prefix
+ *  (did:vh: "`did:vh:` followed by a major and minor version number, each a
+ *  non-negative integer with no leading zeros"), or null. */
+function versionOf (profile: Profile, method: unknown): [number, number] | null {
+  const prefix = profile.method.slice(0, profile.method.lastIndexOf(':') + 1)
+  if (typeof method !== 'string' || !method.startsWith(prefix)) return null
+  const m = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.exec(method.slice(prefix.length))
+  return m ? [Number(m[1]), Number(m[2])] : null
+}
 
 export interface VerifyOptions {
   profile: Profile
@@ -251,51 +288,79 @@ export interface VerifyOptions {
  * witnesses). The log is valid only if every entry is: a caller that
  * applies peer-to-peer updates asks for the last entry, and a failure at
  * any entry fails that request.
+ *
+ * The input is copied first (as JSON, the form a log travels in); the
+ * result, and every document in it, belongs to that copy and not to the
+ * caller's object.
  */
-export async function verify (input: unknown, o: VerifyOptions): Promise<LogCheck> {
-  const fail = (at: number, reason: string): LogCheck => ({ ok: false, at, reason })
+export async function verify (raw: unknown, o: VerifyOptions): Promise<LogCheck> {
+  const fail = (at: number, reason: string): LogCheck => ({ ok: false, kind: 'invalid', at, reason })
+  const unsupported = (at: number, reason: string): LogCheck => ({ ok: false, kind: 'unsupported', at, reason })
+  let input: unknown
+  try { input = JSON.parse(JSON.stringify(raw)) } catch { return fail(0, 'not a log') }
   if (!Array.isArray(input) || input.length === 0) return fail(0, 'not a log')
+  const log = input as Entry[]
+  const vhRules = o.profile.family === 'vh'
   const limit = o.now.getTime() + (o.toleranceSec ?? 300) * 1000
   const allowed = new Set(o.profile.parameters)
+  const supported = versionOf(o.profile, o.profile.method) as [number, number]
   const versions: Version[] = []
   let scid = ''
   let did = ''
   let updateKeys: string[] = []
   let nextKeyHashes: string[] = []
   let prevId = ''
-  let prevTime = -Infinity
+  let prevTime: Instant | null = null
   let deactivated = false
+  let noKeys = false
 
-  for (let i = 0; i < input.length; i++) {
-    const e = input[i]
+  for (let i = 0; i < log.length; i++) {
+    const e = log[i]
     try {
       if (!isObj(e)) return fail(i, 'entry is not an object')
       const keys = Object.keys(e).sort().join(',')
       if (keys !== 'parameters,proof,state,versionId,versionTime') return fail(i, 'entry has other properties than versionId, versionTime, parameters, state, proof')
       const { versionId, versionTime, parameters: p, state, proof } = e as unknown as Entry
       if (deactivated) return fail(i, 'entry after deactivation')
+      // did:vh, Authorized Keys: "once an entry sets updateKeys to [] while pre-rotation is not active, every later entry fails"
+      if (noKeys) return fail(i, 'no key is authorized after updateKeys [] while pre-rotation was off')
 
-      // 1. parameters
+      // 1. parameters; `method` first: an entry with an unknown version is not processed
       if (!isObj(p)) return fail(i, 'parameters is not an object')
+      if (i === 0 && !('method' in p)) return fail(i, 'method is missing')
+      if ('method' in p && p.method !== o.profile.method) {
+        const v = versionOf(o.profile, p.method)
+        if (!v) return fail(i, `method is not of the form ${o.profile.method.slice(0, o.profile.method.lastIndexOf(':') + 1)}<major>.<minor>`)
+        if (i > 0 && (v[0] < supported[0] || (v[0] === supported[0] && v[1] < supported[1]))) return fail(i, 'method changes to a lower version')
+        return unsupported(i, `method ${p.method as string} is not supported`)
+      }
       for (const [k, v] of Object.entries(p)) {
         if (!allowed.has(k)) return fail(i, `parameter ${k} is not defined for this method`)
         if (v === null) return fail(i, `parameter ${k} is null`)
       }
       if (i === 0) {
-        if (p.method !== o.profile.method) return fail(i, 'method is missing or not supported')
         if (typeof p.scid !== 'string') return fail(i, 'scid is missing')
         if (!Array.isArray(p.updateKeys)) return fail(i, 'updateKeys is missing')
-      } else {
-        if ('method' in p && p.method !== o.profile.method) return fail(i, 'method is not supported')
-        if ('scid' in p) return fail(i, 'scid in a later entry')
-      }
+      } else if ('scid' in p) return fail(i, 'scid in a later entry')
       if ('updateKeys' in p && !(isStrArr(p.updateKeys) && p.updateKeys.every((k) => rawOfMultikey(k) !== null))) return fail(i, 'updateKeys is not a list of Ed25519 multikeys')
       if ('nextKeyHashes' in p && !(isStrArr(p.nextKeyHashes) && p.nextKeyHashes.every(isSha256Mh))) return fail(i, 'nextKeyHashes is not a list of SHA-256 multihashes')
-      if ('portable' in p && p.portable !== false) return fail(i, 'portable is not false (portability is not supported here)')
-      if ('witness' in p && !(isObj(p.witness) && Object.keys(p.witness).length === 0)) return fail(i, 'witnesses are not supported here')
-      if ('watchers' in p && !isStrArr(p.watchers)) return fail(i, 'watchers is not a list of strings')
       if ('ttl' in p && !(Number.isInteger(p.ttl) && (p.ttl as number) >= 0 && (p.ttl as number) <= 2 ** 31 - 1)) return fail(i, 'ttl is not an unsigned integer')
       if ('deactivated' in p && typeof p.deactivated !== 'boolean') return fail(i, 'deactivated is not a boolean')
+      // features not built: well-formed values are unsupported, decided once the rest of the entry verifies
+      let notBuilt = ''
+      if ('portable' in p) {
+        if (typeof p.portable !== 'boolean') return fail(i, 'portable is not a boolean')
+        if (p.portable && i > 0) return fail(i, 'portable true in a later entry')
+        if (p.portable) notBuilt = 'portable true is not supported here'
+      }
+      if ('witness' in p) {
+        if (!isObj(p.witness)) return fail(i, 'witness is not an object')
+        if (Object.keys(p.witness).length > 0) notBuilt ||= 'witnesses are not supported here'
+      }
+      if ('watchers' in p) {
+        if (!(isStrArr(p.watchers) && p.watchers.every(isHttpUrl))) return fail(i, 'watchers is not a list of http(s) URLs')
+        if (p.watchers.length > 0) notBuilt ||= 'watchers are not supported here'
+      }
 
       // 7. pre-rotation, and the keys that may sign this entry
       const prerotation = nextKeyHashes.length > 0
@@ -339,15 +404,21 @@ export async function verify (input: unknown, o: VerifyOptions): Promise<LogChec
       if (await hashOf({ ...body, versionId: i === 0 ? scid : prevId }) !== entryHash) return fail(i, 'entryHash does not match')
 
       // 4. versionTime
-      const t = timeOf(versionTime)
-      if (t === null) return fail(i, 'versionTime is not a UTC time in whole seconds')
-      if (t <= prevTime) return fail(i, 'versionTime is not later than the previous entry\'s')
-      if (t > limit) return fail(i, 'versionTime is in the future')
+      const t = timeOf(versionTime, !vhRules)
+      if (t === null) return fail(i, vhRules ? 'versionTime is not a UTC time in whole seconds' : 'versionTime is not a UTC time')
+      if (prevTime !== null && !before(prevTime, t)) return fail(i, 'versionTime is not later than the previous entry\'s')
+      if (t.ms > limit || (t.ms === limit && t.frac !== '')) return fail(i, 'versionTime is in the future')
 
       // 6. the document
-      if (!isObj(state) || state.id !== did) return fail(i, 'state.id is not the DID')
+      if (!isObj(state)) return fail(i, 'state is not an object')
+      const bad = typeof state.id === 'string' && o.profile.syntax ? o.profile.syntax(state.id) : null
+      if (bad) return bad.kind === 'invalid' ? fail(i, `state.id is not a ${o.profile.method.split(':').slice(0, 2).join(':')} DID: ${bad.reason}`) : unsupported(i, bad.reason)
+      if (state.id !== did) return fail(i, 'state.id is not the DID')
+
+      if (notBuilt) return unsupported(i, notBuilt)
 
       // 8. collect
+      if (vhRules && !prerotation && Array.isArray(p.updateKeys) && p.updateKeys.length === 0) noKeys = true
       if (Array.isArray(p.updateKeys)) updateKeys = p.updateKeys as string[]
       if (Array.isArray(p.nextKeyHashes)) nextKeyHashes = p.nextKeyHashes as string[]
       if (p.deactivated === true) deactivated = true
@@ -358,5 +429,5 @@ export async function verify (input: unknown, o: VerifyOptions): Promise<LogChec
       return fail(i, 'entry cannot be processed')
     }
   }
-  return { ok: true, did, scid, versions, head: versions[versions.length - 1] as Version }
+  return { ok: true, did, scid, log, versions, head: versions[versions.length - 1] as Version }
 }

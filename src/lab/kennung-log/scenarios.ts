@@ -15,6 +15,7 @@ export const T0 = Date.parse('2026-11-01T10:00:00Z')
 export const at = (day: number): string => new Date(T0 + day * 86_400_000).toISOString().replace(/\.\d{3}Z$/, 'Z')
 export const NOW = new Date('2026-11-20T00:00:00Z')
 const AUD = 'https://service.example'
+const te = new TextEncoder()
 
 /** A person's identifier as one device holds it: the log, the key the head
  *  committed to, and the authentication key of the head. */
@@ -32,11 +33,10 @@ export async function change (h: Holder, as: string, n: number, day: number): Pr
   return { log: await rotate(h.log, { signer: h.next, next: [next.pubRaw], authKey: auth.pubRaw, time: at(day) }), next, auth }
 }
 
-let nonces = 0
 /** A login: the device's log and a token under its head, signed with `key`
  *  (default: the head's authentication key), naming `version` (default: the head). */
 async function login (v: Verifier, h: Holder, o: { key?: KeyPair, version?: string } = {}): Promise<LoginResult> {
-  const nonce = `n${++nonces}`
+  const nonce = await v.issueNonce()
   const head = h.log[h.log.length - 1] as Entry
   const did = head.state.id as string
   const t = Math.floor(NOW.getTime() / 1000)
@@ -56,13 +56,14 @@ function show (r: LoginResult): string {
     case 'stale': return `stale, the service names ${nameOf(r.held)}`
     case 'contested': return 'contested'
     case 'invalid': return `invalid: ${r.reason}`
+    case 'unsupported': return `unsupported: ${r.reason}`
   }
 }
 async function step (v: Verifier, who: string, h: Holder, o?: { key?: KeyPair, version?: string, label?: string }): Promise<Step> {
   const r = await login(v, h, o)
   const did = (h.log[0] as Entry).state.id as string
-  const held = v.holding(did)
-  const holds = held === undefined ? 'nothing' : `${nameOf(held.head.versionId)}${held.contested ? `, contested, ${held.evidence.length} log(s) as evidence` : ''}`
+  const held = await v.holding(did)
+  const holds = held === undefined ? 'nothing' : `${nameOf(held.head.versionId)}${held.contested ? `, contested, ${held.evidence.map((l) => nameOf(l[l.length - 1]?.versionId)).join(' and ')} as evidence` : ''}`
   return { who, presents: o?.label ?? nameOf((h.log[h.log.length - 1] as Entry).versionId), result: show(r), holds }
 }
 
@@ -130,6 +131,22 @@ async function oldKeyAfterTheChange (): Promise<Step[]> {
     await step(v, 'owner', o2),
     await step(v, 'v2 with a token by the old key, naming v2', o2, { key: o1.auth }),
     await step(v, 'v2 with a token by the old key, naming v1', o2, { key: o1.auth, version: (o1.log[0] as Entry).versionId }),
+    await step(v, 'owner', o2),
+  ]
+}
+
+/** A valid continuation whose login fails is still kept: the verified
+ *  log replaces the held one (Applying Peer-to-Peer Updates, step 4). */
+async function continuationWithAFailingLogin (): Promise<Step[]> {
+  const v = verifier()
+  const o1 = named(await genesis(vh), 'v1')
+  const o2 = named(await change(o1, 'owner', 1, 2), 'v2 (owner)')
+  const copy = named(await change(o1, 'copy', 1, 1), 'v2 (copy)')
+  return [
+    await step(v, 'owner', o1),
+    await step(v, 'owner, with a token by the old authentication key', o2, { key: o1.auth }),
+    await step(v, 'someone with the old log and the old authentication key', o1),
+    await step(v, 'copy', copy),
     await step(v, 'owner', o2),
   ]
 }
@@ -296,6 +313,14 @@ async function rules (): Promise<Record<string, string>> {
     'a parameter set to null': next({ ...committed, ttl: null }),
     'ttl as a string': next({ ...committed, ttl: '3600' }),
     'state.id another DID': next(committed, at(1), didDocument(did.replace('did:vh:', 'did:vh:x'), o1.auth.pubRaw)),
+    'an entry after updateKeys [] that set new nextKeyHashes, pre-rotation off': (async () => {
+      const off = await next({ updateKeys: committed.updateKeys, nextKeyHashes: [] })
+      const empty = await append(off, { parameters: { updateKeys: [], nextKeyHashes: committed.nextKeyHashes }, state: (o1.log[0] as Entry).state, signer: o1.next, time: at(2) })
+      return append(empty, { parameters: { updateKeys: [multikey(n2.pubRaw)], nextKeyHashes: [] }, state: (o1.log[0] as Entry).state, signer: n2, time: at(3) })
+    })(),
+    'method did:vh:99.0 in a later entry': next({ ...committed, method: 'did:vh:99.0' }),
+    'method did:vh:0.9 in a later entry': next({ ...committed, method: 'did:vh:0.9' }),
+    'a watcher': next({ ...committed, watchers: ['https://watcher.example'] }),
     'an entry after updateKeys [] without pre-rotation': (async () => {
       const off = await next({ updateKeys: committed.updateKeys, nextKeyHashes: [] })
       const empty = await append(off, { parameters: { updateKeys: [] }, state: (o1.log[0] as Entry).state, signer: o1.next, time: at(2) })
@@ -306,7 +331,41 @@ async function rules (): Promise<Record<string, string>> {
   const out: Record<string, string> = {}
   for (const [name, log] of Object.entries(cases)) {
     const r = await verify(await log, { profile: vh, now: NOW })
-    out[name] = r.ok ? `valid (${r.versions.length} entries)` : `invalid at entry ${r.at + 1}: ${r.reason}`
+    out[name] = r.ok ? `valid (${r.versions.length} entries)` : `${r.kind} at entry ${r.at + 1}: ${r.reason}`
+  }
+  return out
+}
+
+/** The same kind of entries under did:webvh, where its text differs from did:vh's. */
+async function webvhRules (): Promise<Record<string, string>> {
+  const p = webvh('example.com')
+  const o1 = await genesis(p)
+  const st = (o1.log[0] as Entry).state
+  const [n2, u0] = await Promise.all([keyOf('owner update 2'), keyOf('owner update 0')])
+  const committed = { updateKeys: [multikey(o1.next.pubRaw)], nextKeyHashes: [await keyHash(multikey(n2.pubRaw))] }
+  const next = (parameters: Record<string, unknown>, time = at(1)) => append(o1.log, { parameters, state: st, signer: o1.next, time, created: at(1) })
+  const empty = { ...webvh(''), did: 'did:webvh:{SCID}:' }
+  const cases: Record<string, [Profile, Promise<Entry[]>]> = {
+    'versionTime with fractional seconds': [p, next(committed, at(1).replace('Z', '.500Z'))],
+    'the first entry with fractional seconds': [p, create({ profile: p, updateKey: u0, next: [o1.next.pubRaw], authKey: o1.auth.pubRaw, time: at(0).replace('Z', '.500Z') })],
+    'an empty host': [empty, create({ profile: empty, updateKey: u0, next: [o1.next.pubRaw], authKey: o1.auth.pubRaw, time: at(0) })],
+    'a host without a dot': [webvh('localhost'), create({ profile: webvh('localhost'), updateKey: u0, next: [o1.next.pubRaw], authKey: o1.auth.pubRaw, time: at(0) })],
+    'portable true in the first entry': [p, create({ profile: p, updateKey: u0, next: [o1.next.pubRaw], authKey: o1.auth.pubRaw, time: at(0), extraParameters: { portable: true } })],
+    'portable false in a later entry': [p, next({ ...committed, portable: false })],
+    'portable true in a later entry': [p, next({ ...committed, portable: true })],
+    'a watcher': [p, next({ ...committed, watchers: ['https://watcher.example'] })],
+    'watchers: not a URL': [p, next({ ...committed, watchers: ['not a URL'] })],
+    'method did:webvh:1.1 in a later entry': [p, next({ ...committed, method: 'did:webvh:1.1' })],
+    'an entry after updateKeys [] that set new nextKeyHashes, pre-rotation off': [p, (async () => {
+      const off = await next({ updateKeys: committed.updateKeys, nextKeyHashes: [] })
+      const empty = await append(off, { parameters: { updateKeys: [], nextKeyHashes: committed.nextKeyHashes }, state: st, signer: o1.next, time: at(2) })
+      return append(empty, { parameters: { updateKeys: [multikey(n2.pubRaw)], nextKeyHashes: [] }, state: st, signer: n2, time: at(3) })
+    })()],
+  }
+  const out: Record<string, string> = {}
+  for (const [name, [profile, log]] of Object.entries(cases)) {
+    const r = await verify(await log, { profile, now: NOW })
+    out[name] = r.ok ? `valid (${r.versions.length} entries)` : `${r.kind} at entry ${r.at + 1}: ${r.reason}`
   }
   return out
 }
@@ -337,7 +396,7 @@ async function sizes (): Promise<Record<string, number[]>> {
     const o1 = await genesis(p)
     const o2 = await change(o1, 'owner', 1, 1)
     const log = await deactivate(o2.log, { signer: o2.next, time: at(2) })
-    out[`${name}: genesis, key change, pre-rotation off, deactivation`] = log.map((e) => toJsonl([e]).length)
+    out[`${name}: genesis, key change, pre-rotation off, deactivation`] = log.map((e) => te.encode(toJsonl([e])).length)
   }
   return out
 }
@@ -352,10 +411,12 @@ export async function measure (): Promise<Record<string, unknown>> {
     'two continuations, the owner first': await twoContinuations(true),
     'two continuations, the copy first': await twoContinuations(false),
     'a token under the old key after the change': await oldKeyAfterTheChange(),
+    'a continuation whose login fails': await continuationWithAFailingLogin(),
     'a continuation with a key that was not committed': await uncommittedKey(),
     'deactivation': await deactivation(),
     'tampered entries': await tamperTable(),
     'rules, broken by an entry an authorized key wrote': await rules(),
+    'rules under did:webvh where its text differs': await webvhRules(),
     'the same keys under three names': await threeNames(),
     'sizes': await sizes(),
   }

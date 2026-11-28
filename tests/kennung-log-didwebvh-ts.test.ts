@@ -116,16 +116,27 @@ test('tampered logs: what log.ts and didwebvh-ts each reject', async () => {
   })
 })
 
-test('host-free logs written by log.ts, given to didwebvh-ts', async () => {
+test('host-free logs written by log.ts, given to didwebvh-ts: the missing host alone fails', async () => {
   const out: Record<string, string | undefined> = {}
-  for (const [name, p] of [['did:vh', vh], ['did:scid:vh:1', scidVh]] as const) {
+  const cases = [
+    ['did:webvh with a host, method did:webvh:1.0', webvh('example.com')],
+    // the same method value; only the DID differs
+    ['did:webvh without a host, method did:webvh:1.0', { ...webvh('example.com'), did: 'did:webvh:{SCID}' }],
+    ['did:vh, method did:webvh:1.0', { ...vh, method: 'did:webvh:1.0' }],
+    ['did:vh, method did:vh:1.0', vh],
+    ['did:scid:vh:1, method did:vh:1.0', scidVh],
+  ] as const
+  for (const [name, p] of cases) {
     const log = (await genesis(p)).log
     const r = await resolveDIDFromLog(log as unknown as DIDLog)
-    out[name] = `${r.didResolutionMetadata.error}: ${(r.didResolutionMetadata as any).problemDetails?.detail}`
+    out[name] = r.didResolutionMetadata.error === undefined ? 'resolves' : `${r.didResolutionMetadata.error}: ${(r.didResolutionMetadata as any).problemDetails?.detail}`
   }
   // didwebvh#305: the did:webvh libraries do not take a log without a host.
   expect(out).toEqual({
-    'did:vh': "invalidDid: 'did:vh:1.0' is not a supported method version.",
-    'did:scid:vh:1': "invalidDid: 'did:vh:1.0' is not a supported method version.",
+    'did:webvh with a host, method did:webvh:1.0': 'resolves',
+    'did:webvh without a host, method did:webvh:1.0': "invalidDid: version '1' state.id must include SCID and domain segments",
+    'did:vh, method did:webvh:1.0': "invalidDid: version '1' state.id must be a valid did:webvh identifier",
+    'did:vh, method did:vh:1.0': "invalidDid: 'did:vh:1.0' is not a supported method version.",
+    'did:scid:vh:1, method did:vh:1.0': "invalidDid: 'did:vh:1.0' is not a supported method version.",
   })
 })
