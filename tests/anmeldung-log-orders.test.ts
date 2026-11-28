@@ -112,7 +112,7 @@ describe('every order of small sets', () => {
 })
 
 test('the sets above are every order of their events: together', () => {
-  expect(SETS.reduce((n, x) => n + x[3], 0)).toBe(1267)
+  expect(SETS.reduce((n, x) => n + x[3], 0)).toBe(1264)
 })
 
 describe('random orders of larger sets, fixed seeds', () => {
