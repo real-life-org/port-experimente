@@ -54,11 +54,11 @@ class GatedStore implements Store {
   release = (): void => {}
   hold (nonce: string): void { this.held = nonce; this.gate = new Promise((r) => { this.release = r }) }
   private held = ''
-  issue (nonce: string, expires: number) { return this.inner.issue(nonce, expires) }
+  issue (nonce: string, expires: number, now: number) { return this.inner.issue(nonce, expires, now) }
   read (did: string) { return this.inner.read(did) }
-  async transact<T> (did: string, nonce: string, now: number, decide: (h: Held | undefined, n: NonceState) => { held?: Held, result: T }): Promise<T> {
+  async transact<T> (did: string, nonce: string, clock: () => number, decide: (h: Held | undefined, n: NonceState, now: number) => { held?: Held, result: T }): Promise<T> {
     if (nonce === this.held && this.gate) await this.gate
-    return this.inner.transact(did, nonce, now, decide)
+    return this.inner.transact(did, nonce, clock, decide)
   }
 }
 
@@ -149,4 +149,37 @@ test('a new head with the authentication key unchanged: a token under the old he
   expect(headOf(o2).state).toEqual(headOf(o1).state)
   expect(await login(v, o2, { version: headOf(o1).versionId })).toEqual({ kind: 'invalid', reason: 'token: signed under another version than the head' })
   expect(await login(v, o2)).toMatchObject({ kind: 'ok', step: 'same head' })
+})
+
+test('the time of the nonce and of the token is the time of the decision: expiry while the step waits is never ok', async () => {
+  for (const [what, ttl, jump, reason] of [['the nonce', 120, 121, 'nonce: expired'], ['the token', 1000, 301, 'token: outside its time']] as const) {
+    let now = NOW
+    const store = new GatedStore()
+    const v = new Verifier({ profile: vh, audience: AUD, now: () => now, store, nonceTtlSec: ttl })
+    const o1 = await genesis(vh)
+    const nonce = await v.issueNonce()
+    store.hold(nonce)
+    const pending = v.login({ log: o1.log, nonce, token: await tokenFor(o1, nonce) })   // token: 300 s
+    await new Promise((r) => setTimeout(r, 20))                                          // checks done at NOW, the step waits
+    now = new Date(NOW.getTime() + jump * 1000)                                          // it runs later, once the time is out
+    store.release()
+    expect(await pending, what).toEqual({ kind: 'invalid', reason })
+  }
+})
+
+test('expired nonces are dropped when a new one is issued; a spent one stays until it expires', async () => {
+  let now = NOW
+  const store = new MemoryStore()
+  const v = new Verifier({ profile: vh, audience: AUD, now: () => now, store, nonceTtlSec: 120 })
+  const o1 = await genesis(vh)
+  const n1 = await v.issueNonce()
+  const answer = { log: o1.log, nonce: n1, token: await tokenFor(o1, n1) }
+  expect(await v.login(answer)).toMatchObject({ kind: 'ok' })
+  await v.issueNonce(); await v.issueNonce()
+  expect(store.nonceCount).toBe(3)
+  expect(await v.login(answer)).toEqual({ kind: 'invalid', reason: 'nonce: already used' })   // spent, not yet expired
+  now = new Date(NOW.getTime() + 121_000)
+  await v.issueNonce()
+  expect(store.nonceCount).toBe(1)
+  expect((await v.login(answer)).kind).toBe('invalid')
 })

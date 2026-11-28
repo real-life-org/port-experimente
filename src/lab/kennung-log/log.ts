@@ -261,6 +261,22 @@ function before (a: Instant, b: Instant): boolean {
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 const isStrArr = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string')
 const isHttpUrl = (s: string): boolean => { try { const u = new URL(s); return (u.protocol === 'https:' || u.protocol === 'http:') && u.host !== '' } catch { return false } }
+/** did:vh "The witness Parameter" (did:webvh 1.0 states the same): a non-empty
+ *  `witnesses` array of objects with a unique (NFC) did:key `id` of an Ed25519
+ *  key, and an integer `threshold` from 1 to the number of distinct ids.
+ *  Returns what is wrong, or null. */
+function witnessProblem (w: Record<string, unknown>): string | null {
+  if (!Array.isArray(w.witnesses) || w.witnesses.length === 0) return 'witness.witnesses is not a non-empty array'
+  const ids = new Set<string>()
+  for (const x of w.witnesses) {
+    if (!isObj(x) || typeof x.id !== 'string' || !x.id.startsWith('did:key:') || rawOfMultikey(x.id.slice('did:key:'.length)) === null) return 'a witness id is not a did:key of an Ed25519 key'
+    const id = x.id.normalize('NFC')
+    if (ids.has(id)) return 'witness ids are not unique'
+    ids.add(id)
+  }
+  if (typeof w.threshold !== 'number' || !Number.isInteger(w.threshold) || w.threshold < 1 || w.threshold > ids.size) return 'witness.threshold is missing or not an integer from 1 to the number of distinct witnesses'
+  return null
+}
 const VERSION_ID = /^([1-9][0-9]*)-([^-]+)$/
 
 /** The version of a well-formed `method` value under the profile's prefix
@@ -301,7 +317,9 @@ export async function verify (raw: unknown, o: VerifyOptions): Promise<LogCheck>
   if (!Array.isArray(input) || input.length === 0) return fail(0, 'not a log')
   const log = input as Entry[]
   const vhRules = o.profile.family === 'vh'
-  const limit = o.now.getTime() + (o.toleranceSec ?? 300) * 1000
+  const limitMs = o.now.getTime() + (o.toleranceSec ?? 300) * 1000
+  // "now plus tolerance" as an instant, compared to the fraction like the order of versionTime
+  const limit: Instant = { ms: Math.floor(limitMs / 1000) * 1000, frac: String(((limitMs % 1000) + 1000) % 1000).padStart(3, '0').replace(/0+$/, '') }
   const allowed = new Set(o.profile.parameters)
   const supported = versionOf(o.profile, o.profile.method) as [number, number]
   const versions: Version[] = []
@@ -355,7 +373,11 @@ export async function verify (raw: unknown, o: VerifyOptions): Promise<LogCheck>
       }
       if ('witness' in p) {
         if (!isObj(p.witness)) return fail(i, 'witness is not an object')
-        if (Object.keys(p.witness).length > 0) notBuilt ||= 'witnesses are not supported here'
+        if (Object.keys(p.witness).length > 0) {
+          const w = witnessProblem(p.witness)
+          if (w) return fail(i, w)
+          notBuilt ||= 'witnesses are not supported here'
+        }
       }
       if ('watchers' in p) {
         if (!(isStrArr(p.watchers) && p.watchers.every(isHttpUrl))) return fail(i, 'watchers is not a list of http(s) URLs')
@@ -407,7 +429,7 @@ export async function verify (raw: unknown, o: VerifyOptions): Promise<LogCheck>
       const t = timeOf(versionTime, !vhRules)
       if (t === null) return fail(i, vhRules ? 'versionTime is not a UTC time in whole seconds' : 'versionTime is not a UTC time')
       if (prevTime !== null && !before(prevTime, t)) return fail(i, 'versionTime is not later than the previous entry\'s')
-      if (t.ms > limit || (t.ms === limit && t.frac !== '')) return fail(i, 'versionTime is in the future')
+      if (before(limit, t)) return fail(i, 'versionTime is in the future')
 
       // 6. the document
       if (!isObj(state)) return fail(i, 'state is not an object')

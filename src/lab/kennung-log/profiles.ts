@@ -30,7 +30,9 @@ export function webvhSyntax (id: string): { kind: 'invalid' | 'unsupported', rea
   if (labels.some((l) => !/^(?:[A-Za-z0-9-]|%[0-9A-Fa-f]{2})+$/.test(l))) return bad('a domain label is empty or has other characters')
   const decoded = decodeOnce(name)
   if (decoded === null) return bad('invalid percent-encoding in the domain')
-  if (!/^[\x21-\x7e]*$/.test(decoded)) return { kind: 'unsupported', reason: 'a domain that needs IDNA processing is not supported here' }
+  // an ASCII character that no host name has is invalid, whatever else the name holds; IDNA only concerns non-ASCII
+  if (/[\x00-\x2c\x2f\x3a-\x40\x5b-\x60\x7b-\x7f]/.test(decoded)) return bad('the domain has a character that a host name cannot have')
+  if (/[^\x00-\x7f]/.test(decoded)) return { kind: 'unsupported', reason: 'a domain that needs IDNA processing is not supported here' }
   const dl = decoded.split('.')
   if (dl.some((l) => !/^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(l) || octets(l) > 63) || octets(decoded) > 253) return bad('the domain is not a host name (RFC 1123)')
   // an IP address: a URL parser takes a host whose last label is a number as IPv4

@@ -114,7 +114,7 @@ test('did:webvh: state.id is parsed by the method-specific-id ABNF; an empty hos
   const empty = { ...webvh(''), did: 'did:webvh:{SCID}:' }
   const log = (await genesis(empty)).log
   expect(await verify(log, { profile: empty, now: NOW })).toMatchObject({ ok: false, kind: 'invalid', at: 0, reason: 'state.id is not a did:webvh DID: the domain is not a dotted name' })
-  for (const [host, ok] of [['example.com', true], ['example.com%3A8443:dids:alice', true], ['localhost', false], ['example.com%3A0', false], ['example.com%3A65536', false], ['ex%3Aample.com', false], ['1.2.3.4', false], ['example..com', false], ['example.com:..', false], ['example.com:%2e%2e', false], ['example.com:a%2Fb', false], ['example.com:%zz', false], ['-example.com', false]] as const) {
+  for (const [host, ok] of [['example.com', true], ['example.com%3A8443:dids:alice', true], ['localhost', false], ['example.com%3A0', false], ['example.com%3A65536', false], ['ex%3Aample.com', false], ['1.2.3.4', false], ['example..com', false], ['example.com:..', false], ['example.com:%2e%2e', false], ['example.com:a%2Fb', false], ['example.com:%zz', false], ['-example.com', false], ['exa%20mple.com', false], ['example.com%20', false], ['ex%2Fample.com', false], ['ex%00ample.com', false]] as const) {
     const p = webvh(host)
     expect((await verify((await genesis(p)).log, { profile: p, now: NOW })).ok, host).toBe(ok)
   }
@@ -149,6 +149,13 @@ test('a well-formed log with an unknown version or a feature not built is unsupp
   expect(await kind(await next({ method: 'did:webvh:1.0' }))).toBe('invalid: method is not of the form did:vh:<major>.<minor>')
   expect(await kind(await next({ witness: { threshold: 1, witnesses: [{ id: 'did:key:' + multikey(n2!.pubRaw) }] } }))).toBe('unsupported: witnesses are not supported here')
   expect(await kind(await next({ witness: {} }))).toBe('ok')
+  // a non-empty but malformed witness configuration is invalid; only a well-formed one is unsupported
+  const wid = 'did:key:' + multikey(n2!.pubRaw), wid2 = 'did:key:' + multikey(o1.auth.pubRaw)
+  for (const bad of [{ witnesses: [{ id: wid }] }, { threshold: 0, witnesses: [{ id: wid }] }, { threshold: 1.5, witnesses: [{ id: wid }] }, { threshold: '1', witnesses: [{ id: wid }] }, { threshold: 2, witnesses: [{ id: wid }] },
+    { threshold: 1, witnesses: [{ id: wid }, { id: wid }] }, { threshold: 2, witnesses: [{ id: wid }, { id: wid }] }, { threshold: 1, witnesses: [] }, { threshold: 1 }, { threshold: 1, witnesses: [{}] }, { threshold: 1, witnesses: [{ id: 'did:web:example.com' }] }, { threshold: 1, witnesses: ['x'] }]) {
+    expect(await kind(await next({ witness: bad })), JSON.stringify(bad)).toMatch(/^invalid: (witness|a witness)/)
+  }
+  expect(await kind(await next({ witness: { threshold: 2, witnesses: [{ id: wid }, { id: wid2 }] } }))).toBe('unsupported: witnesses are not supported here')
   expect(await kind(await next({ witness: [] }))).toBe('invalid: witness is not an object')
   expect(await kind(await next({ watchers: ['https://watcher.example'] }))).toBe('unsupported: watchers are not supported here')
   expect(await kind(await next({ watchers: ['not a URL'] }))).toBe('invalid: watchers is not a list of http(s) URLs')
@@ -167,4 +174,24 @@ test('a well-formed log with an unknown version or a feature not built is unsupp
   expect(await kind(portable, w)).toBe('unsupported: portable true is not supported here')
   const later = await append(wo.log, { parameters: { updateKeys: [multikey(wo.next.pubRaw)], nextKeyHashes: [], portable: true }, state: (wo.log[0] as Entry).state, signer: wo.next, time: at(1) })
   expect(await kind(later, w)).toBe('invalid: portable true in a later entry')
+})
+
+test('did:webvh host: a percent-encoded ASCII character no host has is invalid; only a non-ASCII name is unsupported', async () => {
+  const kind = async (host: string) => {
+    const p = webvh(host)
+    const r = await verify((await genesis(p)).log, { profile: p, now: NOW })
+    return r.ok ? 'ok' : r.kind
+  }
+  for (const h of ['exa%20mple.com', 'example.com%20', 'ex%7Fample.com', 'ex%00ample.com', 'ex%2Fample.com', 'ex%20%C3%BCmple.com']) expect(await kind(h), h).toBe('invalid')
+  for (const h of ['b%C3%BCcher.example', 'xn--bcher-kva.example']) expect(await kind(h), h).toBe(h.startsWith('xn') ? 'ok' : 'unsupported')
+})
+
+test('did:webvh: the future limit compares to the fraction (now plus tolerance ends at .250)', async () => {
+  const p = webvh('example.com')
+  const [u0, a0] = await Promise.all([keyOf('fut u0'), keyOf('fut a0')])
+  const now = new Date('2026-11-20T00:00:00.250Z'), tol = 300
+  const edge = (frac: string) => create({ profile: p, updateKey: u0!, next: [], authKey: a0!.pubRaw, time: `2026-11-20T00:05:00${frac}Z` })
+  for (const [frac, ok] of [['', true], ['.2', true], ['.250', true], ['.2500000001', false], ['.900', false]] as const) {
+    expect((await verify(await edge(frac), { profile: p, now, toleranceSec: tol })).ok, frac).toBe(ok)
+  }
 })

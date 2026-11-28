@@ -69,31 +69,41 @@ export type NonceState = 'open' | 'spent' | 'expired' | 'unknown'
 
 /** What the service keeps. `transact` is the one step per DID. */
 export interface Store {
-  issue (nonce: string, expires: number): Promise<void>
+  /** Keeps a nonce until `expires`; nonces that have expired by `now` may be dropped. */
+  issue (nonce: string, expires: number, now: number): Promise<void>
   /** What is held of a DID (a copy). */
   read (did: string): Promise<Held | undefined>
   /**
-   * One step for one DID: read what is held and the nonce's state, call
-   * `decide` (synchronous, no I/O), write the `held` it returns, and spend
+   * One step for one DID: take the time (`clock`, inside the step: the time
+   * of the decision), read what is held and the nonce's state at that time,
+   * call `decide` (synchronous, no I/O), write the `held` it returns, and spend
    * the nonce if it was open, whatever the result. Nothing else touches the
    * DID or the nonce in between.
    */
-  transact<T> (did: string, nonce: string, now: number, decide: (held: Held | undefined, nonce: NonceState) => { held?: Held, result: T }): Promise<T>
+  transact<T> (did: string, nonce: string, clock: () => number, decide: (held: Held | undefined, nonce: NonceState, now: number) => { held?: Held, result: T }): Promise<T>
 }
 
 export class MemoryStore implements Store {
   private readonly held = new Map<string, Held>()
   private readonly nonces = new Map<string, { expires: number, spent: boolean }>()
 
-  async issue (nonce: string, expires: number): Promise<void> { this.nonces.set(nonce, { expires, spent: false }) }
+  /** How many nonces are kept (open, or spent and not yet expired). */
+  get nonceCount (): number { return this.nonces.size }
+
+  async issue (nonce: string, expires: number, now: number): Promise<void> {
+    // expired nonces, spent or not, are dropped; a spent one stays until its expiry so a replay still sees `spent`
+    for (const [k, n] of this.nonces) if (n.expires <= now) this.nonces.delete(k)
+    this.nonces.set(nonce, { expires, spent: false })
+  }
   async read (did: string): Promise<Held | undefined> { const h = this.held.get(did); return h && structuredClone(h) }
 
-  async transact<T> (did: string, nonce: string, now: number, decide: (held: Held | undefined, nonce: NonceState) => { held?: Held, result: T }): Promise<T> {
+  async transact<T> (did: string, nonce: string, clock: () => number, decide: (held: Held | undefined, nonce: NonceState, now: number) => { held?: Held, result: T }): Promise<T> {
     // No await from here to the end: in one process this is a single step.
+    const now = clock()
     const n = this.nonces.get(nonce)
     const state: NonceState = !n ? 'unknown' : n.spent ? 'spent' : now >= n.expires ? 'expired' : 'open'
     const h = this.held.get(did)
-    const out = decide(h && structuredClone(h), state)
+    const out = decide(h && structuredClone(h), state, now)
     if (out.held) this.held.set(did, structuredClone(out.held))
     if (n && state === 'open') n.spent = true
     return out.result
@@ -124,7 +134,8 @@ export class Verifier {
   /** A nonce for one login request; it can be spent once, until it expires. */
   async issueNonce (): Promise<string> {
     const nonce = b64uOf(rand(16))
-    await this.store.issue(nonce, this.o.now().getTime() + (this.o.nonceTtlSec ?? 300) * 1000)
+    const now = this.o.now().getTime()
+    await this.store.issue(nonce, now + (this.o.nonceTtlSec ?? 300) * 1000, now)
     return nonce
   }
 
@@ -139,13 +150,17 @@ export class Verifier {
     const nonce = typeof input.nonce === 'string' ? input.nonce : ''
     // The token against the head of the presented log; it is admitted only
     // where that head is the one held after the step (same or continued).
-    const token = await checkToken(input.token, did, head, this.o.audience, nonce, now)
+    const token = await checkToken(input.token, did, head, this.o.audience, nonce)
 
-    return this.store.transact(did, nonce, now.getTime(), (held, nonceState): { held?: Held, result: LoginResult } => {
+    // The time of the nonce's expiry and of the token's `iat` and `exp` is the
+    // time of the decision: taken in the step, not before the checks above.
+    return this.store.transact(did, nonce, () => this.o.now().getTime(), (held, nonceState, nowMs): { held?: Held, result: LoginResult } => {
       const admit = (next: Held, step: 'first contact' | 'same head' | 'continued', write: boolean): { held?: Held, result: LoginResult } => {
         const keep = write ? { held: next } : {}
         if (next.head.deactivated) return { ...keep, result: { kind: 'invalid', reason: 'the DID is deactivated' } }
-        if (token !== null) return { ...keep, result: { kind: 'invalid', reason: `token: ${token}` } }
+        if (typeof token === 'string') return { ...keep, result: { kind: 'invalid', reason: `token: ${token}` } }
+        const t = Math.floor(nowMs / 1000)
+        if (token.iat > t + 60 || token.exp <= t) return { ...keep, result: { kind: 'invalid', reason: 'token: outside its time' } }
         if (nonceState !== 'open') return { ...keep, result: { kind: 'invalid', reason: `nonce: ${nonceState === 'spent' ? 'already used' : nonceState === 'expired' ? 'expired' : 'not issued here'}` } }
         return { ...keep, result: { kind: 'ok', did, versionId: next.head.versionId, step } }
       }
@@ -175,10 +190,11 @@ export class Verifier {
   }
 }
 
-/** Checks a token against one head. Returns null when it holds, else why not.
- *  The nonce is compared with the request's here; whether the verifier issued
- *  it and it is still open is decided in the step. */
-async function checkToken (token: unknown, did: string, head: Version, audience: string, nonce: string, now: Date): Promise<string | null> {
+/** Checks a token against one head. Returns why not, or its `iat` and `exp`
+ *  when everything but the time holds. The nonce is compared with the
+ *  request's here; whether the verifier issued it and it is still open, and
+ *  whether the token is within its time, is decided in the step. */
+async function checkToken (token: unknown, did: string, head: Version, audience: string, nonce: string): Promise<string | { iat: number, exp: number }> {
   const parts = typeof token === 'string' ? token.split('.') : []
   if (parts.length !== 3) return 'not a compact JWS'
   const [h, p, s] = parts as [string, string, string]
@@ -202,7 +218,6 @@ async function checkToken (token: unknown, did: string, head: Version, audience:
   if (!good) return 'signature does not verify'
   if (claims.aud !== audience) return 'another audience'
   if (claims.nonce !== nonce) return 'another nonce'
-  const t = Math.floor(now.getTime() / 1000)
-  if (!Number.isInteger(claims.iat) || !Number.isInteger(claims.exp) || claims.iat > t + 60 || claims.exp <= t) return 'outside its time'
-  return null
+  if (!Number.isInteger(claims.iat) || !Number.isInteger(claims.exp)) return 'outside its time'
+  return { iat: claims.iat, exp: claims.exp }
 }

@@ -87,10 +87,11 @@ are values: `ok`, `stale` (with the head the service holds), `contested`,
 
 A login runs in two parts. First, without state, on a private copy of the
 input: the log, and the token against the head of that log (signature,
-`kid`, audience, nonce claim equal to the request's nonce, time, no
-`crit`). Then one step per DID (`Store.transact`): compare with the held
-log, keep evidence, spend the nonce, admit or refuse, against what is held
-at that moment. The memory store runs that step without a pause; the
+`kid`, audience, nonce claim equal to the request's nonce, no `crit`).
+Then one step per DID (`Store.transact`): take the time, compare with the
+held log, keep evidence, check the nonce's expiry and the token's `iat` and
+`exp` against that time, spend the nonce, admit or refuse, against what is
+held at that moment. The memory store runs that step without a pause; the
 interface is shaped so that a database can run it as one transaction.
 
 | Case | Result |
@@ -137,7 +138,11 @@ interface is shaped so that a database can run it as one transaction.
    must be the head's.
 5. **A nonce is spent once.** It is issued by the verifier with an expiry
    (300 s by default) and spent in the step by the first login that names
-   it and gets that far, whatever the result.
+   it and gets that far, whatever the result. The clock is read in the step,
+   so a nonce or token that expires while the call waits for the store is
+   not `ok`. Issuing a nonce drops the ones that have expired (spent ones
+   stay until their expiry, so a replay still reads "already used"; after
+   that it reads "not issued here").
 
 ## Cross-check with didwebvh-ts
 
@@ -204,7 +209,11 @@ memory.
   (did:vh: `featureNotSupported`; did:webvh only says resolution
   terminates, so the same classification is ours there), a non-empty
   `witness`, a non-empty `watchers`, `portable: true` in the first did:webvh
-  entry. An entry with an unknown `method` is not processed further; for
+  entry. A non-empty `witness` that is malformed is `invalid`: no
+  `threshold` or one that is not an integer from 1 to the number of
+  distinct witness ids, an empty or missing `witnesses`, an `id` that is
+  not an Ed25519 did:key, or duplicate ids (did:vh, The witness Parameter;
+  did:webvh 1.0 states the same). An entry with an unknown `method` is not processed further; for
   the other features the rest of the entry must verify first, else it is
   `invalid`. A lower `method` is invalid.
 - `updateKeys: []` without pre-rotation ends the log under did:vh (its
@@ -213,8 +222,9 @@ memory.
   1.0 there is no such rule and such a log continues.
 - did:webvh `state.id`: parsed by the ABNF with the rules beside it (dotted
   name, labels by RFC 1123, port 1 to 65535, no IP address, path segments).
-  Not done: IDNA processing (a name that decodes to non-ASCII is
-  unsupported) and the TLS server identity check of RFC 9525.
+  A percent-encoded ASCII character that no host name has (`%20`, `%2F`,
+  `%00`) is `invalid`. Not done: IDNA processing (a name that decodes to
+  non-ASCII, with only host-name characters in ASCII, is unsupported) and the TLS server identity check of RFC 9525.
 - `state.id` must be the DID in every entry (no portability); did:webvh
   with portability only needs one entry to match the resolved DID, and the
   SCID to match in every entry.
