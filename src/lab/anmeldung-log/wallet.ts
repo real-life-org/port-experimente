@@ -153,7 +153,7 @@ export class Wallet {
    * in changes no key.
    */
   constructor (secret: Uint8Array, o: { now: () => number, profile?: Profile, storage?: WalletStorage, transport?: Transport, derive?: typeof deriveKey }) {
-    this.#secret = secret.slice()
+    this.#secret = new Uint8Array(secret)
     this.#now = o.now
     this.#storage = o.storage ?? new MemoryStorage()
     const p = o.profile ?? vh

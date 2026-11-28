@@ -454,3 +454,24 @@ test('Service.receive answers and never throws: broken forms, logs and tokens', 
   const twice = new URLSearchParams([['state', state], ['state', 'x'], ['id_token', 'a'], ['id_token', 'b'], ['did_log', 'c']])
   expect(typeof (await svc.receive(twice)).status).toBe('number')
 })
+
+test('a seed handed in as a Node Buffer is copied too: clearing the buffer afterwards changes no key (Buffer.slice shares memory)', async () => {
+  const plain = new Uint8Array(32).fill(0x33)
+  const { multikey: multikeyOf } = await import('../src/lab/kennung-log/log')
+
+  const seed = Buffer.alloc(32, 0x33)
+  const keys = new ServiceKeys(seed)
+  seed.fill(0)
+  expect(b64uOf((await keys.auth(0)).pubRaw)).toBe(b64uOf((await new ServiceKeys(plain).auth(0)).pubRaw))
+
+  // the wallet: the first identifier it creates carries the update key of the secret as handed in
+  const f = await fake('puffer', 3)
+  const secret = Buffer.alloc(32, 0x33)
+  const w = new Wallet(secret, { now: () => T, transport: loopbackTransport() })
+  secret.fill(0)
+  const o = await w.open(await offer(f))
+  if (!o.ok) throw new Error(o.reason)
+  await w.confirm(o.request)
+  const want = await deriveKey(plain, { method: 'did:webvh', scid: o.request.scid, subjectMethod: 'did:vh' }, 'update', 0)
+  expect(w.identity(o.request.scid)!.log[0]!.parameters.updateKeys).toEqual([multikeyOf(want.pubRaw)])
+})

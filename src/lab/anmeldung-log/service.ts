@@ -44,7 +44,7 @@ export const serviceKeyInfo = (role: 'update' | 'auth', n: number): string => `x
 export class ServiceKeys {
   readonly #seed: Uint8Array
   /** The seed is copied: changing the array handed in changes no key. */
-  constructor (seed: Uint8Array) { this.#seed = seed.slice() }
+  constructor (seed: Uint8Array) { this.#seed = new Uint8Array(seed) }
   static random (): ServiceKeys { return new ServiceKeys(rand(32)) }
   update (n: number): Promise<KeyPair> { return this.#key('update', n) }
   auth (n: number): Promise<KeyPair> { return this.#key('auth', n) }
