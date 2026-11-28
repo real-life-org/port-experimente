@@ -10,19 +10,22 @@
 //
 // The browser bindings are those of src/lab/anmeldung/http.ts, rebuilt: a QR
 // attempt is collected only with its id and its own cookie (v_<id>); the
-// same-device attempt is bound by the cookie `anmeldung`; collecting mints the
-// signed-in cookie `sitzung` exactly once.
+// same-device attempt is bound by the cookie `anmeldung`; collecting gives
+// the signed-in cookie `sitzung` exactly once (the session comes from the
+// service, in one step with a fresh look at the identifier). What has run out
+// is swept on every request and on a timer.
 //
 // The service calls itself by its public HTTPS origin (the one in its DID);
-// tests listen on 127.0.0.1 and the wallet reaches it with `loopbackForTests`.
+// tests listen on 127.0.0.1 and give the wallet a transport of their own
+// (tests/anmeldung-log-loopback.ts).
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { b64uOf, rand } from 'rltp-lib'
 import { REQUEST_MEDIA_TYPE } from './profile'
-import { REQUEST_PATH, RESPONSE_PATH, RETURN_PATH, Service, ServiceKeys, type Login, type ServiceOptions } from './service'
+import { REQUEST_PATH, RESPONSE_PATH, RETURN_PATH, Service, ServiceKeys, type Collected, type ServiceOptions } from './service'
 
-export const SESSION_LIFETIME_MS = 60 * 60_000
 const BINDING_MAX_AGE_S = 600
+const SWEEP_EVERY_MS = 60_000
 const SIGNED_IN = 'sitzung', SAME_DEVICE = 'anmeldung', BINDING = 'v_'
 const MAX_BODY = 256 * 1024
 
@@ -45,28 +48,32 @@ export interface ServeOptions extends Partial<Omit<ServiceOptions, 'host'>> {
 export async function serve (opts: ServeOptions = {}): Promise<{ server: Server, service: Service, origin: string, local: string }> {
   const now = opts.now ?? Date.now
   let service!: Service
-  const authenticated = new Map<string, { login: Login, at: number }>()
+  // the QR way: attempt -> the browser binding (the value of its cookie v_<attempt>) and its start
   const bindings = new Map<string, { value: string, at: number }>()
   const bound = (req: IncomingMessage, vorgang: string): boolean => {
     const b = bindings.get(vorgang)
     return Boolean(b) && now() - b!.at <= BINDING_MAX_AGE_S * 1000 && cookieOf(req, BINDING + vorgang) === b!.value
   }
+  const sweep = (): void => {
+    service?.sweep()
+    for (const [id, b] of bindings) if (now() - b.at > BINDING_MAX_AGE_S * 1000) bindings.delete(id)
+  }
   const cookie = (name: string, value: string, maxAgeS?: number): string =>
     `${name}=${value}; HttpOnly; SameSite=Lax; Secure; Path=/${maxAgeS !== undefined ? `; Max-Age=${maxAgeS}` : ''}`
-  const signIn = (res: ServerResponse, login: Login, clear: string): void => {
-    const fresh = freshId(); authenticated.set(fresh, { login, at: now() })
-    res.setHeader('Set-Cookie', [cookie(SIGNED_IN, fresh), cookie(clear, '', 0)])
+  const signIn = (res: ServerResponse, c: Collected & { session: string }, clear: string): void => {
+    res.setHeader('Set-Cookie', [cookie(SIGNED_IN, c.session), cookie(clear, '', 0)])
   }
 
   const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1'), path = url.pathname
+    sweep()
     if (req.method === 'GET' && path === '/.well-known/did.jsonl') {
       res.writeHead(200, { 'Content-Type': 'text/jsonl', 'Access-Control-Allow-Origin': '*' }); res.end(service.didLog()); return
     }
     if (req.method === 'GET' && path === '/anmeldung-log/start') {
       const same = url.searchParams.get('geraet') === 'gleich'
-      const vorgang = freshId()
-      const s = await service.start(vorgang, same ? 'same-device' : 'cross-device')
+      const s = await service.start(same ? 'same-device' : 'cross-device')
+      const vorgang = s.attempt
       if (same) { res.setHeader('Set-Cookie', cookie(SAME_DEVICE, vorgang, BINDING_MAX_AGE_S)); json(res, 200, { link: s.link }); return }
       const value = freshId()
       bindings.set(vorgang, { value, at: now() })
@@ -88,22 +95,23 @@ export async function serve (opts: ServeOptions = {}): Promise<{ server: Server,
     }
     if (req.method === 'GET' && path === '/anmeldung-log/status') {
       const id = cookieOf(req, SIGNED_IN)
-      const s = id ? authenticated.get(id) : undefined
-      if (s && now() - s.at <= SESSION_LIFETIME_MS) { json(res, 200, s.login); return }
+      const login = id ? service.session(id) : null
+      if (login) { json(res, 200, login); return }
       const vorgang = url.searchParams.get('vorgang')
-      const done = vorgang && bound(req, vorgang) ? service.take(vorgang) : null
+      // collected only by the browser that started the attempt; any other leaves it untouched
+      const done = vorgang && bound(req, vorgang) ? await service.collect(vorgang) : null
       if (done && vorgang) {
         bindings.delete(vorgang)
-        if ('cancelled' in done) { res.setHeader('Set-Cookie', cookie(BINDING + vorgang, '', 0)); json(res, 200, { error: 'user_cancelled' }); return }
-        signIn(res, done, BINDING + vorgang); json(res, 200, done); return
+        if ('error' in done) { res.setHeader('Set-Cookie', cookie(BINDING + vorgang, '', 0)); json(res, 200, { error: done.error }); return }
+        signIn(res, done, BINDING + vorgang); json(res, 200, done.login); return
       }
       json(res, 200, {})
       return
     }
     if (req.method === 'GET' && path === RETURN_PATH) {
       const id = cookieOf(req, SAME_DEVICE)
-      const login = service.redeem(id ?? '', url.searchParams.get('response_code') ?? '')
-      if (login && id) { signIn(res, login, SAME_DEVICE); res.writeHead(303, { Location: '/' }); res.end(); return }
+      const done = await service.redeem(id ?? '', url.searchParams.get('response_code') ?? '')
+      if (done && 'session' in done && id) { signIn(res, done, SAME_DEVICE); res.writeHead(303, { Location: '/' }); res.end(); return }
       json(res, 400, { error: 'login not possible' })
       return
     }
@@ -111,6 +119,10 @@ export async function serve (opts: ServeOptions = {}): Promise<{ server: Server,
   }
   const server = createServer((req, res) => { handle(req, res).catch(() => { if (!res.headersSent) res.writeHead(500); res.end() }) })
   await new Promise<void>((ok) => server.listen(opts.port ?? 0, '127.0.0.1', ok))
+  // also swept while nobody asks; the timer does not keep the process alive and ends with the server
+  const timer = setInterval(sweep, SWEEP_EVERY_MS)
+  timer.unref?.()
+  server.on('close', () => clearInterval(timer))
   const port = (server.address() as { port: number }).port
   const host = `${opts.hostName ?? 'dienst.localhost'}%3A${port}`
   service = await Service.create({ ...opts, host, keys: opts.keys ?? ServiceKeys.random(), now })

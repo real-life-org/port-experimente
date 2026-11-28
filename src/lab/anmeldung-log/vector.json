@@ -16,7 +16,27 @@
     "state": "c3RhdGUtdmVrdG9yLTAx",
     "request_id": "YW5mcmFnZS12ZWt0b3ItMDE"
   },
-  "derivation_rule": "seed = HKDF-SHA-256(ikm = person.secret, salt = empty, info = UTF-8 of hkdf_info, 32 bytes); key = Ed25519 from seed (RFC 8032)",
+  "derivation_rule": "seed = HKDF-SHA-256(ikm, salt = empty, info = UTF-8 of hkdf_info, 32 bytes); key = Ed25519 from seed (RFC 8032). ikm is service.seed for the service keys, person.secret for the person keys.",
+  "service_derivation": [
+    {
+      "role": "update",
+      "index": 0,
+      "hkdf_info": "x-anmeldung-log-service/1/update/0",
+      "public_key_multibase": "z6Mkrfx4DSxUBun3c2VLkzwVnVqxPnXQLGmH3knTzxsEj8bb"
+    },
+    {
+      "role": "update",
+      "index": 1,
+      "hkdf_info": "x-anmeldung-log-service/1/update/1",
+      "public_key_multibase": "z6MkoF1UF1ipcAtLn4eRto48NU9B74Jy7qDeAQxjKNSuUDcy"
+    },
+    {
+      "role": "auth",
+      "index": 0,
+      "hkdf_info": "x-anmeldung-log-service/1/auth/0",
+      "public_key_multibase": "z6MkvCBvcVCtohjNayTjUh5DEA32YDS6N9gvLFXGe5YcBm78"
+    }
+  ],
   "service_did": "did:webvh:QmbtBSjRdcsHMhYjZEVzsNeZjHJHRjkbwScrqAnbQAJS5H:dienst.example",
   "service_scid": "QmbtBSjRdcsHMhYjZEVzsNeZjHJHRjkbwScrqAnbQAJS5H",
   "service_log_url": "https://dienst.example/.well-known/did.jsonl",
@@ -52,38 +72,39 @@
       "exp": 1795867500
     }
   },
+  "subject_method": "did:vh",
   "derivation": [
     {
       "role": "update",
       "index": 0,
-      "hkdf_info": "{\"index\":0,\"method\":\"did:webvh\",\"profile\":\"x-anmeldung-log/1\",\"purpose\":\"login identifier\",\"role\":\"update\",\"scid\":\"QmbtBSjRdcsHMhYjZEVzsNeZjHJHRjkbwScrqAnbQAJS5H\"}",
-      "public_key_multibase": "z6MkgZ2Vr5bYR4QWEhdxn9jZMJgcUUymiboU53AuP7KCbKjS"
+      "hkdf_info": "{\"index\":0,\"method\":\"did:webvh\",\"profile\":\"x-anmeldung-log/1\",\"purpose\":\"login identifier\",\"role\":\"update\",\"scid\":\"QmbtBSjRdcsHMhYjZEVzsNeZjHJHRjkbwScrqAnbQAJS5H\",\"subject_method\":\"did:vh\"}",
+      "public_key_multibase": "z6MkfJUFk1XrWFkft6NztTiyrrUY9591tnMdcXFMtqds8kY2"
     },
     {
       "role": "update",
       "index": 1,
-      "hkdf_info": "{\"index\":1,\"method\":\"did:webvh\",\"profile\":\"x-anmeldung-log/1\",\"purpose\":\"login identifier\",\"role\":\"update\",\"scid\":\"QmbtBSjRdcsHMhYjZEVzsNeZjHJHRjkbwScrqAnbQAJS5H\"}",
-      "public_key_multibase": "z6MkfdmA82H8rL9fiymGyzSZkWv2ejaGnoN429fN199t42YH"
+      "hkdf_info": "{\"index\":1,\"method\":\"did:webvh\",\"profile\":\"x-anmeldung-log/1\",\"purpose\":\"login identifier\",\"role\":\"update\",\"scid\":\"QmbtBSjRdcsHMhYjZEVzsNeZjHJHRjkbwScrqAnbQAJS5H\",\"subject_method\":\"did:vh\"}",
+      "public_key_multibase": "z6MkpJXhkUHx4TPFqxRnmpdH8pCqVZKSXHbsQfiR3HBvZjbb"
     },
     {
       "role": "auth",
       "index": 0,
-      "hkdf_info": "{\"index\":0,\"method\":\"did:webvh\",\"profile\":\"x-anmeldung-log/1\",\"purpose\":\"login identifier\",\"role\":\"auth\",\"scid\":\"QmbtBSjRdcsHMhYjZEVzsNeZjHJHRjkbwScrqAnbQAJS5H\"}",
-      "public_key_multibase": "z6MkwNYQbhLTkxY1d5K8Aka4tTqzjCvrkKMXpcHLkdL45vXA"
+      "hkdf_info": "{\"index\":0,\"method\":\"did:webvh\",\"profile\":\"x-anmeldung-log/1\",\"purpose\":\"login identifier\",\"role\":\"auth\",\"scid\":\"QmbtBSjRdcsHMhYjZEVzsNeZjHJHRjkbwScrqAnbQAJS5H\",\"subject_method\":\"did:vh\"}",
+      "public_key_multibase": "z6MkqQjFCsVE5f3SwYc1wCHAZTA4EBWmkdvphVFh22xgsM6g"
     }
   ],
-  "person_did": "did:vh:QmRKy1UGccp4wJUmpHBUrSN1hRwwGqEfh3hzbw1c4HZNtv",
-  "person_log": "{\"versionId\":\"1-QmfEh1uM5ksxSsD6WGjMB7a9rzZkSZALZmK8gmKUkA3Go2\",\"versionTime\":\"2026-11-28T12:00:00Z\",\"parameters\":{\"method\":\"did:vh:1.0\",\"scid\":\"QmRKy1UGccp4wJUmpHBUrSN1hRwwGqEfh3hzbw1c4HZNtv\",\"updateKeys\":[\"z6MkgZ2Vr5bYR4QWEhdxn9jZMJgcUUymiboU53AuP7KCbKjS\"],\"nextKeyHashes\":[\"QmaWjawzdro6i3rbEjPQs4BdySYgCTavkkGLKijHt6dpEG\"]},\"state\":{\"@context\":[\"https://www.w3.org/ns/did/v1\",\"https://w3id.org/security/multikey/v1\"],\"id\":\"did:vh:QmRKy1UGccp4wJUmpHBUrSN1hRwwGqEfh3hzbw1c4HZNtv\",\"verificationMethod\":[{\"id\":\"did:vh:QmRKy1UGccp4wJUmpHBUrSN1hRwwGqEfh3hzbw1c4HZNtv#key-1\",\"type\":\"Multikey\",\"controller\":\"did:vh:QmRKy1UGccp4wJUmpHBUrSN1hRwwGqEfh3hzbw1c4HZNtv\",\"publicKeyMultibase\":\"z6MkwNYQbhLTkxY1d5K8Aka4tTqzjCvrkKMXpcHLkdL45vXA\"}],\"authentication\":[\"did:vh:QmRKy1UGccp4wJUmpHBUrSN1hRwwGqEfh3hzbw1c4HZNtv#key-1\"]},\"proof\":[{\"type\":\"DataIntegrityProof\",\"cryptosuite\":\"eddsa-jcs-2022\",\"created\":\"2026-11-28T12:00:00Z\",\"verificationMethod\":\"did:key:z6MkgZ2Vr5bYR4QWEhdxn9jZMJgcUUymiboU53AuP7KCbKjS#z6MkgZ2Vr5bYR4QWEhdxn9jZMJgcUUymiboU53AuP7KCbKjS\",\"proofPurpose\":\"assertionMethod\",\"proofValue\":\"z3cvaBUtSup8fXTu4VEsub1RdZxdGxvjyEPZhLg5Zr4MFkmmyktzz7PejvnFuf9Wg5i5LZ3kUpLmfc3yZrw7cyLxy\"}]}\n",
+  "person_did": "did:vh:QmXawCw8QdniGZrPAjsxFYRecPboT9GTGcSboFrdHqEUar",
+  "person_log": "{\"versionId\":\"1-QmY3F18CwzEPsQJF5wFfJknLmkA3hRfnAqQKoQ1qMmLLGP\",\"versionTime\":\"2026-11-28T12:00:00Z\",\"parameters\":{\"method\":\"did:vh:1.0\",\"scid\":\"QmXawCw8QdniGZrPAjsxFYRecPboT9GTGcSboFrdHqEUar\",\"updateKeys\":[\"z6MkfJUFk1XrWFkft6NztTiyrrUY9591tnMdcXFMtqds8kY2\"],\"nextKeyHashes\":[\"QmVbwqvvDkQpg8L5io4CgzB9CYnmDFVBMgo67X12VFYufp\"]},\"state\":{\"@context\":[\"https://www.w3.org/ns/did/v1\",\"https://w3id.org/security/multikey/v1\"],\"id\":\"did:vh:QmXawCw8QdniGZrPAjsxFYRecPboT9GTGcSboFrdHqEUar\",\"verificationMethod\":[{\"id\":\"did:vh:QmXawCw8QdniGZrPAjsxFYRecPboT9GTGcSboFrdHqEUar#key-1\",\"type\":\"Multikey\",\"controller\":\"did:vh:QmXawCw8QdniGZrPAjsxFYRecPboT9GTGcSboFrdHqEUar\",\"publicKeyMultibase\":\"z6MkqQjFCsVE5f3SwYc1wCHAZTA4EBWmkdvphVFh22xgsM6g\"}],\"authentication\":[\"did:vh:QmXawCw8QdniGZrPAjsxFYRecPboT9GTGcSboFrdHqEUar#key-1\"]},\"proof\":[{\"type\":\"DataIntegrityProof\",\"cryptosuite\":\"eddsa-jcs-2022\",\"created\":\"2026-11-28T12:00:00Z\",\"verificationMethod\":\"did:key:z6MkfJUFk1XrWFkft6NztTiyrrUY9591tnMdcXFMtqds8kY2#z6MkfJUFk1XrWFkft6NztTiyrrUY9591tnMdcXFMtqds8kY2\",\"proofPurpose\":\"assertionMethod\",\"proofValue\":\"z4jHpbutMjdJPD9ej56e45dfxmMQCoqZnbtKS6jXxs4XMgTrxNKWPWYZRUipYkscarfviDUJ9iKR6Xsc6WP9z61fE\"}]}\n",
   "id_token": {
-    "compact": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6ImRpZDp2aDpRbVJLeTFVR2NjcDR3SlVtcEhCVXJTTjFoUnd3R3FFZmgzaHpidzFjNEhaTnR2P3ZlcnNpb25JZD0xLVFtZkVoMXVNNWtzeFNzRDZXR2pNQjdhOXJ6WmtTWkFMWm1LOGdtS1VrQTNHbzIja2V5LTEifQ.eyJpc3MiOiJkaWQ6dmg6UW1SS3kxVUdjY3A0d0pVbXBIQlVyU04xaFJ3d0dxRWZoM2h6YncxYzRIWk50diIsInN1YiI6ImRpZDp2aDpRbVJLeTFVR2NjcDR3SlVtcEhCVXJTTjFoUnd3R3FFZmgzaHpidzFjNEhaTnR2IiwiYXVkIjoiZGVjZW50cmFsaXplZF9pZGVudGlmaWVyOmRpZDp3ZWJ2aDpRbWJ0QlNqUmRjc0hNaFlqWkVWenNOZVpqSEpIUmprYndTY3JxQW5iUUFKUzVIOmRpZW5zdC5leGFtcGxlIiwibm9uY2UiOiJibTl1WTJVdGRtVnJkRzl5TFRBeCIsImlhdCI6MTc5NTg2NzIwMCwiZXhwIjoxNzk1ODY3NTAwfQ.uIsQ1prg-wzrZnQDLLwpQIG75t7jE4GUt8ynaCXdFdp3VjmBtLRj6xlDXxwA6keXMGHjUxOzJvVdM9RN6UWFAw",
+    "compact": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6ImRpZDp2aDpRbVhhd0N3OFFkbmlHWnJQQWpzeEZZUmVjUGJvVDlHVEdjU2JvRnJkSHFFVWFyP3ZlcnNpb25JZD0xLVFtWTNGMThDd3pFUHNRSkY1d0ZmSmtuTG1rQTNoUmZuQXFRS29RMXFNbUxMR1Aja2V5LTEifQ.eyJpc3MiOiJkaWQ6dmg6UW1YYXdDdzhRZG5pR1pyUEFqc3hGWVJlY1Bib1Q5R1RHY1Nib0ZyZEhxRVVhciIsInN1YiI6ImRpZDp2aDpRbVhhd0N3OFFkbmlHWnJQQWpzeEZZUmVjUGJvVDlHVEdjU2JvRnJkSHFFVWFyIiwiYXVkIjoiZGVjZW50cmFsaXplZF9pZGVudGlmaWVyOmRpZDp3ZWJ2aDpRbWJ0QlNqUmRjc0hNaFlqWkVWenNOZVpqSEpIUmprYndTY3JxQW5iUUFKUzVIOmRpZW5zdC5leGFtcGxlIiwibm9uY2UiOiJibTl1WTJVdGRtVnJkRzl5TFRBeCIsImlhdCI6MTc5NTg2NzIwMCwiZXhwIjoxNzk1ODY3NTAwfQ.0_RvodoEHQcTup72MNAc78YBHM_lVvu4GxMXZRXzqJhyc1HEC0HnOfnPJ-5NQRKZqVRP-afnadG6SF1iXE38DQ",
     "header": {
       "alg": "EdDSA",
       "typ": "JWT",
-      "kid": "did:vh:QmRKy1UGccp4wJUmpHBUrSN1hRwwGqEfh3hzbw1c4HZNtv?versionId=1-QmfEh1uM5ksxSsD6WGjMB7a9rzZkSZALZmK8gmKUkA3Go2#key-1"
+      "kid": "did:vh:QmXawCw8QdniGZrPAjsxFYRecPboT9GTGcSboFrdHqEUar?versionId=1-QmY3F18CwzEPsQJF5wFfJknLmkA3hRfnAqQKoQ1qMmLLGP#key-1"
     },
     "payload": {
-      "iss": "did:vh:QmRKy1UGccp4wJUmpHBUrSN1hRwwGqEfh3hzbw1c4HZNtv",
-      "sub": "did:vh:QmRKy1UGccp4wJUmpHBUrSN1hRwwGqEfh3hzbw1c4HZNtv",
+      "iss": "did:vh:QmXawCw8QdniGZrPAjsxFYRecPboT9GTGcSboFrdHqEUar",
+      "sub": "did:vh:QmXawCw8QdniGZrPAjsxFYRecPboT9GTGcSboFrdHqEUar",
       "aud": "decentralized_identifier:did:webvh:QmbtBSjRdcsHMhYjZEVzsNeZjHJHRjkbwScrqAnbQAJS5H:dienst.example",
       "nonce": "bm9uY2UtdmVrdG9yLTAx",
       "iat": 1795867200,
@@ -93,7 +114,7 @@
   "post": {
     "url": "https://dienst.example/anmeldung-log/antwort",
     "content_type": "application/x-www-form-urlencoded",
-    "body": "id_token=eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6ImRpZDp2aDpRbVJLeTFVR2NjcDR3SlVtcEhCVXJTTjFoUnd3R3FFZmgzaHpidzFjNEhaTnR2P3ZlcnNpb25JZD0xLVFtZkVoMXVNNWtzeFNzRDZXR2pNQjdhOXJ6WmtTWkFMWm1LOGdtS1VrQTNHbzIja2V5LTEifQ.eyJpc3MiOiJkaWQ6dmg6UW1SS3kxVUdjY3A0d0pVbXBIQlVyU04xaFJ3d0dxRWZoM2h6YncxYzRIWk50diIsInN1YiI6ImRpZDp2aDpRbVJLeTFVR2NjcDR3SlVtcEhCVXJTTjFoUnd3R3FFZmgzaHpidzFjNEhaTnR2IiwiYXVkIjoiZGVjZW50cmFsaXplZF9pZGVudGlmaWVyOmRpZDp3ZWJ2aDpRbWJ0QlNqUmRjc0hNaFlqWkVWenNOZVpqSEpIUmprYndTY3JxQW5iUUFKUzVIOmRpZW5zdC5leGFtcGxlIiwibm9uY2UiOiJibTl1WTJVdGRtVnJkRzl5TFRBeCIsImlhdCI6MTc5NTg2NzIwMCwiZXhwIjoxNzk1ODY3NTAwfQ.uIsQ1prg-wzrZnQDLLwpQIG75t7jE4GUt8ynaCXdFdp3VjmBtLRj6xlDXxwA6keXMGHjUxOzJvVdM9RN6UWFAw&state=c3RhdGUtdmVrdG9yLTAx&did_log=%7B%22versionId%22%3A%221-QmfEh1uM5ksxSsD6WGjMB7a9rzZkSZALZmK8gmKUkA3Go2%22%2C%22versionTime%22%3A%222026-11-28T12%3A00%3A00Z%22%2C%22parameters%22%3A%7B%22method%22%3A%22did%3Avh%3A1.0%22%2C%22scid%22%3A%22QmRKy1UGccp4wJUmpHBUrSN1hRwwGqEfh3hzbw1c4HZNtv%22%2C%22updateKeys%22%3A%5B%22z6MkgZ2Vr5bYR4QWEhdxn9jZMJgcUUymiboU53AuP7KCbKjS%22%5D%2C%22nextKeyHashes%22%3A%5B%22QmaWjawzdro6i3rbEjPQs4BdySYgCTavkkGLKijHt6dpEG%22%5D%7D%2C%22state%22%3A%7B%22%40context%22%3A%5B%22https%3A%2F%2Fwww.w3.org%2Fns%2Fdid%2Fv1%22%2C%22https%3A%2F%2Fw3id.org%2Fsecurity%2Fmultikey%2Fv1%22%5D%2C%22id%22%3A%22did%3Avh%3AQmRKy1UGccp4wJUmpHBUrSN1hRwwGqEfh3hzbw1c4HZNtv%22%2C%22verificationMethod%22%3A%5B%7B%22id%22%3A%22did%3Avh%3AQmRKy1UGccp4wJUmpHBUrSN1hRwwGqEfh3hzbw1c4HZNtv%23key-1%22%2C%22type%22%3A%22Multikey%22%2C%22controller%22%3A%22did%3Avh%3AQmRKy1UGccp4wJUmpHBUrSN1hRwwGqEfh3hzbw1c4HZNtv%22%2C%22publicKeyMultibase%22%3A%22z6MkwNYQbhLTkxY1d5K8Aka4tTqzjCvrkKMXpcHLkdL45vXA%22%7D%5D%2C%22authentication%22%3A%5B%22did%3Avh%3AQmRKy1UGccp4wJUmpHBUrSN1hRwwGqEfh3hzbw1c4HZNtv%23key-1%22%5D%7D%2C%22proof%22%3A%5B%7B%22type%22%3A%22DataIntegrityProof%22%2C%22cryptosuite%22%3A%22eddsa-jcs-2022%22%2C%22created%22%3A%222026-11-28T12%3A00%3A00Z%22%2C%22verificationMethod%22%3A%22did%3Akey%3Az6MkgZ2Vr5bYR4QWEhdxn9jZMJgcUUymiboU53AuP7KCbKjS%23z6MkgZ2Vr5bYR4QWEhdxn9jZMJgcUUymiboU53AuP7KCbKjS%22%2C%22proofPurpose%22%3A%22assertionMethod%22%2C%22proofValue%22%3A%22z3cvaBUtSup8fXTu4VEsub1RdZxdGxvjyEPZhLg5Zr4MFkmmyktzz7PejvnFuf9Wg5i5LZ3kUpLmfc3yZrw7cyLxy%22%7D%5D%7D%0A"
+    "body": "id_token=eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6ImRpZDp2aDpRbVhhd0N3OFFkbmlHWnJQQWpzeEZZUmVjUGJvVDlHVEdjU2JvRnJkSHFFVWFyP3ZlcnNpb25JZD0xLVFtWTNGMThDd3pFUHNRSkY1d0ZmSmtuTG1rQTNoUmZuQXFRS29RMXFNbUxMR1Aja2V5LTEifQ.eyJpc3MiOiJkaWQ6dmg6UW1YYXdDdzhRZG5pR1pyUEFqc3hGWVJlY1Bib1Q5R1RHY1Nib0ZyZEhxRVVhciIsInN1YiI6ImRpZDp2aDpRbVhhd0N3OFFkbmlHWnJQQWpzeEZZUmVjUGJvVDlHVEdjU2JvRnJkSHFFVWFyIiwiYXVkIjoiZGVjZW50cmFsaXplZF9pZGVudGlmaWVyOmRpZDp3ZWJ2aDpRbWJ0QlNqUmRjc0hNaFlqWkVWenNOZVpqSEpIUmprYndTY3JxQW5iUUFKUzVIOmRpZW5zdC5leGFtcGxlIiwibm9uY2UiOiJibTl1WTJVdGRtVnJkRzl5TFRBeCIsImlhdCI6MTc5NTg2NzIwMCwiZXhwIjoxNzk1ODY3NTAwfQ.0_RvodoEHQcTup72MNAc78YBHM_lVvu4GxMXZRXzqJhyc1HEC0HnOfnPJ-5NQRKZqVRP-afnadG6SF1iXE38DQ&state=c3RhdGUtdmVrdG9yLTAx&did_log=%7B%22versionId%22%3A%221-QmY3F18CwzEPsQJF5wFfJknLmkA3hRfnAqQKoQ1qMmLLGP%22%2C%22versionTime%22%3A%222026-11-28T12%3A00%3A00Z%22%2C%22parameters%22%3A%7B%22method%22%3A%22did%3Avh%3A1.0%22%2C%22scid%22%3A%22QmXawCw8QdniGZrPAjsxFYRecPboT9GTGcSboFrdHqEUar%22%2C%22updateKeys%22%3A%5B%22z6MkfJUFk1XrWFkft6NztTiyrrUY9591tnMdcXFMtqds8kY2%22%5D%2C%22nextKeyHashes%22%3A%5B%22QmVbwqvvDkQpg8L5io4CgzB9CYnmDFVBMgo67X12VFYufp%22%5D%7D%2C%22state%22%3A%7B%22%40context%22%3A%5B%22https%3A%2F%2Fwww.w3.org%2Fns%2Fdid%2Fv1%22%2C%22https%3A%2F%2Fw3id.org%2Fsecurity%2Fmultikey%2Fv1%22%5D%2C%22id%22%3A%22did%3Avh%3AQmXawCw8QdniGZrPAjsxFYRecPboT9GTGcSboFrdHqEUar%22%2C%22verificationMethod%22%3A%5B%7B%22id%22%3A%22did%3Avh%3AQmXawCw8QdniGZrPAjsxFYRecPboT9GTGcSboFrdHqEUar%23key-1%22%2C%22type%22%3A%22Multikey%22%2C%22controller%22%3A%22did%3Avh%3AQmXawCw8QdniGZrPAjsxFYRecPboT9GTGcSboFrdHqEUar%22%2C%22publicKeyMultibase%22%3A%22z6MkqQjFCsVE5f3SwYc1wCHAZTA4EBWmkdvphVFh22xgsM6g%22%7D%5D%2C%22authentication%22%3A%5B%22did%3Avh%3AQmXawCw8QdniGZrPAjsxFYRecPboT9GTGcSboFrdHqEUar%23key-1%22%5D%7D%2C%22proof%22%3A%5B%7B%22type%22%3A%22DataIntegrityProof%22%2C%22cryptosuite%22%3A%22eddsa-jcs-2022%22%2C%22created%22%3A%222026-11-28T12%3A00%3A00Z%22%2C%22verificationMethod%22%3A%22did%3Akey%3Az6MkfJUFk1XrWFkft6NztTiyrrUY9591tnMdcXFMtqds8kY2%23z6MkfJUFk1XrWFkft6NztTiyrrUY9591tnMdcXFMtqds8kY2%22%2C%22proofPurpose%22%3A%22assertionMethod%22%2C%22proofValue%22%3A%22z4jHpbutMjdJPD9ej56e45dfxmMQCoqZnbtKS6jXxs4XMgTrxNKWPWYZRUipYkscarfviDUJ9iKR6Xsc6WP9z61fE%22%7D%5D%7D%0A"
   },
   "service_reply": {
     "status": 200,

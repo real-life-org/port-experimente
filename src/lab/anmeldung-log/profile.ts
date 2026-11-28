@@ -1,7 +1,7 @@
 // The fixed values and shared pieces of the login profile (SIOPv2 draft 13
 // with named rules taken from OpenID4VP 1.0 and RFC 9101; NOTES.md has the
 // table of where each rule comes from):
-// - the outer link (QR code or app link): only `client_id` and `request_uri`;
+// - the outer link (QR code or app link): `client_id` and `request_uri` are written and read; other parameters are ignored;
 // - the signed Request Object (JWS, EdDSA, `typ` oauth-authz-req+jwt);
 // - where a did:webvh log lives (did:webvh 1.0, The DID to HTTPS Transformation);
 // - the derivation context for the person's keys toward one service.
@@ -151,20 +151,39 @@ export async function checkRequestObject (jwt: unknown, o: { clientId: string, d
   if ('client_name' in md && typeof md.client_name !== 'string') return no('client_metadata.client_name is not text')
   if (!Number.isInteger(c.iat) || !Number.isInteger(c.exp)) return no('iat or exp is missing')
   const iat = c.iat as number, exp = c.exp as number
-  if (iat > o.nowS + CLOCK_SKEW_S || ('nbf' in c && !(Number.isInteger(c.nbf) && (c.nbf as number) <= o.nowS + CLOCK_SKEW_S))) return no('not yet valid')
-  if (exp <= o.nowS) return no('expired')
+  if (exp <= iat) return no('exp is not later than iat')
+  if ('nbf' in c && !Number.isInteger(c.nbf)) return no('nbf is not a number')
   if (exp - iat > REQUEST_LIFETIME_S) return no('valid for longer than this profile allows')
+  const late = checkWindow(c as RequestClaims, o.nowS)
+  if (late) return no(late)
   return { ok: true, header, claims: c as RequestClaims }
 }
+
+/** The time window of a checked Request Object at `nowS`: why not, or null. Checked on opening and again on answering. */
+export function checkWindow (c: Pick<RequestClaims, 'iat' | 'exp' | 'nbf'>, nowS: number): string | null {
+  if (c.iat > nowS + CLOCK_SKEW_S || (c.nbf !== undefined && c.nbf > nowS + CLOCK_SKEW_S)) return 'not yet valid'
+  if (c.exp <= nowS) return 'expired'
+  return null
+}
+
+/** What a key of the person's identifier is derived for: the service (its method and verified SCID) and the method of the person's own identifier. */
+export interface KeyFor { method: string, scid: string, subjectMethod: string }
 
 /**
  * The derivation context for one key of the person's identifier toward one
  * service, as the HKDF info string: the JCS of a fixed set of members, so
  * every value is delimited and no two contexts share an encoding. `scid` must
- * come from a verified log of the service DID.
+ * come from a verified log of the service DID; `subject_method` is the method
+ * of the person's identifier (`subjectMethodOf`), so that two methods never
+ * share keys.
  */
-export function keyContext (serviceMethod: string, verifiedScid: string, role: 'update' | 'auth', index: number): string {
-  return jcs({ index, method: serviceMethod, profile: PROFILE, purpose: 'login identifier', role, scid: verifiedScid })
+export function keyContext (k: KeyFor, role: 'update' | 'auth', index: number): string {
+  return jcs({ index, method: k.method, profile: PROFILE, purpose: 'login identifier', role, scid: k.scid, subject_method: k.subjectMethod })
+}
+
+/** The method of a profile's identifiers, with its version where the DID carries one: `did:vh`, `did:scid:vh:1`, `did:webvh`. */
+export function subjectMethodOf (p: Profile): string {
+  return p.did.slice(0, p.did.indexOf(':{SCID}'))
 }
 
 /** SIOPv2, subject_syntax_types_supported: `did:` followed by the method name, without a `:` suffix. */

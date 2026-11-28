@@ -4,80 +4,35 @@
 // service, answer, cancel, and change its own key.
 //
 // Order of checks before anything is shown or sent:
-// 1. the outer link holds `client_id` (decentralized_identifier:did:webvh:...) and `request_uri`, nothing else is used;
+// 1. the outer link gives `client_id` (decentralized_identifier:did:webvh:...) and `request_uri`; other parameters are ignored;
 // 2. the DID gives the origin and the log URL (did:webvh 1.0, The DID to HTTPS Transformation);
 //    the request_uri must be on that origin (profile rule: no fetch from anyone but the service);
 // 3. the log is fetched and verified as the log of exactly that DID; a known service's new log must continue the one held;
-// 4. the Request Object is fetched and checked against the head's key (`kid`), and its claims (profile.ts);
+//    a deactivated head is refused, and kept as the service's head;
+// 4. the Request Object is fetched and checked against the head's key (`kid`), and its claims (profile.ts),
+//    with the time taken after the fetch;
 // 5. the redirect_uri must be exactly on the DID's HTTPS origin, host and port.
-// Only a request that passed all of this can be answered or cancelled; an
-// error goes only to the redirect_uri checked in 5.
+//
+// What passed is kept inside the wallet. The caller gets a frozen view
+// (`Shown`) to show the person and to hand back; only a view this wallet
+// made can be answered or cancelled. Answering and cancelling check again,
+// at that moment, in one step with storing (`commit`): the request is still
+// in its window, and the service head it was checked under is the held one
+// or continues it. Otherwise nothing is sent.
 
 import { edFromSeed, hkdf, type KeyPair } from 'rltp-lib'
 import { create, fromJsonl, rotate, toJsonl, verify, type Entry, type Profile, type Version } from '../kennung-log/log'
 import { vh, webvh } from '../kennung-log/profiles'
 import { kidOf, signToken } from '../kennung-log/verifier'
-import { checkRequestObject, didOfClientId, DID_LOG_FIELD, keyContext, locate, parseOuter, REQUEST_MEDIA_TYPE, subjectSyntaxOf, type RequestClaims } from './profile'
+import { checkRequestObject, checkWindow, didOfClientId, DID_LOG_FIELD, keyContext, locate, parseOuter, REQUEST_MEDIA_TYPE, subjectMethodOf, subjectSyntaxOf, type KeyFor, type RequestClaims } from './profile'
+import { httpsTransport, LIMITS, type Transport } from './transport'
 
+export { LIMITS }
 export const TOKEN_LIFETIME_S = 300
-export const LIMITS = { requestBytes: 16 * 1024, logBytes: 256 * 1024, replyBytes: 16 * 1024, timeoutMs: 5000 }
-
-export interface FetchOptions {
-  /** Tests only: an https URL whose host is `localhost` or ends in `.localhost` is fetched over
-   *  plain http from 127.0.0.1 at the same port. Without it, only https, and no loopback or IP host. */
-  loopbackForTests?: boolean
-}
-
-/** Why a fetch is refused, or the URL it goes to. */
-function target (url: string, o: FetchOptions): string | { error: string } {
-  let u: URL
-  try { u = new URL(url) } catch { return { error: 'not a URL' } }
-  if (u.protocol !== 'https:') return { error: 'not https' }
-  if (u.username || u.password) return { error: 'credentials in the URL' }
-  const host = u.hostname.toLowerCase()
-  const local = host === 'localhost' || host.endsWith('.localhost')
-  if (local && o.loopbackForTests) return `http://127.0.0.1${u.port ? ':' + u.port : ''}${u.pathname}${u.search}`
-  // no fetch into the local network by literal address or name (a name that resolves there is not checked)
-  if (local || /^\[|^[0-9.]+$|^0x/i.test(host) || host.endsWith('.local') || host.endsWith('.internal')) return { error: 'a local address' }
-  return u.href
-}
-
-/** GET or POST with a size cap, a time limit and no redirects followed (SIOPv2: MUST NOT follow redirects). */
-export async function limitedFetch (url: string, o: FetchOptions & { method?: 'GET' | 'POST', body?: string, maxBytes: number, accept?: string }): Promise<{ status: number, type: string, text: string } | { error: string }> {
-  const to = target(url, o)
-  if (typeof to !== 'string') return to
-  let r: Response
-  try {
-    r = await fetch(to, {
-      method: o.method ?? 'GET',
-      redirect: 'manual',
-      signal: AbortSignal.timeout(LIMITS.timeoutMs),
-      headers: { ...(o.body !== undefined ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}), ...(o.accept ? { Accept: o.accept } : {}) },
-      ...(o.body !== undefined ? { body: o.body } : {}),
-    })
-  } catch { return { error: 'unreachable' } }
-  if (r.status >= 300 && r.status < 400) return { error: 'a redirect (not followed)' }
-  const reader = r.body?.getReader()
-  const chunks: Uint8Array[] = []
-  let size = 0
-  if (reader) {
-    for (;;) {
-      let next: ReadableStreamReadResult<Uint8Array>
-      try { next = await reader.read() } catch { return { error: 'unreachable' } }
-      if (next.done) break
-      size += next.value.length
-      if (size > o.maxBytes) { await reader.cancel().catch(() => {}); return { error: 'too large' } }
-      chunks.push(next.value)
-    }
-  }
-  const bytes = new Uint8Array(size); let at = 0
-  for (const c of chunks) { bytes.set(c, at); at += c.length }
-  return { status: r.status, type: r.headers.get('content-type') ?? '', text: new TextDecoder('utf-8', { fatal: false }).decode(bytes) }
-}
 
 /** What the wallet keeps: per service (by verified SCID) the service's log, and the person's identifier toward it. */
 export interface WalletState {
-  services: Record<string, { did: string, log: Entry[] }>
+  services: Record<string, { did: string, log: Entry[], deactivated?: true }>
   identities: Record<string, { log: Entry[], index: number }>
 }
 export interface WalletStorage { load (): WalletState | null, save (s: WalletState): void }
@@ -88,40 +43,57 @@ export class MemoryStorage implements WalletStorage {
   save (s: WalletState) { this.s = structuredClone(s) }
 }
 
-/** A request that passed every check. Only this can be answered or cancelled. */
-export interface Checked {
-  clientId: string
-  did: string
+/** What the person sees of a request that passed every check, and what the caller hands back. Frozen; a copy. */
+export interface Shown {
+  readonly clientId: string
+  readonly did: string
   /** from the verified log, never from the text of the request */
-  scid: string
-  origin: string
-  host: string
-  name?: string
-  claims: RequestClaims
-  serviceLog: Entry[]
-  serviceHead: Version
+  readonly scid: string
+  readonly origin: string
+  readonly host: string
+  readonly name?: string
+  readonly claims: Readonly<RequestClaims>
   /** what the person sees first: the checked host, then the name as the service's own statement */
-  text: string
+  readonly text: string
 }
-export type Opened = { ok: true, request: Checked } | { ok: false, reason: string }
-
+export type Opened = { ok: true, request: Shown } | { ok: false, reason: string }
 export type Sent = { status: number, body: Record<string, unknown>, redirect_uri?: string } | { error: string }
 
+/** The checked state of one request; never leaves the wallet. */
+interface Checked { clientId: string, did: string, scid: string, origin: string, claims: RequestClaims, serviceLog: Entry[], serviceHead: Version }
+
 /** The keys of the person's identifier toward one service: update key n and authentication key n. */
-export async function deriveKey (secret: Uint8Array, service: { method: string, scid: string }, role: 'update' | 'auth', index: number): Promise<KeyPair> {
-  return edFromSeed(await hkdf(secret, keyContext(service.method, service.scid, role, index)))
+export async function deriveKey (secret: Uint8Array, k: KeyFor, role: 'update' | 'auth', index: number): Promise<KeyPair> {
+  return edFromSeed(await hkdf(secret, keyContext(k, role, index)))
 }
 
 const SERVICE_METHOD = 'did:webvh'
 const isoSeconds = (ms: number): string => new Date(Math.floor(ms / 1000) * 1000).toISOString().replace(/\.000Z$/, 'Z')
 
+type Relation = 'same' | 'extends' | 'behind' | 'diverges'
+/** How a log relates to the one held (each versionId covers the entries before it). */
+function relate (held: Entry[], copy: Entry[]): Relation {
+  const k = Math.min(held.length, copy.length) - 1
+  if (held[k]?.versionId !== copy[k]?.versionId) return 'diverges'
+  return copy.length === held.length ? 'same' : copy.length > held.length ? 'extends' : 'behind'
+}
+const goesOn = (r: Relation): boolean => r === 'same' || r === 'extends'
+
+function freeze<T> (o: T): T {
+  if (o && typeof o === 'object') { for (const v of Object.values(o)) freeze(v); Object.freeze(o) }
+  return o
+}
+
 export class Wallet {
   private readonly storage: WalletStorage
+  private readonly transport: Transport
+  private readonly checked = new WeakMap<Shown, Checked>()
   readonly profile: Profile
 
-  constructor (private readonly secret: Uint8Array, private readonly o: { now: () => number, profile?: Profile, storage?: WalletStorage, fetch?: FetchOptions } ) {
+  constructor (private readonly secret: Uint8Array, private readonly o: { now: () => number, profile?: Profile, storage?: WalletStorage, transport?: Transport }) {
     this.storage = o.storage ?? new MemoryStorage()
     this.profile = o.profile ?? vh
+    this.transport = o.transport ?? httpsTransport()
   }
 
   /** A copy of what the wallet holds (a second device with the same state starts from it). */
@@ -133,10 +105,37 @@ export class Wallet {
     return id && { did: (id.log[0] as Entry).state.id as string, ...id }
   }
 
-  /** Steps 1 to 5, fetching over HTTPS. Nothing is sent. */
+  private keyFor (scid: string): KeyFor { return { method: SERVICE_METHOD, scid, subjectMethod: subjectMethodOf(this.profile) } }
+
+  /**
+   * The one place that writes the wallet's state: read, change, check, store,
+   * with no await in between (in one process a single step). `change` gets a
+   * copy and the time of the step. Whatever it returns, the stored result
+   * must keep every service log and every identifier log that was held, or
+   * continue it; a deactivated service stays deactivated. Otherwise nothing
+   * is stored.
+   */
+  private commit<T> (change: (s: WalletState, nowMs: number) => { state: WalletState, value: T } | { refused: string }): { value: T, nowMs: number } | { refused: string } {
+    const before = this.state()
+    const nowMs = this.o.now()
+    const out = change(structuredClone(before), nowMs)
+    if ('refused' in out) return out
+    for (const [scid, s] of Object.entries(before.services)) {
+      const n = out.state.services[scid]
+      if (!n || !goesOn(relate(s.log, n.log)) || (s.deactivated && !n.deactivated)) return { refused: 'a held service log would go back' }
+    }
+    for (const [scid, id] of Object.entries(before.identities)) {
+      const n = out.state.identities[scid]
+      if (!n || !goesOn(relate(id.log, n.log)) || n.index < id.index) return { refused: 'a held identifier would go back' }
+    }
+    this.storage.save(out.state)
+    return { value: out.value, nowMs }
+  }
+
+  /** Steps 1 to 5, fetching through the transport. Nothing is sent. */
   open (link: string): Promise<Opened> {
     return this.evaluate(link, async (url, kind) => {
-      const r = await limitedFetch(url, { ...this.o.fetch, maxBytes: kind === 'log' ? LIMITS.logBytes : LIMITS.requestBytes, ...(kind === 'request' ? { accept: REQUEST_MEDIA_TYPE } : {}) })
+      const r = await this.transport.fetch(url, { maxBytes: kind === 'log' ? LIMITS.logBytes : LIMITS.requestBytes, ...(kind === 'request' ? { accept: REQUEST_MEDIA_TYPE } : {}) })
       if ('error' in r) return r
       return r.status === 200 ? { text: r.text } : { error: `HTTP ${r.status}` }
     })
@@ -160,102 +159,158 @@ export class Wallet {
     if ('error' in fetched) return no(`service log: ${fetched.error}`)
     const raw = fromJsonl(fetched.text)
     if (raw === null) return no('service log: not JSON Lines')
-    const now = this.o.now()
-    const check = await verify(raw, { profile: webvh(where.rest), now: new Date(now), did })
+    const check = await verify(raw, { profile: webvh(where.rest), now: new Date(this.o.now()), did })
     if (!check.ok) return no(`service log: ${check.reason}`)
-    if (check.head.deactivated) return no('service log: the service DID is deactivated')
     const known = this.state().services[check.scid]
-    if (known) {
-      const k = known.log.length - 1
-      if (check.log.length < known.log.length || check.log[k]?.versionId !== known.log[k]?.versionId) return no('service log: does not continue the log held for this service')
+    if (known && !goesOn(relate(known.log, check.log))) return no('service log: does not continue the log held for this service')
+    if (check.head.deactivated) {
+      // kept, so that no older head of this service is taken later
+      this.commit((s) => {
+        const held = s.services[check.scid]
+        if (held && !goesOn(relate(held.log, check.log))) return { refused: 'changed meanwhile' }
+        s.services[check.scid] = { did, log: check.log, deactivated: true }
+        return { state: s, value: null }
+      })
+      return no('service log: the service DID is deactivated')
     }
 
     const ro = await get(outer.request_uri, 'request')
     if ('error' in ro) return no(`request: ${ro.error}`)
-    const rc = await checkRequestObject(ro.text.trim(), { clientId: outer.client_id, did, head: check.head, nowS: Math.floor(now / 1000) })
+    // the window is checked at the time after the fetch
+    const rc = await checkRequestObject(ro.text.trim(), { clientId: outer.client_id, did, head: check.head, nowS: Math.floor(this.o.now() / 1000) })
     if (!rc.ok) return no(`request: ${rc.reason}`)
     let redirect: URL
     try { redirect = new URL(rc.claims.redirect_uri) } catch { return no('redirect_uri is not a URL') }
     if (redirect.protocol !== 'https:' || redirect.origin !== where.origin || redirect.username || redirect.password) return no('redirect_uri is not on the HTTPS origin of the service DID')
 
+    const c: Checked = { clientId: outer.client_id, did, scid: check.scid, origin: where.origin, claims: structuredClone(rc.claims), serviceLog: check.log, serviceHead: check.head }
     const host = new URL(where.origin).host
     const name = rc.claims.client_metadata.client_name
-    const request: Checked = {
-      clientId: outer.client_id, did, scid: check.scid, origin: where.origin, host, claims: rc.claims,
-      serviceLog: check.log, serviceHead: check.head,
+    const shown: Shown = freeze({
+      clientId: c.clientId, did, scid: c.scid, origin: c.origin, host, claims: structuredClone(rc.claims),
       ...(name ? { name } : {}),
       text: `${host} möchte dich anmelden.${name ? ` Der Dienst nennt sich „${name}“.` : ''} Er sieht nur einen Namen für dich, der nur dort gilt.`,
-    }
+    })
     const supported = rc.claims.client_metadata.subject_syntax_types_supported
     if (!supported.includes(subjectSyntaxOf(this.profile)) && !supported.includes('did')) {
-      await this.sendError(request, 'subject_syntax_types_not_supported')
+      await this.sendError(c, 'subject_syntax_types_not_supported')
       return no('the service supports none of the wallet\'s DID methods')
     }
-    return { ok: true, request }
+    this.checked.set(shown, c)
+    return { ok: true, request: shown }
   }
 
-  /** The person confirmed: prepare the answer and post it to the checked redirect_uri. */
-  async confirm (r: Checked): Promise<Sent> {
-    const a = await this.prepare(r)
-    return this.send(r, a.form)
+  /** At the moment of answering: the request still in its window, and the service head it was checked under the held one or its continuation. */
+  private stillGood (c: Checked, s: WalletState, nowMs: number): string | null {
+    const late = checkWindow(c.claims, Math.floor(nowMs / 1000))
+    if (late) return `the request: ${late}`
+    const held = s.services[c.scid]
+    if (held?.deactivated) return 'the service DID is deactivated'
+    if (held && !goesOn(relate(held.log, c.serviceLog))) return 'a newer head of the service is held'
+    return null
   }
 
-  /** The answer: the identifier toward this service (created at the first login and stored before anything is sent) and the ID token. */
-  async prepare (r: Checked): Promise<{ url: string, form: Record<string, string> }> {
-    const now = this.o.now()
-    const state = this.state()
-    const service = { method: SERVICE_METHOD, scid: r.scid }
-    let id = state.identities[r.scid]
-    if (!id) {
-      const [u0, u1, a0] = await Promise.all([deriveKey(this.secret, service, 'update', 0), deriveKey(this.secret, service, 'update', 1), deriveKey(this.secret, service, 'auth', 0)])
-      id = { log: await create({ profile: this.profile, updateKey: u0, next: [u1.pubRaw], authKey: a0.pubRaw, time: isoSeconds(now) }), index: 0 }
+  /** The person confirmed: the answer, posted to the checked redirect_uri. */
+  async confirm (shown: Shown): Promise<Sent> {
+    const a = await this.answer(shown)
+    if ('error' in a) return a
+    return this.post(a.c, a.form)
+  }
+
+  /** The answer `confirm` would send, without sending it (the vector). */
+  async prepare (shown: Shown): Promise<{ url: string, form: Record<string, string> } | { error: string }> {
+    const a = await this.answer(shown)
+    return 'error' in a ? a : { url: a.url, form: a.form }
+  }
+
+  /**
+   * The answer, without sending it: the identifier toward this service
+   * (created at the first login) and the service head stored in one step with
+   * the checks at this moment; then the ID token.
+   */
+  private async answer (shown: Shown): Promise<{ url: string, form: Record<string, string>, c: Checked } | { error: string }> {
+    const c = this.checked.get(shown)
+    if (!c) return { error: 'not a request this wallet opened' }
+    const k = this.keyFor(c.scid)
+    // the first entry is written before the step (it needs await); the step takes it only if there is still none
+    let first: { log: Entry[], index: number } | null = null
+    if (!this.state().identities[c.scid]) {
+      const [u0, u1, a0] = await Promise.all([deriveKey(this.secret, k, 'update', 0), deriveKey(this.secret, k, 'update', 1), deriveKey(this.secret, k, 'auth', 0)])
+      first = { log: await create({ profile: this.profile, updateKey: u0, next: [u1.pubRaw], authKey: a0.pubRaw, time: isoSeconds(this.o.now()) }), index: 0 }
     }
-    state.identities[r.scid] = id
-    state.services[r.scid] = { did: r.did, log: r.serviceLog }
-    this.storage.save(state)                                 // stored before anything is sent
+    const step = this.commit<{ log: Entry[], index: number }>((s, nowMs) => {
+      const bad = this.stillGood(c, s, nowMs)
+      if (bad) return { refused: bad }
+      const id = s.identities[c.scid] ?? first
+      if (!id) return { refused: 'the identifier changed meanwhile' }
+      const held = s.services[c.scid]
+      s.identities[c.scid] = id
+      s.services[c.scid] = { did: c.did, log: held && relate(held.log, c.serviceLog) === 'same' ? held.log : c.serviceLog }
+      return { state: s, value: id }
+    })
+    if ('refused' in step) return { error: step.refused }
+    const id = step.value
     const head = id.log[id.log.length - 1] as Entry
     const did = (id.log[0] as Entry).state.id as string
-    const iat = Math.floor(now / 1000)
-    const token = await signToken(await deriveKey(this.secret, service, 'auth', id.index), kidOf(did, head.versionId), {
-      iss: did, sub: did, aud: r.clientId, nonce: r.claims.nonce, iat, exp: iat + TOKEN_LIFETIME_S,
+    const iat = Math.floor(step.nowMs / 1000)
+    const token = await signToken(await deriveKey(this.secret, k, 'auth', id.index), kidOf(did, head.versionId), {
+      iss: did, sub: did, aud: c.clientId, nonce: c.claims.nonce, iat, exp: iat + TOKEN_LIFETIME_S,
     })
-    return { url: r.claims.redirect_uri, form: { id_token: token, state: r.claims.state, [DID_LOG_FIELD]: toJsonl(id.log) } }
+    return { url: c.claims.redirect_uri, form: { id_token: token, state: c.claims.state, [DID_LOG_FIELD]: toJsonl(id.log) }, c }
   }
 
-  /** The person said no: `user_cancelled` to the checked redirect_uri (SIOPv2, Error Response). */
-  cancel (r: Checked): Promise<Sent> { return this.sendError(r, 'user_cancelled') }
-
-  private sendError (r: Checked, error: string): Promise<Sent> {
-    return this.send(r, { error, state: r.claims.state })
+  /** The person said no: `user_cancelled` to the checked redirect_uri (SIOPv2, Error Response), under the same checks as an answer. */
+  cancel (shown: Shown): Promise<Sent> {
+    const c = this.checked.get(shown)
+    if (!c) return Promise.resolve({ error: 'not a request this wallet opened' })
+    return this.sendError(c, 'user_cancelled')
   }
 
-  private async send (r: Checked, form: Record<string, string>): Promise<Sent> {
-    const res = await limitedFetch(r.claims.redirect_uri, { ...this.o.fetch, method: 'POST', body: new URLSearchParams(form).toString(), maxBytes: LIMITS.replyBytes })
+  private async sendError (c: Checked, error: string): Promise<Sent> {
+    const step = this.commit((s, nowMs) => {
+      const bad = this.stillGood(c, s, nowMs)
+      if (bad) return { refused: bad }
+      // a known service's head moves on; a service the person did not take is not added
+      const held = s.services[c.scid]
+      if (held && relate(held.log, c.serviceLog) === 'extends') s.services[c.scid] = { did: c.did, log: c.serviceLog }
+      return { state: s, value: null }
+    })
+    if ('refused' in step) return { error: step.refused }
+    return this.post(c, { error, state: c.claims.state })
+  }
+
+  private async post (c: Checked, form: Record<string, string>): Promise<Sent> {
+    const res = await this.transport.fetch(c.claims.redirect_uri, { method: 'POST', body: new URLSearchParams(form).toString(), maxBytes: LIMITS.replyBytes })
     if ('error' in res) return res
     let body: Record<string, unknown> = {}
     try { const b = JSON.parse(res.text); if (b && typeof b === 'object' && !Array.isArray(b)) body = b } catch { /* not JSON */ }
     // the same-device return: opened only on the service's own origin
-    const back = typeof body.redirect_uri === 'string' && mayOpen(r, body.redirect_uri) ? { redirect_uri: body.redirect_uri } : {}
+    const back = typeof body.redirect_uri === 'string' && onOrigin(c.origin, body.redirect_uri) ? { redirect_uri: body.redirect_uri } : {}
     return { status: res.status, body, ...back }
   }
 
   /** Change the key of the identifier toward one service: the committed update key signs, a new authentication key. */
   async rotate (scid: string): Promise<void> {
-    const state = this.state()
-    const id = state.identities[scid]
-    if (!id) throw new Error('no identifier for this service')
-    const service = { method: SERVICE_METHOD, scid }
-    const n = id.index + 1
-    const [signer, next, auth] = await Promise.all([deriveKey(this.secret, service, 'update', n), deriveKey(this.secret, service, 'update', n + 1), deriveKey(this.secret, service, 'auth', n)])
+    const from = this.state().identities[scid]
+    if (!from) throw new Error('no identifier for this service')
+    const k = this.keyFor(scid)
+    const n = from.index + 1
+    const [signer, next, auth] = await Promise.all([deriveKey(this.secret, k, 'update', n), deriveKey(this.secret, k, 'update', n + 1), deriveKey(this.secret, k, 'auth', n)])
     const now = this.o.now()
-    const prev = Date.parse((id.log[id.log.length - 1] as Entry).versionTime)
+    const prev = Date.parse((from.log[from.log.length - 1] as Entry).versionTime)
     if (Math.floor(now / 1000) * 1000 <= prev) throw new Error('rotate: the clock is not later than the last entry')
-    state.identities[scid] = { log: await rotate(id.log, { signer, next: [next.pubRaw], authKey: auth.pubRaw, time: isoSeconds(now) }), index: n }
-    this.storage.save(state)
+    const log = await rotate(from.log, { signer, next: [next.pubRaw], authKey: auth.pubRaw, time: isoSeconds(now) })
+    const step = this.commit((s) => {
+      const id = s.identities[scid]
+      if (!id || relate(id.log, from.log) !== 'same') return { refused: 'the identifier changed meanwhile' }
+      s.identities[scid] = { log, index: n }
+      return { state: s, value: null }
+    })
+    if ('refused' in step) throw new Error(`rotate: ${step.refused}`)
   }
 }
 
 /** A return address the wallet may open: only on the service's own origin. */
-export function mayOpen (r: Checked, uri: string): boolean {
-  try { const u = new URL(uri); return u.protocol === 'https:' && u.origin === r.origin } catch { return false }
+function onOrigin (origin: string, uri: string): boolean {
+  try { const u = new URL(uri); return u.protocol === 'https:' && u.origin === origin } catch { return false }
 }
