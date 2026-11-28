@@ -156,17 +156,18 @@ export class Wallet {
     return commitState(this.#storage, this.#now(), change)
   }
 
-  /** Steps 1 to 5, fetching through the transport. Nothing is sent. */
-  open (link: string): Promise<Opened> {
-    return this.evaluate(link, async (url, kind) => {
+  /**
+   * Steps 1 to 5. The log and the Request Object come through the transport
+   * and from nowhere else: what binds a did:webvh to its host is that its log
+   * was fetched there, so the wallet has no way to be handed either as text.
+   * Nothing is sent.
+   */
+  async open (link: string): Promise<Opened> {
+    const get = async (url: string, kind: 'log' | 'request'): Promise<{ text: string } | { error: string }> => {
       const r = await this.#transport.get(url, { maxBytes: kind === 'log' ? LIMITS.logBytes : LIMITS.requestBytes, ...(kind === 'request' ? { accept: REQUEST_MEDIA_TYPE } : {}) })
       if ('error' in r) return r
       return r.status === 200 ? { text: r.text } : { error: `HTTP ${r.status}` }
-    })
-  }
-
-  /** Steps 1 to 5 with a given way to get the log and the Request Object (the vector passes them in). */
-  async evaluate (link: string, get: (url: string, kind: 'log' | 'request') => Promise<{ text: string } | { error: string }>): Promise<Opened> {
+    }
     const no = (reason: string): Opened => ({ ok: false, reason })
     const outer = parseOuter(link)
     if ('error' in outer) return no(outer.error)
@@ -177,7 +178,7 @@ export class Wallet {
     if ('error' in where) return no(where.error)
     let ru: URL
     try { ru = new URL(outer.request_uri) } catch { return no('request_uri is not a URL') }
-    if (ru.protocol !== 'https:' || ru.origin !== where.origin) return no('request_uri is not on the origin of the service DID')
+    if (ru.protocol !== 'https:' || ru.origin !== where.origin || ru.username || ru.password) return no('request_uri is not on the origin of the service DID')
 
     const fetched = await get(where.logUrl, 'log')
     if ('error' in fetched) return no(`service log: ${fetched.error}`)
@@ -246,14 +247,6 @@ export class Wallet {
       if (sent !== MOVED) return sent
     }
     return { error: 'the identifier kept changing while answering' }
-  }
-
-  /** The answer `confirm` would send, without sending it (the vector). */
-  async prepare (shown: Shown): Promise<{ url: string, form: Record<string, string> } | { error: string }> {
-    const c = this.#checked.get(shown)
-    if (!c) return { error: 'not a request this wallet opened' }
-    const a = await this.#answer(c)
-    return 'error' in a ? a : { url: c.claims.redirect_uri, form: a.form }
   }
 
   /**

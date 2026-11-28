@@ -9,7 +9,7 @@ import { fromB64u } from 'rltp-lib'
 import { MemoryLoginStore, Service, ServiceKeys } from '../src/lab/anmeldung-log/service'
 import { commitState, deriveKey, MemoryStorage, Wallet, type Shown, type WalletState } from '../src/lab/anmeldung-log/wallet'
 import { limited, type Transport } from '../src/lab/anmeldung-log/transport'
-import { loopbackSend, loopbackTransport } from './anmeldung-log-loopback'
+import { holding, loopbackSend, loopbackTransport } from './anmeldung-log-loopback'
 import { DID_LOG_FIELD } from '../src/lab/anmeldung-log/profile'
 import { kidOf, signToken } from '../src/lab/kennung-log/verifier'
 
@@ -411,8 +411,11 @@ test('swapped answers between two attempts: refused by the nonce; both attempts 
   const bA = browser(s.local), bB = browser(s.local)
   const A = (await bA.call('/anmeldung-log/start')).body, B = (await bB.call('/anmeldung-log/start')).body
   const rA = await opened(w, A.link), rB = await opened(w, B.link)
-  const fA = await w.prepare(rA)
-  if ('error' in fA) throw new Error(fA.error)
+  // the same person on a wallet whose answers are kept, not sent: the test delivers A's answer itself
+  const kept = holding(loopbackTransport())
+  const wHeld = new Wallet(secret, { now: clock, storage: new MemoryStorage(w.state()), transport: kept.transport })
+  await wHeld.confirm(await opened(wHeld, A.link))
+  const fA = kept.held[0] as { form: Record<string, string> }
   // A's token and log under B's state
   expect(await post(s, { ...fA.form, state: rB.claims.state })).toMatchObject({ status: 400, body: { error_description: 'token: another nonce' } })
   expect([store.peek(rA.claims.nonce, t), store.peek(rB.claims.nonce, t)]).toEqual(['open', 'open'])
@@ -485,12 +488,13 @@ test('contested between the answer and the pickup: no session, on either way', a
 
 test('an attempt given up while its answer is checked: the check ends and keeps nothing', async () => {
   const s = await service()
-  const w = wallet(secretOf(28))
   const b = browser(s.local)
   const { vorgang, link } = (await b.call('/anmeldung-log/start')).body
+  const kept = holding(loopbackTransport())
+  const w = new Wallet(secretOf(28), { now: clock, transport: kept.transport })
   const r = await opened(w, link)
-  const a = await w.prepare(r)
-  if ('error' in a) throw new Error(a.error)
+  await w.confirm(r)
+  const a = kept.held[0] as { form: Record<string, string> }
   const pending = s.service.receive(new URLSearchParams(a.form))   // runs to its first await
   await s.service.forget(vorgang)
   expect(await pending).toMatchObject({ status: 400, body: { error_description: 'the request is no longer open' } })
@@ -628,7 +632,7 @@ test('the checked state and the wallet\'s inner methods are out of reach of Java
   const any = w as any
   expect(Object.getOwnPropertyNames(w)).toEqual(['profile'])
   expect(Object.getOwnPropertySymbols(w)).toEqual([])
-  expect(Object.getOwnPropertyNames(Object.getPrototypeOf(w)).sort()).toEqual(['cancel', 'confirm', 'constructor', 'evaluate', 'identity', 'open', 'prepare', 'rotate', 'state'])
+  expect(Object.getOwnPropertyNames(Object.getPrototypeOf(w)).sort()).toEqual(['cancel', 'confirm', 'constructor', 'identity', 'open', 'rotate', 'state'])
   for (const k of ['checked', 'commit', 'answer', 'send', 'sendError', 'stillGood', 'storage', 'transport', 'secret', 'o']) expect([k, any[k]]).toEqual([k, undefined])
   expect(JSON.stringify(w)).toBe(JSON.stringify({ profile: w.profile }))
   expect(await w.confirm(r)).toMatchObject({ status: 200 })

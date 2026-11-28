@@ -130,6 +130,11 @@ const refusals: [string, (f: Fake) => Promise<string>, string][] = [
     await offer(g)
     return outerLink(CLIENT_ID_PREFIX + f.did, g.origin + '/r')
   }, 'request_uri is not on the origin of the service DID'],
+  ['a request_uri with credentials', async (f) => {
+    const link = await offer(f)
+    const q = new URLSearchParams(link.slice(link.indexOf('#') + 1))
+    return outerLink(q.get('client_id') as string, (q.get('request_uri') as string).replace('https://', 'https://user:secret@'))
+  }, 'request_uri is not on the origin of the service DID'],
   ['a log fetch answered with a redirect', async (f) => {
     f.routes.set('/.well-known/did.jsonl', { type: 'text/plain', body: '', status: 302, location: 'https://example.com/did.jsonl' })
     return offer(f)

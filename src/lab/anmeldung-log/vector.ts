@@ -12,6 +12,7 @@ import { vh } from '../kennung-log/profiles'
 import { kidOf } from '../kennung-log/verifier'
 import { CLIENT_ID_PREFIX, DID_LOG_FIELD, keyContext, locate, parseOuter, PROFILE, subjectMethodOf, type KeyFor } from './profile'
 import { REQUEST_PATH, Service, serviceKeyInfo, serviceLog, ServiceKeys } from './service'
+import type { Transport } from './transport'
 import { deriveKey, MemoryStorage, Wallet } from './wallet'
 
 const hex = (b: Uint8Array): string => [...b].map((x) => x.toString(16).padStart(2, '0')).join('')
@@ -31,7 +32,23 @@ export const VECTOR_INPUTS = {
 type Inputs = typeof VECTOR_INPUTS
 const DERIVATION_RULE = 'seed = HKDF-SHA-256(ikm, salt = empty, info = UTF-8 of hkdf_info, 32 bytes); key = Ed25519 from seed (RFC 8032). ikm is service.seed for the service keys, person.secret for the person keys.'
 
-async function parts (i: Inputs) {
+/**
+ * The wallet's transport for the vector, without a network: it serves the
+ * given texts at the given URLs and keeps what the wallet posts instead of
+ * sending it. The wallet runs its whole way, gate included.
+ */
+function fixedTransport (served: () => Record<string, string>): { transport: Transport, posts: { url: string, body: string }[] } {
+  const posts: { url: string, body: string }[] = []
+  return {
+    posts,
+    transport: {
+      get: async (url) => { const text = served()[url]; return text === undefined ? { error: 'unexpected fetch ' + url } : { status: 200, type: '', text } },
+      post: async (url, body) => { posts.push({ url, body }); return { status: 200, type: 'application/json', text: '{}' } },
+    },
+  }
+}
+
+async function parts (i: Inputs, served: () => Record<string, string>) {
   const now = Date.parse(i.time)
   const keys = new ServiceKeys(unhex(i.service.seed))
   const service = await Service.create({
@@ -39,22 +56,28 @@ async function parts (i: Inputs) {
     log: await serviceLog(i.service.host, keys, i.service.log_time),
     fixed: { nonce: i.nonce, state: i.state, requestId: i.request_id },
   })
-  const wallet = new Wallet(unhex(i.person.secret), { now: () => now, storage: new MemoryStorage(), profile: vh })
-  return { now, service, wallet }
+  const net = fixedTransport(served)
+  const wallet = new Wallet(unhex(i.person.secret), { now: () => now, storage: new MemoryStorage(), profile: vh, transport: net.transport })
+  return { now, service, wallet, posts: net.posts }
 }
 
 const SERVICE_KEYS = [['update', 0], ['update', 1], ['auth', 0]] as const
 
 /** Build the vector from its inputs. */
 export async function buildVector (i: Inputs = VECTOR_INPUTS) {
-  const { service, wallet } = await parts(i)
+  const served: Record<string, string> = {}
+  const { service, wallet, posts } = await parts(i, () => served)
   const started = await service.start('cross-device')
   const jwt = service.requestObject(i.request_id) as string
   const logText = service.didLog()
-  const opened = await wallet.evaluate(started.link, async (url) => ({ text: url.endsWith('/did.jsonl') ? logText : jwt }))
+  const logUrl = (locate(service.did) as { logUrl: string }).logUrl
+  served[logUrl] = logText; served[started.requestUri] = jwt
+  const opened = await wallet.open(started.link)
   if (!opened.ok) throw new Error(opened.reason)
-  const answer = await wallet.prepare(opened.request)
-  if ('error' in answer) throw new Error(answer.error)
+  const sent = await wallet.confirm(opened.request)
+  if ('error' in sent) throw new Error(sent.error)
+  const posted = posts[0] as { url: string, body: string }
+  const answer = { url: posted.url, form: Object.fromEntries(new URLSearchParams(posted.body)) as Record<string, string> }
   const scid = opened.request.scid
   const k: KeyFor = { method: 'did:webvh', scid, subjectMethod: subjectMethodOf(vh) }
   const serviceDerivation = []
@@ -77,7 +100,7 @@ export async function buildVector (i: Inputs = VECTOR_INPUTS) {
     service_derivation: serviceDerivation,
     service_did: service.did,
     service_scid: scid,
-    service_log_url: 'https://dienst.example/.well-known/did.jsonl',
+    service_log_url: logUrl,
     service_log: logText,
     outer_link: started.link,
     request_uri: started.requestUri,
@@ -193,8 +216,8 @@ export async function checkVector (v: Vector): Promise<string[]> {
   expect(v.post.content_type === 'application/x-www-form-urlencoded', 'post: content_type is not application/x-www-form-urlencoded')
 
   // the code: the wallet accepts the request, the service the POST
-  const { service, wallet } = await parts(i)
-  const opened = await wallet.evaluate(v.outer_link, async (url) => url === v.service_log_url ? { text: v.service_log } : url === v.request_uri ? { text: ro.compact } : { error: 'unexpected fetch ' + url })
+  const { service, wallet } = await parts(i, () => ({ [v.service_log_url]: v.service_log, [v.request_uri]: ro.compact }))
+  const opened = await wallet.open(v.outer_link)
   if (!opened.ok) problems.unshift(`wallet refuses: ${opened.reason}`)
   await service.start('cross-device')
   const reply = await service.receive(new URLSearchParams(v.post.body))

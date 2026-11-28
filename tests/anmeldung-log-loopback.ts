@@ -17,3 +17,20 @@ export const loopbackSend: Send = (url, r) => new Promise((ok, fail) => {
 })
 
 export const loopbackTransport = (o: { timeoutMs?: number } = {}): Transport => limited(loopbackSend, o)
+
+/**
+ * A transport that keeps what the wallet posts instead of sending it, so a
+ * test can deliver the answer itself (to another attempt, or at another
+ * moment). The wallet still goes its whole way, gate included; fetching
+ * goes through `inner`.
+ */
+export function holding (inner: Transport): { transport: Transport, held: { url: string, form: Record<string, string> }[] } {
+  const held: { url: string, form: Record<string, string> }[] = []
+  return {
+    held,
+    transport: {
+      get: (url, o) => inner.get(url, o),
+      post: async (url, body) => { held.push({ url, form: Object.fromEntries(new URLSearchParams(body)) }); return { status: 0, type: '', text: '' } },
+    },
+  }
+}

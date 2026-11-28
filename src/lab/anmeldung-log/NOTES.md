@@ -219,6 +219,13 @@ code (`/erneuern`), the cap on open requests, the demo wallet page.
   wallet (answer, cancel, deactivation, key change) goes through this one
   step, which refuses any result in which a held service log or identifier
   log would go back.
+- **No way around the transport**: the wallet's methods are `open`,
+  `confirm`, `cancel`, `rotate`, `identity` and `state`. The service's log and
+  the Request Object reach it only through the transport (what binds a
+  did:webvh to its host is that the log was fetched there), and a signed
+  answer leaves it only through the gate below; no method hands a caller the
+  log as text in, or the token out. The vector and the tests that deliver an
+  answer themselves give the wallet a transport of their own.
 - **One gate before the transport**: the wallet prepares everything first
   (keys derived, token signed, body built); then one function, the only one
   in the module that calls `transport.post`, checks without an await between
